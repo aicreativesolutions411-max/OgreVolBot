@@ -19875,3 +19875,56 @@ html body .swamp-connect-shell .hero-sound-btn:hover { box-shadow: 0 0 24px rgba
   .coin-banner-hero{max-height:150px;border-radius:12px 12px 0 0;}
   .smart-chart-token-header.has-banner .live-pair-avatar{width:60px;height:60px;min-width:60px;}
 }
+
+/* Native tape under the smart chart. It stays compact on mobile and gives the
+   desktop terminal the same chart-left / execution-right flow on both chains. */
+.smart-trade-tape{
+  margin-top:12px;
+  overflow:hidden;
+  border:1px solid rgba(73,255,37,.2);
+  border-radius:16px;
+  background:linear-gradient(180deg,rgba(10,21,11,.98),rgba(4,10,5,.98));
+  box-shadow:inset 0 1px 0 rgba(136,255,111,.05);
+}
+.smart-trade-tape-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:13px 15px;
+  border-bottom:1px solid rgba(73,255,37,.14);
+}
+.smart-trade-tape-head>div{display:grid;grid-template-columns:auto 1fr;column-gap:8px;align-items:center;}
+.smart-trade-tape-head h4{margin:0;color:#f3fff0;font-size:.86rem;letter-spacing:.03em;}
+.smart-trade-tape-head small{grid-column:2;color:#769176;font-size:.68rem;}
+.tape-live-dot{width:7px;height:7px;border-radius:50%;background:#57ff27;box-shadow:0 0 10px #57ff27;}
+.tape-live-label{padding:4px 8px;border:1px solid rgba(73,255,37,.28);border-radius:999px;color:#8fff6d;font-size:.62rem;font-weight:800;letter-spacing:.1em;}
+.smart-trade-tape .tape-gauges{display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:1px;background:rgba(73,255,37,.11);border-bottom:1px solid rgba(73,255,37,.12);}
+.smart-trade-tape .tape-gauges article{min-width:0;padding:12px 14px;background:#071008;}
+.smart-trade-tape .tape-gauges span{display:block;color:#718671;font-size:.62rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;}
+.smart-trade-tape .tape-gauges strong{display:block;margin:4px 0 2px;color:#f4fff1;font-size:1rem;}
+.smart-trade-tape .tape-gauges strong.buy{color:#68ff41;}
+.smart-trade-tape .tape-gauges strong.sell{color:#ff647d;}
+.smart-trade-tape .tape-gauges small{display:block;overflow:hidden;color:#789078;font-size:.66rem;text-overflow:ellipsis;white-space:nowrap;}
+.smart-trade-tape .tape-pressure{position:relative;height:5px;margin:7px 0 5px;border-radius:999px;background:linear-gradient(90deg,#ff536e 0 50%,#52ff2c 50% 100%);}
+.smart-trade-tape .tape-pressure i{position:absolute;top:50%;width:9px;height:9px;border:2px solid #061006;border-radius:50%;background:#fff;box-shadow:0 0 0 1px rgba(255,255,255,.45);transform:translate(-50%,-50%);}
+.smart-trade-tape-table{max-height:246px;overflow:auto;}
+.smart-trade-tape-table table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;}
+.smart-trade-tape-table th,.smart-trade-tape-table td{padding:8px 13px;border-bottom:1px solid rgba(255,255,255,.045);text-align:right;font-size:.7rem;white-space:nowrap;}
+.smart-trade-tape-table th{position:sticky;top:0;z-index:1;background:#081109;color:#647864;font-size:.59rem;letter-spacing:.08em;text-transform:uppercase;}
+.smart-trade-tape-table th:first-child,.smart-trade-tape-table td:first-child{text-align:left;}
+.smart-trade-tape-table a{color:#a8c8a5;text-decoration:none;}
+.smart-trade-tape .tape-side{display:inline-block;min-width:34px;margin-right:6px;font-size:.63rem;font-weight:900;}
+.smart-trade-tape .tape-side.buy{color:#63ff3a;}
+.smart-trade-tape .tape-side.sell{color:#ff647d;}
+.smart-trade-tape .tape-side+small{color:#6f846f;}
+.smart-trade-tape .tape-tx{font-size:.9rem;}
+.smart-trade-tape .tape-empty{padding:24px;text-align:center;color:#789078;}
+.smart-trade-tape .tape-reconnect{margin:0;padding:8px 13px;color:#d3af51;font-size:.66rem;}
+@media (max-width:760px){
+  .smart-trade-tape .tape-gauges{grid-template-columns:1fr 1fr;}
+  .smart-trade-tape .tape-gauges article:first-child{grid-column:1/-1;}
+  .smart-trade-tape-table{max-height:205px;}
+  .smart-trade-tape-table th,.smart-trade-tape-table td{padding:8px 9px;font-size:.66rem;}
+  .smart-trade-tape-table th:nth-child(4),.smart-trade-tape-table td:nth-child(4){display:none;}
+}

@@ -395,7 +395,7 @@
   }
 
   function validAccountCredentials(username, password) {
-    if (!/^[a-z0-9][a-z0-9_.-]{2,23}$/i.test(username)) return "Username must be 3–24 letters, numbers, dots, dashes, or underscores.";
+    if (!/^[a-z0-9][a-z0-9_.-]{1,23}$/i.test(username)) return "Username must be 2–24 letters, numbers, dots, dashes, or underscores.";
     if (password.length < 8) return "Password must be at least 8 characters.";
     return "";
   }

@@ -6,6 +6,7 @@
   const API_BASE = window.OGRE_PORTAL_CONFIG?.apiBase || location.origin;
   const STORAGE_KEY = "slimewireFunIndicators:v1";
   const FIB_STORAGE_KEY = "slimewireFunFibSettings:v1";
+  const HARMONIC_STORAGE_KEY = "slimewireFunHarmonics:v1";
   const DEFAULT_FIB_SETTINGS = Object.freeze({
     lookback: 120,
     levels: [
@@ -20,11 +21,19 @@
       { ratio: 1.618, enabled: false, color: "#ff8b54", style: 2 }
     ]
   });
+  const HARMONIC_NAMES = Object.freeze(["bat", "gartley", "shark", "butterfly", "crab", "five0"]);
+  const DEFAULT_HARMONIC_SETTINGS = Object.freeze({
+    lookback: 240,
+    pivotSpan: 3,
+    tolerance: 0.12,
+    patterns: { bat: true, gartley: true, shark: true, butterfly: true, crab: true, five0: true }
+  });
   const TF_MAP = { "1": "1m", "5": "5m", "15": "15m", "60": "1h" };
   const AUTO_REFRESH_MS = 25_000;
   const CANDLE_TIMEOUT_MS = 6_500;
   const enabled = readEnabled();
   let fibSettings = readFibSettings();
+  let harmonicSettings = readHarmonicSettings();
   const candleCache = new Map();
   const pendingCandleRequests = new Map();
   const geckoPoolCache = new Map();
@@ -38,8 +47,8 @@
   function readEnabled() {
     try {
       const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-      return { fib: Boolean(value?.fib), rsi: Boolean(value?.rsi), macd: Boolean(value?.macd) };
-    } catch { return { fib: false, rsi: false, macd: false }; }
+      return { fib: Boolean(value?.fib), rsi: Boolean(value?.rsi), macd: Boolean(value?.macd), harmonics: Boolean(value?.harmonics) };
+    } catch { return { fib: false, rsi: false, macd: false, harmonics: false }; }
   }
   function saveEnabled() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(enabled)); } catch {} }
   function defaultFibSettings() { return { lookback: DEFAULT_FIB_SETTINGS.lookback, levels: DEFAULT_FIB_SETTINGS.levels.map((level) => ({ ...level })) }; }
@@ -61,6 +70,21 @@
     } catch { return defaults; }
   }
   function saveFibSettings() { try { localStorage.setItem(FIB_STORAGE_KEY, JSON.stringify(fibSettings)); } catch {} }
+  function defaultHarmonicSettings() {
+    return { ...DEFAULT_HARMONIC_SETTINGS, patterns: { ...DEFAULT_HARMONIC_SETTINGS.patterns } };
+  }
+  function readHarmonicSettings() {
+    const defaults = defaultHarmonicSettings();
+    try {
+      const value = JSON.parse(localStorage.getItem(HARMONIC_STORAGE_KEY) || "null");
+      const lookback = [120, 240, 400].includes(Number(value?.lookback)) ? Number(value.lookback) : defaults.lookback;
+      const pivotSpan = [2, 3, 4, 5].includes(Number(value?.pivotSpan)) ? Number(value.pivotSpan) : defaults.pivotSpan;
+      const tolerance = [0.08, 0.12, 0.18].includes(Number(value?.tolerance)) ? Number(value.tolerance) : defaults.tolerance;
+      const patterns = Object.fromEntries(HARMONIC_NAMES.map((name) => [name, value?.patterns?.[name] !== false]));
+      return { lookback, pivotSpan, tolerance, patterns };
+    } catch { return defaults; }
+  }
+  function saveHarmonicSettings() { try { localStorage.setItem(HARMONIC_STORAGE_KEY, JSON.stringify(harmonicSettings)); } catch {} }
   function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
   function fibRatioLabel(ratio) { return Number.isInteger(ratio) ? String(ratio) : String(Number(ratio.toFixed(3))); }
   function renderFibSettings() {
@@ -72,11 +96,32 @@
   function openFibSettings() {
     const panel = $("[data-fib-settings]");
     if (!panel) return;
+    closeHarmonicSettings();
     panel.hidden = false;
     renderFibSettings();
   }
   function closeFibSettings() {
     const panel = $("[data-fib-settings]");
+    if (panel) panel.hidden = true;
+  }
+  function harmonicName(name) {
+    return name === "five0" ? "5-0" : name.charAt(0).toUpperCase() + name.slice(1);
+  }
+  function renderHarmonicSettings() {
+    const panel = $("[data-harmonic-settings]");
+    if (!panel || panel.hidden) return;
+    const patterns = HARMONIC_NAMES.map((name) => `<label class="harmonic-pattern-toggle"><input type="checkbox" data-harmonic-pattern="${name}" ${harmonicSettings.patterns[name] ? "checked" : ""}><span>${harmonicName(name)}</span></label>`).join("");
+    panel.innerHTML = `<div class="fib-settings-head"><div><b>Harmonic patterns</b><span>Confirmed X-A-B-C-D swing geometry</span></div><button type="button" data-harmonic-settings-close aria-label="Close harmonic settings">×</button></div><div class="harmonic-settings-controls"><label class="fib-show"><input type="checkbox" data-harmonics-enabled ${enabled.harmonics ? "checked" : ""}><span>Paint patterns on chart</span></label><label><span>History</span><select data-harmonic-lookback><option value="120" ${harmonicSettings.lookback === 120 ? "selected" : ""}>120 candles</option><option value="240" ${harmonicSettings.lookback === 240 ? "selected" : ""}>240 candles</option><option value="400" ${harmonicSettings.lookback === 400 ? "selected" : ""}>400 candles</option></select></label><label><span>Pivot</span><select data-harmonic-pivot><option value="2" ${harmonicSettings.pivotSpan === 2 ? "selected" : ""}>Fast</option><option value="3" ${harmonicSettings.pivotSpan === 3 ? "selected" : ""}>Balanced</option><option value="4" ${harmonicSettings.pivotSpan === 4 ? "selected" : ""}>Clean</option><option value="5" ${harmonicSettings.pivotSpan === 5 ? "selected" : ""}>Major</option></select></label><label><span>Tolerance</span><select data-harmonic-tolerance><option value="0.08" ${harmonicSettings.tolerance === 0.08 ? "selected" : ""}>Strict</option><option value="0.12" ${harmonicSettings.tolerance === 0.12 ? "selected" : ""}>Balanced</option><option value="0.18" ${harmonicSettings.tolerance === 0.18 ? "selected" : ""}>Wide</option></select></label></div><div class="harmonic-pattern-grid">${patterns}</div><div class="harmonic-settings-actions"><button type="button" data-harmonic-all>All patterns</button><button type="button" data-harmonic-reset>Restore defaults</button></div><p>Only completed five-point structures are painted. Confidence measures ratio fit, not future price direction.</p>`;
+  }
+  function openHarmonicSettings() {
+    const panel = $("[data-harmonic-settings]");
+    if (!panel) return;
+    closeFibSettings();
+    panel.hidden = false;
+    renderHarmonicSettings();
+  }
+  function closeHarmonicSettings() {
+    const panel = $("[data-harmonic-settings]");
     if (panel) panel.hidden = true;
   }
   function selectedKey() {
@@ -91,7 +136,7 @@
     return TF_MAP[value] || "15m";
   }
   function isRobinhood(key) { return /^0x[0-9a-f]{40}$/i.test(String(key || "")); }
-  function anyEnabled() { return enabled.fib || enabled.rsi || enabled.macd; }
+  function anyEnabled() { return enabled.fib || enabled.rsi || enabled.macd || enabled.harmonics; }
   function setStatus(message, error = false) {
     const status = $("[data-indicator-status]");
     if (!status) return;
@@ -392,7 +437,8 @@
 
   function analysisHeader(subtitle, badge = "LIVE") {
     const fibControl = enabled.fib ? '<button type="button" data-fib-settings-open aria-label="Open Fibonacci settings">⚙ Fib</button>' : "";
-    return `<div class="analysis-head"><div><b>SLIME ANALYSIS</b><span>${escapeHtml(subtitle)}</span></div><div class="analysis-head-actions"><em>${escapeHtml(badge)}</em>${fibControl}<button type="button" data-analysis-back aria-label="Return to regular chart">↩ Chart</button></div></div>`;
+    const harmonicControl = enabled.harmonics ? '<button type="button" data-harmonic-settings-open aria-label="Open harmonic pattern settings">◇ Patterns</button>' : "";
+    return `<div class="analysis-head"><div><b>SLIME ANALYSIS</b><span>${escapeHtml(subtitle)}</span></div><div class="analysis-head-actions"><em>${escapeHtml(badge)}</em>${fibControl}${harmonicControl}<button type="button" data-analysis-back aria-label="Return to regular chart">↩ Chart</button></div></div>`;
   }
 
   function activateAnalysis({ openDrawer = true } = {}) {
@@ -403,7 +449,7 @@
     if (openDrawer) toggleDrawer(true, false);
     syncButtons();
     if (anyEnabled()) void renderIndicators();
-    else setStatus("Choose one or stack all three.");
+    else setStatus("Choose an indicator or stack several.");
   }
 
   function deactivateAnalysis({ closeDrawer = true } = {}) {
@@ -441,9 +487,112 @@
     }));
   }
 
+  function harmonicSwingPivots(candles, span = 3, lookback = 240) {
+    const offset = Math.max(0, candles.length - lookback);
+    const rows = candles.slice(offset);
+    const pivots = [];
+    for (let index = span; index < rows.length - span; index += 1) {
+      const row = rows[index], windowRows = rows.slice(index - span, index + span + 1);
+      const high = windowRows.every((item) => row.h >= item.h) && windowRows.some((item) => row.h > item.h);
+      const low = windowRows.every((item) => row.l <= item.l) && windowRows.some((item) => row.l < item.l);
+      if (!high && !low) continue;
+      const candidate = { index: offset + index, time: row.t, price: high ? row.h : row.l, kind: high ? "high" : "low" };
+      const previous = pivots.at(-1);
+      if (previous?.kind === candidate.kind) {
+        const moreExtreme = candidate.kind === "high" ? candidate.price > previous.price : candidate.price < previous.price;
+        if (moreExtreme) pivots[pivots.length - 1] = candidate;
+      } else pivots.push(candidate);
+    }
+    return pivots;
+  }
+
+  function harmonicRatioScore(value, min, max = min, tolerance = 0.12) {
+    if (!Number.isFinite(value) || !(value > 0)) return 0;
+    const low = min === max ? min * (1 - tolerance) : min * (1 - tolerance * 0.55);
+    const high = min === max ? max * (1 + tolerance) : max * (1 + tolerance * 0.55);
+    if (value < low || value > high) return 0;
+    if (value >= min && value <= max) {
+      if (min === max) return 1;
+      const center = (min + max) / 2, half = Math.max((max - min) / 2, Number.EPSILON);
+      return 0.82 + 0.18 * (1 - Math.min(1, Math.abs(value - center) / half));
+    }
+    const edge = value < min ? min : max;
+    const outer = value < min ? low : high;
+    return 0.55 + 0.27 * (1 - Math.abs(value - edge) / Math.max(Math.abs(outer - edge), Number.EPSILON));
+  }
+
+  function harmonicCandidate(points, pattern, tolerance = 0.12) {
+    if (!Array.isArray(points) || points.length !== 5) return null;
+    const [x, a, b, c, d] = points;
+    const xa = Math.abs(a.price - x.price), ab = Math.abs(b.price - a.price), bc = Math.abs(c.price - b.price), cd = Math.abs(d.price - c.price);
+    if (!(xa > 0 && ab > 0 && bc > 0 && cd > 0)) return null;
+    const ratios = {
+      b: ab / xa,
+      bc: bc / ab,
+      cd: cd / bc,
+      d: Math.abs(d.price - a.price) / xa,
+      abcd: cd / ab,
+      endpoint: Math.abs(d.price - x.price) / Math.max(Math.abs(c.price - x.price), Number.EPSILON)
+    };
+    const rules = {
+      gartley: [[ratios.b, 0.618, 0.618], [ratios.cd, 1.13, 1.618], [ratios.d, 0.786, 0.786], [ratios.abcd, 1, 1.27]],
+      bat: [[ratios.b, 0.382, 0.5], [ratios.cd, 1.618, 2.618], [ratios.d, 0.886, 0.886], [ratios.abcd, 1, 1.618]],
+      butterfly: [[ratios.b, 0.786, 0.786], [ratios.cd, 2, 2.618], [ratios.d, 1.27, 1.27], [ratios.abcd, 1, 1.618]],
+      crab: [[ratios.b, 0.382, 0.618], [ratios.cd, 2.24, 3.618], [ratios.d, 1.618, 1.618]],
+      five0: [[ratios.b, 1.13, 1.618], [ratios.bc, 1.618, 2.24], [ratios.cd, 0.5, 0.5], [ratios.abcd, 0.886, 1.13]],
+      shark: [[ratios.b, 1.13, 1.618], [ratios.bc, 1.618, 2.24], [ratios.endpoint, 0.886, 1.13]]
+    }[pattern];
+    if (!rules) return null;
+    const scores = rules.map(([value, min, max]) => harmonicRatioScore(value, min, max, tolerance));
+    if (scores.some((score) => score <= 0)) return null;
+    const confidence = Math.round(58 + (scores.reduce((sum, score) => sum + score, 0) / scores.length) * 40);
+    return { pattern, points, ratios, confidence, direction: d.kind === "low" ? "bullish" : "bearish" };
+  }
+
+  function findHarmonicPatterns(candles, settings = harmonicSettings) {
+    const pivots = harmonicSwingPivots(candles, settings.pivotSpan, settings.lookback);
+    const selected = HARMONIC_NAMES.filter((name) => settings.patterns[name]);
+    const matches = [];
+    for (let index = 0; index <= pivots.length - 5; index += 1) {
+      const points = pivots.slice(index, index + 5);
+      selected.forEach((pattern) => {
+        const candidate = harmonicCandidate(points, pattern, settings.tolerance);
+        if (candidate) matches.push(candidate);
+      });
+    }
+    matches.sort((left, right) => right.points[4].index - left.points[4].index || right.confidence - left.confidence);
+    const unique = [];
+    matches.forEach((match) => {
+      if (!unique.some((item) => item.points[4].index === match.points[4].index)) unique.push(match);
+    });
+    return unique.slice(0, 3);
+  }
+
+  function harmonicPatternPanel(candles, matches = findHarmonicPatterns(candles)) {
+    if (!matches.length) return emptyPanel("Harmonic Patterns", "No completed Bat, Gartley, Shark, Butterfly, Crab, or 5-0 match in this swing window.");
+    const match = matches[0], ratio = (value) => Number(value).toFixed(3);
+    const details = `<div class="harmonic-ratios"><span>B/XA <b>${ratio(match.ratios.b)}</b></span><span>BC/AB <b>${ratio(match.ratios.bc)}</b></span><span>CD/BC <b>${ratio(match.ratios.cd)}</b></span><span>D/XA <b>${ratio(match.ratios.d)}</b></span></div>`;
+    return linePanel(`${harmonicName(match.pattern)} · ${match.direction}`, `Completed at D · ratio-fit score`, `${match.confidence}%`, details);
+  }
+
+  function paintHarmonicPattern(candleSeries, priceNode, candles) {
+    const matches = findHarmonicPatterns(candles);
+    const match = matches[0];
+    if (!match || !nativeChart) return matches;
+    const color = match.direction === "bullish" ? "#72ff23" : "#ff5a78";
+    const lineSeries = nativeChart.addLineSeries({ color, lineWidth: 2, lineStyle: 0, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: harmonicName(match.pattern) });
+    lineSeries.setData(match.points.map((point) => ({ time: point.time, value: point.price })));
+    const labels = match.pattern === "shark" ? ["O", "X", "A", "B", "C"] : ["X", "A", "B", "C", "D"];
+    if (typeof candleSeries.setMarkers === "function") candleSeries.setMarkers(match.points.map((point, index) => ({ time: point.time, position: point.kind === "high" ? "aboveBar" : "belowBar", color, shape: "circle", text: labels[index] })));
+    candleSeries.createPriceLine({ price: match.points[4].price, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: `${harmonicName(match.pattern)} PRZ` });
+    priceNode?.insertAdjacentHTML("beforeend", `<div class="harmonic-chart-badge ${match.direction}"><b>${escapeHtml(harmonicName(match.pattern))}</b><span>${escapeHtml(match.direction)} · ${match.confidence}% ratio fit</span></div>`);
+    return matches;
+  }
+
   function nativeAnalysisMarkup(candles, source, timeframe, stale) {
-    const activeLabels = [enabled.fib && "Fibonacci", enabled.rsi && "RSI 14", enabled.macd && "MACD"].filter(Boolean);
-    const panels = [enabled.rsi && rsiPanel(candles), enabled.macd && macdPanel(candles)].filter(Boolean).join("");
+    const harmonicMatches = enabled.harmonics ? findHarmonicPatterns(candles) : [];
+    const activeLabels = [enabled.fib && "Fibonacci", enabled.rsi && "RSI 14", enabled.macd && "MACD", enabled.harmonics && "Harmonics"].filter(Boolean);
+    const panels = [enabled.harmonics && harmonicPatternPanel(candles, harmonicMatches), enabled.rsi && rsiPanel(candles), enabled.macd && macdPanel(candles)].filter(Boolean).join("");
     return `<div class="indicator-analysis" data-indicator-analysis>${analysisHeader(`${activeLabels.join(" + ")} · ${timeframe}`)}<div class="analysis-price" data-analysis-price aria-label="Candlestick chart with selected technical indicators"></div>${panels}<div class="analysis-source">${escapeHtml(source.replace(/[-_]/g, " "))}${stale ? " · cached fallback" : ""} · ${candles.length} candles${enabled.fib ? ` · ${Math.min(fibSettings.lookback, candles.length)}-bar Fib window` : ""}</div></div>`;
   }
 
@@ -493,6 +642,7 @@
         });
       });
     }
+    if (enabled.harmonics) paintHarmonicPattern(candleSeries, priceNode, candles);
     nativeChart.timeScale().fitContent();
     nativeResizeObserver = new ResizeObserver(() => {
       if (nativeChart && priceNode.isConnected) nativeChart.applyOptions({ width: Math.max(280, priceNode.clientWidth) });
@@ -507,7 +657,7 @@
     restoreProviderChart();
     syncButtons();
     const panels = $("[data-indicator-panels]");
-    if (panels) panels.innerHTML = `<div class="analysis-fallback"><b>Indicators are off — regular chart restored</b><small>${escapeHtml(message)} Fibonacci is only marked active when its levels are painted on candles.</small><button type="button" data-indicator-retry>Retry analysis</button></div>`;
+    if (panels) panels.innerHTML = `<div class="analysis-fallback"><b>Indicators are off — regular chart restored</b><small>${escapeHtml(message)} Overlays are only marked active after they are painted on real candles.</small><button type="button" data-indicator-retry>Retry analysis</button></div>`;
     toggleDrawer(true, false);
     setStatus("Saved indicators are off until candle history loads.", true);
   }
@@ -524,7 +674,7 @@
       clearTimeout(autoRefreshTimer);
       return;
     }
-    if (!anyEnabled()) { analysisActive = false; clearTimeout(autoRefreshTimer); panels.innerHTML = ""; setStatus("Choose one or stack all three."); restoreProviderChart(); syncButtons(); return; }
+    if (!anyEnabled()) { analysisActive = false; clearTimeout(autoRefreshTimer); panels.innerHTML = ""; setStatus("Choose an indicator or stack several."); restoreProviderChart(); syncButtons(); return; }
     const key = selectedKey();
     if (!key) { clearTimeout(autoRefreshTimer); panels.innerHTML = ""; setStatus("Open a coin chart first.", true); return; }
     const timeframe = activeTimeframe();
@@ -559,8 +709,10 @@
       return;
     }
     if (event.target.closest("[data-fib-settings-open]")) { toggleDrawer(true, false); openFibSettings(); return; }
+    if (event.target.closest("[data-harmonic-settings-open]")) { toggleDrawer(true, false); openHarmonicSettings(); return; }
     if (event.target.closest("[data-analysis-back]")) { deactivateAnalysis({ closeDrawer: true }); return; }
     if (event.target.closest("[data-fib-settings-close]")) { closeFibSettings(); return; }
+    if (event.target.closest("[data-harmonic-settings-close]")) { closeHarmonicSettings(); return; }
     if (event.target.closest("[data-fib-reset]")) {
       fibSettings = defaultFibSettings();
       saveFibSettings();
@@ -575,6 +727,21 @@
         renderFibSettings();
         scheduleRender(0);
       }
+      return;
+    }
+    if (event.target.closest("[data-harmonic-reset]")) {
+      harmonicSettings = defaultHarmonicSettings();
+      saveHarmonicSettings();
+      renderHarmonicSettings();
+      scheduleRender(0);
+      return;
+    }
+    if (event.target.closest("[data-harmonic-all]")) {
+      const turnOn = HARMONIC_NAMES.some((name) => !harmonicSettings.patterns[name]);
+      HARMONIC_NAMES.forEach((name) => { harmonicSettings.patterns[name] = turnOn; });
+      saveHarmonicSettings();
+      renderHarmonicSettings();
+      scheduleRender(0);
       return;
     }
     const removeLevel = event.target.closest("[data-fib-remove]");
@@ -593,6 +760,9 @@
       if (kind === "fib") {
         enabled.fib = true;
         openFibSettings();
+      } else if (kind === "harmonics") {
+        enabled.harmonics = true;
+        openHarmonicSettings();
       } else enabled[kind] = !enabled[kind];
       saveEnabled();
       if (anyEnabled()) {
@@ -612,6 +782,31 @@
       syncButtons();
       if (anyEnabled()) { analysisActive = true; void renderIndicators(); }
       else deactivateAnalysis({ closeDrawer: false });
+      return;
+    }
+    if (event.target.matches("[data-harmonics-enabled]")) {
+      enabled.harmonics = event.target.checked;
+      saveEnabled();
+      syncButtons();
+      if (anyEnabled()) { analysisActive = true; void renderIndicators(); }
+      else deactivateAnalysis({ closeDrawer: false });
+      return;
+    }
+    if (event.target.matches("[data-harmonic-pattern]")) {
+      const name = event.target.dataset.harmonicPattern;
+      if (HARMONIC_NAMES.includes(name)) harmonicSettings.patterns[name] = event.target.checked;
+      saveHarmonicSettings();
+      renderHarmonicSettings();
+      scheduleRender(0);
+      return;
+    }
+    if (event.target.matches("[data-harmonic-lookback], [data-harmonic-pivot], [data-harmonic-tolerance]")) {
+      if (event.target.matches("[data-harmonic-lookback]")) harmonicSettings.lookback = Number(event.target.value);
+      if (event.target.matches("[data-harmonic-pivot]")) harmonicSettings.pivotSpan = Number(event.target.value);
+      if (event.target.matches("[data-harmonic-tolerance]")) harmonicSettings.tolerance = Number(event.target.value);
+      saveHarmonicSettings();
+      renderHarmonicSettings();
+      scheduleRender(0);
       return;
     }
     if (event.target.matches("[data-fib-lookback]")) {

@@ -627,6 +627,7 @@ test("volume cleanup uses locked fallback exits and eventually releases a stuck 
   assert.match(retain, /VOLUME_BOT_CLEANUP_GAS_LAMPORTS/);
   assert.match(retain, /options\.drainAllSol/);
   assert.match(retain, /drainSolFromWallet/);
+  assert.match(retain, /waitForVolumeSolDrain/);
   assert.match(retain, /kind: "cleanup-excess-sol"/);
   assert.match(retain, /retained: true/);
   assert.doesNotMatch(retain, /pruneVolumeWallet/);
@@ -650,6 +651,7 @@ test("a verified one-token residue drains the old 0.012 SOL cleanup reserve", as
         drainCalls += 1;
         return { signature: "drained", sentLamports: 11_995_000 };
       },
+      waitForVolumeSolDrain: async () => ({ settled: true, lamports: 0 }),
       decryptWallet: (record) => record,
       invalidateWalletReadCache: () => {},
       volumeBotTradeOutcomeAmbiguous: () => false,
@@ -673,6 +675,37 @@ test("a verified one-token residue drains the old 0.012 SOL cleanup reserve", as
   assert.equal(drainCalls, 1);
   assert.equal(fixedTransferCalls, 0);
   assert.deepEqual(result, { closed: true, retained: true, sentLamports: 11_995_000 });
+});
+
+test("one-token cleanup is not complete until native SOL verifies at zero", async () => {
+  let waits = 0;
+  const retain = await compileAsyncFunction(
+    "retainVolumeWalletAndReturnExcessSol",
+    ["plan", "record", "persist", "options"],
+    {
+      getSolBalanceCached: async () => 50_000,
+      PublicKey: class PublicKey { constructor(value) { this.value = value; } },
+      runVolumeBotExternalAction: async (_plan, _persist, _claim, task) => task(),
+      drainSolFromWallet: async () => ({ sentLamports: 45_000 }),
+      waitForVolumeSolDrain: async () => ({ settled: ++waits > 1, lamports: waits > 1 ? 0 : 5_000 }),
+      decryptWallet: (record) => record,
+      invalidateWalletReadCache: () => {},
+      volumeBotTradeOutcomeAmbiguous: () => false,
+      volumeBotEnterRecovery: () => {},
+      volumeBotLogPush: () => {},
+      shortMint: (value) => value,
+      friendlyError: (error) => String(error?.message || error),
+      VOLUME_BOT_CLEANUP_GAS_LAMPORTS: 12_000_000,
+      volumeBotTransferSol: async () => {}
+    }
+  );
+
+  const plan = { sourcePublicKey: "SOURCE" };
+  const wallet = { publicKey: "GHOST" };
+  const first = await retain(plan, wallet, async () => true, { drainAllSol: true });
+  const second = await retain(plan, wallet, async () => true, { drainAllSol: true });
+  assert.equal(first.closed, false);
+  assert.equal(second.closed, true);
 });
 
 test("the durable worker lease permits every recovery action while sweeping", () => {

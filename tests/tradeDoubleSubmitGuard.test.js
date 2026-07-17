@@ -229,7 +229,7 @@ test("Halt & Release only closes a settled Stop & Sweep and keeps recovery custo
 test("rolling volume keeps a funded ghost wallet recoverable when buy outcome is uncertain", () => {
   const rolling = functionBody(serverSource, "runRollingVolumeBotStep");
   const transferAt = rolling.indexOf('kind: "rolling-fund"');
-  const branchEnd = rolling.indexOf("if (plan.roundsDone >= maxRounds)", transferAt);
+  const branchEnd = rolling.indexOf("// SELL:", transferAt);
 
   assert.ok(transferAt >= 0 && branchEnd > transferAt, "rolling buy branch is missing");
   const fundedBuyAttempt = rolling.slice(transferAt, branchEnd);
@@ -249,6 +249,21 @@ test("rolling volume keeps a funded ghost wallet recoverable when buy outcome is
     /(?:plan\.pool\.push|plan\.activeWalletPublicKey\s*=|retain(?:ed)?VolumeWallet|queueVolumeWalletCleanup)/,
     "the funded wallet must remain discoverable by stop/sweep recovery"
   );
+});
+
+test("rolling volume is continuous and exact-one-token cleanup is server enforced", () => {
+  const start = functionBody(serverSource, "webStartVolumeBotCore");
+  const rolling = functionBody(serverSource, "runRollingVolumeBotStep");
+  const row = functionBody(serverSource, "webVolumeBotRow");
+
+  assert.match(start, /const keepDust = true/);
+  assert.doesNotMatch(start, /const keepDust = Boolean\(body\.keepDust\)/);
+  assert.match(start, /rollingWallets: true, continuous: true, maxRounds: 0/);
+  assert.match(start, /until Stop or source SOL runs low/);
+  assert.doesNotMatch(rolling, /roundsDone\s*<\s*maxRounds|Buy quota reached/);
+  assert.match(rolling, /getSolBalanceCached\(decryptWallet\(sourceRecord\)\.publicKey, \{ force: true \}\)/);
+  assert.match(rolling, /Source SOL spent/);
+  assert.match(row, /continuous: rolling/);
 });
 
 test("normal balance hydration excludes hidden volume wallets before any RPC fan-out", () => {
@@ -1144,6 +1159,21 @@ test("Fun profile clearly exposes naming, creation, and login recovery", () => {
   assert.match(fun, /location\.origin/);
 });
 
+test("shared web profiles accept two-character usernames on every account surface", () => {
+  const fun = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "utf8");
+  const cash = fs.readFileSync(new URL("../web/public/cash/cash.js", import.meta.url), "utf8");
+  const classic = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
+  const terminal = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
+  assert.match(serverSource, /Username must be 2-24 characters/);
+  assert.match(fun, /Username must be 2–24 letters/);
+  assert.match(cash, /Username must be 2–24 letters/);
+  assert.match(classic, /Username must be 2-24 characters/);
+  assert.match(terminal, /Username must be 2-24 characters/);
+  for (const source of [serverSource, fun, cash, classic]) {
+    assert.doesNotMatch(source, /Username must be 3(?:-|\u2013)24/);
+  }
+});
+
 test("Fun Discover supports public username search and a saved Following tab", () => {
   const fun = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "utf8");
   const html = fs.readFileSync(new URL("../web/public/fun.html", import.meta.url), "utf8");
@@ -1340,8 +1370,17 @@ test("coin charts stay trader-focused while Robinhood liquidity remains creator-
     const rhChart = functionBody(src, "renderRhTrade");
     assert.doesNotMatch(rhChart, /blinkLinksHtml/);
     assert.doesNotMatch(rhChart, /rhAddLiquidity/);
+    assert.match(rhChart, /class="trade rhTradeUnified"/);
+    assert.match(rhChart, /class="tradeSide"/);
+    assert.match(rhChart, /id="rhTradeTape"/);
+    assert.match(rhChart, /loadInlineTape\(address,r,"robinhood","rhTradeTape"\)/);
+    assert.match(rhChart, /pays with SOL/);
+    assert.match(functionBody(src, "renderTrade"), /id="tradeTape"/);
     assert.match(functionBody(src, "renderLaunch"), />Open trading</);
   }
+  assert.match(serverSource, /pathname === "\/api\/web\/token-trades"/);
+  assert.match(serverSource, /requestUrl\.searchParams\.get\("network"\)/);
+  assert.match(functionBody(serverSource, "fetchGeckoPoolTrades"), /networks\/\$\{network\}\/pools/);
 });
 
 test("Raid bot: clean card + overall progress bar + goal-to-go + views + Refresh", () => {

@@ -365,6 +365,7 @@ const state = {
   smartChartBootstrap: {},
   smartChartBootstrapLoading: {},
   smartChartPrefetchLog: [],
+  smartChartTape: null,
   smartChartZoom: 100,
   smartChartView: "chart",
   chartTradeTab: new URLSearchParams(window.location.search || "").get("tab") === "sell" ? "sell" : "buy",
@@ -408,7 +409,7 @@ const state = {
   slimeBotMode: "smart",
   slimeBotAggr: "med",
   slimeBotStagger: "steady",
-  slimeBotKeepDust: false,
+  slimeBotKeepDust: true,
   slimeBotOffset: false,
   distributeStatus: "",
   distributeBusy: false,
@@ -4947,6 +4948,115 @@ function slimeConfirm({ title = "Confirm", lines = [], confirmLabel = "Confirm",
   });
 }
 
+function tokenSendDialog({ symbol = "token", balance = 0, walletLabel = "Wallet" } = {}) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "slime-confirm-overlay";
+    overlay.innerHTML = `
+      <div class="slime-confirm-card" role="dialog" aria-modal="true" aria-label="Send ${escapeHtml(symbol)}">
+        <h3 class="slime-confirm-title">Send ${escapeHtml(symbol)}</h3>
+        <p class="slime-confirm-line">${escapeHtml(walletLabel)} · ${escapeHtml(String(balance))} available</p>
+        <label class="slime-confirm-input-label">Amount
+          <input class="slime-confirm-input" data-token-send-amount inputmode="decimal" value="${escapeHtml(String(balance))}">
+        </label>
+        <div class="card-actions compact">${[25, 50, 100].map((percent) => `<button type="button" data-token-send-percent="${percent}">${percent}%</button>`).join("")}</div>
+        <label class="slime-confirm-input-label">Destination Solana wallet
+          <input class="slime-confirm-input" data-token-send-destination autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste wallet address">
+        </label>
+        <div class="slime-confirm-actions">
+          <button type="button" class="slime-confirm-cancel">Cancel</button>
+          <button type="button" class="slime-confirm-accept">Review send</button>
+        </div>
+      </div>`;
+    const amount = overlay.querySelector("[data-token-send-amount]");
+    const destination = overlay.querySelector("[data-token-send-destination]");
+    let percent = 100;
+    const previousFocus = document.activeElement;
+    const settle = (result) => {
+      overlay.remove();
+      document.removeEventListener("keydown", onKeydown, true);
+      try { previousFocus?.focus?.({ preventScroll: true }); } catch {}
+      resolve(result);
+    };
+    const accept = () => settle({
+      amount: String(amount?.value || "").trim(),
+      destination: String(destination?.value || "").trim(),
+      percent
+    });
+    const onKeydown = (event) => {
+      if (event.key === "Escape") { event.preventDefault(); settle(null); }
+      else if (event.key === "Enter") { event.preventDefault(); accept(); }
+    };
+    amount?.addEventListener("input", () => { percent = 0; });
+    overlay.querySelectorAll("[data-token-send-percent]").forEach((button) => {
+      button.addEventListener("click", () => {
+        percent = Number(button.dataset.tokenSendPercent || 0);
+        const selected = Number(balance) * percent / 100;
+        if (amount) amount.value = selected.toLocaleString("en-US", { useGrouping: false, maximumSignificantDigits: 12 });
+      });
+    });
+    overlay.addEventListener("pointerdown", (event) => { if (event.target === overlay) settle(null); });
+    overlay.querySelector(".slime-confirm-cancel")?.addEventListener("click", () => settle(null));
+    overlay.querySelector(".slime-confirm-accept")?.addEventListener("click", accept);
+    document.addEventListener("keydown", onKeydown, true);
+    document.body.appendChild(overlay);
+    destination?.focus({ preventScroll: true });
+  });
+}
+
+async function sendPositionToken(button) {
+  const tokenMint = String(button.dataset.positionSendToken || "").trim();
+  const walletIndex = Number(button.dataset.positionSendWalletIndex || 0);
+  const walletPublicKey = String(button.dataset.positionSendWallet || "").trim();
+  const walletLabel = String(button.dataset.positionSendWalletLabel || "Wallet");
+  const symbol = String(button.dataset.positionSendSymbol || shortAddress(tokenMint));
+  const balance = Number(button.dataset.positionSendBalance || 0);
+  if (!tokenMint || !walletIndex || !walletPublicKey || !(balance > 0)) {
+    setError("Refresh this position before sending.");
+    return;
+  }
+  const draft = await tokenSendDialog({ symbol, balance, walletLabel });
+  if (!draft) return;
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(draft.destination)) {
+    setError("Enter a valid Solana wallet address.");
+    return;
+  }
+  if (!(Number(draft.amount) > 0) || Number(draft.amount) > balance * 1.000000001) {
+    setError("Enter an amount within this wallet's token balance.");
+    return;
+  }
+  const approved = await slimeConfirm({
+    title: `Send ${symbol}?`,
+    lines: [`${draft.amount} ${symbol}`, `From ${walletLabel}`, `To ${shortAddress(draft.destination)}`, "This on-chain transfer cannot be reversed."],
+    confirmLabel: "Send tokens",
+    danger: true
+  });
+  if (!approved) return;
+  button.disabled = true;
+  try {
+    const data = await api("/api/web/wallets/send-token", {
+      method: "POST",
+      timeoutMs: 95_000,
+      body: JSON.stringify({
+        walletIndex,
+        walletPublicKey,
+        tokenMint,
+        destination: draft.destination,
+        ...(draft.percent > 0 ? { percent: draft.percent } : { amount: draft.amount }),
+        sendAttemptId: createClientAttemptId("token-send")
+      })
+    });
+    state.lastAction = data.transfer?.summary || `${symbol} sent.`;
+    setError("");
+    await refreshPositionsOnly({ force: true, reason: "token-send" });
+  } catch (error) {
+    setError(error.message || "Token send failed.");
+  } finally {
+    button.disabled = false;
+    render();
+  }
+}
+
 function shouldDeferTerminalRender() {
   if (document.hidden && state.route === "terminal") return true;
   const active = document.activeElement;
@@ -6693,7 +6803,7 @@ function loginSecuritySection() {
       </div>
       <label>
         Username
-        <input data-profile-username type="text" autocomplete="username" placeholder="slimewire" value="${escapeHtml(username)}">
+        <input data-profile-username type="text" autocomplete="username" minlength="2" maxlength="24" placeholder="slimewire" value="${escapeHtml(username)}">
       </label>
       <label>
         Password
@@ -8322,7 +8432,7 @@ function driveOgreVolumeStage(stage) {
   if (bot) {
     const st = bot.stats || {};
     const buys = Number(st.buys || 0), sells = Number(st.sells || 0), funded = Number(st.fundedSol || 0);
-    const cyc = Number(bot.currentCycle || 0), tot = Number(bot.cycles || bot.maxRounds || 0);
+    const cyc = Number(bot.currentCycle || 0), tot = Number(bot.cycles || bot.maxRounds || 0), continuous = Boolean(bot.rolling && bot.continuous);
     const ba = Number(bot.buyAmountSol || 0);
     if (budget) {
       budget.classList.add("show");
@@ -8334,7 +8444,7 @@ function driveOgreVolumeStage(stage) {
       ring.classList.add("show");
       const C = 2 * Math.PI * 22; const prog = tot > 0 ? Math.min(1, cyc / tot) : 0;
       const prg = ring.querySelector("[data-ov-ring-prg]"); if (prg) { prg.style.strokeDasharray = C; prg.style.strokeDashoffset = C * (1 - prog); }
-      const lbl = ring.querySelector("[data-ov-ring-lbl]"); if (lbl) lbl.textContent = cyc + "/" + (tot || "?");
+      const lbl = ring.querySelector("[data-ov-ring-lbl]"); if (lbl) lbl.textContent = continuous ? `${cyc}/∞` : cyc + "/" + (tot || "?");
     }
     if (read) {
       read.classList.add("show");
@@ -9711,10 +9821,10 @@ function volumeBotPanelHtml() {
         </div>
 
         <div class="vbot-config-toggles">
-          <label class="vbot-toggle">
-            <input type="checkbox" data-vbot-keepdust ${state.slimeBotKeepDust ? "checked" : ""}>
-            <span><strong>Leave dust</strong> — keep 1 token in each recycled wallet (looks like a real holder)</span>
-          </label>
+          <div class="vbot-toggle">
+            <input type="checkbox" checked disabled aria-label="Exact one-token retirement enabled">
+            <span><strong>Clean retirement</strong> — every ghost wallet keeps exactly 1 target token; all native SOL is swept back</span>
+          </div>
           <label class="vbot-toggle">
             <input type="checkbox" data-vbot-offset ${state.slimeBotOffset ? "checked" : ""}>
             <span><strong>Offset sell</strong> — a different wallet sells behind each buy (no instant self-sell)</span>
@@ -9787,7 +9897,7 @@ function readVolumeBotForm() {
     sweepBack: true,
     walletIndexes: [],
     walletGroup: "",
-    keepDust: Boolean($("[data-vbot-keepdust]")?.checked),
+    keepDust: true,
     offsetSell: Boolean($("[data-vbot-offset]")?.checked),
     staggerPattern: ["steady", "waves", "organic", "ladder"].includes(state.slimeBotStagger) ? state.slimeBotStagger : "steady",
     investment,
@@ -13018,6 +13128,10 @@ async function saveLoginCredentials() {
     writeText(status, "Enter a username and password first.");
     return;
   }
+  if (!/^[a-z0-9][a-z0-9_.-]{1,23}$/i.test(username)) {
+    writeText(status, "Username must be 2-24 characters and use letters, numbers, dots, dashes, or underscores.");
+    return;
+  }
 
   try {
     await ensureWebAccount(status, "Creating secure web profile...");
@@ -15837,7 +15951,7 @@ async function sweepBackgroundWallets(attempt = 0) {
       dedupe: false,
       timeoutMs: API_LONG_ACTION_TIMEOUT_MS
     });
-    const keepFollowing = attempt < 60 && (data?.queued || (Number(data?.pending || 0) > 0 && Number(data?.soldCount || 0) > 0));
+    const keepFollowing = attempt < 120 && (data?.queued || Number(data?.pending || 0) > 0);
     state.sweepBackgroundStatus = `${data?.summary || "Background wallet recovery started."}${keepFollowing ? " Finishing automatically…" : ""}`;
     await refreshWalletNow({ force: true, deep: true, reason: "sweep-background" }).catch(() => {});
     if (keepFollowing) {
@@ -16020,11 +16134,21 @@ function walletPositionValueSol(position, amount) {
   return totalValue * (amount / totalAmount);
 }
 
+function walletPositionPnlPercent(position) {
+  const buys = Number(position?.buys);
+  const spent = Number(position?.spentSol);
+  const value = Number.parseFloat(String(position?.openPnlPercent ?? "").replace("%", ""));
+  return buys > 0 && spent > 0 && Number.isFinite(value) ? value : null;
+}
+
 function walletPositionRowHtml(entry, wallet) {
   const { position, holding, amount } = entry;
   const valueSol = walletPositionValueSol(position, amount);
   const valueLabel = valueSol === null ? (position.valuePending ? "updating" : "price unavailable") : `${valueSol.toFixed(valueSol >= 1 ? 4 : 6)} SOL`;
   const walletPublicKey = String(wallet.publicKey || holding.walletPublicKey || "");
+  const pnlPercent = walletPositionPnlPercent(position);
+  const pnlLabel = pnlPercent === null ? "PnL unavailable" : `${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(1)}% PnL`;
+  const pnlClass = pnlPercent === null ? "" : (pnlPercent >= 0 ? "is-positive" : "is-negative");
   return `
     <article class="row-card position wallet-position-row with-avatar is-clickable" data-token-chart="${escapeHtml(position.tokenMint)}" data-token-chart-source="wallet-position-row" title="Open chart and trade this position">
       ${livePairAvatarHtml(position)}
@@ -16033,12 +16157,14 @@ function walletPositionRowHtml(entry, wallet) {
         ${position.name ? `<small>${escapeHtml(position.name)}</small>` : ""}
         <span>${escapeHtml(holding.uiAmount || String(amount))} tokens</span>
         <small>Value in this wallet: ${escapeHtml(valueLabel)}</small>
+        <small class="${pnlClass}">${escapeHtml(pnlLabel)}</small>
       </div>
       <div class="card-actions compact wallet-position-actions">
         <button data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="25" data-position-sell-wallet="${escapeHtml(walletPublicKey)}" data-position-sell-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}">25%</button>
         <button data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="50" data-position-sell-wallet="${escapeHtml(walletPublicKey)}" data-position-sell-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}">50%</button>
         <button class="danger-lite" data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="100" data-position-sell-wallet="${escapeHtml(walletPublicKey)}" data-position-sell-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}">100%</button>
         <button data-position-sell-custom="${escapeHtml(position.tokenMint)}" data-position-sell-wallet="${escapeHtml(walletPublicKey)}" data-position-sell-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}">Custom</button>
+        <button data-position-send-token="${escapeHtml(position.tokenMint)}" data-position-send-wallet-index="${wallet.index}" data-position-send-wallet="${escapeHtml(walletPublicKey)}" data-position-send-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}" data-position-send-symbol="${escapeHtml(position.symbol || position.shortMint)}" data-position-send-balance="${escapeHtml(String(amount))}">Send</button>
         <button class="primary" data-smart-chart-token="${escapeHtml(position.tokenMint)}">Chart</button>
       </div>
     </article>`;
@@ -19503,6 +19629,139 @@ function tradesForToken(mint = "") {
   return (state.pnl?.trades || []).filter((trade) => String(trade?.tokenMint || trade?.mint || "").trim() === key);
 }
 
+let smartChartTapeTimer = null;
+let smartChartTapeInFlight = "";
+
+function smartChartTapeNetwork(token = {}) {
+  const address = String(token?.tokenMint || token?.address || state.smartChartToken || "").trim();
+  const chain = String(token?.chain || token?.chainId || token?.network || token?.source || "").toLowerCase();
+  return /^0x[0-9a-f]{40}$/i.test(address) || /robinhood|hood/.test(chain) ? "robinhood" : "solana";
+}
+
+function smartChartTapePool(token = {}) {
+  const mint = String(token?.tokenMint || token?.mint || state.smartChartToken || "").trim();
+  return String(token?.pairAddress || token?.pairId || smartChartResolvedDex(mint)?.pairAddress || smartChartBootstrapForMint(mint)?.pairAddress || "").trim();
+}
+
+function scheduleSmartChartTapeRefresh(mint) {
+  if (smartChartTapeTimer) window.clearTimeout(smartChartTapeTimer);
+  smartChartTapeTimer = window.setTimeout(() => {
+    smartChartTapeTimer = null;
+    if (state.route !== "terminal" || state.activeTab !== "smartChart" || String(state.smartChartToken || "") !== String(mint || "")) return;
+    ensureSmartChartTapeData(selectedSmartChartTokenRow(), { force: true });
+  }, 4_000);
+}
+
+function ensureSmartChartTapeData(token = {}, options = {}) {
+  const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  if (!mint) return;
+  const network = smartChartTapeNetwork(token);
+  const pool = smartChartTapePool(token);
+  const isPump = network === "solana" && !pool && Boolean(pumpUrlForRow(token) && isUnbondedPumpToken(token));
+  const key = `${network}:${pool || mint}`;
+  const current = state.smartChartTape;
+  if (!options.force && current?.key === key && Date.now() - Number(current.loadedAt || 0) < 3_500) return;
+  if (smartChartTapeInFlight === key) return;
+  if (!pool && !isPump) {
+    state.smartChartTape = { key, mint, network, pool: "", trades: current?.mint === mint ? current.trades || [] : [], loading: true, loadedAt: 0, message: "Resolving the strongest pool…" };
+    scheduleSmartChartTapeRefresh(mint);
+    return;
+  }
+  smartChartTapeInFlight = key;
+  state.smartChartTape = { key, mint, network, pool, trades: current?.key === key ? current.trades || [] : [], loading: true, loadedAt: Number(current?.loadedAt || 0), message: "" };
+  const path = isPump
+    ? `/api/web/pump-trades?mint=${encodeURIComponent(mint)}`
+    : `/api/web/token-trades?pool=${encodeURIComponent(pool)}&network=${encodeURIComponent(network)}`;
+  void api(path, { timeoutMs: 9_000 }).then((data) => {
+    if (String(state.smartChartToken || "") !== mint) return;
+    state.smartChartTape = { key, mint, network, pool, trades: Array.isArray(data?.trades) ? data.trades.slice(0, 60) : [], loading: false, loadedAt: Date.now(), message: "" };
+    if (state.route === "terminal" && state.activeTab === "smartChart") render({ preserveSmartChartFrame: true });
+  }).catch((error) => {
+    if (String(state.smartChartToken || "") !== mint) return;
+    state.smartChartTape = { key, mint, network, pool, trades: current?.key === key ? current.trades || [] : [], loading: false, loadedAt: Date.now(), message: publicErrorMessage(error?.message || "Trade tape is reconnecting.") };
+    if (state.route === "terminal" && state.activeTab === "smartChart") render({ preserveSmartChartFrame: true });
+  }).finally(() => {
+    if (smartChartTapeInFlight === key) smartChartTapeInFlight = "";
+    scheduleSmartChartTapeRefresh(mint);
+  });
+}
+
+function smartChartTapePrice(value) {
+  const price = Number(value);
+  if (!Number.isFinite(price) || price <= 0) return "—";
+  if (price >= 1) return `$${price.toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
+  return `$${price.toPrecision(4)}`;
+}
+
+function smartChartTapeUsd(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount < 0) return "—";
+  if (amount < 1) return `$${amount.toFixed(2)}`;
+  return compactUsd(amount);
+}
+
+function smartChartTapeAge(value) {
+  const time = Date.parse(value || "");
+  if (!Number.isFinite(time)) return "now";
+  const seconds = Math.max(0, Math.round((Date.now() - time) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m`;
+}
+
+function smartChartTapeSummary(trades = []) {
+  const now = Date.now();
+  const recent = trades.filter((trade) => {
+    const time = Date.parse(trade?.ts || "");
+    return Number.isFinite(time) && now - time <= 5 * 60_000;
+  });
+  const sample = recent.length >= 3 ? recent : trades.slice(0, 30);
+  const buys = sample.filter((trade) => trade?.kind !== "sell");
+  const sells = sample.filter((trade) => trade?.kind === "sell");
+  const buyUsd = buys.reduce((sum, trade) => sum + Math.max(0, Number(trade?.usd) || 0), 0);
+  const sellUsd = sells.reduce((sum, trade) => sum + Math.max(0, Number(trade?.usd) || 0), 0);
+  const totalUsd = buyUsd + sellUsd;
+  const pressure = totalUsd > 0 ? buyUsd / totalUsd : sample.length ? buys.length / sample.length : 0.5;
+  const times = sample.map((trade) => Date.parse(trade?.ts || "")).filter(Number.isFinite).sort((a, b) => b - a);
+  const spanMinutes = times.length > 1 ? Math.max(0.25, (times[0] - times[times.length - 1]) / 60_000) : 1;
+  const pace = sample.length / spanMinutes;
+  const direction = pressure >= 0.68 ? "Strong buying" : pressure >= 0.56 ? "Buy leaning" : pressure <= 0.32 ? "Strong selling" : pressure <= 0.44 ? "Sell leaning" : "Balanced";
+  const tone = pressure >= 0.56 ? "buy" : pressure <= 0.44 ? "sell" : "flat";
+  return { buys: buys.length, sells: sells.length, buyUsd, sellUsd, netUsd: buyUsd - sellUsd, pressure, pace, direction, tone, sampleSize: sample.length };
+}
+
+function smartChartTradeTapeHtml(token = {}) {
+  const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  ensureSmartChartTapeData(token);
+  const tape = state.smartChartTape?.mint === mint ? state.smartChartTape : { trades: [], loading: true, message: "" };
+  const trades = Array.isArray(tape.trades) ? tape.trades : [];
+  const summary = smartChartTapeSummary(trades);
+  const explorer = tape.network === "robinhood" ? "https://robinhoodchain.blockscout.com" : "https://solscan.io";
+  const rows = trades.slice(0, 16).map((trade) => {
+    const side = trade?.kind === "sell" ? "sell" : "buy";
+    const txHref = trade?.tx ? `${explorer}/tx/${encodeURIComponent(trade.tx)}` : "";
+    const makerHref = trade?.maker ? `${explorer}/address/${encodeURIComponent(trade.maker)}` : "";
+    return `<tr data-side="${side}"><td><span class="tape-side ${side}">${side.toUpperCase()}</span><small>${escapeHtml(smartChartTapeAge(trade?.ts))}</small></td><td>${escapeHtml(smartChartTapeUsd(trade?.usd))}</td><td>${escapeHtml(smartChartTapePrice(trade?.price))}</td><td>${makerHref ? `<a href="${escapeHtml(makerHref)}" target="_blank" rel="noreferrer">${escapeHtml(shortAddress(trade.maker))}</a>` : "—"}</td><td>${txHref ? `<a class="tape-tx" href="${escapeHtml(txHref)}" target="_blank" rel="noreferrer">↗</a>` : "—"}</td></tr>`;
+  }).join("");
+  const pressurePct = Math.round(summary.pressure * 100);
+  return `
+    <section class="smart-trade-tape" data-smart-trade-tape data-tone="${summary.tone}">
+      <div class="smart-trade-tape-head">
+        <div><span class="tape-live-dot"></span><h4>Live Trade Tape</h4><small>${tape.network === "robinhood" ? "Robinhood" : "Solana"} · recent market swaps</small></div>
+        <span class="tape-live-label">${tape.loading ? "SYNCING" : "LIVE"}</span>
+      </div>
+      <div class="tape-gauges">
+        <article><span>Direction</span><strong>${escapeHtml(summary.direction)}</strong><div class="tape-pressure"><i style="left:${pressurePct}%"></i></div><small>${pressurePct}% buy pressure · ${summary.sampleSize} trades</small></article>
+        <article><span>Net flow</span><strong class="${summary.netUsd >= 0 ? "buy" : "sell"}">${summary.netUsd >= 0 ? "+" : "−"}${escapeHtml(smartChartTapeUsd(Math.abs(summary.netUsd)))}</strong><small>Buys ${escapeHtml(smartChartTapeUsd(summary.buyUsd))} · Sells ${escapeHtml(smartChartTapeUsd(summary.sellUsd))}</small></article>
+        <article><span>Pace</span><strong>${summary.pace > 0 ? summary.pace.toFixed(summary.pace >= 10 ? 0 : 1) : "0"}/min</strong><small>${summary.buys} buys · ${summary.sells} sells</small></article>
+      </div>
+      <div class="smart-trade-tape-table">
+        <table><thead><tr><th>Side / Time</th><th>USD</th><th>Price</th><th>Maker</th><th>Tx</th></tr></thead><tbody>${rows || `<tr><td colspan="5" class="tape-empty">${escapeHtml(tape.message || (tape.loading ? "Loading recent swaps…" : "No recent swaps in this pool yet."))}</td></tr>`}</tbody></table>
+      </div>
+      ${tape.message && rows ? `<p class="tape-reconnect">${escapeHtml(tape.message)}</p>` : ""}
+    </section>
+  `;
+}
+
 function smartChartTransactionsHtml(token = {}, heldPosition = null) {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
   const trades = tradesForToken(mint);
@@ -19879,7 +20138,8 @@ function smartChartHtml() {
             </div>
           </div>
           ${smartChartMarketBarHtml(token, heldPosition)}
-          ${smartChartDexFrameHtml(token, "chartTxns")}
+          ${smartChartDexFrameHtml(token, "chart")}
+          ${smartChartTradeTapeHtml(token)}
         </article>
         <aside class="terminal-panel smart-chart-side smart-chart-clean-side">
           <h3>Trade ${escapeHtml(tokenLabel)}</h3>
@@ -24150,6 +24410,12 @@ document.addEventListener("click", async (event) => {
     });
     return;
   }
+  if (target.matches("[data-position-send-token]")) {
+    event.preventDefault();
+    event.stopPropagation();
+    await sendPositionToken(target);
+    return;
+  }
   if (target.matches("[data-position-sell-custom]")) {
     event.preventDefault();
     event.stopPropagation();
@@ -24961,9 +25227,6 @@ document.addEventListener("change", async (event) => {
   if (target?.matches?.("[data-vbot-autocreate]")) {
     const manual = document.querySelector("[data-vbot-manual-wallets]");
     if (manual) manual.hidden = Boolean(target.checked);
-  }
-  if (target?.matches?.("[data-vbot-keepdust]")) {
-    state.slimeBotKeepDust = Boolean(target.checked);
   }
   if (target?.matches?.("[data-vbot-offset]")) {
     state.slimeBotOffset = Boolean(target.checked);

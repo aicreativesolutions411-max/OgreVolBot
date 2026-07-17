@@ -793,6 +793,29 @@ export async function rhTransferEth(solanaSecretKey, toAddress, wei, rpcUrl) {
   return sent.hash;
 }
 
+export async function rhTransferErc20(solanaSecretKey, tokenAddress, toAddress, amountRaw, rpcUrl) {
+  const wallet = evmWalletFromSolana(solanaSecretKey, rpcUrl);
+  const token = ethers.getAddress(String(tokenAddress || ""));
+  const destination = ethers.getAddress(String(toAddress || ""));
+  if (destination.toLowerCase() === wallet.address.toLowerCase()) throw new Error("That destination is this wallet.");
+  const raw = BigInt(amountRaw || 0);
+  if (raw <= 0n) throw new Error("Enter a token amount greater than zero.");
+  const contract = new ethers.Contract(token, ["function transfer(address,uint256) returns (bool)"], wallet);
+  const request = await contract.transfer.populateTransaction(destination, raw);
+  try {
+    const estimated = await wallet.estimateGas(request);
+    request.gasLimit = (estimated * 14n) / 10n;
+  } catch (error) {
+    const message = String(error?.shortMessage || error?.message || "");
+    if (/insufficient funds/i.test(message)) throw new Error("Not enough ETH for the Robinhood Chain network fee.");
+    throw new Error(`Token transfer simulation failed: ${message.slice(0, 220)}`);
+  }
+  const sent = await wallet.sendTransaction(request);
+  const receipt = await sent.wait(1, 90_000);
+  if (!receipt || Number(receipt.status) !== 1) throw new Error("Token transfer failed on Robinhood Chain.");
+  return sent.hash;
+}
+
 // Convert the accrued ETH fee pot -> SOL at the Solana fee wallet. Leaves a gas reserve behind.
 export async function rhSweepFeesToSol({ appSecret, solFeeWallet, rpcUrl, minEth = 0.002, gasReserveEth = 0.0003 }) {
   const feeWallet = rhFeeEvmWallet(appSecret, rpcUrl);

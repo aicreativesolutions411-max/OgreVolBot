@@ -45,6 +45,7 @@
     chartMode: "chart",
     coinCalls: [],
     positions: [],
+    rhWalletPosition: null,
     positionValuePromise: null,
     positionValueForceRequested: false,
     positionLoadVersion: 0,
@@ -68,6 +69,7 @@
     quickAmount: "0.1",
     quickPanel: "trade",
     pendingSolSend: null,
+    pendingTokenSend: null,
     pendingWalletManagerAction: null,
     launchReturnView: "home",
     deferredInstall: null
@@ -864,7 +866,7 @@
       panel.innerHTML = emptyState("Your mobile wallet starts here", "Tap Deposit or Receive when you are ready. SlimeWire creates the account only when you use it.");
       return;
     }
-    if (state.profileTab === "positions") renderWalletPositions();
+    if (state.profileTab === "positions") { renderWalletPositions(); void loadFunRhPositions(); }
     else if (state.profileTab === "activity") loadWalletActivity();
     else if (state.profileTab === "created") loadCreatedCoins();
     else renderSocialProfile();
@@ -885,8 +887,8 @@
     const tracker = user.referralTracker || {}, rows = Array.isArray(tracker.rows) ? tracker.rows : [];
     const trackerRows = rows.slice(0, 20).map((row) => `<div class="referral-row"><span><b>${escapeHtml(row.profileName || "Referral")}</b><small>${escapeHtml(row.shortWallet || "No wallet yet")} · ${Number(row.tradeCount || 0)} trades</small></span><strong>${escapeHtml(row.volumeSol || "0")} SOL<small>${escapeHtml(row.earnedSol || "0")} SOL earned</small></strong></div>`).join("");
     const earnedSol = user.referralStats?.totalSol || "0";
-    const namingCard = user.username ? "" : `<div class="read-card account-welcome"><span>PROFILE SETUP</span><h3>Create a profile or log in.</h3><p>Name and secure the wallets already on this account, or log in to an existing SlimeWire profile.</p><div class="field"><label>Profile name</label><input data-profile-username maxlength="24" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="Choose a profile name"></div><div class="field"><label>Password</label><input data-profile-password type="password" autocomplete="new-password" placeholder="8+ characters"></div><div class="account-actions"><button class="submit-trade" type="button" data-save-social-profile>Create profile</button><button class="recovery-button" type="button" data-fun-account="login">Log in</button></div><p class="fineprint">Creating a profile keeps your current wallets and settings. Logging in opens an existing profile.</p></div>`;
-    panel.innerHTML = `<div class="read-card account-status"><span>ACCOUNT</span><h3>${escapeHtml(user.username ? `@${user.username}` : "Profile not named yet")}</h3><p>${user.hasPasswordLogin ? "Login protected · available on your other devices" : "Add a username and password so this profile can be recovered anywhere."}</p></div><div class="read-card"><h3>Invite &amp; earn 💸</h3><p>Choose a clean link ending, then share it. When invited traders trade, your referral earnings are tracked here.</p><div class="field referral-link-field"><label>Your link</label><input readonly value="${escapeHtml(user.referralLink || location.origin)}"></div><div class="field"><label>Custom link ending</label><input data-referral-code value="${escapeHtml(user.referralCode || "")}" maxlength="32" placeholder="YOURNAME"></div><div class="account-actions"><button class="submit-trade" type="button" data-save-referral-code>Save link</button><button class="recovery-button" type="button" data-copy-invite>Copy invite link</button></div></div><div class="referral-stats"><div><b>${Number(tracker.count || 0)}</b><span>Referrals</span></div><div><b>${Number(tracker.activeCount || 0)}</b><span>Active</span></div><div><b>${escapeHtml(tracker.volumeSol || "0")}</b><span>SOL volume</span></div><div><b>${escapeHtml(earnedSol)}</b><span>SOL earned</span></div></div><details class="profile-drawer"><summary>Referral tracker <span>${Number(tracker.count || 0)} users</span></summary><div class="profile-drawer-body">${trackerRows || '<p>No referrals yet. Your first signup will appear here even before they trade.</p>'}</div></details><details class="profile-drawer"><summary>Referral payout wallet <span>${user.referralPayoutWallet ? escapeHtml(short(user.referralPayoutWallet)) : "Set wallet"}</span></summary><div class="profile-drawer-body"><p>Your earned fees are paid to this Solana wallet. Leave it blank to use your main SlimeWire wallet.</p><div class="field"><label>Payout wallet</label><input data-referral-payout value="${escapeHtml(user.referralPayoutWallet || "")}" placeholder="Solana wallet address"></div><button class="submit-trade" type="button" data-save-referral-payout>Save payout wallet</button></div></details><div class="read-card"><h3>Your public trader profile</h3><p>Publish only your opted-in trade record and let people follow alerts. Following never places or copies a trade.</p></div><div class="preset-editor"><div class="field"><label>Username</label><input data-profile-username value="${escapeHtml(user.username || "")}" maxlength="24" placeholder="slimetrader"></div><div class="field"><label>${user.hasPasswordLogin ? "New password (only needed to change login)" : "Password"}</label><input type="password" data-profile-password autocomplete="new-password" placeholder="8+ characters"></div><label class="check-row"><input type="checkbox" data-profile-public ${user.showOnTraderBoard ? "checked" : ""}> Show my opted-in trading profile publicly</label><button class="submit-trade" type="button" data-save-social-profile>Save profile</button><button class="recovery-button" type="button" data-enable-push>Enable trade alerts on this device</button><button class="recovery-button danger-button" type="button" data-fun-sign-out>Sign out on this device</button><p class="fineprint" data-social-status>Profile alerts are informational only. SlimeWire will never auto-buy from a follow.</p></div><a class="fineprint" style="display:block;text-align:center;padding:14px 0 4px" href="/?desktop=1">🖥 Switch to the desktop site</a>`;
+    const namingCard = user.username ? "" : `<div class="read-card account-welcome"><span>PROFILE SETUP</span><h3>Create a profile or log in.</h3><p>Name and secure the wallets already on this account, or log in to an existing SlimeWire profile.</p><div class="field"><label>Profile name</label><input data-profile-username minlength="2" maxlength="24" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="Choose a profile name"></div><div class="field"><label>Password</label><input data-profile-password type="password" autocomplete="new-password" placeholder="8+ characters"></div><div class="account-actions"><button class="submit-trade" type="button" data-save-social-profile>Create profile</button><button class="recovery-button" type="button" data-fun-account="login">Log in</button></div><p class="fineprint">Creating a profile keeps your current wallets and settings. Logging in opens an existing profile.</p></div>`;
+    panel.innerHTML = `<div class="read-card account-status"><span>ACCOUNT</span><h3>${escapeHtml(user.username ? `@${user.username}` : "Profile not named yet")}</h3><p>${user.hasPasswordLogin ? "Login protected · available on your other devices" : "Add a username and password so this profile can be recovered anywhere."}</p></div><div class="read-card"><h3>Invite &amp; earn 💸</h3><p>Choose a clean link ending, then share it. When invited traders trade, your referral earnings are tracked here.</p><div class="field referral-link-field"><label>Your link</label><input readonly value="${escapeHtml(user.referralLink || location.origin)}"></div><div class="field"><label>Custom link ending</label><input data-referral-code value="${escapeHtml(user.referralCode || "")}" maxlength="32" placeholder="YOURNAME"></div><div class="account-actions"><button class="submit-trade" type="button" data-save-referral-code>Save link</button><button class="recovery-button" type="button" data-copy-invite>Copy invite link</button></div></div><div class="referral-stats"><div><b>${Number(tracker.count || 0)}</b><span>Referrals</span></div><div><b>${Number(tracker.activeCount || 0)}</b><span>Active</span></div><div><b>${escapeHtml(tracker.volumeSol || "0")}</b><span>SOL volume</span></div><div><b>${escapeHtml(earnedSol)}</b><span>SOL earned</span></div></div><details class="profile-drawer"><summary>Referral tracker <span>${Number(tracker.count || 0)} users</span></summary><div class="profile-drawer-body">${trackerRows || '<p>No referrals yet. Your first signup will appear here even before they trade.</p>'}</div></details><details class="profile-drawer"><summary>Referral payout wallet <span>${user.referralPayoutWallet ? escapeHtml(short(user.referralPayoutWallet)) : "Set wallet"}</span></summary><div class="profile-drawer-body"><p>Your earned fees are paid to this Solana wallet. Leave it blank to use your main SlimeWire wallet.</p><div class="field"><label>Payout wallet</label><input data-referral-payout value="${escapeHtml(user.referralPayoutWallet || "")}" placeholder="Solana wallet address"></div><button class="submit-trade" type="button" data-save-referral-payout>Save payout wallet</button></div></details><div class="read-card"><h3>Your public trader profile</h3><p>Publish only your opted-in trade record and let people follow alerts. Following never places or copies a trade.</p></div><div class="preset-editor"><div class="field"><label>Username</label><input data-profile-username value="${escapeHtml(user.username || "")}" minlength="2" maxlength="24" placeholder="slimetrader"></div><div class="field"><label>${user.hasPasswordLogin ? "New password (only needed to change login)" : "Password"}</label><input type="password" data-profile-password autocomplete="new-password" placeholder="8+ characters"></div><label class="check-row"><input type="checkbox" data-profile-public ${user.showOnTraderBoard ? "checked" : ""}> Show my opted-in trading profile publicly</label><button class="submit-trade" type="button" data-save-social-profile>Save profile</button><button class="recovery-button" type="button" data-enable-push>Enable trade alerts on this device</button><button class="recovery-button danger-button" type="button" data-fun-sign-out>Sign out on this device</button><p class="fineprint" data-social-status>Profile alerts are informational only. SlimeWire will never auto-buy from a follow.</p></div><a class="fineprint" style="display:block;text-align:center;padding:14px 0 4px" href="/?desktop=1">🖥 Switch to the desktop site</a>`;
     if (namingCard) {
       panel.insertAdjacentHTML("afterbegin", namingCard);
       const statusCard = panel.querySelector(".account-status");
@@ -900,7 +902,7 @@
   }
   async function saveSocialProfile(button) {
     const username = String($("[data-profile-username]")?.value || "").trim(), password = String($("[data-profile-password]")?.value || "");
-    if (!/^[a-z0-9][a-z0-9_.-]{2,23}$/i.test(username)) { toast("Username must be 3–24 letters, numbers, dots, dashes, or underscores.", true); return; }
+    if (!/^[a-z0-9][a-z0-9_.-]{1,23}$/i.test(username)) { toast("Username must be 2–24 letters, numbers, dots, dashes, or underscores.", true); return; }
     const credentialsChanged = username.toLowerCase() !== String(state.user?.username || "").toLowerCase() || Boolean(password);
     if (credentialsChanged && password.length < 8) { toast("Use a password of at least 8 characters to change your login.", true); return; }
     button.disabled = true;
@@ -918,11 +920,11 @@
   }
   function openFunAccount(mode = "login") {
     const create = mode === "create";
-    openSheet(`<div class="sheet-title"><img src="${slimePfp(create ? "create-profile" : "login-profile")}" alt=""><div><h2>${create ? "Create your profile" : "Welcome back"}</h2><p>${create ? "One login for wallets, referrals, and settings" : "Log in to restore your SlimeWire account"}</p></div></div><div class="field"><label>Username</label><input data-fun-account-user autocomplete="username" maxlength="24" autocapitalize="off" spellcheck="false" placeholder="slimetrader"></div><div class="field"><label>Password</label><input data-fun-account-pass type="password" autocomplete="${create ? "new-password" : "current-password"}" placeholder="8+ characters"></div><button class="submit-trade" type="button" data-submit-fun-account="${create ? "create" : "login"}">${create ? "Create profile" : "Log in"}</button><button class="recovery-button" type="button" data-fun-account="${create ? "login" : "create"}">${create ? "Already have one? Log in" : "New here? Create profile"}</button><p class="fineprint" data-fun-account-status>${create ? "Creating a profile does not create or fund a wallet." : "Use the same username and password you saved before."}</p>`);
+    openSheet(`<div class="sheet-title"><img src="${slimePfp(create ? "create-profile" : "login-profile")}" alt=""><div><h2>${create ? "Create your profile" : "Welcome back"}</h2><p>${create ? "One login for wallets, referrals, and settings" : "Log in to restore your SlimeWire account"}</p></div></div><div class="field"><label>Username</label><input data-fun-account-user autocomplete="username" minlength="2" maxlength="24" autocapitalize="off" spellcheck="false" placeholder="slimetrader"></div><div class="field"><label>Password</label><input data-fun-account-pass type="password" autocomplete="${create ? "new-password" : "current-password"}" placeholder="8+ characters"></div><button class="submit-trade" type="button" data-submit-fun-account="${create ? "create" : "login"}">${create ? "Create profile" : "Log in"}</button><button class="recovery-button" type="button" data-fun-account="${create ? "login" : "create"}">${create ? "Already have one? Log in" : "New here? Create profile"}</button><p class="fineprint" data-fun-account-status>${create ? "Creating a profile does not create or fund a wallet." : "Use the same username and password you saved before."}</p>`);
   }
   async function submitFunAccount(button, mode) {
     const username = String($("[data-fun-account-user]")?.value || "").trim(), password = String($("[data-fun-account-pass]")?.value || ""), status = $("[data-fun-account-status]");
-    if (!/^[a-z0-9][a-z0-9_.-]{2,23}$/i.test(username)) { status.textContent = "Username must be 3–24 letters, numbers, dots, dashes, or underscores."; return; }
+    if (!/^[a-z0-9][a-z0-9_.-]{1,23}$/i.test(username)) { status.textContent = "Username must be 2–24 letters, numbers, dots, dashes, or underscores."; return; }
     if (password.length < 8) { status.textContent = "Password must be at least 8 characters."; return; }
     button.disabled = true; button.textContent = mode === "create" ? "Creating…" : "Logging in…";
     const result = await post(mode === "create" ? "/api/web/signup" : "/api/web/password-login", { username, password, ref: localStorage.getItem("ggRef") || "" });
@@ -968,21 +970,53 @@
     const groups = state.wallets.map((wallet) => ({ wallet, summary: walletAssetSummary(wallet) })).filter((group) => group.summary.assets.length);
     const groupsHtml = groups.map(({ wallet, summary }) => {
       const coinValue = summary.coinsSol > 0 ? `${formatPositionSol(summary.coinsSol)} SOL` : (summary.hasPendingValue ? "Pricing…" : "0 SOL");
-      const rows = summary.assets.map((asset) => `
+      const rows = summary.assets.map((asset) => {
+        const pnlPercent = positionOpenPnl(asset) == null ? null : positionPercent(asset.openPnlPercent);
+        const pnlClass = pnlPercent == null ? "" : (pnlPercent >= 0 ? "up" : "down");
+        return `
         <article class="fun-wallet-position-row">
           <button class="fun-position-coin" type="button" data-open-coin="${escapeHtml(asset.tokenMint)}" data-chain-kind="sol">
             <img ${coinImageAttrs(asset)} alt="">
             <span><b>${escapeHtml(asset.symbol || short(asset.tokenMint))}</b><small>${escapeHtml(formatTokenQuantity(asset.quantity))} tokens</small></span>
-            <strong>${asset.valueSol == null ? "Pricing…" : `${escapeHtml(formatPositionSol(asset.valueSol))} SOL`}</strong>
+            <strong><span>${asset.valueSol == null ? "Pricing…" : `${escapeHtml(formatPositionSol(asset.valueSol))} SOL`}</span><small class="position-holding-pnl ${pnlClass}">${pnlPercent == null ? "PnL —" : `${escapeHtml(formatPct(pnlPercent))} PnL`}</small></strong>
           </button>
           <div class="fun-position-sell-grid">
             ${[25, 50, 100].map((percent) => `<button type="button" class="${percent === 100 ? "danger" : ""}" data-fun-position-sell="${escapeHtml(asset.tokenMint)}" data-fun-position-percent="${percent}" data-fun-position-wallet="${escapeHtml(wallet.publicKey)}" data-fun-position-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}">${percent}%</button>`).join("")}
             <button type="button" data-fun-position-custom="${escapeHtml(asset.tokenMint)}" data-fun-position-wallet="${escapeHtml(wallet.publicKey)}" data-fun-position-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}" data-fun-position-symbol="${escapeHtml(asset.symbol || short(asset.tokenMint))}">Custom</button>
           </div>
-        </article>`).join("");
+          <button class="fun-position-send" type="button" data-fun-send-token="${escapeHtml(asset.tokenMint)}" data-fun-send-wallet-index="${wallet.index}" data-fun-send-wallet="${escapeHtml(wallet.publicKey)}" data-fun-send-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}" data-fun-send-symbol="${escapeHtml(asset.symbol || short(asset.tokenMint))}" data-fun-send-balance="${escapeHtml(String(asset.quantity))}">Send tokens</button>
+        </article>`;
+      }).join("");
       return `<section class="fun-wallet-position-group"><header><span><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}</b><small>${escapeHtml(short(wallet.publicKey))}</small></span><strong>${escapeHtml(coinValue)}</strong></header>${rows}</section>`;
     }).join("");
-    panel.innerHTML = `<div class="position-actions"><button type="button" data-send-sol>Send SOL</button><button type="button" data-receive>Receive</button></div>${groupsHtml || emptyState("No open positions", "Coins you buy through SlimeWire appear here.")}`;
+    const rh = state.rhWalletPosition;
+    const active = activeWallet();
+    const rhRows = rh && active && Number(rh.walletIndex) === Number(active.index)
+      ? (rh.tokens || []).filter((token) => Number(token.uiAmount || 0) > 0).map((token) => {
+          const pnl = positionNumber(token.pnlPercent);
+          const pnlClass = pnl == null ? "" : (pnl >= 0 ? "up" : "down");
+          return `<article class="fun-wallet-position-row">
+            <button class="fun-position-coin" type="button" data-open-coin="${escapeHtml(token.address)}" data-chain-kind="robinhood">
+              <img ${coinImageAttrs({ ...token, chain: "robinhood", tokenMint: token.address, imageUrl: token.iconUrl })} alt="">
+              <span><b>${escapeHtml(token.symbol || short(token.address))}</b><small>${escapeHtml(formatTokenQuantity(token.uiAmount))} tokens · RH</small></span>
+              <strong><span>${token.valueUsd == null ? "Pricing…" : escapeHtml(formatWalletUsd(token.valueUsd))}</span><small class="position-holding-pnl ${pnlClass}">${pnl == null ? "PnL —" : `${escapeHtml(formatPct(pnl))} PnL`}</small></strong>
+            </button>
+            <button class="fun-position-send" type="button" data-fun-send-token="${escapeHtml(token.address)}" data-fun-send-chain="robinhood" data-fun-send-wallet-index="${active.index}" data-fun-send-wallet="${escapeHtml(active.publicKey)}" data-fun-send-wallet-label="${escapeHtml(active.label || `Wallet ${active.index}`)}" data-fun-send-symbol="${escapeHtml(token.symbol || short(token.address))}" data-fun-send-balance="${escapeHtml(String(token.uiAmount))}">Send tokens</button>
+          </article>`;
+        }).join("") : "";
+    const rhHtml = rhRows ? `<section class="fun-wallet-position-group"><header><span><b>Robinhood Chain</b><small>${escapeHtml(short(rh.address || ""))}</small></span><strong>${escapeHtml(String(rh.eth || "0"))} ETH</strong></header>${rhRows}</section>` : "";
+    panel.innerHTML = `<div class="position-actions"><button type="button" data-send-sol>Send SOL</button><button type="button" data-receive>Receive</button></div>${groupsHtml || (!rhHtml ? emptyState("No open positions", "Coins you buy through SlimeWire appear here.") : "")}${rhHtml}`;
+  }
+
+  async function loadFunRhPositions(force = false) {
+    const wallet = activeWallet();
+    if (!state.token || !wallet) { state.rhWalletPosition = null; return null; }
+    if (!force && state.rhWalletPosition && Number(state.rhWalletPosition.walletIndex) === Number(wallet.index)) return state.rhWalletPosition;
+    const result = await request(`/api/web/rh/wallet?walletIndex=${encodeURIComponent(wallet.index)}`);
+    if (!result.ok || !result.data?.ok || Number(activeWallet()?.index) !== Number(wallet.index)) return null;
+    state.rhWalletPosition = { ...result.data, walletIndex: wallet.index };
+    if (state.view === "wallet" && state.profileTab === "positions") renderWalletPositions();
+    return state.rhWalletPosition;
   }
 
   function openFunWalletPositionCustom(button) {
@@ -1018,6 +1052,93 @@
       button.textContent = oldText;
     }
   }
+
+  function tokenSendDisplayAmount(balance, percent) {
+    const value = Number(balance) * Number(percent) / 100;
+    if (!Number.isFinite(value) || value <= 0) return "";
+    return value.toLocaleString("en-US", { useGrouping: false, maximumSignificantDigits: 12 });
+  }
+
+  function openFunTokenSend(button) {
+    const tokenMint = String(button.dataset.funSendToken || "").trim();
+    const chain = button.dataset.funSendChain === "robinhood" ? "robinhood" : "solana";
+    const walletIndex = Number(button.dataset.funSendWalletIndex || 0);
+    const walletPublicKey = String(button.dataset.funSendWallet || "").trim();
+    const walletLabel = String(button.dataset.funSendWalletLabel || "Wallet").trim();
+    const symbol = String(button.dataset.funSendSymbol || short(tokenMint)).trim();
+    const balance = Number(button.dataset.funSendBalance || 0);
+    if (!tokenMint || !walletIndex || !walletPublicKey || !(balance > 0)) {
+      toast("Refresh this position before sending.", true);
+      return;
+    }
+    state.pendingTokenSend = {
+      chain, tokenMint, walletIndex, walletPublicKey, walletLabel, symbol, balance,
+      percent: 100, amount: tokenSendDisplayAmount(balance, 100), destination: "", sendAttemptId: ""
+    };
+    openSheet(`<div class="sheet-title"><img src="${escapeHtml(coinImage({ tokenMint }))}" alt=""><div><h2>Send ${escapeHtml(symbol)}</h2><p>${escapeHtml(walletLabel)} · ${escapeHtml(formatTokenQuantity(balance))} available</p></div></div>
+      <div class="field"><label>Amount</label><input data-send-token-amount inputmode="decimal" value="${escapeHtml(state.pendingTokenSend.amount)}" data-send-token-percent="100"><div class="amount-chips">${[25, 50, 100].map((percent) => `<button type="button" class="${percent === 100 ? "active" : ""}" data-set-send-token-percent="${percent}">${percent}%</button>`).join("")}</div></div>
+      <div class="field"><label>Destination ${chain === "robinhood" ? "Robinhood Chain" : "Solana"} wallet</label><input data-send-token-destination autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${chain === "robinhood" ? "0x…" : "Paste wallet address"}"></div>
+      <button class="submit-trade" type="button" data-review-token-send>Review send</button>
+      <p class="fineprint">This transfers ${escapeHtml(symbol)} as tokens. It does not sell or swap them. On-chain transfers cannot be reversed.</p>`);
+  }
+
+  function reviewFunTokenSend() {
+    const pending = state.pendingTokenSend;
+    if (!pending) return;
+    const amountInput = $("[data-send-token-amount]");
+    const destination = String($("[data-send-token-destination]")?.value || "").trim();
+    const amount = String(amountInput?.value || "").trim();
+    const percent = Number(amountInput?.dataset.sendTokenPercent || 0);
+    const validDestination = pending.chain === "robinhood"
+      ? /^0x[0-9a-fA-F]{40}$/.test(destination)
+      : /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(destination);
+    if (!validDestination) {
+      toast(`Enter a valid ${pending.chain === "robinhood" ? "Robinhood Chain" : "Solana"} wallet address.`, true);
+      return;
+    }
+    if (!(Number(amount) > 0) || Number(amount) > pending.balance * 1.000000001) {
+      toast("Enter an amount within this wallet's token balance.", true);
+      return;
+    }
+    state.pendingTokenSend = {
+      ...pending, destination, amount, percent: percent > 0 ? percent : 0,
+      sendAttemptId: attemptId("fun-token-send")
+    };
+    openSheet(`<div class="sheet-title"><img src="${escapeHtml(coinImage({ tokenMint: pending.tokenMint }))}" alt=""><div><h2>Confirm token send</h2><p>${escapeHtml(pending.symbol)} · ${escapeHtml(pending.walletLabel)}</p></div></div>
+      <div class="read-card"><h3>${escapeHtml(amount)} ${escapeHtml(pending.symbol)}</h3><p>To ${escapeHtml(short(destination))}</p></div>
+      <button class="submit-trade" type="button" data-confirm-token-send>Send tokens</button>
+      <p class="fineprint">Check the token, amount, chain, and destination carefully. This cannot be reversed.</p>`);
+  }
+
+  async function confirmFunTokenSend(button) {
+    const pending = state.pendingTokenSend;
+    if (!pending || button.disabled) return;
+    button.disabled = true;
+    button.textContent = "Sending…";
+    const isRh = pending.chain === "robinhood";
+    const result = await post(isRh ? "/api/web/rh/send-token" : "/api/web/wallets/send-token", {
+      walletIndex: pending.walletIndex,
+      walletPublicKey: pending.walletPublicKey,
+      ...(isRh ? { tokenAddress: pending.tokenMint } : { tokenMint: pending.tokenMint }),
+      destination: pending.destination,
+      ...(pending.percent > 0 ? { percent: pending.percent } : { amount: pending.amount }),
+      sendAttemptId: pending.sendAttemptId
+    }, { timeout: 95_000, noRetry: true });
+    if (!result.ok || !result.data?.ok) {
+      button.disabled = false;
+      button.textContent = "Send tokens";
+      toast(apiMessage(result.data, "Token send failed."), true);
+      return;
+    }
+    const sent = result.data.transfer?.amount || pending.amount;
+    state.pendingTokenSend = null;
+    await Promise.all([loadWallets(true), loadPositions({ force: true }), isRh ? loadFunRhPositions(true) : Promise.resolve(null)]);
+    renderWalletHero();
+    renderWalletPositions();
+    closeSheet();
+    toast(`${sent} ${pending.symbol} sent`);
+  }
+
   async function loadWalletActivity() {
     const panel = $("[data-profile-panel]"); panel.innerHTML = '<div class="skeleton-list"></div>';
     const [sol, rh] = await Promise.all([request("/api/web/pnl"), request("/api/web/rh/activity")]);
@@ -1630,7 +1751,10 @@
       : "0 SOL";
     const totalUsd = formatWalletUsd(summary.totalUsd);
     const totalLabel = totalUsd === "—" ? `${formatPositionSol(summary.totalSol)}${pendingMark} SOL` : `${totalUsd}${pendingMark}`;
-    const assetRows = summary.assets.map((asset) => `<button class="wallet-asset-row" type="button" data-open-coin="${escapeHtml(asset.tokenMint)}" data-chain-kind="sol"><img ${coinImageAttrs(asset)} alt=""><span><b>${escapeHtml(asset.symbol || short(asset.tokenMint))}</b><small>${escapeHtml(formatTokenQuantity(asset.quantity))} tokens</small></span><strong>${asset.valueSol == null ? "Pricing..." : `${escapeHtml(formatPositionSol(asset.valueSol))} SOL`}</strong></button>`).join("");
+    const assetRows = summary.assets.map((asset) => {
+      const pnl = positionOpenPnl(asset) == null ? null : positionPercent(asset.openPnlPercent);
+      return `<button class="wallet-asset-row" type="button" data-open-coin="${escapeHtml(asset.tokenMint)}" data-chain-kind="sol"><img ${coinImageAttrs(asset)} alt=""><span><b>${escapeHtml(asset.symbol || short(asset.tokenMint))}</b><small>${escapeHtml(formatTokenQuantity(asset.quantity))} tokens · ${pnl == null ? "PnL —" : `${escapeHtml(formatPct(pnl))} PnL`}</small></span><strong>${asset.valueSol == null ? "Pricing..." : `${escapeHtml(formatPositionSol(asset.valueSol))} SOL`}</strong></button>`;
+    }).join("");
     const positionDetails = summary.assets.length
       ? `<details class="wallet-assets"><summary><span>Coin positions</span><b>${summary.assets.length} token${summary.assets.length === 1 ? "" : "s"} ›</b></summary><div>${assetRows}</div></details>`
       : `<div class="wallet-assets-empty">No coin positions in this wallet</div>`;
@@ -1908,7 +2032,7 @@
         <div class="field"><label>Fund from wallet</label><select data-volume-wallet>${volumeWalletOptions()}</select></div>
         <div class="field-row"><div class="field"><label>Min buy SOL</label><input data-volume-min inputmode="decimal" value="0.012"></div><div class="field"><label>Max buy SOL</label><input data-volume-max inputmode="decimal" value="0.03"></div></div>
         <div class="field-row"><div class="field"><label>Cadence</label><select data-volume-speed><option value="20">Calm</option><option value="8" selected>Natural</option><option value="3">Fast</option></select></div><div class="field"><label>Pattern</label><select data-volume-pattern><option value="organic" selected>Organic mix</option><option value="waves">Waves</option><option value="steady">Steady</option><option value="ladder">Uptrend bias</option></select></div></div>
-        <label class="check-row"><input type="checkbox" data-volume-keep-dust> Leave one small token residue in each retired wallet</label>
+        <div class="check-row"><span aria-hidden="true">✓</span> Retire each ghost wallet with exactly 1 target token and zero native SOL</div>
         <label class="check-row"><input type="checkbox" data-volume-offset checked> Offset sells to older wallets</label>
         <div class="volume-actions"><button class="submit-trade" type="button" data-start-volume>Start</button><button type="button" data-stop-volume>Stop & sweep</button></div>
         <button class="recovery-button" type="button" data-sweep-volume>Sweep any stranded ghost wallets</button>
@@ -1958,7 +2082,7 @@
     } else {
       const pattern = $("[data-volume-pattern]")?.value || "organic", delaySecs = $("[data-volume-speed]")?.value || "8";
       const sourceWallet = state.wallets.find((wallet) => Number(wallet.index) === walletIndex);
-      result = await post("/api/web/volume-bot/start", { tokenMint: token, sourceWalletIndex: walletIndex, sourceWalletPublicKey: sourceWallet?.publicKey || "", rollingWallets: true, buyAmountSol: String((Number(min) + Number(max)) / 2), minBuyAmountSol: min, maxBuyAmountSol: max, poolSize: "3", maxRounds: "60", sellPercent: "100", buyBias: pattern === "ladder" ? "75" : "55", delaySecs, slippageBps: 600, sweepBack: true, keepDust: Boolean($("[data-volume-keep-dust]")?.checked), offsetSell: Boolean($("[data-volume-offset]")?.checked), staggerPattern: pattern, tradeAttemptId: attemptId("fun-volume") });
+      result = await post("/api/web/volume-bot/start", { tokenMint: token, sourceWalletIndex: walletIndex, sourceWalletPublicKey: sourceWallet?.publicKey || "", rollingWallets: true, buyAmountSol: String((Number(min) + Number(max)) / 2), minBuyAmountSol: min, maxBuyAmountSol: max, poolSize: "3", maxRounds: "60", sellPercent: "100", buyBias: pattern === "ladder" ? "75" : "55", delaySecs, slippageBps: 600, sweepBack: true, keepDust: true, offsetSell: Boolean($("[data-volume-offset]")?.checked), staggerPattern: pattern, tradeAttemptId: attemptId("fun-volume") });
     }
     button.disabled = false; button.textContent = "Start";
     if (result.ok && result.data?.ok) { toast("Volume run started"); pollFunVolume(rh); }
@@ -2004,7 +2128,7 @@
     const result = await post("/api/web/wallets/sweep-background", { preserveOneToken: true }, { timeout: 180_000, noRetry: true });
     state.volumeSweepPending = false;
     const ok = Boolean(result.ok && result.data?.ok);
-    const keepFollowing = ok && attempt < 60 && (result.data?.queued || (Number(result.data?.pending || 0) > 0 && Number(result.data?.soldCount || 0) > 0));
+    const keepFollowing = ok && attempt < 120 && (result.data?.queued || Number(result.data?.pending || 0) > 0);
     if (attempt === 0 || !keepFollowing) toast(ok ? (result.data.summary || "Background wallet recovery started") : (result.data?.error || "Sweep failed"), !ok);
     pollFunVolume(false);
     if (keepFollowing) {
@@ -2175,6 +2299,10 @@
     const customWalletSell = event.target.closest("[data-fun-position-custom]"); if (customWalletSell) { openFunWalletPositionCustom(customWalletSell); return; }
     const customWalletPercent = event.target.closest("[data-fun-custom-percent]"); if (customWalletPercent) { const input = $("[data-fun-custom-sell-percent]"); if (input) input.value = customWalletPercent.dataset.funCustomPercent; return; }
     const walletPositionSell = event.target.closest("[data-fun-position-sell]"); if (walletPositionSell) { await sellFunWalletPosition(walletPositionSell); return; }
+    const sendToken = event.target.closest("[data-fun-send-token]"); if (sendToken) { openFunTokenSend(sendToken); return; }
+    const sendTokenPercent = event.target.closest("[data-set-send-token-percent]"); if (sendTokenPercent) { const input = $("[data-send-token-amount]"); const pending = state.pendingTokenSend; if (input && pending) { const percent = Number(sendTokenPercent.dataset.setSendTokenPercent || 0); input.value = tokenSendDisplayAmount(pending.balance, percent); input.dataset.sendTokenPercent = String(percent); pending.percent = percent; $$('[data-set-send-token-percent]').forEach((item) => item.classList.toggle("active", item === sendTokenPercent)); } return; }
+    if (event.target.closest("[data-review-token-send]")) { reviewFunTokenSend(); return; }
+    const confirmTokenSend = event.target.closest("[data-confirm-token-send]"); if (confirmTokenSend) { await confirmFunTokenSend(confirmTokenSend); return; }
     const claimCreatorFees = event.target.closest("[data-claim-creator-fees]"); if (claimCreatorFees) { await claimFunCreatorFees(claimCreatorFees); return; }
     const coinButton = event.target.closest("[data-open-coin]"); if (coinButton) { closeSearch(); closeSheet(); await openCoin(coinButton.dataset.openCoin, coinButton.dataset.chainKind); return; }
     const chainButton = event.target.closest("[data-chain]"); if (chainButton) { state.chain = chainButton.dataset.chain; $$("[data-chain]").forEach((button) => button.classList.toggle("active", button.dataset.chain === state.chain)); loadFeed(true); return; }
@@ -2264,6 +2392,12 @@
     reader.onload = () => { textarea.value = String(reader.result || "").trim(); if (status) status.textContent = `Loaded ${file.name}. Tap Restore / import wallet.`; };
     reader.onerror = () => { if (status) status.textContent = "Could not read that file. Paste the backup text instead."; };
     reader.readAsText(file);
+  });
+  document.addEventListener("input", (event) => {
+    if (!event.target.matches("[data-send-token-amount]")) return;
+    delete event.target.dataset.sendTokenPercent;
+    if (state.pendingTokenSend) state.pendingTokenSend.percent = 0;
+    $$('[data-set-send-token-percent]').forEach((button) => button.classList.remove("active"));
   });
   document.addEventListener("keydown", async (event) => {
     if (event.key !== "Enter" || !event.target.matches("[data-custom-review-amount]")) return;

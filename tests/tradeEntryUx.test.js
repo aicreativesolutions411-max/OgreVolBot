@@ -138,13 +138,17 @@ test("Chart page uses a clean DEX chart and transactions workspace", () => {
   const chart = functionBody(appSource, "smartChartHtml");
   assert.match(chart, /smart-chart-clean-terminal/);
   assert.match(chart, /smartChartMarketBarHtml\(token, heldPosition\)/);
-  assert.match(chart, /smartChartDexFrameHtml\(token, "chartTxns"\)/);
+  assert.match(chart, /smartChartDexFrameHtml\(token, "chart"\)/);
+  assert.match(chart, /smartChartTradeTapeHtml\(token\)/);
   assert.match(chart, /chartTradePanelHtml\(token, heldPosition\)/);
   assert.doesNotMatch(chart, /smartChartViewTabsHtml\(chartView\)/);
   assert.doesNotMatch(chart, /smartChartQuickActionsHtml\(token, heldPosition\)/);
   assert.doesNotMatch(chart, /smart-chart-bottom-grid/);
   assert.match(functionBody(appSource, "smartChartTransactionsHtml"), /smartChartDexFrameHtml\(token, "txns"\)/);
   assert.match(functionBody(appSource, "smartChartInfoPanelHtml"), /smartChartDexFrameHtml\(token, "info"\)/);
+  assert.match(functionBody(appSource, "smartChartTradeTapeHtml"), /Live Trade Tape/);
+  assert.match(functionBody(appSource, "ensureSmartChartTapeData"), /\/api\/web\/token-trades\?pool=/);
+  assert.match(functionBody(appSource, "ensureSmartChartTapeData"), /network=/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /data-chart-frame-loading/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /fetchpriority="high"/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /setAttribute\('data-loaded','true'\)/);

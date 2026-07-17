@@ -20,7 +20,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "47", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "49", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -33,7 +33,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v40/);
+  assert.match(funWorker, /slimewire-fun-v43/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -76,9 +76,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=31/);
-  assert.match(funWorker, /slimewire-fun-v40/);
-  assert.match(funWorker, /fun\.css\?v=31/);
+  assert.match(html, /fun\.css\?v=32/);
+  assert.match(funWorker, /slimewire-fun-v43/);
+  assert.match(funWorker, /fun\.css\?v=32/);
 });
 
 test("/fun keeps the wallet funding card compact and scannable", () => {
@@ -87,8 +87,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=47/);
-  assert.match(funWorker, /fun\.js\?v=47/);
+  assert.match(html, /fun\.js\?v=49/);
+  assert.match(funWorker, /fun\.js\?v=49/);
 });
 
 test("Connect and Deposit share one simple funding flow without surprise wallet downloads", () => {
@@ -139,7 +139,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v40"/);
+  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v43"/);
   assert.match(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
   assert.match(funWorker, /self\.clients\.claim\(\)/);
@@ -575,15 +575,15 @@ test("balanced pro chart keeps core stats visible and adds working chart/transac
   assert.match(js, /frame\.dataset\.src === src/);
 });
 
-test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, and MACD", () => {
-  for (const marker of ['data-indicators-toggle', 'data-indicator-kind="fib"', 'data-indicator-kind="rsi"', 'data-indicator-kind="macd"', 'data-indicator-panels']) assert.match(html, new RegExp(marker));
+test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, MACD, and harmonics", () => {
+  for (const marker of ['data-indicators-toggle', 'data-indicator-kind="fib"', 'data-indicator-kind="rsi"', 'data-indicator-kind="macd"', 'data-indicator-kind="harmonics"', 'data-indicator-panels']) assert.match(html, new RegExp(marker));
   assert.match(html, /aria-controls="slimeIndicatorDrawer"/);
   assert.match(html, /data-indicator-status role="status" aria-live="polite"/);
   assert.match(html, /vendor\/lightweight-charts\.standalone\.production\.js/);
   assert.ok(html.indexOf("lightweight-charts.standalone.production.js") < html.indexOf("fun-indicators.js"));
-  assert.match(html, /fun-indicators\.js\?v=6/);
-  assert.match(funWorker, /fun-indicators\.js\?v=6/);
-  assert.match(funWorker, /fun\.css\?v=31/);
+  assert.match(html, /fun-indicators\.js\?v=7/);
+  assert.match(funWorker, /fun-indicators\.js\?v=7/);
+  assert.match(funWorker, /fun\.css\?v=32/);
   assert.match(indicators, /\/api\/chart\?ca=/);
   assert.match(indicators, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/pools/);
   assert.match(indicators, /function fibonacciPanel/);
@@ -624,8 +624,21 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, and MACD",
   assert.match(indicators, /let analysisActive = false/);
   assert.match(indicators, /data-analysis-back/);
   assert.match(indicators, /data-fib-settings-open/);
+  assert.match(html, /data-harmonic-settings hidden/);
+  assert.match(indicators, /slimewireFunHarmonics:v1/);
+  assert.match(indicators, /\["bat", "gartley", "shark", "butterfly", "crab", "five0"\]/);
+  assert.match(indicators, /function harmonicSwingPivots/);
+  assert.match(indicators, /function harmonicCandidate/);
+  assert.match(indicators, /function findHarmonicPatterns/);
+  assert.match(indicators, /function paintHarmonicPattern/);
+  assert.match(indicators, /addLineSeries/);
+  assert.match(indicators, /setMarkers/);
+  assert.match(indicators, /harmonicName\(match\.pattern\)\} PRZ/);
+  assert.match(indicators, /data-harmonic-lookback/);
+  assert.match(indicators, /data-harmonic-pivot/);
+  assert.match(indicators, /data-harmonic-tolerance/);
   assert.match(indicators, /analysisActive && enabled\[button\.dataset\.indicatorKind\]/);
-  assert.match(indicators, /Fibonacci is only marked active when its levels are painted on candles/);
+  assert.match(indicators, /Overlays are only marked active after they are painted on real candles/);
   assert.match(indicators, /regular chart restored/i);
   assert.match(indicators, /if \(!analysisActive\) \{ clearTimeout\(autoRefreshTimer\); return; \}/);
   assert.doesNotMatch(indicators, /if \(anyEnabled\(\)\) scheduleRender\(0\);/);
@@ -635,6 +648,8 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, and MACD",
   assert.match(css, /\.indicator-button\{min-height:36px/);
   assert.match(css, /\.indicator-picker button\{min-height:36px/);
   assert.match(css, /\.fib-settings\{/);
+  assert.match(css, /\.harmonic-settings\{/);
+  assert.match(css, /\.harmonic-chart-badge/);
 });
 
 test("/fun RSI, MACD, and Fibonacci calculations match known fixtures", () => {
@@ -673,6 +688,31 @@ test("/fun RSI, MACD, and Fibonacci calculations match known fixtures", () => {
   assert.equal(upswing.valueLabel, "61.8% 13.82");
   assert.match(downswing.subtitle, /Recent 3-candle downswing/);
   assert.equal(downswing.valueLabel, "61.8% 16.18");
+});
+
+test("/fun harmonic ratios recognize Carney-style Bat, Gartley, Butterfly, Crab, Shark, and 5-0 fixtures", () => {
+  const scoreStart = indicators.indexOf("  function harmonicRatioScore");
+  const candidateEnd = indicators.indexOf("\n  function findHarmonicPatterns", scoreStart);
+  assert.notEqual(scoreStart, -1);
+  assert.notEqual(candidateEnd, -1);
+  const candidateSource = indicators.slice(scoreStart, candidateEnd);
+  const harmonicCandidate = Function(`${candidateSource}\nreturn harmonicCandidate;`)();
+  const points = (prices) => prices.map((price, index) => ({ price, kind: index % 2 ? "high" : "low", index, time: index + 1 }));
+  const fixtures = {
+    bat: [100, 200, 150, 180, 111.4],
+    gartley: [100, 200, 138.2, 183, 121.4],
+    butterfly: [100, 200, 121.4, 170, 73],
+    crab: [100, 200, 150, 190, 38.2],
+    five0: [100, 200, 50, 320, 185],
+    shark: [100, 200, 50, 320, 298]
+  };
+  for (const [pattern, prices] of Object.entries(fixtures)) {
+    const match = harmonicCandidate(points(prices), pattern, 0.18);
+    assert.ok(match, `${pattern} fixture should match`);
+    assert.equal(match.pattern, pattern);
+    assert.ok(match.confidence >= 58 && match.confidence <= 98);
+  }
+  assert.equal(harmonicCandidate(points(fixtures.bat), "gartley", 0.08), null, "Bat geometry must not be mislabeled as strict Gartley");
 });
 
 test("/fun live feeds reject stale responses and refresh only the visible view", () => {
@@ -767,6 +807,27 @@ test("positions are grouped by wallet with scoped 25, 50, 100, and custom sells"
   assert.match(terminalApp, /walletPublicKeys: scopedWalletPublicKey \? \[scopedWalletPublicKey\] : \[\]/);
   assert.match(server, /walletPositions,/);
   assert.match(server, /walletPublicKey: holding\.walletPublicKey/);
+});
+
+test("wallet holdings show real PnL and send Solana or Robinhood tokens without selling", () => {
+  assert.match(server, /pathname === "\/api\/web\/wallets\/send-token"/);
+  assert.match(server, /runIdempotentMoneyOp\(\s*"web-send-token"/);
+  assert.match(server, /createTransferCheckedInstruction\(/);
+  assert.match(server, /pathname === "\/api\/web\/rh\/send-token"/);
+  assert.match(server, /runIdempotentMoneyOp\(\s*"web-rh-send-token"/);
+  assert.match(rhChain, /export async function rhTransferErc20/);
+  assert.match(js, /data-fun-send-token=/);
+  assert.match(js, /data-review-token-send/);
+  assert.match(js, /position-holding-pnl/);
+  assert.match(js, /loadFunRhPositions/);
+  assert.match(terminalApp, /data-position-send-token=/);
+  assert.match(terminalApp, /function tokenSendDialog/);
+  assert.match(terminalApp, /walletPositionPnlPercent/);
+  for (const source of [desktopHtml, desktopAliasHtml]) {
+    assert.match(source, /function sendTokenModal/);
+    assert.match(source, /function rhSendTokenModal/);
+    assert.match(source, /pnlPercent/);
+  }
 });
 
 test("selected degen hero art is optimized and referenced from the v3 banner", () => {

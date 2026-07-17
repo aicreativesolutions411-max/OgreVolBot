@@ -32,12 +32,12 @@ test("Cash and Fun source shells install the same funding release", () => {
   assert.match(publicCashHtml, /cash\.js\?v=22/);
   assert.match(publicCashWorker, /cash\.css\?v=22/);
   assert.match(publicCashWorker, /cash\.js\?v=22/);
-  assert.match(publicFunHtml, /fun\.css\?v=31/);
-  assert.match(publicFunHtml, /fun\.js\?v=47/);
-  assert.match(publicFunHtml, /fun-indicators\.js\?v=6/);
-  assert.match(publicFunWorker, /fun\.css\?v=31/);
-  assert.match(publicFunWorker, /fun\.js\?v=47/);
-  assert.match(publicFunWorker, /fun-indicators\.js\?v=6/);
+  assert.match(publicFunHtml, /fun\.css\?v=32/);
+  assert.match(publicFunHtml, /fun\.js\?v=49/);
+  assert.match(publicFunHtml, /fun-indicators\.js\?v=7/);
+  assert.match(publicFunWorker, /fun\.css\?v=32/);
+  assert.match(publicFunWorker, /fun\.js\?v=49/);
+  assert.match(publicFunWorker, /fun-indicators\.js\?v=7/);
 });
 
 test("built PWA shells contain the same funding release as web/public", () => {
@@ -54,7 +54,7 @@ test("installed Cash and Fun apps force worker updates and isolate their caches"
   assert.match(publicCashJs, /serviceWorker\.register\("\/cash\/sw\.js", \{ updateViaCache: "none" \}\)/);
   assert.match(publicFunJs, /serviceWorker\.register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
   assert.match(publicCashWorker, /const CACHE = "slimecash-v24"/);
-  assert.match(publicFunWorker, /const FUN_CACHE = "slimewire-fun-v40"/);
+  assert.match(publicFunWorker, /const FUN_CACHE = "slimewire-fun-v43"/);
   assert.match(publicCashWorker, /key\.startsWith\("slimecash-"\) && key !== CACHE/);
   assert.match(publicFunWorker, /key\.startsWith\("slimewire-fun-"\) && key !== FUN_CACHE/);
   assert.doesNotMatch(publicCashWorker, /keys\.filter\(\(key\) => key !== CACHE\)/);
