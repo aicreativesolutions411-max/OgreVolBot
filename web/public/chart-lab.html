@@ -103,11 +103,11 @@
         </div>
         <div class="rail">
           <div class="mc">
-            <div class="stat"><div class="k">Market cap</div><div class="v" id="s_mc">$182K</div></div>
-            <div class="stat"><div class="k">Liquidity</div><div class="v" id="s_liq">$44K</div></div>
-            <div class="stat"><div class="k">Volume 24h</div><div class="v" id="s_vol">$1.2M</div></div>
-            <div class="stat"><div class="k">Holders</div><div class="v" id="s_holders">-</div></div>
-            <div class="stat"><div class="k">Buys / Sells</div><div class="v" id="s_bs">612 / 287</div></div>
+            <div class="stat"><div class="k">Market cap</div><div class="v" id="s_mc">—</div></div>
+            <div class="stat"><div class="k">Liquidity</div><div class="v" id="s_liq">—</div></div>
+            <div class="stat"><div class="k">Volume 24h</div><div class="v" id="s_vol">—</div></div>
+            <div class="stat"><div class="k">Holders</div><div class="v" id="s_holders">—</div></div>
+            <div class="stat"><div class="k">Buys / Sells</div><div class="v" id="s_bs">—</div></div>
           </div>
         </div>
       </div>
@@ -305,6 +305,7 @@
     if((s.buys24||s.sells24)&&(e=document.getElementById('s_bs')))e.textContent=(Number(s.buys24)||0).toLocaleString()+' / '+(Number(s.sells24)||0).toLocaleString();
     var symShow=SYMP||s.symbol; if(symShow&&(e=document.querySelector('.tk .sym'))){var nm=(s.name&&s.name!==symShow)?(' <span style="color:#5d8a6e;font-weight:400"> - '+esc(String(s.name).slice(0,22))+'</span>'):'';e.innerHTML='$'+esc(symShow)+nm;}
     if(CA&&(e=document.querySelector('.tk .sub')))e.textContent=CA.slice(0,4)+'...'+CA.slice(-4);
+    if(s.imageUrl&&(e=document.querySelector('.tk .av'))){e.textContent='';e.style.backgroundImage='url("'+String(s.imageUrl).replace(/["\\\r\n]/g,'')+'")';e.style.backgroundSize='cover';e.style.backgroundPosition='center';}
     if(tick&&price>0)liveTick(price);
   }
   function applyDexStats(s){
@@ -345,11 +346,15 @@
     return true;
   }
   function loadServer(){ if(!CA)return; fetch(API+'/api/chart?ca='+encodeURIComponent(CA)+'&tf='+encodeURIComponent(TF)).then(function(r){return r.json();}).then(function(d){ if(d&&d.candles)applyChartData(d); }).catch(function(){}); }
+  function loadBootstrap(){ if(!CA)return; json(API+'/api/web/chart/bootstrap?token='+encodeURIComponent(CA)).then(function(j){
+    var c=j&&j.chart;if(!c)return;if(c.pairAddress)dexPair=c.pairAddress;
+    applyStats({symbol:c.symbol,name:c.name,imageUrl:c.imageUrl,priceUsd:c.priceUsd,mc:c.marketCap||c.fdv,liq:c.liquidityUsd,vol24:c.volumeH24,buys24:c.txns&&c.txns.h24&&c.txns.h24.buys,sells24:c.txns&&c.txns.h24&&c.txns.h24.sells},false);
+  }); }
 
   // PRIMARY candle load = OUR server (/api/chart -> Solana Tracker + swap-api, cached). Reliable
   // and instant; no per-user external candle rate limit. loadDex() layers the exact top-bar stats + the
   // live forming-candle tick on top.
-  function loadReal(){ if(!CA)return; loadServer(); loadDex(); }
+  function loadReal(){ if(!CA)return; loadBootstrap(); loadServer(); loadDex(); }
 
   // A SECONDS-OLD coin has no candles yet (no trades to bucket), so the loader used to spin forever
   // ("ogre flashing like it can't load"). After a short wait with no candles, swap the spinner for a
@@ -367,6 +372,7 @@
     loadReal();
     setTimeout(markTooFresh,7000);   // fresh pair with no candles yet → calm note, not an endless spinner
     setInterval(loadServer,15000);   // refresh the real candle history from OUR server
+    setInterval(loadBootstrap,15000);// saved launch pool + identity before public DEX indexing
     setInterval(loadDex,3500);       // fast live price → forming-candle movement + exact stats
   } else { hideLoad(); }
 

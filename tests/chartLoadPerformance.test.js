@@ -64,7 +64,7 @@ test("chart iframe uses cached bootstrap URLs and does not wait on feed refresh"
 
 test("native chart loads candles from our server first and has no browser GeckoTerminal candle path", () => {
   assert.match(chartLabSource, /\/api\/chart\?ca=/);
-  assert.match(chartLabSource, /function loadReal\(\)\{ if\(!CA\)return; loadServer\(\); loadDex\(\); \}/);
+  assert.match(chartLabSource, /function loadReal\(\)\{ if\(!CA\)return; loadBootstrap\(\); loadServer\(\); loadDex\(\); \}/);
   assert.match(chartLabSource, /setInterval\(loadServer,15000\)/);
   assert.match(chartLabSource, /applyStats\(d,false\)/);
   assert.match(chartLabSource, /applyTradeTicks\(d\.trades\)/);
@@ -115,6 +115,9 @@ test("classic mobile terminal hydrates a pasted Robinhood CA from the saved Sush
   assert.match(hydrate, /pairAddress/);
   assert.match(functionBody(terminalSource, "rhNativeChartFrame"), /\/chart-lab\?ca=/);
   assert.match(functionBody(terminalSource, "renderRhTrade"), /Promise\.all\(\[rhEnrichRows\(\[r\]\),rhHydrateChartRow\(r\)\]\)/);
+  assert.match(functionBody(terminalSource, "renderRhTrade"), /id="rhTvAvatar"/);
+  assert.match(functionBody(chartLabSource, "loadBootstrap"), /\/api\/web\/chart\/bootstrap\?token=/);
+  assert.doesNotMatch(chartLabSource, /id="s_mc">\$182K|id="s_liq">\$44K|id="s_bs">612 \/ 287/);
   assert.match(tokenPageSource, /\^0x\[0-9a-f\]\{40\}\$\/i\.test\(rawMint\)/);
 });
 
