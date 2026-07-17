@@ -3593,3 +3593,32 @@ test("Telegram /index posts a cached top-10 crypto market snapshot with in-place
   assert.match(messageHandler, /\["index", "marketindex", "cryptoindex"\]/);
   assert.match(channelHandler, /\["index", "marketindex", "cryptoindex"\]/);
 });
+
+test("Telegram /c and /chart render CA, crypto, and stock charts in chat with timeframe buttons", () => {
+  const register = functionBody(serverSource, "registerTelegramBotCommands");
+  const command = functionBody(serverSource, "handleTelegramChartCommand");
+  const tokenChart = functionBody(serverSource, "sendTokenChart");
+  const stockResolver = functionBody(serverSource, "resolveYahooStock");
+  const stockFetch = functionBody(serverSource, "fetchYahooStockChart");
+  const stockChart = functionBody(serverSource, "sendStockChart");
+  const cryptoChart = functionBody(serverSource, "sendCryptoChart");
+  const callbackHandler = functionBody(serverSource, "handleCallback");
+  const messageHandler = functionBody(serverSource, "handleMessage");
+
+  assert.match(register, /command: "chart"/);
+  assert.match(command, /sendTokenChart\(chatId, evmCa, "robinhood", "5m"\)/);
+  assert.match(command, /sendTokenChart\(chatId, solCa, "solana", "5m"\)/);
+  assert.match(command, /resolveYahooStock/);
+  assert.match(command, /resolveCoinGeckoId/);
+  assert.match(tokenChart, /renderCandleChartPng/);
+  assert.match(tokenChart, /editMessagePhotoBuffer/);
+  assert.match(stockResolver, /query1\.finance\.yahoo\.com\/v1\/finance\/search/);
+  assert.match(stockFetch, /query1\.finance\.yahoo\.com\/v8\/finance\/chart/);
+  assert.match(stockChart, /renderCandleChartPng/);
+  assert.match(stockChart, /editMessagePhotoBuffer/);
+  assert.match(cryptoChart, /editMessagePhotoBuffer/);
+  assert.match(callbackHandler, /startsWith\("chartca:"\)/);
+  assert.match(callbackHandler, /startsWith\("chartst:"\)/);
+  assert.doesNotMatch(messageHandler, /query\.data\?\.startsWith\("chart(?:ca|st):"\)/);
+  assert.match(functionBody(serverSource, "handleChannelPostCommands"), /\["chart", "c"\]/);
+});
