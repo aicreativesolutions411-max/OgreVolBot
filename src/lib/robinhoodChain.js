@@ -14,6 +14,7 @@ import { ethers } from "ethers";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const artifact = JSON.parse(fs.readFileSync(path.join(here, "rh-erc20.json"), "utf8"));
+const sushiLaunchArtifact = JSON.parse(fs.readFileSync(path.join(here, "rh-sushi-launch.json"), "utf8"));
 
 export const RH_CHAIN_ID = 4663;
 export const RH_DEFAULT_RPC = "https://rpc.mainnet.chain.robinhood.com";
@@ -143,6 +144,158 @@ export async function rhDeployToken({ solanaSecretKey, name, symbol, supplyToken
 }
 
 export const rhArtifactInfo = { solcVersion: artifact.solcVersion, bytecodeBytes: (artifact.bytecode.length - 2) / 2 };
+
+// Official Sushi deployments for Robinhood Chain. These are intentionally kept
+// separate from RH_UNIV3 below: Robinhood has both Uniswap and Sushi V3 venues,
+// and silently treating one as the other produced the wrong pool destination.
+// Source: Sushi's published `sushi` package (evm/config/features, chain 4663).
+export const RH_SUSHI = Object.freeze({
+  v3Factory: "0xe51960f1b45f1c9fb6d166e6a884f866fc70433b",
+  v3PositionManager: "0x51d0e5188afe12d502e29d982d20c190e7816107",
+  v3Quoter: "0x3e290e5e01818002a0b672148bdc7514d861c7b3",
+  v2Factory: "0xe52abd50ad151ecdf56427effd715e703696a6b1",
+  v2Router: "0x9a55d3d0c0f09859c7869510f53ed0a30b340766",
+  weth: "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+  fee: 10_000,
+  tickSpacing: 200,
+  poolUrl: "https://www.sushi.com/robinhood/pool",
+  quoteApi: `https://api.sushi.com/quote/v7/${RH_CHAIN_ID}`,
+});
+
+const RH_SUSHI_MAX_USABLE_TICK = 887_200;
+const RH_SUSHI_MIN_USABLE_TICK = -887_200;
+const sushiFactoryArtifact = sushiLaunchArtifact.contracts.SlimeSushiLaunchFactoryRH;
+const sushiTokenArtifact = sushiLaunchArtifact.contracts.SlimeSushiTokenRH;
+
+function normalizedEvmAddress(value) {
+  const clean = String(value || "").trim();
+  return /^0x[0-9a-fA-F]{40}$/.test(clean) ? ethers.getAddress(clean) : "";
+}
+
+/** Convert a desired starting market cap into a Sushi V3, 1%-fee aligned tick. */
+export function rhSushiInitialTick({ marketCapUsd = 5_000, supplyTokens = 1_000_000_000, ethUsd }) {
+  const marketCap = Number(marketCapUsd);
+  const supply = Number(supplyTokens);
+  const ethPrice = Number(ethUsd);
+  if (!(marketCap > 0) || !(supply > 0) || !(ethPrice > 0)) throw new Error("Starting market cap, supply, and ETH price must be positive.");
+  const wethPerToken = marketCap / supply / ethPrice;
+  const rawTick = Math.log(wethPerToken) / Math.log(1.0001);
+  const aligned = Math.round(rawTick / RH_SUSHI.tickSpacing) * RH_SUSHI.tickSpacing;
+  return Math.max(RH_SUSHI_MIN_USABLE_TICK, Math.min(RH_SUSHI_MAX_USABLE_TICK - RH_SUSHI.tickSpacing, aligned));
+}
+
+/**
+ * Pick a deterministic CREATE2 salt whose token address sorts below WETH.
+ * That ordering is what lets the launch contract put 100% of supply into an
+ * active, one-sided rising-price position without creator-supplied liquidity.
+ */
+export function rhFindSushiLaunchSalt({ factoryAddress, name, symbol, supplyTokens, contractUri = "", maxAttempts = 2_048 }) {
+  const factory = normalizedEvmAddress(factoryAddress);
+  if (!factory) throw new Error("RH Sushi launch factory address is not configured.");
+  const supply = BigInt(String(supplyTokens || 0)) * 10n ** 18n;
+  if (supply <= 0n) throw new Error("Supply must be positive.");
+  const encoded = ethers.AbiCoder.defaultAbiCoder().encode(
+    ["string", "string", "uint256", "string"],
+    [String(name || "").trim(), String(symbol || "").trim(), supply, String(contractUri || "")]
+  );
+  const initCodeHash = ethers.keccak256(ethers.concat([sushiTokenArtifact.bytecode, encoded]));
+  const weth = BigInt(RH_SUSHI.weth);
+  for (let i = 0; i < Math.max(1, Number(maxAttempts) || 2_048); i += 1) {
+    const salt = ethers.keccak256(ethers.toUtf8Bytes(`slimewire-sushi-rh:${i}`));
+    const tokenAddress = ethers.getCreate2Address(factory, salt, initCodeHash);
+    if (BigInt(tokenAddress) < weth) return { salt, tokenAddress, attempts: i + 1, supplyWei: supply };
+  }
+  throw new Error("Could not derive a valid launch address. Change the ticker or try again.");
+}
+
+export function rhSushiLaunchConfigured(factoryAddress) {
+  return Boolean(normalizedEvmAddress(factoryAddress));
+}
+
+/** Atomic token + Sushi V3 market creation through the audited-to-deploy factory artifact. */
+export async function rhLaunchTokenOnSushi({
+  solanaSecretKey,
+  factoryAddress,
+  name,
+  symbol,
+  supplyTokens = 1_000_000_000,
+  contractUri = "",
+  initialMarketCapUsd = 5_000,
+  ethUsd,
+  rpcUrl,
+  confirmTimeoutMs = 180_000,
+}) {
+  const factory = normalizedEvmAddress(factoryAddress);
+  if (!factory) throw new Error("Automatic Sushi launches are not enabled yet.");
+  const cleanName = String(name || "").trim();
+  const cleanSymbol = String(symbol || "").trim();
+  if (!cleanName || cleanName.length > 64) throw new Error("Token name is required (max 64 chars).");
+  if (!cleanSymbol || cleanSymbol.length > 12) throw new Error("Ticker is required (max 12 chars).");
+  const supplyWhole = BigInt(Math.round(Number(supplyTokens) || 0));
+  if (supplyWhole <= 0n || supplyWhole > 1_000_000_000_000_000n) throw new Error("Supply must be between 1 and 1,000,000,000,000,000 tokens.");
+  const wallet = evmWalletFromSolana(solanaSecretKey, rpcUrl);
+  const code = await wallet.provider.getCode(factory);
+  if (!code || code === "0x") throw new Error("The configured Sushi launch factory is not deployed on Robinhood Chain.");
+  const launch = new ethers.Contract(factory, sushiFactoryArtifact.abi, wallet);
+  const { salt, tokenAddress, attempts, supplyWei } = rhFindSushiLaunchSalt({
+    factoryAddress: factory,
+    name: cleanName,
+    symbol: cleanSymbol,
+    supplyTokens: supplyWhole,
+    contractUri,
+  });
+  const initialTick = rhSushiInitialTick({ marketCapUsd: initialMarketCapUsd, supplyTokens: supplyWhole, ethUsd });
+  const launchFeeWei = BigInt(await launch.launchFeeWei());
+  const txArgs = [cleanName, cleanSymbol, supplyWei, String(contractUri || ""), initialTick, wallet.address, salt];
+  let gas;
+  try {
+    gas = await launch.launch.estimateGas(...txArgs, { value: launchFeeWei });
+  } catch (error) {
+    const message = String(error?.shortMessage || error?.reason || error?.message || error);
+    throw new Error(`Automatic Sushi launch simulation failed (nothing was spent): ${message.slice(0, 300)}`);
+  }
+  const feeData = await wallet.provider.getFeeData();
+  const gasPrice = feeData.maxFeePerGas || feeData.gasPrice || 0n;
+  const required = launchFeeWei + gas * gasPrice;
+  const balance = await wallet.provider.getBalance(wallet.address);
+  if (balance < required) {
+    const err = new Error(`Automatic launch needs about ${ethers.formatEther(required)} ETH for its fee and gas, but this wallet has ${ethers.formatEther(balance)} ETH.`);
+    err.statusCode = 400;
+    throw err;
+  }
+  const tx = await launch.launch(...txArgs, { value: launchFeeWei, gasLimit: (gas * 13n) / 10n });
+  const receipt = await tx.wait(1, confirmTimeoutMs);
+  let event = null;
+  for (const log of receipt?.logs || []) {
+    try {
+      const parsed = launch.interface.parseLog(log);
+      if (parsed?.name === "TokenLaunched") { event = parsed.args; break; }
+    } catch { /* another contract's log */ }
+  }
+  const pool = event?.pool || "";
+  const tokenId = event?.tokenId != null ? event.tokenId.toString() : "";
+  const locker = await launch.locker().catch(() => "");
+  return {
+    tokenAddress,
+    pool,
+    tokenId,
+    locker,
+    txHash: tx.hash,
+    deployer: wallet.address,
+    blockNumber: receipt?.blockNumber ?? null,
+    gasUsed: receipt?.gasUsed?.toString() || "",
+    gasCostEth: receipt ? ethers.formatEther((receipt.gasUsed || 0n) * (receipt.gasPrice || gasPrice)) : "",
+    launchFeeEth: ethers.formatEther(launchFeeWei),
+    supplyTokens: supplyWhole.toString(),
+    initialTick,
+    saltAttempts: attempts,
+    venue: "sushiswap-v3",
+    liquidityLocked: true,
+    explorerToken: rhExplorerToken(tokenAddress),
+    explorerTx: rhExplorerTx(tx.hash),
+    sushiPoolUrl: RH_SUSHI.poolUrl,
+  };
+}
 
 // Uniswap V3 is the DEX on Robinhood Chain. To make a freshly-launched coin BUYABLE we create a
 // TOKEN/WETH pool (1% fee) and seed it with the creator's ETH + tokens. Addresses read off-chain.
@@ -591,7 +744,15 @@ export async function rhImpliedPriceUsd(tokenAddress, probeAddress) {
       fromCurrency: "0x0000000000000000000000000000000000000000",
       toCurrency: tokenAddress,
       amountRaw: (ethers.parseEther(String(probeEth))).toString()
-    }).catch((error) => (/no trading route/i.test(String(error?.message)) ? { noPool: true } : null))
+    }).catch(async (error) => {
+      if (!/no trading route|no routes found/i.test(String(error?.message))) return null;
+      return sushiQuoteRhSwap({
+        address: probeAddress,
+        fromCurrency: "0x0000000000000000000000000000000000000000",
+        toCurrency: tokenAddress,
+        amountRaw: ethers.parseEther(String(probeEth)).toString()
+      }).catch(() => ({ noPool: true }));
+    })
   ]);
   if (!quote || quote.noPool) return quote && quote.noPool ? { noPool: true } : null;
   const out = Number(quote.outFormatted || 0);
@@ -719,6 +880,54 @@ export async function relayQuoteRhSwap({ address, fromCurrency, toCurrency, amou
     outFormatted: data.details?.currencyOut?.amountFormatted || "",
     outSymbol: data.details?.currencyOut?.currency?.symbol || "",
     impactPercent: data.details?.totalImpact?.percent || ""
+  };
+}
+
+// Direct Sushi fallback for brand-new Sushi pools. Relay remains the first choice
+// because it can aggregate every RH venue, but its index may trail a fresh pool.
+// Sushi's swap API knows its own V2/V3 pools immediately and returns executable
+// calldata. ERC-20 inputs receive an explicit exact-amount approval step.
+export async function sushiQuoteRhSwap({ address, fromCurrency, toCurrency, amountRaw, maxSlippage = 0.03 }) {
+  const native = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+  const zero = "0x0000000000000000000000000000000000000000";
+  const tokenIn = String(fromCurrency || "").toLowerCase() === zero ? native : ethers.getAddress(fromCurrency);
+  const tokenOut = String(toCurrency || "").toLowerCase() === zero ? native : ethers.getAddress(toCurrency);
+  const sender = ethers.getAddress(address);
+  const url = new URL(`${RH_SUSHI.quoteApi.replace("/quote/", "/swap/")}`);
+  url.searchParams.set("tokenIn", tokenIn);
+  url.searchParams.set("tokenOut", tokenOut);
+  url.searchParams.set("amount", String(amountRaw));
+  url.searchParams.set("maxSlippage", String(Math.max(0.001, Math.min(0.25, Number(maxSlippage) || 0.03))));
+  url.searchParams.set("sender", sender);
+  // SlimeWire estimates every returned transaction with the actual signer just
+  // before sending. Skipping Sushi's remote simulation also lets read-only price
+  // probes use an unfunded address without producing a false "no route".
+  url.searchParams.set("simulate", "false");
+  const response = await fetch(url, {
+    headers: { accept: "application/json", "user-agent": "SlimeWire/1.0" },
+    signal: AbortSignal.timeout ? AbortSignal.timeout(20_000) : undefined,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.status !== "Success" || !data.tx?.to || !data.tx?.data) {
+    throw new Error(data.status === "NoWay"
+      ? "No trading route for this coin right now — its Sushi pool may still be initializing."
+      : `Sushi swap quote failed: ${String(data.detail || data.title || data.message || data.status || `HTTP ${response.status}`).slice(0, 200)}`);
+  }
+  const txs = [];
+  if (tokenIn !== native) {
+    const approve = new ethers.Interface(["function approve(address spender,uint256 amount) returns (bool)"]);
+    txs.push({ stepId: "sushi-approve", to: tokenIn, data: approve.encodeFunctionData("approve", [data.tx.to, BigInt(amountRaw)]), value: "0" });
+  }
+  txs.push({ stepId: "sushi-swap", to: data.tx.to, data: data.tx.data, value: String(data.tx.value || "0") });
+  const outToken = Array.isArray(data.tokens) ? data.tokens[Number(data.tokenTo)] : null;
+  const decimals = Math.max(0, Math.min(36, Number(outToken?.decimals ?? 18)));
+  const assumed = BigInt(String(data.assumedAmountOut || "0"));
+  return {
+    txs,
+    outFormatted: ethers.formatUnits(assumed, decimals),
+    outSymbol: String(outToken?.symbol || ""),
+    impactPercent: Number.isFinite(Number(data.priceImpact)) ? String(Number(data.priceImpact) * 100) : "",
+    venue: "sushiswap",
   };
 }
 

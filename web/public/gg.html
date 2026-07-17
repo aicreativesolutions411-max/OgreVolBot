@@ -4343,20 +4343,22 @@
     const btn=$("#lcMetSetupBtn");if(btn)btn.onclick=()=>setupMeteoraCurve();
     const cc=$("#lcCustomCurve");if(cc)cc.onchange=()=>{const f=$("#lcCustomCurveFields");if(f)f.style.display=cc.checked?"":"none";};
   }
-  // Robinhood Chain rail: brand-new EVM L2 (chain 4663, gas = ETH) with NO launchpad yet — we deploy
-  // the token contract ourselves (fixed supply, no owner functions = contract can't rug). Each wallet
-  // has a derived Robinhood address; this panel shows it + its ETH so the user can fund before launching.
+  function rhLaunchDevHtml(automatic){
+    return '<div class="launch-summary"><span class="mark">🪶</span><div><b>'+(automatic?'Automatic Sushi launch':'Simple Robinhood launch')+'</b><br><span class="mut">'+(automatic?'One click creates the fixed-supply coin, opens its Sushi V3 market, and permanently locks the liquidity position. No separate add-liquidity step.':'The fixed supply deploys to your creator wallet. Automatic Sushi markets will appear here after the launch factory is enabled.')+'</span></div></div>'+
+      '<div class="field row2"><div><label>Total supply</label><input id="lcRhSupply" inputmode="numeric" value="1000000000"></div><div><label>Starting market cap ($)</label><input id="lcRhStartMc" inputmode="numeric" value="5000" '+(automatic?'':'disabled')+'></div></div>'+
+      (automatic?'<div class="field"><label>First buy (SOL) <span style="text-transform:none">(optional)</span></label><input id="lcRhDevBuy" inputmode="decimal" placeholder="0.1"><span class="mut" style="font-size:10px">The market opens first, then your selected creator wallet buys immediately. Leave blank for a fair no-dev-buy launch.</span></div>':'')+
+      '<div class="lcnote"><b>Pay only with SOL.</b> SlimeWire converts the small Robinhood network amount automatically.'+(automatic?' The full token supply goes into the launch curve; your first buy is your starting position.':'')+'</div>'+
+      '<label class="lcheck"><input type="checkbox" id="lcRhAutoBundle"> <span><b>Buy from my other wallets when trading opens</b> — each wallet pays in SOL and SlimeWire handles conversion automatically.</span></label>'+
+      '<div class="field row2"><div><label>Min buy (SOL)</label><input id="lcRhBundleMin" inputmode="decimal" value="0.01"></div><div><label>Max buy (SOL)</label><input id="lcRhBundleMax" inputmode="decimal" value="0.05"></div></div>'+
+      '<div class="lcnote">'+(automatic?'<b>Sushi V3 · 1% launch pool.</b> Liquidity cannot be withdrawn. Pool fees can be collected by the creator wallet.':'Tokens deploy first; use <b>Open trading</b> after launch to seed the legacy pool.')+'</div>';
+  }
+  // Robinhood Chain rail: each saved SlimeWire wallet already has a deterministic EVM address.
+  // The automatic path creates the token and its locked Sushi V3 market from one user action.
   async function refreshRhSetup(){
     const isRh=(state.launchRail||"pump")==="robinhood";
     const devRh=$("#lcDevRhNote"),devSol=$("#lcDevSol");
     if(devRh&&devSol){
-      if(isRh){devSol.style.display="none";devRh.style.display="";
-        devRh.innerHTML='<div class="launch-summary"><span class="mark">🪶</span><div><b>Simple Robinhood launch</b><br><span class="mut">The full fixed supply goes to your creator wallet. SlimeWire enables venue-side creator fees automatically; the token contract stays untaxed and has no owner mint controls.</span></div></div>'+
-          '<div class="field"><label>Total supply</label><input id="lcRhSupply" inputmode="numeric" value="1000000000"><span class="mut" style="font-size:10px">All tokens mint to your creator wallet.</span></div>'+
-          '<div class="lcnote"><b>Pay only with SOL.</b> SlimeWire automatically converts the small network amount Robinhood Chain needs behind the scenes.</div>'+
-          '<label class="lcheck"><input type="checkbox" id="lcRhAutoBundle"> <span><b>Buy from my other wallets when trading opens</b> — each wallet pays in SOL and SlimeWire handles conversion automatically (24-hour window).</span></label>'+
-          '<div class="field row2"><div><label>Min buy (SOL)</label><input id="lcRhBundleMin" inputmode="decimal" value="0.01"></div><div><label>Max buy (SOL)</label><input id="lcRhBundleMax" inputmode="decimal" value="0.05"></div></div>'+
-          '<div class="lcnote">Robinhood tokens deploy first, then become tradeable when liquidity opens. After deploy, SlimeWire shows one clear <b>Open trading</b> action and keeps any armed bundle watching in the background.</div>';}
+      if(isRh){devSol.style.display="none";devRh.style.display="";devRh.innerHTML=rhLaunchDevHtml(!!state.rhAutomaticLaunch);}
       else{devRh.style.display="none";devSol.style.display="";}
     }
     const el=$("#lcRhSetup");if(!el)return;
@@ -4366,6 +4368,9 @@
     const {ok,d}=await api("/api/web/rh/wallet?walletIndex="+encodeURIComponent(devIdx)).catch(()=>({}));
     if((state.launchRail||"pump")!=="robinhood")return;
     if(!(ok&&d&&d.ok)){el.innerHTML='<div class="launch-summary"><span class="mark">!</span><div><b>Robinhood wallet unavailable.</b><br><span class="mut">Choose a creator wallet in Dev &amp; Bundle and try again.</span></div></div>';return;}
+    state.rhAutomaticLaunch=!!d.automaticLaunch;
+    if(devRh)devRh.innerHTML=rhLaunchDevHtml(state.rhAutomaticLaunch);
+    lcRestore();
     el.innerHTML='<div class="launch-summary"><span class="mark">🪶</span><div><b>Robinhood Chain ready · pay with SOL</b><br><span class="mut">'+esc(short(d.address))+' · Network conversion is automatic. <a href="'+esc(d.explorer)+'" target="_blank" rel="noopener noreferrer">View wallet</a></span></div></div>';
   }
   async function setupMeteoraCurve(){
@@ -4537,8 +4542,8 @@
     $("#lcGo").onclick=async()=>{
       const name=$("#lcName").value.trim(),sym=$("#lcSym").value.trim();
       if(!name||!sym){toast("Name and ticker are required (Coin tab).",true);state.launchTab="coin";renderLaunch();return;}
-      // Robinhood Chain rail: no dev-buy concept yet (no pool) — deploy the ERC-20 straight from the
-      // dev wallet's derived EVM address. Whole supply lands in the creator's wallet.
+      // Automatic Robinhood rail: token + locked Sushi V3 market in one action.
+      // A missing factory safely falls back to the legacy deploy/open-trading path.
       if((state.launchRail||"pump")==="robinhood"){
         if(!(await ensureTradeReady()))return;
         const b=$("#lcGo");b.disabled=true;b.textContent="Deploying on Robinhood Chain…";
@@ -4551,7 +4556,8 @@
         const rhBundleMin=(($("#lcRhBundleMin")||{}).value||"0.01").trim(),rhBundleMax=(($("#lcRhBundleMax")||{}).value||"0.05").trim();
         const rhBundleWallets=(state.wallets||[]).map(w=>w.index).filter(i=>String(i)!==devIdx);
         const rhBody={name,symbol:sym,supplyTokens:supply,devWalletIndex:devIdx,launchAttemptId:attemptId(),
-          fundRhWithSol:true,fundSolAmount:"0.01",
+          fundRhWithSol:true,fundSolAmount:state.rhAutomaticLaunch?"0.03":"0.01",
+          initialMarketCapUsd:(($("#lcRhStartMc")||{}).value||"5000").trim(),devBuySol:(($("#lcRhDevBuy")||{}).value||"").trim(),
           creatorFeeEnabled:true,holderRewards:rhHolderRewards,
           description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim()};
         if(state.launchImg)rhBody.imageDataUrl=state.launchImg.dataUrl;
@@ -4563,11 +4569,11 @@
           state._launchKept=false;state.launchForm=null;state.launchImg=null;state.launchBanner=null;
           $("#lcOut").innerHTML='<div class="feebox">🪶 <b>'+esc(name)+' ('+esc(sym)+') is LIVE on Robinhood Chain!</b>'+
             '<div class="ln">Token: <b style="word-break:break-all">'+esc(d.tokenAddress)+'</b></div>'+
-            '<div class="ln">Supply '+esc(Number(d.supplyTokens||supply).toLocaleString())+' — all in your wallet · network conversion handled automatically</div>'+
+            '<div class="ln">Supply '+esc(Number(d.supplyTokens||supply).toLocaleString())+' · '+(d.automaticMarket?'Sushi V3 market live · liquidity permanently locked':'legacy token deployed · open trading below')+'</div>'+
             '<div class="ln"><a href="'+esc(d.explorerToken||"#")+'" target="_blank" rel="noopener noreferrer">View token on Blockscout</a> · <a href="'+esc(d.explorerTx||"#")+'" target="_blank" rel="noopener noreferrer">deploy tx</a></div>'+
-            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="wbtn" type="button" onclick="GG.rhAddLiquidity(\''+esc(d.tokenAddress)+'\',\''+esc(devIdx)+'\')">Open trading</button><button class="wbtn ghost" type="button" onclick="GG.rhTrade(\''+esc(d.tokenAddress)+'\')">View coin</button></div>'+
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'+(d.automaticMarket?'<button class="wbtn" type="button" onclick="GG.rhTrade(\''+esc(d.tokenAddress)+'\')">Trade now</button><a class="wbtn ghost" href="'+esc(d.sushiPoolUrl||"https://www.sushi.com/robinhood/pool")+'" target="_blank" rel="noopener noreferrer">Sushi pool</a>':'<button class="wbtn" type="button" onclick="GG.rhAddLiquidity(\''+esc(d.tokenAddress)+'\',\''+esc(devIdx)+'\')">Open trading</button><button class="wbtn ghost" type="button" onclick="GG.rhTrade(\''+esc(d.tokenAddress)+'\')">View coin</button>')+'</div>'+
             (bundleArmed?'<div class="ln">📦 Auto-bundle armed — your other wallets will buy when the pool opens.</div>':'')+
-            '<div class="ln mut" style="font-size:10px;margin-top:6px">Your coin has <b>no trading pool yet</b> — nobody can buy it until one exists. Tap <b>Open trading</b>, choose a small SOL amount and how many tokens to seed; SlimeWire handles the network conversion automatically.</div></div>';
+            (d.devBuy&&d.devBuy.ok===false?'<div class="ln mut" style="font-size:10px;margin-top:6px">Market is live, but the optional first buy needs a retry: '+esc(d.devBuy.error||"route is warming")+'</div>':'')+'</div>';
           toast("🪶 Deployed on Robinhood Chain!");
         } else toast((d&&(d.message||d.error))||"Robinhood Chain launch failed",true);
         return;
