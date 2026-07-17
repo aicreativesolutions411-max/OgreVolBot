@@ -2049,13 +2049,12 @@
     const coin = state.selected || {}, key = coinKey(coin), rh = coin.chain === "robinhood" || isRh(key);
     if (rh) {
       openSheet(`<div class="sheet-title"><img ${coinImageAttrs(coin)} alt=""><div><h2>Robinhood volume</h2><p>Native controls · ${escapeHtml(coin.symbol || short(key))}</p></div></div>
-        <div class="read-card"><h3>Round-trip engine</h3><p>Fund the derived Robinhood wallet from SOL, then run randomized rounds. Stop waits for the current action to finish.</p></div>
+        <div class="read-card"><h3>SOL-powered round trips</h3><p>Choose SOL once. SlimeWire converts it for this wallet and automatically sizes randomized Robinhood buys and sells.</p></div>
         <div class="field"><label>Token contract</label><input data-volume-token data-volume-chain="robinhood" value="${escapeHtml(key)}"></div>
         <div class="field"><label>Wallet</label><select data-volume-wallet>${volumeWalletOptions()}</select></div>
-        <div class="field-row"><div class="field"><label>Fund from SOL first</label><input data-rh-volume-fund inputmode="decimal" value="0" placeholder="0.2"></div><div class="field"><label>Rounds</label><input data-volume-rounds inputmode="numeric" value="3"></div></div>
-        <div class="field-row"><div class="field"><label>Min ETH trade</label><input data-volume-min inputmode="decimal" value="0.002"></div><div class="field"><label>Max ETH trade</label><input data-volume-max inputmode="decimal" value="0.01"></div></div>
-        <div class="volume-actions"><button class="submit-trade" type="button" data-start-volume>Start</button><button type="button" data-stop-volume>Stop</button></div>
-        <div data-volume-status class="volume-status">Checking status…</div><p class="fineprint">Robinhood rounds use the selected derived wallet. SOL funding is converted automatically before the run when entered.</p>`);
+        <div class="field-row"><div class="field"><label>SOL budget</label><input data-rh-volume-fund inputmode="decimal" value="0.10" placeholder="0.10"></div><div class="field"><label>Rounds</label><input data-volume-rounds inputmode="numeric" value="3"></div></div>
+        <div class="volume-actions"><button class="submit-trade" type="button" data-start-volume>Start with SOL</button><button type="button" data-stop-volume>Stop</button></div>
+        <div data-volume-status class="volume-status">Checking status…</div><p class="fineprint">Conversion happens once before trading. SlimeWire chooses the ETH trade range from the converted balance, so there is no ETH setup.</p>`);
     } else {
       openSheet(`<div class="sheet-title"><img ${coinImageAttrs(coin)} alt=""><div><h2>Rolling wallet volume</h2><p>Fresh ghost wallets · offset sells · automatic sweep</p></div></div>
         <div class="read-card"><h3>Natural cadence controls</h3><p>Buys and sells use different points in the rolling wallet pool, varied sizes, and the selected pattern. It keeps running server-side.</p></div>
@@ -2093,29 +2092,27 @@
     clearTimeout(state.volumePoll);
     const status = $("[data-volume-status]"); if (!status) return;
     const result = await request(rh ? "/api/web/rh/volume/status" : "/api/web/volume-bot");
-    if (status && result.ok) status.innerHTML = rh ? (result.data?.status === "idle" ? "No active run." : `<div class="volume-run"><b>${escapeHtml(result.data?.status || "running")}</b><p>Round ${Number(result.data?.done || 0)} / ${Number(result.data?.rounds || 0)}</p>${(result.data?.trades || []).slice(-4).reverse().map((trade) => `<small>${trade.ok ? `Wallet ${trade.walletIndex} · ${escapeHtml(trade.amountEth)} ETH` : escapeHtml(trade.error || "Trade failed")}</small>`).join("")}</div>`) : volumeStatusHtml(result.data?.bots || []);
+    if (status && result.ok) status.innerHTML = rh ? (result.data?.status === "idle" ? "No active run." : `<div class="volume-run"><b>${escapeHtml(result.data?.status || "running")}</b><p>Round ${Number(result.data?.done || 0)} / ${Number(result.data?.rounds || 0)} · ${Number(result.data?.fundSolPerWallet || 0).toFixed(3)} SOL</p>${(result.data?.funding || []).slice(-3).reverse().map((fund) => `<small>${fund.ok ? `Wallet ${fund.walletIndex} · SOL converted` : escapeHtml(fund.error || "Funding failed")}</small>`).join("")}${(result.data?.trades || []).slice(-4).reverse().map((trade) => `<small>${trade.ok ? `Wallet ${trade.walletIndex} · buy + sell complete` : escapeHtml(trade.error || "Trade failed")}</small>`).join("")}</div>`) : volumeStatusHtml(result.data?.bots || []);
     if ($("[data-volume-status]")) state.volumePoll = setTimeout(() => pollFunVolume(rh), 4000);
   }
   async function startFunVolume(button) {
     if (!(await ensureTradeReady())) return;
     const tokenField = $("[data-volume-token]"), token = String(tokenField?.value || "").trim(), configuredRh = tokenField?.dataset.volumeChain === "robinhood", detectedRh = isRh(token), rh = configuredRh, walletIndex = Number($("[data-volume-wallet]")?.value || state.activeWallet), min = $("[data-volume-min]")?.value || "", max = $("[data-volume-max]")?.value || "";
-    if (!token || !(Number(min) > 0) || !(Number(max) >= Number(min))) { toast("Check the contract and min/max size.", true); return; }
+    if (!token || (!rh && (!(Number(min) > 0) || !(Number(max) >= Number(min))))) { toast(rh ? "Check the Robinhood contract." : "Check the contract and min/max size.", true); return; }
     if (configuredRh !== detectedRh) { toast(`This volume panel is set up for ${configuredRh ? "Robinhood" : "Solana"}. Open the coin on the correct chain and try again.`, true); return; }
     button.disabled = true; button.textContent = "Starting…";
     let result;
     if (rh) {
       const fundSol = Number($("[data-rh-volume-fund]")?.value || 0);
-      if (fundSol > 0) {
-        const funded = await post("/api/web/rh/fund-with-sol", { walletIndex, amountSol: String(fundSol), tradeAttemptId: attemptId("fun-rh-volume-fund") });
-        if (!funded.ok || !funded.data?.ok) { button.disabled = false; button.textContent = "Start"; toast(funded.data?.error || "SOL funding failed", true); return; }
-      }
-      result = await post("/api/web/rh/volume/start", { tokenAddress: token, walletIndexes: [walletIndex], rounds: $("[data-volume-rounds]")?.value || "3", minEth: min, maxEth: max });
+      if (!(fundSol >= 0.005) || fundSol > 5) { button.disabled = false; button.textContent = "Start with SOL"; toast("Enter 0.005 to 5 SOL.", true); return; }
+      button.textContent = "Converting SOL…";
+      result = await post("/api/web/rh/volume/start", { tokenAddress: token, walletIndexes: [walletIndex], rounds: $("[data-volume-rounds]")?.value || "3", payCurrency: "SOL", fundSolPerWallet: String(fundSol) });
     } else {
       const pattern = $("[data-volume-pattern]")?.value || "organic", delaySecs = $("[data-volume-speed]")?.value || "8";
       const sourceWallet = state.wallets.find((wallet) => Number(wallet.index) === walletIndex);
       result = await post("/api/web/volume-bot/start", { tokenMint: token, sourceWalletIndex: walletIndex, sourceWalletPublicKey: sourceWallet?.publicKey || "", rollingWallets: true, buyAmountSol: String((Number(min) + Number(max)) / 2), minBuyAmountSol: min, maxBuyAmountSol: max, poolSize: "3", maxRounds: "60", sellPercent: "100", buyBias: pattern === "ladder" ? "75" : "55", delaySecs, slippageBps: 600, sweepBack: true, keepDust: true, offsetSell: Boolean($("[data-volume-offset]")?.checked), staggerPattern: pattern, tradeAttemptId: attemptId("fun-volume") });
     }
-    button.disabled = false; button.textContent = "Start";
+    button.disabled = false; button.textContent = rh ? "Start with SOL" : "Start";
     if (result.ok && result.data?.ok) { toast("Volume run started"); pollFunVolume(rh); }
     else if (!rh) {
       toast(result.data?.error || result.data?.message || "Could not start volume", true);

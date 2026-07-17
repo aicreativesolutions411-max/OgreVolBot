@@ -9700,6 +9700,26 @@ function volumeBotIsActive(bot) {
   return Boolean(bot) && bot.status !== "completed" && !["done", "stopped"].includes(stage);
 }
 
+function rhVolumeBotFromStatus(row = {}) {
+  if (!row || row.status === "idle") return null;
+  const trades = Array.isArray(row.trades) ? row.trades : [];
+  const completed = ["done", "stopped", "failed"].includes(String(row.status || "").toLowerCase());
+  const successful = trades.filter((trade) => trade.ok).length;
+  return {
+    id: "rh-volume-current",
+    robinhood: true,
+    tokenMint: row.tokenAddress || "Robinhood token",
+    shortMint: row.tokenAddress ? shortAddress(row.tokenAddress) : "Robinhood",
+    stage: row.status || "running",
+    status: completed ? "completed" : "running",
+    currentCycle: Number(row.done || 0),
+    cycles: Number(row.rounds || 0),
+    walletCount: Number(row.walletCount || row.walletIndexes?.length || 0),
+    stats: { buys: successful, sells: successful, errors: trades.filter((trade) => !trade.ok).length },
+    message: row.error || `${Number(row.fundSolPerWallet || 0).toFixed(3)} SOL per wallet · automatic Robinhood conversion`
+  };
+}
+
 function volumeBotStageLabel(bot) {
   if (!volumeBotIsActive(bot)) return "Finished";
   if (bot.stage === "sweeping") return "Sweeping back";
@@ -9750,8 +9770,9 @@ function volumeBotListHtml() {
           <div><span>Wallets</span><strong>${escapeHtml(Number(bot.walletCount || 0))}</strong></div>
           <div><span>Buys</span><strong>${escapeHtml(Number(stats.buys || 0))}</strong></div>
           <div><span>Sells</span><strong>${escapeHtml(Number(stats.sells || 0))}</strong></div>
-          <div><span>Flat fee</span><strong>0.05 SOL / 50 tx</strong></div>
-          <div><span>Next fee</span><strong>${escapeHtml(Number(stats.nextFlatFeeIn || 50))} tx</strong></div>
+          ${bot.robinhood
+            ? `<div><span>Funding</span><strong>SOL → RH</strong></div><div><span>Trade sizing</span><strong>Automatic</strong></div>`
+            : `<div><span>Flat fee</span><strong>0.05 SOL / 50 tx</strong></div><div><span>Next fee</span><strong>${escapeHtml(Number(stats.nextFlatFeeIn || 50))} tx</strong></div>`}
           <div><span>Errors</span><strong>${escapeHtml(Number(stats.errors || 0))}</strong></div>
         </div>
         <small>${escapeHtml(bot.message || "")}</small>
@@ -9869,7 +9890,9 @@ function volumeBotPanelHtml() {
 function readVolumeBotForm() {
   const mode = state.slimeBotMode === "spam" ? "spam" : "smart";
   const aggr = ["low", "med", "high"].includes(state.slimeBotAggr) ? state.slimeBotAggr : "med";
-  const investment = Math.max(0.05, Math.min(50, Number($("[data-vbot-invest-num]")?.value || $("[data-vbot-invest]")?.value || "1")));
+  const tokenMint = $("[data-vbot-token]")?.value?.trim() || "";
+  const robinhood = /^0x[0-9a-fA-F]{40}$/.test(tokenMint);
+  const investment = Math.max(0.05, Math.min(robinhood ? 5 : 50, Number($("[data-vbot-invest-num]")?.value || $("[data-vbot-invest]")?.value || "1")));
   const durationMin = Math.max(20, Math.min(360, Number($("[data-vbot-duration]")?.value || "60")));
 
   const aggrMap = {
@@ -9886,7 +9909,8 @@ function readVolumeBotForm() {
   const buyAmountSol = Math.max(0.005, Math.min(0.5, investment / rounds));
 
   return {
-    tokenMint: $("[data-vbot-token]")?.value?.trim() || "",
+    tokenMint,
+    chain: robinhood ? "robinhood" : "solana",
     sourceWalletIndex: $("[data-vbot-source]")?.value || "1",
     rollingWallets: rolling,
     autoCreateWallets: !rolling,
@@ -9920,8 +9944,13 @@ function setVolumeBotStatus(message) {
 
 async function loadVolumeBots({ silent = true } = {}) {
   try {
-    const data = await api("/api/web/volume-bot");
-    state.volumeBots = Array.isArray(data.bots) ? data.bots : [];
+    const [solResult, rhResult] = await Promise.allSettled([
+      api("/api/web/volume-bot"),
+      api("/api/web/rh/volume/status")
+    ]);
+    const solBots = solResult.status === "fulfilled" && Array.isArray(solResult.value?.bots) ? solResult.value.bots : [];
+    const rhBot = rhResult.status === "fulfilled" ? rhVolumeBotFromStatus(rhResult.value) : null;
+    state.volumeBots = rhBot ? [rhBot, ...solBots] : solBots;
     if (state.activeTab === "volume") render();
   } catch (error) {
     if (!silent) setError(error.message);
@@ -9936,9 +9965,17 @@ async function startVolumeBot() {
     return;
   }
   const durLabel = form.durationMin >= 60 ? `${(form.durationMin / 60).toFixed(form.durationMin % 60 ? 1 : 0)}h` : `${form.durationMin}m`;
+  const rh = form.chain === "robinhood";
+  const rhRounds = Math.max(1, Math.min(10, Math.round(form.durationMin / 20)));
   const confirmed = await slimeConfirm({
     title: "Start SlimeBot",
-    lines: [
+    lines: rh ? [
+      "This spends REAL SOL.",
+      `Robinhood token: ${form.tokenMint}`,
+      `${form.investment} SOL is converted once for Wallet ${form.sourceWalletIndex}.`,
+      `${rhRounds} randomized Robinhood buy + sell round(s); trade sizing is automatic.`,
+      "Stop waits for the current on-chain action to finish."
+    ] : [
       "This spends REAL SOL.",
       `Token: ${form.tokenMint}`,
       `${form.mode === "smart" ? "Smart" : "Spam"} mode, ${form.aggr.toUpperCase()} aggressiveness.`,
@@ -9953,9 +9990,15 @@ async function startVolumeBot() {
   setVolumeBotStatus("Funding wallets and starting bot...");
   render();
   try {
-    const data = await api("/api/web/volume-bot/start", {
+    const data = await api(rh ? "/api/web/rh/volume/start" : "/api/web/volume-bot/start", {
       method: "POST",
-      body: JSON.stringify(form),
+      body: JSON.stringify(rh ? {
+        tokenAddress: form.tokenMint,
+        walletIndexes: [form.sourceWalletIndex],
+        rounds: String(rhRounds),
+        payCurrency: "SOL",
+        fundSolPerWallet: String(form.investment)
+      } : form),
       dedupe: false,
       timeoutMs: API_LONG_ACTION_TIMEOUT_MS
     });
@@ -9963,7 +10006,7 @@ async function startVolumeBot() {
     if (data.bot) {
       state.volumeBots = [data.bot, ...state.volumeBots.filter((bot) => bot.id !== data.bot.id)];
     }
-    setVolumeBotStatus(data.bot?.message || "SlimeBot started.");
+    setVolumeBotStatus(data.bot?.message || (rh ? "SOL conversion started. Robinhood volume will begin automatically." : "SlimeBot started."));
     render();
     void loadVolumeBots();
   } catch (error) {
@@ -9978,16 +10021,17 @@ async function stopVolumeBot(planId) {
   if (!planId) return;
   try {
     setVolumeBotStatus("Stopping bot...");
-    const data = await api("/api/web/volume-bot/stop", {
+    const robinhood = planId === "rh-volume-current";
+    const data = await api(robinhood ? "/api/web/rh/volume/stop" : "/api/web/volume-bot/stop", {
       method: "POST",
-      body: JSON.stringify({ planId }),
+      body: JSON.stringify(robinhood ? {} : { planId }),
       dedupe: false,
       timeoutMs: API_LONG_ACTION_TIMEOUT_MS
     });
     if (data.bot) {
       state.volumeBots = state.volumeBots.map((bot) => (bot.id === data.bot.id ? data.bot : bot));
     }
-    setVolumeBotStatus(data.bot?.message || "Stop requested.");
+    setVolumeBotStatus(data.bot?.message || (robinhood ? "Stopping after the current Robinhood action." : "Stop requested."));
     render();
     void loadVolumeBots();
   } catch (error) {

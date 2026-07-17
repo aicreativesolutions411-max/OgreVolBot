@@ -753,12 +753,19 @@ test("RH power tools: TP/SL guards + bundle + volume bot, all through the safe t
   assert.match(functionBody(serverSource, "webRhBundle"), /runIdempotentMoneyOp\("web-rh-bundle"/);
   assert.match(functionBody(serverSource, "webRhBundleCore"), /webRhTradeCore/);
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/volume\/start"/);
-  assert.match(functionBody(serverSource, "webRhVolumeStart"), /webRhTradeCore/);
+  const rhVolumeStart = functionBody(serverSource, "webRhVolumeStart");
+  assert.match(rhVolumeStart, /webRhTradeCore/);
+  assert.match(rhVolumeStart, /fundSolPerWallet/);
+  assert.match(rhVolumeStart, /webRhFundWithSol/);
+  assert.match(rhVolumeStart, /payCurrency: solFunded \? "SOL" : "ETH"/);
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/volume\/stop"/);
   for (const src of [ggSource, indexSource]) {
     assert.match(src, /function rhGuardModal/);
     assert.match(src, /function rhBundleModal/);
     assert.match(src, /function rhVolumeModal/);
+    assert.match(functionBody(src, "rhVolumeModal"), /SOL budget per wallet/);
+    assert.match(functionBody(src, "rhVolumeModal"), /fundSolPerWallet:fundSol/);
+    assert.doesNotMatch(functionBody(src, "rhVolumeModal"), /Min \/ Max \(ETH\)/);
     assert.match(src, /🛠 Robinhood tools/);
     assert.match(src, /GG\.rhGuardModal/);
   }

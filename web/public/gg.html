@@ -1952,7 +1952,7 @@
     }catch(e){return false;}
   }
   function rhNativeChartFrame(address,r){
-    return '<iframe src="/chart-lab?ca='+encodeURIComponent(address)+'&tf=5m&embed=1&sym='+encodeURIComponent((r&&r.symbol)||'')+'" title="Robinhood live chart" loading="eager"></iframe>';
+    return '<iframe src="/chart-lab?ca='+encodeURIComponent(address)+'&tf=5m&embed=1&cv=2&sym='+encodeURIComponent((r&&r.symbol)||'')+'" title="Robinhood live chart" loading="eager"></iframe>';
   }
   // Robinhood coin trade modal — same one-tap concept as Solana coins: instant buy (ETH amount) and
   // sell (% of bag) from the active wallet's Robinhood account, routed through the chain's live pools.
@@ -2208,22 +2208,23 @@
   let rhVolPollT=null;
   function rhVolumeModal(address){
     const r=(state.rhRows||{})[String(address).toLowerCase()]||{address};
-    openModal('<h3>🔁 Volume bot — '+esc(r.symbol||short(address))+'</h3><p class="sub mut" style="font-size:12px">Each round: every checked wallet buys a random amount, then sells right back. Costs only fees + impact.</p>'+
+    openModal('<h3>🔁 Robinhood volume — '+esc(r.symbol||short(address))+'</h3><p class="sub mut" style="font-size:12px">Choose SOL once. SlimeWire converts it for each checked wallet, then runs randomized Robinhood buys and sells automatically.</p>'+
       rhWalletChecks("rhVw")+
-      '<div class="field row2"><div><label>Rounds</label><input id="rhVR" inputmode="numeric" value="3"></div><div><label>Min / Max (ETH)</label><div style="display:flex;gap:6px"><input id="rhVMin" inputmode="decimal" placeholder="0.002" style="flex:1;min-width:0"><input id="rhVMax" inputmode="decimal" placeholder="0.01" style="flex:1;min-width:0"></div></div></div>'+
-      '<div style="display:flex;gap:8px"><button class="wbtn" id="rhVGo" style="flex:1">🔁 Start</button><button class="wbtn ghost" id="rhVStop" style="flex:0 0 auto">Stop</button></div>'+
+      '<div class="field row2"><div><label>Rounds</label><input id="rhVR" inputmode="numeric" value="3"></div><div><label>SOL budget per wallet</label><input id="rhVSol" inputmode="decimal" value="0.10" placeholder="0.10"></div></div>'+
+      '<div style="display:flex;gap:8px"><button class="wbtn" id="rhVGo" style="flex:1">🔁 Start with SOL</button><button class="wbtn ghost" id="rhVStop" style="flex:0 0 auto">Stop</button></div>'+
+      '<p class="sub mut" style="font-size:11px;margin-top:8px">Conversion happens once before trading. The bot chooses safe ETH trade sizes from the converted balance; you never enter ETH.</p>'+
       '<div id="rhVOut" class="mut" style="font-size:11px;margin-top:10px"></div>');
-    const paint=(s)=>{const o=$("#rhVOut");if(!o)return;if(!s||s.status==="idle"){o.textContent="Not running.";return;}o.innerHTML='<b>'+esc(s.status)+'</b> · round '+s.done+'/'+s.rounds+(s.error?' · '+esc(s.error):'')+'<br>'+(s.trades||[]).slice(-6).map(t=>'<span class="'+(t.ok?"up":"down")+'">W'+t.walletIndex+' r'+t.round+' '+(t.ok?(t.amountEth+'→'+(t.backEth?Number(t.backEth).toFixed(5):'?')+' ETH'):esc(t.error||'fail'))+'</span>').join("<br>");};
-    const poll=async()=>{const {ok,d}=await api("/api/web/rh/volume/status").catch(()=>({}));if(ok&&d)paint(d);if(d&&d.status==="running"&&$("#rhVOut")){clearTimeout(rhVolPollT);rhVolPollT=setTimeout(poll,4000);}};
+    const paint=(s)=>{const o=$("#rhVOut");if(!o)return;if(!s||s.status==="idle"){o.textContent="Not running.";return;}const funds=(s.funding||[]).slice(-4).map(f=>'<span class="'+(f.ok?'up':'down')+'">W'+f.walletIndex+' '+(f.ok?(esc(f.amountSol)+' SOL converted'):esc(f.error||'funding failed'))+'</span>').join('<br>');const trades=(s.trades||[]).slice(-6).map(t=>'<span class="'+(t.ok?"up":"down")+'">W'+t.walletIndex+' r'+t.round+' '+(t.ok?('buy + sell complete'):esc(t.error||'fail'))+'</span>').join("<br>");o.innerHTML='<b>'+esc(s.status)+'</b> · round '+s.done+'/'+s.rounds+(s.error?' · '+esc(s.error):'')+(funds?'<br>'+funds:'')+(trades?'<br>'+trades:'');};
+    const poll=async()=>{const {ok,d}=await api("/api/web/rh/volume/status").catch(()=>({}));if(ok&&d)paint(d);if(d&&["funding","running","stopping"].includes(d.status)&&$("#rhVOut")){clearTimeout(rhVolPollT);rhVolPollT=setTimeout(poll,4000);}};
     const go=$("#rhVGo");if(go)go.onclick=async()=>{
       const idxs=rhChecked("rhVw");if(!idxs.length){toast("Check at least one wallet.",true);return;}
-      const min=($("#rhVMin")||{}).value,max=($("#rhVMax")||{}).value,rounds=($("#rhVR")||{}).value||"3";
-      if(!(Number(min)>0)||!(Number(max)>=Number(min))){toast("Set a valid min/max ETH range.",true);return;}
+      const fundSol=($("#rhVSol")||{}).value,rounds=($("#rhVR")||{}).value||"3";
+      if(!(Number(fundSol)>=0.005)||Number(fundSol)>5){toast("Enter 0.005 to 5 SOL per wallet.",true);return;}
       if(!(await ensureTradeReady()))return;
-      go.disabled=true;go.textContent="Starting…";
-      const {ok,d}=await jpost("/api/web/rh/volume/start",{tokenAddress:address,walletIndexes:idxs,rounds,minEth:min,maxEth:max});
-      go.disabled=false;go.textContent="🔁 Start";
-      if(ok&&d&&d.ok){toast("🔁 Volume bot running");poll();}
+      go.disabled=true;go.textContent="Converting SOL…";
+      const {ok,d}=await jpost("/api/web/rh/volume/start",{tokenAddress:address,walletIndexes:idxs,rounds,payCurrency:"SOL",fundSolPerWallet:fundSol});
+      go.disabled=false;go.textContent="🔁 Start with SOL";
+      if(ok&&d&&d.ok){toast("🔁 SOL conversion and Robinhood volume started");poll();}
       else toast((d&&(d.message||d.error))||"Couldn't start",true);
     };
     const st=$("#rhVStop");if(st)st.onclick=async()=>{await jpost("/api/web/rh/volume/stop",{});toast("Stopping after the current trade…");poll();};

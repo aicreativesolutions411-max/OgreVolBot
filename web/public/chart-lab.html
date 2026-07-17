@@ -254,9 +254,10 @@
   Promise.all([loadTex('/assets/slimewire/candle-slime.webp'),loadTex('/assets/slimewire/candle-blood.webp')]).then(function(t){
     if(!t[0]||!t[1])return;                                    // textures missing -> keep LWC's own candles
     skin.slime=t[0]; skin.blood=t[1]; skin.ready=true;
-    // Hand the candle BODIES to the overlay; keep slime/blood WICKS on the LWC series so the
-    // axes, last-price line and crosshair stay perfectly real.
-    try{ candle.applyOptions({upColor:'rgba(0,0,0,0)',downColor:'rgba(0,0,0,0)',borderVisible:false,wickUpColor:'#9dff6a',wickDownColor:'#ff8a96'}); }catch(e){}
+    // Keep native candles visible as the guaranteed chart. Some embedded/mobile browsers load the
+    // textures but decline to paint the keyed overlay canvas. Transparent native bodies then made a
+    // valid chart look blank. Slime/blood is enhancement only, never the only visible price data.
+    try{ candle.applyOptions({upColor:'#33e08a',downColor:'#ff445c',borderVisible:true,borderUpColor:'#7cff4f',borderDownColor:'#ff7182',wickUpColor:'#9dff6a',wickDownColor:'#ff8a96'}); }catch(e){}
     sizeOv(); scheduleSkin();
   });
   function sizeOv(){ var w=el.clientWidth||340,h=el.clientHeight||300,dpr=Math.min(2,window.devicePixelRatio||1);

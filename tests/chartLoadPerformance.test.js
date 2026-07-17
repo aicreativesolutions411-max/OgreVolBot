@@ -72,6 +72,14 @@ test("native chart loads candles from our server first and has no browser GeckoT
   assert.doesNotMatch(chartLabSource, /function loadGT|api\.geckoterminal\.com|GTB=|\/ohlcv\//);
 });
 
+test("native chart never hides real candles behind the optional slime texture", () => {
+  assert.match(chartLabSource, /upColor:'#33e08a'/);
+  assert.match(chartLabSource, /downColor:'#ff445c'/);
+  assert.match(chartLabSource, /Slime\/blood is enhancement only/);
+  assert.doesNotMatch(chartLabSource, /applyOptions\(\{upColor:'rgba\(0,0,0,0\)'/);
+  assert.match(functionBody(terminalSource, "rhNativeChartFrame"), /cv=2/);
+});
+
 test("native chart API uses Solana Tracker primary with swap-api fallback", () => {
   const body = functionBody(serverSource, "buildChartData");
   assert.match(body, /solanaTrackerJson\(`\/chart\/\$\{mint\}\?type=\$\{encodeURIComponent\(tf\)\}&currency=usd`/);

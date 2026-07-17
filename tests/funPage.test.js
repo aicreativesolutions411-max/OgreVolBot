@@ -567,7 +567,8 @@ test("coin setup exposes fast buys, ladder exits, one-wallet RH trades, and the 
   assert.match(js, /sweep-background", \{ preserveOneToken: true \}, \{ timeout: 180_000, noRetry: true \}/);
   assert.match(js, /setTimeout\(\(\) => sweepFunVolume\(attempt \+ 1\), 5_000\)/);
   assert.match(js, /\/api\/web\/rh\/volume\/start/);
-  assert.match(js, /\/api\/web\/rh\/fund-with-sol/);
+  assert.match(js, /payCurrency: "SOL", fundSolPerWallet/);
+  assert.doesNotMatch(js, /Min ETH trade|Max ETH trade/);
 });
 
 test("balanced pro chart keeps core stats visible and adds working chart/transaction controls", () => {
