@@ -150,6 +150,7 @@ export const rhArtifactInfo = { solcVersion: artifact.solcVersion, bytecodeBytes
 // and silently treating one as the other produced the wrong pool destination.
 // Source: Sushi's published `sushi` package (evm/config/features, chain 4663).
 export const RH_SUSHI = Object.freeze({
+  launchFactory: "0xd611FEca4504dAa1Ab09fa36AD20F0C4153C24FA",
   v3Factory: "0xe51960f1b45f1c9fb6d166e6a884f866fc70433b",
   v3PositionManager: "0x51d0e5188afe12d502e29d982d20c190e7816107",
   v3Quoter: "0x3e290e5e01818002a0b672148bdc7514d861c7b3",

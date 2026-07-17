@@ -10,6 +10,7 @@ import {
 } from "../src/lib/robinhoodChain.js";
 
 test("Robinhood Sushi addresses are distinct from the legacy Uniswap venue", () => {
+  assert.equal(RH_SUSHI.launchFactory, "0xd611FEca4504dAa1Ab09fa36AD20F0C4153C24FA");
   assert.equal(RH_SUSHI.v3Factory, "0xe51960f1b45f1c9fb6d166e6a884f866fc70433b");
   assert.equal(RH_SUSHI.v3PositionManager, "0x51d0e5188afe12d502e29d982d20c190e7816107");
   assert.equal(RH_SUSHI.v2Factory, "0xe52abd50ad151ecdf56427effd715e703696a6b1");
@@ -54,10 +55,11 @@ test("launch contract permanently locks liquidity and has no withdrawal path", (
   assert.doesNotMatch(lockerFunctions.join(" "), /withdraw|decreaseLiquidity|transferFrom/i);
 });
 
-test("web launch keeps automatic Sushi markets feature-gated with legacy fallback", () => {
+test("web launch defaults to the live automatic Sushi factory", () => {
   const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
   const web = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
   assert.match(server, /RH_SUSHI_LAUNCH_FACTORY_ADDRESS/);
+  assert.match(server, /RH_SUSHI_LAUNCH_FACTORY_ADDRESS \|\| RH_SUSHI\.launchFactory/);
   assert.match(server, /rhLaunchTokenOnSushi/);
   assert.match(server, /sushiQuoteRhSwap/);
   assert.match(server, /automaticMarket[\s\S]*rhDeployToken/);
