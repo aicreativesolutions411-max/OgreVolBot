@@ -113,7 +113,7 @@ test("classic mobile terminal hydrates a pasted Robinhood CA from the saved Sush
   const hydrate = functionBody(terminalSource, "rhHydrateChartRow");
   assert.match(hydrate, /\/api\/web\/chart\/bootstrap\?token=/);
   assert.match(hydrate, /pairAddress/);
-  assert.match(functionBody(terminalSource, "rhNativeChartFrame"), /\/chart-lab\.html\?ca=/);
+  assert.match(functionBody(terminalSource, "rhNativeChartFrame"), /\/chart-lab\?ca=/);
   assert.match(functionBody(terminalSource, "renderRhTrade"), /Promise\.all\(\[rhEnrichRows\(\[r\]\),rhHydrateChartRow\(r\)\]\)/);
   assert.match(tokenPageSource, /\^0x\[0-9a-f\]\{40\}\$\/i\.test\(rawMint\)/);
 });
