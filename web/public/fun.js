@@ -9,6 +9,8 @@
   const ACTIVE_PRESET_KEY = "slimewireFunTradePreset";
   const ACTIVE_WALLET_KEY = "slimecashActiveWalletIndex";
   const FUN_PENDING_FUND_KEY = "slimewireFunPendingWalletFund:v1";
+  const WALLET_BACKUP_MARK_PREFIX = "slimewireFunWalletBackedUp:v1:";
+  const WALLET_BACKUP_REMINDER_KEY = "slimewireFunWalletBackupReminder:v1";
   const TOKEN_FALLBACK = "/assets/slimewire/png/slimewire-mark.png";
   const SLIME_PFPS = [
     "f_f648203a.png", "f_cc8f54e4.png", "f_c9dc667d.png", "f_c4f3d050.png", "f_c20374ef.png",
@@ -82,6 +84,17 @@
   }
   function readLocal(key, fallback) { try { const parsed = JSON.parse(localStorage.getItem(key) || "null"); return parsed ?? fallback; } catch { return fallback; } }
   function saveLocal(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
+  function walletBackupMarkKey(publicKey) { return `${WALLET_BACKUP_MARK_PREFIX}${String(publicKey || "").trim()}`; }
+  function walletBackedUp(walletOrKey) {
+    const publicKey = typeof walletOrKey === "string" ? walletOrKey : walletOrKey?.publicKey;
+    if (!publicKey) return false;
+    try { return localStorage.getItem(walletBackupMarkKey(publicKey)) === "1"; } catch { return false; }
+  }
+  function markWalletBackedUp(walletOrKey) {
+    const publicKey = typeof walletOrKey === "string" ? walletOrKey : walletOrKey?.publicKey;
+    if (!publicKey) return;
+    try { localStorage.setItem(walletBackupMarkKey(publicKey), "1"); } catch {}
+  }
   function hashCode(value) { let hash = 0; for (const char of String(value || "slime")) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0; return Math.abs(hash); }
   function short(value) { const text = String(value || ""); return text.length > 12 ? `${text.slice(0, 5)}…${text.slice(-4)}` : text; }
   function formatUsd(value) {
@@ -372,9 +385,10 @@
       return;
     }
     const sol = Number(wallet.sol || 0);
+    const backedUp = walletBackedUp(wallet);
     const { totalSol } = portfolioSolTotal();
     const totalUsd = state.solUsd > 0 ? totalSol * state.solUsd : null;
-    target.innerHTML = `<section class="readiness-card ready"><div class="readiness-summary"><div><span>WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL ready` : "Add SOL to trade"}</h2><p>${sol > 0 ? "Pick a coin and choose your amount." : "Add SOL from Phantom, Solflare, or another Solana wallet."}</p></div><div class="wallet-cash-total"><span>TOTAL VALUE</span><b>${formatWalletUsd(totalUsd)}</b><small>SOL + COINS</small></div></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b>2 <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Add SOL"}</i></b></div><div class="readiness-actions"><button type="button" data-deposit>${sol > 0 ? "Add more SOL" : "Add SOL"}</button><button class="secondary" type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Backup wallet</button></div></section>`;
+    target.innerHTML = `<section class="readiness-card ready"><div class="readiness-summary"><div><span>WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL ready` : "Add SOL to trade"}</h2><p>${backedUp ? (sol > 0 ? "Pick a coin and choose your amount." : "Add SOL from Phantom, Solflare, or another Solana wallet.") : "Save this wallet backup before trading on another device."}</p></div><div class="wallet-cash-total"><span>TOTAL VALUE</span><b>${formatWalletUsd(totalUsd)}</b><small>SOL + COINS</small></div></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b class="${backedUp ? "done" : "needs-action"}">${backedUp ? "OK" : "2"} <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Add SOL"}</i></b></div><div class="readiness-actions"><button type="button" data-deposit>${sol > 0 ? "Add more SOL" : "Add SOL"}</button><button class="secondary" type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">${backedUp ? "Download backup again" : "Backup this wallet"}</button></div></section>`;
   }
 
   function normalizeSol(row) {
@@ -1700,11 +1714,17 @@
   }
   async function createWallet() {
     if (!(await ensureAccount())) { toast("Could not start your account.", true); return false; }
+    const previousWallets = new Set(state.wallets.map((wallet) => String(wallet.publicKey || "")));
     const result = await post("/api/web/wallets/create", { label: "SlimeWire Go", count: 1 });
     if (!result.ok || !result.data?.ok) { toast(result.data?.message || result.data?.error || "Wallet creation failed", true); return false; }
     const downloads = result.data.downloads || {};
-    downloadWalletFiles(downloads);
-    await loadWallets(true); renderWalletHero(); renderWalletPositions(); if (state.view === "quick") renderQuickRoute(); toast("Wallet created. Backups downloaded—store them safely."); return true;
+    const downloaded = downloadWalletFiles(downloads);
+    await loadWallets(true);
+    if (downloaded > 0) {
+      const created = state.wallets.filter((wallet) => !previousWallets.has(String(wallet.publicKey || "")));
+      for (const wallet of created) markWalletBackedUp(wallet);
+    }
+    renderHomeReadiness(); renderWalletHero(); renderWalletPositions(); if (state.view === "quick") renderQuickRoute(); toast("Wallet created. Backups downloaded—store them safely."); return true;
   }
   function downloadText(filename, text) { const blob = new Blob([text], { type: "text/plain" }), url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = filename || "slimewire-backup.txt"; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000); }
   function downloadWalletFiles(downloads = {}) {
@@ -1761,7 +1781,8 @@
     const positionDetails = summary.assets.length
       ? `<details class="wallet-assets"><summary><span>Coin positions</span><b>${summary.assets.length} token${summary.assets.length === 1 ? "" : "s"} ›</b></summary><div>${assetRows}</div></details>`
       : `<div class="wallet-assets-empty">No coin positions in this wallet</div>`;
-    return `<div class="wallet-manage-row" data-wallet-manager-row="${wallet.index}"><label class="wallet-batch-check" title="Select wallet"><input type="checkbox" data-wallet-batch-select="${wallet.index}" checked><span></span></label><div class="wallet-manage-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.index === state.activeWallet && String(wallet.label || "").trim().toLowerCase() !== "main" ? " · Main" : ""}</b><span>${escapeHtml(short(wallet.publicKey))}</span><div class="wallet-value-strip"><span><small>SOL</small><b>${escapeHtml(formatPositionSol(summary.liquidSol))}</b></span><span><small>COINS</small><b>${escapeHtml(coinValue)}</b></span><span><small>TOTAL</small><b>${escapeHtml(totalLabel)}</b></span></div>${positionDetails}<span class="wallet-fund-amount"><input data-wallet-fund-amount="${wallet.index}" inputmode="decimal" placeholder="SOL for this wallet" aria-label="SOL amount for ${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}"></span><span class="wallet-rename"><input data-wallet-rename-input="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40"><button type="button" data-rename-wallet="${wallet.index}">Rename</button></span></div><div class="wallet-row-actions"><button type="button" data-select-wallet="${wallet.index}" ${wallet.index === state.activeWallet ? "disabled" : ""}>${wallet.index === state.activeWallet ? "Active" : "Main"}</button><button type="button" data-wallet-funds="${wallet.index}">Only</button><button class="danger" type="button" data-remove-wallet="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button></div></div>`;
+    const backupLabel = walletBackedUp(wallet) ? "Backup again" : "Backup";
+    return `<div class="wallet-manage-row" data-wallet-manager-row="${wallet.index}"><label class="wallet-batch-check" title="Select wallet"><input type="checkbox" data-wallet-batch-select="${wallet.index}" checked><span></span></label><div class="wallet-manage-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.index === state.activeWallet && String(wallet.label || "").trim().toLowerCase() !== "main" ? " · Main" : ""}</b><span>${escapeHtml(short(wallet.publicKey))}</span><div class="wallet-value-strip"><span><small>SOL</small><b>${escapeHtml(formatPositionSol(summary.liquidSol))}</b></span><span><small>COINS</small><b>${escapeHtml(coinValue)}</b></span><span><small>TOTAL</small><b>${escapeHtml(totalLabel)}</b></span></div>${positionDetails}<span class="wallet-fund-amount"><input data-wallet-fund-amount="${wallet.index}" inputmode="decimal" placeholder="SOL for this wallet" aria-label="SOL amount for ${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}"></span><span class="wallet-rename"><input data-wallet-rename-input="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40"><button type="button" data-rename-wallet="${wallet.index}">Rename</button></span></div><div class="wallet-row-actions"><button type="button" data-select-wallet="${wallet.index}" ${wallet.index === state.activeWallet ? "disabled" : ""}>${wallet.index === state.activeWallet ? "Active" : "Main"}</button><button type="button" data-wallet-funds="${wallet.index}">Only</button><button type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">${backupLabel}</button><button class="danger" type="button" data-remove-wallet="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button></div></div>`;
   }
   async function openWalletManager() {
     if (state.token) {
@@ -1907,8 +1928,15 @@
           count = downloadWalletFiles(downloads);
         }
         if (!count) { if (status) status.textContent = "Backup file was unavailable."; toast("Backup file was unavailable.", true); return; }
+        if (options.recoveryOnly) {
+          const selected = state.wallets.find((wallet) => String(wallet.publicKey || "") === String(options.walletPublicKey || "") || Number(wallet.index) === Number(options.walletIndex));
+          markWalletBackedUp(selected || options.walletPublicKey);
+        } else {
+          for (const wallet of state.wallets) markWalletBackedUp(wallet);
+        }
+        renderHomeReadiness();
         const message = options.recoveryOnly && count === 1
-          ? "Active wallet recovery key downloaded. Keep it private."
+          ? "Selected wallet recovery key downloaded. Keep it private."
           : (count === 2 ? "Both wallet backup files downloaded." : (result.data.backup?.message || "Wallet backup downloaded."));
         if (status) status.textContent = message;
         toast(message);
@@ -2504,7 +2532,19 @@
     $$('[data-chain]').forEach((button) => button.classList.toggle("active", button.dataset.chain === state.chain));
     $$('[data-feed]').forEach((button) => button.classList.toggle("active", button.dataset.feed === state.feed));
     if (!IS_QUICK_ROUTE) loadFeed();
-    if (state.token) Promise.all([loadMe(), loadWallets(), loadPositions(), loadPresets(), loadCreatedCoinsSilently()]).then(() => { renderCashHandoff(); renderHomeReadiness(); resumePendingFunFunding(); if (state.view === "coin") renderQuickTrade(); if (state.view === "quick") renderQuickRoute(); }).catch(() => {});
+    if (state.token) Promise.all([loadMe(), loadWallets(), loadPositions(), loadPresets(), loadCreatedCoinsSilently()]).then(() => {
+      renderCashHandoff(); renderHomeReadiness(); resumePendingFunFunding();
+      const firstWallet = state.wallets[0];
+      if (firstWallet && !walletBackedUp(firstWallet)) {
+        try {
+          if (sessionStorage.getItem(WALLET_BACKUP_REMINDER_KEY) !== firstWallet.publicKey) {
+            sessionStorage.setItem(WALLET_BACKUP_REMINDER_KEY, firstWallet.publicKey);
+            toast("Back up Wallet 1 before using another device.");
+          }
+        } catch {}
+      }
+      if (state.view === "coin") renderQuickTrade(); if (state.view === "quick") renderQuickRoute();
+    }).catch(() => {});
     const routeParams = new URLSearchParams(location.search);
     resumePendingFunFunding();
     if (IS_QUICK_ROUTE) {

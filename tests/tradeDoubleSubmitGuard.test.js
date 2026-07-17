@@ -653,6 +653,42 @@ test("RH board acts like the Solana boards: live MC/liq data, chart, quick-buy, 
   }
 });
 
+test("Telegram balances and Positions include Robinhood bags from the managed wallet's derived account", () => {
+  const snapshots = functionBody(serverSource, "buildTelegramRhWalletSnapshots");
+  assert.match(snapshots, /evmAddressFromSolana/);
+  assert.match(snapshots, /rhAddressTokens/);                         // broad indexed holdings
+  assert.match(snapshots, /rhErc20Balance/);                          // fresh direct-chain balance
+  assert.match(snapshots, /auditPath/);                               // just-bought fallback before indexing
+  assert.match(snapshots, /!wallet\.volumeBot && !wallet\.ephemeral/); // never expose operational wallets
+
+  const balances = functionBody(serverSource, "showWalletBalances");
+  assert.match(balances, /buildTelegramRhWalletSnapshots/);
+  assert.match(balances, /Robinhood tokens:/);
+  assert.match(balances, /Robinhood ETH:/);
+
+  const positions = functionBody(serverSource, "showPositionsOverview");
+  assert.match(positions, /aggregateTelegramRhPositions/);
+  assert.match(positions, /Robinhood Chain bags/);
+  assert.match(positions, /callback_data: `rqs:100:\$\{position\.tokenAddress\}`/); // sell from the actual RH holder
+});
+
+test("pasting your managed Solana wallet into Telegram also includes its linked Robinhood bags", () => {
+  const linked = functionBody(serverSource, "linkedManagedRhWalletScan");
+  assert.match(linked, /walletsForOwner\(store, userId\)/);
+  assert.match(linked, /entry\.publicKey === solanaAddress/);
+  assert.match(linked, /evmAddressFromSolana\(keypair\.secretKey\)/);
+  assert.match(linked, /rhWalletScan\(evmAddress/);
+
+  const scan = functionBody(serverSource, "getWalletScan");
+  assert.match(scan, /Promise\.all/);
+  assert.match(scan, /linkedManagedRhWalletScan\(userId, a\)/);
+  assert.match(scan, /mergeLinkedRhWalletScan\(solanaScan, rhScan\)/);
+
+  const card = functionBody(serverSource, "formatWalletScanCard");
+  assert.match(card, /Linked RH/);
+  assert.match(card, /h\.chain === "robinhood" \? " · RH"/);
+});
+
 test("RH rows: quick-buy stays in frame on mobile + fresh coins always get MC (implied-price fallback)", () => {
   for (const src of [ggSource, indexSource]) {
     // Mobile layout contract: name truncates (flex:1;min-width:0), right-side chips fixed, row overflow
@@ -2474,7 +2510,7 @@ test("Robinhood address routing proves wallet versus ERC-20 before scan and trac
   assert.match(functionBody(serverSource, "gatherSlimeScan"), /mergedDexMetadataForToken\(mint, pairs, best\)/);
   const look = functionBody(serverSource, "handleTelegramLookCommand");
   assert.match(look, /await rhTokenContractProof\(rhAddr\)/);
-  assert.match(look, /else await sendWalletScanCard\(chatId, rhAddr\)/);
+  assert.match(look, /else await sendWalletScanCard\(chatId, rhAddr, message\?\.from\?\.id \|\| null\)/);
   const xReply = functionBody(serverSource, "buildXReply");
   assert.match(xReply, /const token = await rhTokenContractProof/);
   assert.match(xReply, /if \(!token\.contract\) return await buildXMapReply/);
