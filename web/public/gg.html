@@ -556,6 +556,17 @@
   body.fun-launch-embed #v-launch{inset:0;overflow:auto;padding:0 0 24px}
   body.fun-launch-embed #v-launch .wgrid{padding:8px 6px 24px}
   body.fun-launch-embed #v-launch .launch-card{max-width:640px}
+  /* DEXTools-style chart / tape splitter. It resizes the live panes in place, so neither
+     the chart iframe nor the trade stream reloads while the trader makes room. */
+  .chartTapeSplit{position:relative;display:flex;align-items:center;justify-content:center;flex:0 0 18px;height:18px;border:0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:#080d09;cursor:row-resize;touch-action:none;user-select:none;z-index:6;outline:none}
+  .chartTapeSplit:before{content:"";width:58px;height:4px;border-radius:999px;background:#334234;box-shadow:0 0 0 1px rgba(114,255,35,.08);transition:.12s}
+  .chartTapeSplit span{position:absolute;right:12px;color:var(--muted2);font-size:9px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;opacity:.72;pointer-events:none}
+  .chartTapeSplit:hover:before,.chartTapeSplit:focus-visible:before,.chartTapeSplit.dragging:before{background:var(--green);box-shadow:0 0 12px rgba(114,255,35,.42)}
+  .chartTapeSplit:focus-visible{box-shadow:inset 0 0 0 1px rgba(114,255,35,.55)}
+  .chartSplitMain.chartSplitAdjusted .chartwrap{height:var(--chart-split-height)!important;flex:0 0 auto!important}
+  .chartSplitMain.chartSplitAdjusted .marketTape{height:var(--tape-split-height);min-height:0;overflow:hidden;display:flex;flex-direction:column}
+  .chartSplitMain.chartSplitAdjusted .tapeTable{max-height:none;min-height:58px;flex:1 1 auto}
+  @media(max-width:820px){.chartTapeSplit{flex-basis:24px;height:24px}.chartTapeSplit:before{width:72px}.chartTapeSplit span{right:8px;font-size:8px}.chartSplitMain.chartSplitAdjusted .marketTape{padding-bottom:8px}}
 </style>
 </head>
 <body>
@@ -1951,12 +1962,12 @@
     const statsHtml=()=>'<div><span>MC</span><b>'+stat(r.marketCapUsd)+'</b></div><div><span>Vol 24h</span><b>'+stat(r.volume24hUsd)+'</b></div><div><span>Liquidity</span><b>'+stat(r.liquidityUsd)+'</b></div>';
     const links=(r.x?'<a href="'+esc(/^https?:/.test(r.x)?r.x:("https://x.com/"+String(r.x).replace(/^@/,"")))+'" target="_blank" rel="noopener noreferrer">𝕏</a>':'')+(r.telegram?'<a href="'+esc(r.telegram)+'" target="_blank" rel="noopener noreferrer">✈</a>':'')+(r.website?'<a href="'+esc(r.website)+'" target="_blank" rel="noopener noreferrer">🌐</a>':'')+'<a href="'+esc(r.explorer||("https://robinhoodchain.blockscout.com/token/"+address))+'" target="_blank" rel="noopener noreferrer">◈</a>';
     state.rhTradeSide=state.rhTradeSide==="sell"?"sell":"buy";const buys=["0.01","0.025","0.05","0.10"];
-    $("#v-rhtrade").innerHTML='<div class="trade rhTradeUnified" data-focus="chart"><div class="tradeMain"><div class="thead">'+rhAvatar(r,46,"12px")+'<div class="ti"><b id="rhTvSym">'+esc(r.symbol||"?")+'</b><div id="rhTvName" class="sub">'+esc((r.name||"")+' · Robinhood Chain'+(r.createdAt?' · '+age(r.createdAt):''))+'</div><span class="ic chartsoc">'+links+'</span></div><div class="st" id="rhTvStats">'+statsHtml()+'</div></div>'+
+    $("#v-rhtrade").innerHTML='<div class="trade rhTradeUnified" data-focus="chart"><div class="tradeMain chartSplitMain"><div class="thead">'+rhAvatar(r,46,"12px")+'<div class="ti"><b id="rhTvSym">'+esc(r.symbol||"?")+'</b><div id="rhTvName" class="sub">'+esc((r.name||"")+' · Robinhood Chain'+(r.createdAt?' · '+age(r.createdAt):''))+'</div><span class="ic chartsoc">'+links+'</span></div><div class="st" id="rhTvStats">'+statsHtml()+'</div></div>'+
       '<div class="tstrip"><button class="on" type="button" onclick="document.getElementById(\'rhTvChart\').scrollIntoView({behavior:\'smooth\'})">Chart</button><button type="button" onclick="document.getElementById(\'rhTradeTape\').scrollIntoView({behavior:\'smooth\'})">Transactions</button><button type="button" onclick="document.querySelector(\'#v-rhtrade .tradeSide\').scrollIntoView({behavior:\'smooth\'})">Position &amp; Trade</button></div>'+
-      '<div id="rhTvChart" class="chartwrap">'+(r.pairAddress?'<iframe src="https://dexscreener.com/robinhood/'+esc(r.pairAddress)+'?embed=1&theme=dark&trades=0&info=0&interval=5"></iframe>':'<div class="msg" style="padding:30px;font-size:12px">Chart appears once this coin\'s strongest pool is indexed.</div>')+'</div><section class="marketTape" id="rhTradeTape" aria-label="Live Robinhood trade tape"></section></div>'+
+      '<div id="rhTvChart" class="chartwrap">'+(r.pairAddress?'<iframe src="https://dexscreener.com/robinhood/'+esc(r.pairAddress)+'?embed=1&theme=dark&trades=0&info=0&interval=5"></iframe>':'<div class="msg" style="padding:30px;font-size:12px">Chart appears once this coin\'s strongest pool is indexed.</div>')+'</div>'+chartTapeSplitHtml()+'<section class="marketTape" id="rhTradeTape" aria-label="Live Robinhood trade tape"></section></div>'+
       '<div class="tradeSide"><div class="pnlbar"><div><span>ETH</span><b id="rhEthBal">—</b></div><div><span>Holdings</span><b id="rhTokenBal">—</b></div><div><span>PNL</span><b class="mut" id="rhPnlVal">—</b></div><button class="posref" title="Refresh balance" onclick="GG.rhRefresh()">↻</button></div><div class="sidepad"><div class="wsel" onclick="GG.go(\'wallet\')"><span class="dot"></span><b>Wallet '+esc(String(state.activeWallet||1))+' · pays with SOL</b><span class="ar">⇄</span></div><div class="psel"><label>Preset</label><button class="chip" type="button" onclick="GG.rhPresetModal()">Edit RH presets ＋</button></div><div class="bsrow"><button class="buy" id="rhSideBuy">Buy</button><button class="sell" id="rhSideSell">Sell</button></div><div class="amtin"><input id="rhTmAmt" inputmode="decimal" value="0.01"><span id="rhAmtUnit">SOL</span></div><div class="chips" id="rhChips"></div><button class="bigbuy" id="rhTmBuy">Buy</button><div id="rhTmBal" class="mut" style="font-size:11px;margin:8px 0">Checking your wallet…</div><div class="perf"><div><span>5M</span><b class="'+(Number(r.m5)>=0?'up':'down')+'">'+(isFinite(Number(r.m5))?((Number(r.m5)>=0?'+':'')+Number(r.m5).toFixed(1)+'%'):'—')+'</b></div><div><span>PAY</span><b>◎ SOL</b></div><div><span>CHAIN</span><b>RH</b></div><div><span>SWAP</span><b>AUTO</b></div></div><div class="secbox"><h4>🛡 Token Data &amp; Security</h4><div id="rhSafety" class="mut" style="font-size:11px">Scanning coin for honeypot / sell traps…</div></div><div class="rhSideTools"><button class="wbtn ghost" onclick="GG.rhGuardModal(\''+esc(address)+'\')">🎯 TP / SL</button><button class="wbtn ghost" onclick="GG.rhBundleModal(\''+esc(address)+'\')">📦 Bundle</button><button class="wbtn ghost" onclick="GG.rhVolumeModal(\''+esc(address)+'\')">🔁 Volume</button></div><p class="wnote">One SOL wallet trades both chains. Robinhood conversion is automatic.</p></div></div></div>';
     function paint(){const sell=state.rhTradeSide==="sell",amt=$("#rhTmAmt"),unit=$("#rhAmtUnit"),big=$("#rhTmBuy"),chips=$("#rhChips");$("#rhSideBuy").classList.toggle("on",!sell);$("#rhSideSell").classList.toggle("on",sell);big.classList.toggle("sell",sell);unit.textContent=sell?"%":"SOL";big.textContent=(sell?"Sell ":"Buy ")+(r.symbol||"");const vals=sell?["25%","50%","75%","100%"]:buys;chips.innerHTML=vals.map(v=>'<button data-v="'+v+'">'+v+'</button>').join("");chips.querySelectorAll("button").forEach(b=>b.onclick=()=>{amt.value=b.dataset.v.replace("%","");});amt.value=sell?"100":"0.01";}
-    $("#rhSideBuy").onclick=()=>{state.rhTradeSide="buy";paint();};$("#rhSideSell").onclick=()=>{state.rhTradeSide="sell";paint();};$("#rhTmBuy").onclick=()=>{const a=($("#rhTmAmt")||{}).value;if(!(Number(a)>0)){toast("Enter a valid amount.",true);return;}state.rhTradeSide==="sell"?rhTrade(address,"sell",{percent:Number(a)}):rhBuyAmount(address,String(a));};paint();loadInlineTape(address,r,"robinhood","rhTradeTape");
+    $("#rhSideBuy").onclick=()=>{state.rhTradeSide="buy";paint();};$("#rhSideSell").onclick=()=>{state.rhTradeSide="sell";paint();};$("#rhTmBuy").onclick=()=>{const a=($("#rhTmAmt")||{}).value;if(!(Number(a)>0)){toast("Enter a valid amount.",true);return;}state.rhTradeSide==="sell"?rhTrade(address,"sell",{percent:Number(a)}):rhBuyAmount(address,String(a));};paint();wireChartTapeSplit($("#v-rhtrade .chartSplitMain"));loadInlineTape(address,r,"robinhood","rhTradeTape");
     rhEnrichRows([r]).then(changed=>{if(state.route!=="rhtrade")return;if(changed){const s=$("#rhTvStats");if(s)s.innerHTML=statsHtml();const c=$("#rhTvChart");if(c&&r.pairAddress&&!c.querySelector("iframe"))c.innerHTML='<iframe src="https://dexscreener.com/robinhood/'+esc(r.pairAddress)+'?embed=1&theme=dark&trades=0&info=0&interval=5"></iframe>';const sy=$("#rhTvSym");if(sy&&r.symbol)sy.textContent=r.symbol;const nm=$("#rhTvName");if(nm)nm.textContent=(r.name||"")+' · Robinhood Chain';if(r.symbol)h.textContent=r.symbol;loadInlineTape(address,r,"robinhood","rhTradeTape");}if(!(r.priceUsd>0))loadNoxaFallback(r,address,statsHtml,h);});
     rhTmRefreshBal(address);loadRhSafety(address);
   }
@@ -2430,12 +2441,42 @@
   function txAgo(ts){if(!ts)return"—";const s=Math.max(0,(Date.now()-new Date(ts).getTime())/1000);if(s<60)return Math.floor(s)+"s";if(s<3600)return Math.floor(s/60)+"m";if(s<86400)return Math.floor(s/3600)+"h";return Math.floor(s/86400)+"d";}
   function fmtPrice(n){n=Number(n);if(!isFinite(n)||n<=0)return"—";if(n>=1)return n.toFixed(3);if(n>=0.001)return n.toFixed(5);return n.toExponential(2);}
   function curTradeRow(){return (state.tradeRow&&state.tradeRow.tokenMint===state.mint)?state.tradeRow:findRow(state.mint);}
+  const CHART_TAPE_SPLIT_KEY="slimewireChartTapeSplitV1";
+  function chartTapeDefaultRatio(){return window.matchMedia("(max-width:820px)").matches?.58:.62;}
+  function chartTapeSplitHtml(){return'<div class="chartTapeSplit" data-chart-tape-split role="separator" aria-orientation="horizontal" aria-label="Resize chart and live trades" aria-valuetext="Drag up for more trades or down for more chart" tabindex="0" title="Drag up for more trades · down for more chart. Double-click to reset."><span>Chart ↕ Trades</span></div>';}
+  function chartTapeSplitParts(main){
+    const chart=main&&main.querySelector(".chartwrap"),tape=main&&main.querySelector(".marketTape"),handle=main&&main.querySelector("[data-chart-tape-split]");
+    if(!chart||!tape||!handle)return null;
+    const mobile=window.matchMedia("(max-width:820px)").matches,minChart=mobile?220:240,minTape=mobile?185:205;
+    return{chart,tape,handle,minChart,minTape,total:Math.max(minChart+minTape,chart.offsetHeight+tape.offsetHeight)};
+  }
+  function applyChartTapeSplit(main,height,persist,totalOverride){
+    const p=chartTapeSplitParts(main);if(!p)return;
+    const total=Math.max(p.minChart+p.minTape,Number(totalOverride)||p.total),maxChart=Math.max(p.minChart,total-p.minTape),next=Math.max(p.minChart,Math.min(maxChart,Number(height)||p.chart.offsetHeight)),tapeHeight=Math.max(p.minTape,total-next),ratio=next/total;
+    main.classList.add("chartSplitAdjusted");main.style.setProperty("--chart-split-height",Math.round(next)+"px");main.style.setProperty("--tape-split-height",Math.round(tapeHeight)+"px");
+    p.handle.setAttribute("aria-valuemin",String(Math.round(p.minChart)));p.handle.setAttribute("aria-valuemax",String(Math.round(maxChart)));p.handle.setAttribute("aria-valuenow",String(Math.round(next)));p.handle.setAttribute("aria-valuetext",Math.round(ratio*100)+"% chart · "+Math.round((1-ratio)*100)+"% live trades");
+    if(persist){try{localStorage.setItem(CHART_TAPE_SPLIT_KEY,String(ratio));}catch(e){}}
+  }
+  function resetChartTapeSplit(main){
+    if(!main)return;try{localStorage.removeItem(CHART_TAPE_SPLIT_KEY);}catch(e){}const p=chartTapeSplitParts(main);if(p)applyChartTapeSplit(main,p.total*chartTapeDefaultRatio(),false,p.total);
+  }
+  function wireChartTapeSplit(main){
+    const first=chartTapeSplitParts(main);if(!first)return;let drag=null;
+    let initial=chartTapeDefaultRatio();try{const saved=Number(localStorage.getItem(CHART_TAPE_SPLIT_KEY));if(saved>.05&&saved<.95)initial=saved;}catch(e){}requestAnimationFrame(()=>{const p=chartTapeSplitParts(main);if(p)applyChartTapeSplit(main,p.total*initial,false,p.total);});
+    const move=e=>{if(!drag||drag.id!==e.pointerId)return;e.preventDefault();applyChartTapeSplit(main,drag.height+(e.clientY-drag.y),true,drag.total);};
+    const cleanup=()=>{window.removeEventListener("pointermove",move,true);window.removeEventListener("pointerup",end,true);window.removeEventListener("pointercancel",end,true);first.handle.classList.remove("dragging");};
+    const end=e=>{if(!drag||drag.id!==e.pointerId)return;cleanup();drag=null;};
+    first.handle.onpointerdown=e=>{const p=chartTapeSplitParts(main);if(!p)return;e.preventDefault();if(drag){cleanup();drag=null;}drag={id:e.pointerId,y:e.clientY,height:p.chart.offsetHeight,total:p.total};p.handle.classList.add("dragging");window.addEventListener("pointermove",move,true);window.addEventListener("pointerup",end,true);window.addEventListener("pointercancel",end,true);};
+    first.handle.ondblclick=()=>resetChartTapeSplit(main);
+    first.handle.onkeydown=e=>{const p=chartTapeSplitParts(main);if(!p)return;let next=p.chart.offsetHeight;if(e.key==="ArrowUp")next-=32;else if(e.key==="ArrowDown")next+=32;else if(e.key==="PageUp")next-=80;else if(e.key==="PageDown")next+=80;else if(e.key==="Home")next=p.minChart;else if(e.key==="End")next=p.total-p.minTape;else if(e.key==="Escape"){resetChartTapeSplit(main);e.preventDefault();return;}else return;e.preventDefault();applyChartTapeSplit(main,next,true,p.total);};
+  }
   function setCtab(which){
     state.tradeTab=which;
     if(which!=="tx"&&state.txPollT){clearTimeout(state.txPollT);state.txPollT=null;}
     if(which!=="chat"&&chatPollT){clearTimeout(chatPollT);chatPollT=null;}
     const c=$("#ctab");if(c)c.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.ct===which));
     ["chart","tx","pos","chat"].forEach(p=>{const pane=$('[data-pane="'+p+'"]');if(pane)pane.style.display=(p===which)?"":"none";});
+    const main=c&&c.closest(".tradeMain"),split=main&&main.querySelector("[data-chart-tape-split]"),tape=main&&main.querySelector(".marketTape");if(split)split.style.display=which==="chart"?"":"none";if(tape)tape.style.display=which==="chart"?"":"none";
     if(which==="tx")loadTxPane(state.mint,curTradeRow());
     else if(which==="pos")loadPosPane(state.mint);
     else if(which==="chat")loadChatLive(state.mint);
@@ -2854,7 +2895,7 @@
     state.tradeTab=state._openTradeTab||"chart";state._openTradeTab=null;
     let r=findRow(mint);state.tradeRow=r;subbarTrade(r);
     const view=$("#v-trade");
-    view.innerHTML='<div class="trade" data-focus="'+(buyFirst?'buy':'chart')+'"><div class="tradeMain">'+
+    view.innerHTML='<div class="trade" data-focus="'+(buyFirst?'buy':'chart')+'"><div class="tradeMain chartSplitMain">'+
         '<div class="thead" id="thead">'+(r?theadHtml(r):'<div class="ti"><b>'+short(mint)+'</b></div>')+'</div>'+
         '<div class="tstrip" id="ctab">'+
           '<button data-ct="chart" class="on">Chart</button>'+
@@ -2866,7 +2907,7 @@
             '<a href="https://solscan.io/token/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener noreferrer">🔎 Solscan</a>'+
             '<a href="https://dexscreener.com/solana/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener noreferrer">📊 DexScreener</a>'+
           '</div></div></div>'+
-        '<div class="chartwrap" data-pane="chart">'+chartIframe(mint,r)+'</div>'+
+        '<div class="chartwrap" data-pane="chart">'+chartIframe(mint,r)+'</div>'+chartTapeSplitHtml()+
         '<section class="marketTape" id="tradeTape" aria-label="Live trade tape"></section>'+
         '<div class="txpane" data-pane="tx" style="display:none"></div>'+
         '<div class="pospane" data-pane="pos" style="display:none"></div>'+
@@ -2885,7 +2926,7 @@
         '</div></div>'+
         '<button class="tradefab" id="tradeFab" onclick="GG.flipTrade()" aria-label="Flip between bigger chart and bigger buy panel">'+(buyFirst?'📈 Chart':'💰 Buy')+'</button>'+
       '</div>';
-    wireTradePanel(mint,r);updateWselLine();paintPresetSel();wireCtab();loadTradePnl(mint);loadTradeStats(mint);loadInlineTape(mint,r||{},"solana","tradeTape");
+    wireTradePanel(mint,r);updateWselLine();paintPresetSel();wireCtab();wireChartTapeSplit(view.querySelector(".chartSplitMain"));loadTradePnl(mint);loadTradeStats(mint);loadInlineTape(mint,r||{},"solana","tradeTape");
     const mb=$("#ctMoreBtn");if(mb)mb.onclick=(e)=>{e.stopPropagation();mb.parentNode.classList.toggle("open");};
     if(state.token&&!(state.presets.trade||[]).length){loadPresets().then(()=>{if(state.route==="trade")paintPresetSel();});}
     if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){state.tradeRow=r;rememberTradeRecent(r);$("#thead").innerHTML=theadHtml(r);fillPerf(r);}}

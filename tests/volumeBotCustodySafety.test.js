@@ -47,7 +47,7 @@ test("volume cleanup requires complete fresh reads of both token programs", () =
   assert.match(cleanup, /afterClose\.length/);
   assert.match(cleanup, /remainingAccounts\.length/);
   assert.match(cleanup, /targetRaw > 0n && !residueAlreadyPrepared/);
-  assert.match(cleanup, /retainVolumeWalletAndReturnExcessSol\(plan, record, persist\)/);
+  assert.match(cleanup, /retainVolumeWalletAndReturnExcessSol\(plan, record, persist, \{ drainAllSol: true \}\)/);
 });
 
 test("cleanup skips a new sell claim when the screenshot wallet is already sold", async () => {

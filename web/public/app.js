@@ -478,6 +478,8 @@ const state = {
   launchResult: null,
   launchCoinDraft: getStoredLaunchCoinDraft(),
   launchCoinStatus: "",
+  nftLoyaltyOverview: null,
+  nftLoyaltyStatus: "",
   launchWatches: [],
   pumpLiveStatus: "",
   pumpLiveLastActionAt: 0,
@@ -10418,10 +10420,279 @@ function launchShareKitHtml() {
         <button data-copy="${escapeHtml(room)}">Copy Room Link</button>
         <a class="button-like" href="${escapeHtml(apiUrl(`/api/web/signal-card?tokenMint=${encodeURIComponent(kit.tokenMint)}`))}" target="_blank" rel="noreferrer">📸 Share Card</a>
         ${xShareButton(xText + " " + room, "Post to X")}
+        ${kit.nftCollection?.status === "COMPLETE" && kit.nftCollection?.explorerUrl
+          ? `<a class="button-like" href="${escapeHtml(kit.nftCollection.explorerUrl)}" target="_blank" rel="noreferrer">NFT Collection</a>`
+          : kit.nftCollection?.status === "FAILED"
+            ? `<button type="button" data-launch-nft-retry="${escapeHtml(kit.launchAttemptId || "")}" data-launch-nft-mint="${escapeHtml(kit.tokenMint)}">Retry NFT Collection</button>`
+            : ""}
         <button data-launch-kit-close>Done</button>
       </div>
+      ${kit.nftCollection ? `<p class="trade-status">${escapeHtml(kit.nftCollection.status === "COMPLETE"
+        ? `${kit.nftCollection.name || "NFT collection"} is linked on-chain to ${shortAddress(kit.tokenMint)}.`
+        : kit.nftCollection.error || "The coin is live; its NFT collection is still finishing.")}</p>` : ""}
     </section>
   `;
+}
+
+function nftLoyaltyManagerHtml(draft = {}) {
+  const overview = state.nftLoyaltyOverview;
+  const mint = overview?.tokenMint || draft.tokenMint || state.launchShareKit?.tokenMint || "";
+  const collection = overview?.collection;
+  const items = overview?.items || [];
+  const campaigns = overview?.campaigns || [];
+  const funding = overview?.funding || null;
+  const slimeCashBalance = funding?.slimeCashWallet
+    ? Number(state.wallets.find((wallet) => Number(wallet.index) === Number(funding.slimeCashWallet.index))?.sol || 0)
+    : 0;
+  const campaignRows = campaigns.length ? campaigns.map((campaign) => `
+    <article class="read-card">
+      <strong>${escapeHtml(campaign.rewardSymbol || "TOKEN")} rewards</strong>
+      <p>${escapeHtml(campaign.totalAmount || "0")} deposited by creator · ${escapeHtml(String(campaign.assetCount || 0))} NFT(s) · ${escapeHtml(String(campaign.claimedAssetCount || 0))} claimed</p>
+      ${campaign.viewerCanClaim ? `<div class="quick-grid"><select data-nft-claim-wallet>${walletSelectOptionsHtml("")}</select><button type="button" class="primary" data-nft-campaign-claim="${escapeHtml(campaign.id)}">Claim reward</button></div>` : `<small>${campaign.status === "ACTIVE" ? "No unclaimed allocation in your managed wallets." : escapeHtml(campaign.status || "Complete")}</small>`}
+    </article>`).join("") : `<p class="muted">No creator-funded campaigns yet.</p>`;
+  return `
+    <div class="nft-loyalty-manager">
+      <div class="trade-head"><div><h4>NFT Collection & Holder Rewards</h4><p>Rarity + uninterrupted holding builds Reward Power. Transfers reset the time bonus. Rewards come from creator deposits, never SlimeWire trading fees.</p></div><span class="pill">Metaplex Core</span></div>
+      <div class="volume-grid">
+        <label class="full-span">Linked coin CA<input data-nft-loyalty-token-mint type="text" placeholder="Paste Solana coin CA" value="${escapeHtml(mint)}"></label>
+        <div class="quick-grid full-span">
+          <button type="button" data-nft-loyalty-load>Open manager</button>
+          <button type="button" data-nft-collection-create>Create collection after launch</button>
+        </div>
+        <label class="full-span">Link a collection you already control<input data-nft-link-address type="text" placeholder="Metaplex Core collection address"></label>
+        <button type="button" data-nft-collection-link>Verify & link collection</button>
+      </div>
+      ${overview ? `
+        <div class="read-card"><span>COLLECTION</span><h4>${escapeHtml(collection?.name || "Not linked yet")}</h4><p>${collection?.address ? `${shortAddress(collection.address)} · ${items.length}/${Number(collection.supplyCap || 500)} item(s) tracked · ${escapeHtml(collection.supplyMode === "fixed" ? "fixed supply" : "expandable")}` : "Create or link a collection before minting."}</p>${collection?.address ? `<small>Metaplex Core · ${(Number(collection.royaltyBps || 0) / 100).toFixed(2)}% creator royalty · marketplace-ready metadata (listing is done on the marketplace)</small>` : ""}</div>
+        ${funding ? `<div class="read-card nft-funding-card"><span>NFT MINT FUNDING</span><h4>${funding.sameWallet ? "SlimeCash is your creator wallet" : "Fund from SlimeCash"}</h4><p>Metaplex Core's published reference is about 0.0037 SOL per standard NFT, plus the collection account, transaction priority, and permanent artwork storage. SlimeWire shows a buffer because live network costs can move.</p>
+          <div class="factor-list"><span>SlimeCash · ${escapeHtml(shortAddress(funding.slimeCashWallet?.publicKey || ""))}</span><span>${slimeCashBalance.toFixed(4)} SOL</span></div>
+          ${funding.sameWallet
+            ? `<p class="muted">No transfer is needed. Collection and NFT mint costs spend directly from this SlimeCash wallet after confirmation.</p>`
+            : funding.slimeCashWallet && funding.creatorWallet
+              ? `<div class="quick-grid"><label>Move SOL to creator wallet<input data-nft-slimecash-fund-amount type="number" min="0.005" step="0.005" value="0.1" inputmode="decimal"></label><button type="button" class="primary" data-nft-slimecash-fund>Fund NFT wallet</button></div><small>Destination: ${escapeHtml(funding.creatorWallet.label)} · ${escapeHtml(shortAddress(funding.creatorWallet.publicKey))}</small>`
+              : `<p class="muted">Create or restore a SlimeCash wallet to fund NFT minting here.</p>`}
+        </div>` : ""}
+        ${collection?.status === "COMPLETE" ? `
+          <details class="tool-disclosure"><summary>Mint an NFT item</summary><div class="volume-grid">
+            <label>Name<input data-nft-item-name type="text" maxlength="64" placeholder="Slime #1"></label>
+            <label>Rarity<select data-nft-item-rarity>${(overview.rarityTiers || []).map((tier) => `<option value="${escapeHtml(tier.key)}">${escapeHtml(tier.label)} · ${(Number(tier.multiplierBps || 10000) / 10000).toFixed(2)}x</option>`).join("")}</select></label>
+            <label class="full-span">Description<textarea data-nft-item-description rows="2" maxlength="800"></textarea></label>
+            <label>Recipient wallet<input data-nft-item-recipient type="text" placeholder="Defaults to creator wallet"></label>
+            <label>Artwork<input data-nft-item-image type="file" accept="image/*"></label>
+            <button type="button" class="primary" data-nft-item-mint>Mint NFT</button>
+          </div></details>
+          <details class="tool-disclosure"><summary>Fund a holder reward campaign</summary><div class="volume-grid">
+            <label>Reward token CA<input data-nft-reward-mint type="text" placeholder="Future meme coin CA"></label>
+            <label>Reward ticker<input data-nft-reward-symbol type="text" maxlength="16" placeholder="SLIME"></label>
+            <label>Token amount<input data-nft-reward-amount type="text" inputmode="decimal" placeholder="1000000"></label>
+            <label>Funding wallet<select data-nft-reward-wallet>${walletSelectOptionsHtml("")}</select></label>
+            <label class="switch-row full-span"><input data-nft-reward-auto-fees type="checkbox"><span>Send 20% of this coin's future creator-fee claims to current NFT holders (opt-in; creator fees only)</span></label>
+            <button type="button" class="primary" data-nft-campaign-create>Deposit & activate</button>
+            <p class="muted full-span">The selected tokens move into a dedicated campaign vault. NFT holders claim to a managed wallet that still owns the NFT. This is Reward Power, not promised APY or guaranteed NFT value.</p>
+          </div></details>
+          <div class="nft-campaign-list">${campaignRows}</div>` : ""}
+      ` : ""}
+      <p class="trade-status" data-nft-loyalty-status>${escapeHtml(state.nftLoyaltyStatus || "Paste a launched coin CA to manage its collection or view holder rewards.")}</p>
+    </div>`;
+}
+
+async function retryLaunchNftCollection(button) {
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  const previous = button.textContent;
+  button.textContent = "Creating Collection...";
+  try {
+    const data = await api("/api/web/launch/nft-collection/retry", {
+      method: "POST",
+      body: JSON.stringify({
+        launchAttemptId: button.dataset.launchNftRetry || "",
+        tokenMint: button.dataset.launchNftMint || ""
+      }),
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS,
+      preserveSafeError: true
+    });
+    const nftCollection = data?.launch?.nftCollection || null;
+    state.launchShareKit = { ...(state.launchShareKit || {}), nftCollection };
+    state.launchCoinStatus = nftCollection?.status === "COMPLETE"
+      ? `NFT collection linked: ${shortAddress(nftCollection.address)}.`
+      : nftCollection?.error || "Collection still needs a retry.";
+    render({ force: true });
+  } catch (error) {
+    state.launchCoinStatus = publicErrorMessage(error?.message || "Could not create the NFT collection.");
+    writeText($("[data-launch-coin-status]"), state.launchCoinStatus);
+    button.disabled = false;
+    button.textContent = previous;
+  }
+}
+
+function nftManagerMintValue() {
+  return ($("[data-nft-loyalty-token-mint]")?.value || state.nftLoyaltyOverview?.tokenMint || state.launchCoinDraft?.tokenMint || "").trim();
+}
+
+function setNftLoyaltyStatus(message) {
+  state.nftLoyaltyStatus = publicErrorMessage(message || "");
+  writeText($("[data-nft-loyalty-status]"), state.nftLoyaltyStatus);
+}
+
+async function loadNftLoyaltyOverview(tokenMint = nftManagerMintValue()) {
+  if (!tokenMint) { setNftLoyaltyStatus("Paste the launched coin CA first."); return null; }
+  setNftLoyaltyStatus("Loading collection, items, and campaigns...");
+  try {
+    const data = await api(`/api/web/nft/loyalty?tokenMint=${encodeURIComponent(tokenMint)}`, { preserveSafeError: true });
+    state.nftLoyaltyOverview = data;
+    state.nftLoyaltyStatus = data.collection?.address
+      ? `Collection ready: ${shortAddress(data.collection.address)}.`
+      : "This coin has no linked collection yet.";
+    render({ force: true });
+    return data;
+  } catch (error) {
+    setNftLoyaltyStatus(error?.message || "Could not load NFT rewards.");
+    return null;
+  }
+}
+
+async function createLaterNftCollection() {
+  const tokenMint = nftManagerMintValue();
+  if (!tokenMint) { setNftLoyaltyStatus("Paste the launched coin CA first."); return; }
+  setNftLoyaltyStatus("Creating the on-chain collection...");
+  try {
+    await api("/api/web/nft/collection/create", {
+      method: "POST",
+      body: JSON.stringify({
+        tokenMint,
+        name: ($("[data-launch-coin-nft-name]")?.value || "").trim(),
+        description: ($("[data-launch-coin-nft-description]")?.value || "").trim(),
+        supplyMode: $("[data-launch-coin-nft-supply-mode]")?.value || "expandable",
+        supplyCap: Number($("[data-launch-coin-nft-supply-cap]")?.value || 500),
+        royaltyBps: Number($("[data-launch-coin-nft-royalty]")?.value ?? 500)
+      }),
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS,
+      preserveSafeError: true
+    });
+    await loadNftLoyaltyOverview(tokenMint);
+  } catch (error) { setNftLoyaltyStatus(error?.message || "Could not create the NFT collection."); }
+}
+
+async function linkExistingNftCollection() {
+  const tokenMint = nftManagerMintValue();
+  const collectionAddress = ($("[data-nft-link-address]")?.value || "").trim();
+  if (!tokenMint || !collectionAddress) { setNftLoyaltyStatus("Paste both the coin CA and collection address."); return; }
+  setNftLoyaltyStatus("Verifying the collection authority on-chain...");
+  try {
+    await api("/api/web/nft/collection/link", {
+      method: "POST", body: JSON.stringify({ tokenMint, collectionAddress }),
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS, preserveSafeError: true
+    });
+    await loadNftLoyaltyOverview(tokenMint);
+  } catch (error) { setNftLoyaltyStatus(error?.message || "Could not link that collection."); }
+}
+
+async function fundNftFromSlimeCash(button) {
+  const funding = state.nftLoyaltyOverview?.funding;
+  if (!funding?.slimeCashWallet || !funding?.creatorWallet) {
+    setNftLoyaltyStatus("Create or restore both the SlimeCash and creator wallets first.");
+    return;
+  }
+  if (funding.sameWallet) {
+    setNftLoyaltyStatus("SlimeCash is already the creator wallet. No funding transfer is needed.");
+    return;
+  }
+  const amountSol = ($("[data-nft-slimecash-fund-amount]")?.value || "").trim();
+  if (!(Number(amountSol) >= 0.005)) {
+    setNftLoyaltyStatus("Enter at least 0.005 SOL for NFT network and account costs.");
+    return;
+  }
+  button.disabled = true;
+  setNftLoyaltyStatus("Funding the NFT creator wallet from SlimeCash...");
+  try {
+    const data = await api("/api/web/wallets/send-sol", {
+      method: "POST",
+      body: JSON.stringify({
+        fromWalletIndex: funding.slimeCashWallet.index,
+        sourcePublicKey: funding.slimeCashWallet.publicKey,
+        allocations: [{ destination: funding.creatorWallet.publicKey, amountSol }],
+        tradeAttemptId: createClientAttemptId("nft-slimecash-fund")
+      }),
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS,
+      preserveSafeError: true
+    });
+    state.nftLoyaltyStatus = `${data.sweep?.totalSol || amountSol} SOL moved from SlimeCash to the NFT creator wallet.`;
+    queuePostTradeRefresh(data.sweep?.signature || "", "nft-slimecash-fund");
+    await loadNftLoyaltyOverview(nftManagerMintValue());
+  } catch (error) {
+    setNftLoyaltyStatus(error?.message || "Could not fund the NFT creator wallet.");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function mintNftLoyaltyItem() {
+  const tokenMint = nftManagerMintValue();
+  const name = ($("[data-nft-item-name]")?.value || "").trim();
+  if (!tokenMint || !name) { setNftLoyaltyStatus("Add the coin CA and NFT name first."); return; }
+  setNftLoyaltyStatus("Uploading artwork and minting the NFT...");
+  try {
+    const file = $("[data-nft-item-image]")?.files?.[0];
+    const imageDataUrl = file ? await readFileAsDataUrl(file) : "";
+    await api("/api/web/nft/item/mint", {
+      method: "POST",
+      body: JSON.stringify({
+        clientRequestId: createClientAttemptId("nft-mint"), tokenMint, name,
+        description: ($("[data-nft-item-description]")?.value || "").trim(),
+        rarity: $("[data-nft-item-rarity]")?.value || "common",
+        recipient: ($("[data-nft-item-recipient]")?.value || "").trim(),
+        imageDataUrl, imageName: file?.name || ""
+      }),
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS,
+      preserveSafeError: true
+    });
+    state.nftLoyaltyStatus = `${name} minted into the linked collection.`;
+    await loadNftLoyaltyOverview(tokenMint);
+  } catch (error) { setNftLoyaltyStatus(error?.message || "Could not mint that NFT."); }
+}
+
+async function createNftRewardCampaign() {
+  const tokenMint = nftManagerMintValue();
+  const rewardMint = ($("[data-nft-reward-mint]")?.value || "").trim();
+  const amount = ($("[data-nft-reward-amount]")?.value || "").trim();
+  if (!tokenMint || !rewardMint || !amount) { setNftLoyaltyStatus("Add the coin CA, reward-token CA, and amount."); return; }
+  setNftLoyaltyStatus("Checking NFT owners and depositing the creator-funded reward pool...");
+  try {
+    await api("/api/web/nft/reward-campaign", {
+      method: "POST",
+      body: JSON.stringify({
+        clientRequestId: createClientAttemptId("nft-reward"), tokenMint, rewardMint, amount,
+        rewardSymbol: ($("[data-nft-reward-symbol]")?.value || "TOKEN").trim(),
+        walletIndex: $("[data-nft-reward-wallet]")?.value || "1",
+        creatorFeeAutoFund: Boolean($("[data-nft-reward-auto-fees]")?.checked)
+      }),
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS,
+      preserveSafeError: true
+    });
+    state.nftLoyaltyStatus = "Reward campaign funded and active.";
+    await loadNftLoyaltyOverview(tokenMint);
+  } catch (error) { setNftLoyaltyStatus(error?.message || "Could not fund the NFT reward campaign."); }
+}
+
+async function claimNftRewardCampaign(button) {
+  const campaignId = button?.dataset?.nftCampaignClaim || "";
+  const walletIndex = button?.closest(".quick-grid")?.querySelector("[data-nft-claim-wallet]")?.value || "1";
+  if (!campaignId) return;
+  button.disabled = true;
+  setNftLoyaltyStatus("Verifying current NFT ownership and sending the claim...");
+  try {
+    const data = await api("/api/web/nft/reward-campaign/claim", {
+      method: "POST",
+      body: JSON.stringify({ campaignId, walletIndex, clientRequestId: `${campaignId}:${walletIndex}` }),
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS,
+      preserveSafeError: true
+    });
+    state.nftLoyaltyStatus = `Claimed ${data.claim?.amount || ""} reward tokens.`;
+    await loadNftLoyaltyOverview();
+  } catch (error) {
+    button.disabled = false;
+    setNftLoyaltyStatus(error?.message || "Could not claim that NFT reward.");
+  }
 }
 
 // Pre-launch hype page: schedule the launch -> shareable countdown page on
@@ -10569,6 +10840,47 @@ function launchCoinHtml() {
               <input data-launch-coin-telegram type="url" placeholder="https://t.me/..." value="${escapeHtml(draft.telegram || "")}">
             </label>
           </div>`
+    },
+    {
+      key: "nft", label: "NFT", hint: "Linked collection", title: "Linked NFT Collection (optional)",
+      html: `
+          <div class="volume-grid">
+            <label class="switch-row full-span">
+              <input data-launch-coin-nft-enabled type="checkbox" ${draft.nftCollection?.enabled ? "checked" : ""}>
+              <span>Create an on-chain NFT collection linked to this coin after the coin launch confirms</span>
+            </label>
+            <label>
+              Collection Name
+              <input data-launch-coin-nft-name type="text" maxlength="64" placeholder="Defaults to Token Name NFT Collection" value="${escapeHtml(draft.nftCollection?.name || "")}">
+            </label>
+            <label>
+              Supply
+              <select data-launch-coin-nft-supply-mode>
+                <option value="expandable" ${draft.nftCollection?.supplyMode !== "fixed" ? "selected" : ""}>Expandable up to 500</option>
+                <option value="fixed" ${draft.nftCollection?.supplyMode === "fixed" ? "selected" : ""}>Fixed cap</option>
+              </select>
+            </label>
+            <label>
+              Fixed cap (used only for fixed supply)
+              <input data-launch-coin-nft-supply-cap type="number" min="1" max="500" step="1" value="${escapeHtml(String(draft.nftCollection?.supplyCap || 500))}">
+            </label>
+            <label>
+              Marketplace royalty
+              <select data-launch-coin-nft-royalty>
+                ${[0, 250, 500, 750, 1000].map((bps) => `<option value="${bps}" ${Number(draft.nftCollection?.royaltyBps ?? 500) === bps ? "selected" : ""}>${(bps / 100).toFixed(2)}%</option>`).join("")}
+              </select>
+            </label>
+            <label class="full-span">
+              Collection Description
+              <textarea data-launch-coin-nft-description rows="3" maxlength="800" placeholder="Defaults to an official collection linked to this ticker">${escapeHtml(draft.nftCollection?.description || "")}</textarea>
+            </label>
+            <label class="switch-row full-span">
+              <input data-launch-coin-nft-use-coin-art type="checkbox" checked disabled>
+              <span>Use the coin image as the collection cover</span>
+            </label>
+            <p class="muted full-span">This creates a real Metaplex Core collection controlled by the selected dev wallet, records the coin CA, and adds an on-chain creator royalty. Expandable collections can start with any number and add editions later, up to 500 in SlimeWire. Fixed supply records and enforces the selected cap in SlimeWire. Items can be discovered by marketplaces that index Metaplex Core; listing or selling still happens on that marketplace.</p>
+          </div>
+          ${nftLoyaltyManagerHtml(draft)}`
     },
     {
       key: "fees", label: "Fees", hint: "Creator fees", title: "Creator Fees (optional)",
@@ -10826,6 +11138,15 @@ function readLaunchCoinDraft() {
       minTokens: Number($("[data-launch-coin-holder-reward-min-tokens]")?.value || 3000000) || 3000000,
       minHoldHours: Number($("[data-launch-coin-holder-reward-min-hours]")?.value ?? 4),
       maxRecipients: Number($("[data-launch-coin-holder-reward-max]")?.value || 100) || 100
+    },
+    nftCollection: {
+      enabled: Boolean($("[data-launch-coin-nft-enabled]")?.checked),
+      name: ($("[data-launch-coin-nft-name]")?.value || "").trim(),
+      description: ($("[data-launch-coin-nft-description]")?.value || "").trim(),
+      supplyMode: $("[data-launch-coin-nft-supply-mode]")?.value || "expandable",
+      supplyCap: Number($("[data-launch-coin-nft-supply-cap]")?.value || 500),
+      royaltyBps: Number($("[data-launch-coin-nft-royalty]")?.value ?? 500),
+      useCoinArt: true
     },
     // A positive amount always enables the dev buy. Do not make users also keep a
     // separate switch in sync or let a stale unchecked draft silently drop the buy.
@@ -11326,9 +11647,15 @@ async function submitLaunchCoin() {
     }
     const tokenMint = String(launch.tokenMint || launch.mint || launch.ca || launch.contractAddress || "").trim();
     const signature = launch.signature ? ` Signature: ${shortAddress(launch.signature)}.` : "";
+    const collectionNote = launch.nftCollection?.status === "COMPLETE"
+      ? ` NFT collection linked: ${shortAddress(launch.nftCollection.address)}.`
+      : launch.nftCollection?.status === "FAILED"
+        ? " Coin is live; the NFT collection needs a retry from the launch card."
+        : "";
 
     if (!tokenMint) {
       state.launchCoinStatus = `Launch submitted, but the launch connector did not return a CA yet.${signature} The CA will appear above when it lands — then trade it from the Swap panel.`;
+      if (collectionNote) state.launchCoinStatus += collectionNote;
       writeText(status, state.launchCoinStatus);
       return;
     }
@@ -11341,6 +11668,8 @@ async function submitLaunchCoin() {
       tokenMint,
       symbol: draft.symbol || "",
       name: draft.name || "",
+      launchAttemptId: launch.launchAttemptId || launchAttemptId,
+      nftCollection: launch.nftCollection || null,
       at: Date.now()
     };
     // The sheet did its job - reset it (state + stored draft) so the next launch
@@ -11358,6 +11687,7 @@ async function submitLaunchCoin() {
       state.launchCoinStatus = launch.bundleFallback
         ? `Launched ${shortAddress(tokenMint)} via the standard path (bundle missed the block lottery)${buyNote ? ` - server fired ${buyNote} right behind the create` : ""}.${signature} Opening chart...`
         : `Launch bundled atomically: ${shortAddress(tokenMint)}${buyNote ? ` (${buyNote} landed in-block)` : ""}${launch.exitsArmed ? " - exits auto-armed" : " - ⚠️ tap Arm Exits on your bag"}.${signature} Opening chart...`;
+      if (collectionNote) state.launchCoinStatus += collectionNote;
       writeText(status, state.launchCoinStatus);
       // INSTANT FEEDBACK: show the new bag and prime the chart from what we
       // already know, so the user sees their position the moment the chart opens
@@ -11378,7 +11708,7 @@ async function submitLaunchCoin() {
       return;
     }
 
-    state.launchCoinStatus = `Launch returned ${shortAddress(tokenMint)}.${signature} Routing into ${launchCoinActionLabel(draft.action)}...`;
+    state.launchCoinStatus = `Launch returned ${shortAddress(tokenMint)}.${signature}${collectionNote} Routing into ${launchCoinActionLabel(draft.action)}...`;
     writeText(status, state.launchCoinStatus);
 
     if (draft.devBuyEnabled) {
@@ -19762,6 +20092,41 @@ function smartChartTradeTapeHtml(token = {}) {
   `;
 }
 
+const SMART_CHART_SPLIT_KEY = "slimewireSmartChartHeight";
+function smartChartSplitMetrics(rawHeight = null) {
+  let stored = Number(rawHeight);
+  if (!Number.isFinite(stored)) {
+    try { stored = Number(localStorage.getItem(SMART_CHART_SPLIT_KEY)); } catch { stored = 0; }
+  }
+  const compact = isCompactViewport();
+  const chartMin = compact ? 360 : 380;
+  const chartMax = compact ? 720 : 860;
+  const chartHeight = Math.round(Math.max(chartMin, Math.min(chartMax, stored || (compact ? 510 : 650))));
+  const totalHeight = compact ? 850 : 980;
+  const tapeHeight = Math.round(Math.max(compact ? 180 : 190, Math.min(compact ? 420 : 560, totalHeight - chartHeight)));
+  return { chartHeight, tapeHeight };
+}
+
+function smartChartSplitterHtml() {
+  const sizes = smartChartSplitMetrics();
+  return `
+    <div class="smart-chart-splitter" data-smart-chart-splitter role="separator" aria-label="Resize chart and trade tape" aria-orientation="horizontal" aria-valuemin="380" aria-valuemax="860" aria-valuenow="${sizes.chartHeight}" tabindex="0">
+      <span></span><strong>Drag for more chart or trades</strong><span></span>
+    </div>
+  `;
+}
+
+function applySmartChartSplit(height, root = document.querySelector(".smart-chart-clean-main"), { persist = true } = {}) {
+  if (!root) return;
+  const sizes = smartChartSplitMetrics(height);
+  root.style.setProperty("--smart-chart-user-height", `${sizes.chartHeight}px`);
+  root.style.setProperty("--smart-chart-tape-height", `${sizes.tapeHeight}px`);
+  root.querySelector("[data-smart-chart-splitter]")?.setAttribute("aria-valuenow", String(sizes.chartHeight));
+  if (persist) {
+    try { localStorage.setItem(SMART_CHART_SPLIT_KEY, String(sizes.chartHeight)); } catch {}
+  }
+}
+
 function smartChartTransactionsHtml(token = {}, heldPosition = null) {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
   const trades = tradesForToken(mint);
@@ -20124,7 +20489,7 @@ function smartChartHtml() {
         <button class="primary" type="button" data-smart-chart-open>Open Chart</button>
       </div>
       <div class="smart-chart-grid smart-chart-clean-grid">
-        <article class="terminal-panel smart-chart-main smart-chart-clean-main">
+        <article class="terminal-panel smart-chart-main smart-chart-clean-main" style="--smart-chart-user-height:${smartChartSplitMetrics().chartHeight}px;--smart-chart-tape-height:${smartChartSplitMetrics().tapeHeight}px">
           ${(() => { ensureCoinBanner(mint); const b = coinBannerUrl(mint); return b ? `<div class="coin-banner-hero" style="background-image:url('${b}')" role="img" aria-label="Coin banner"></div>` : ""; })()}
           <div class="smart-chart-token-header smart-chart-clean-token-header${coinBannerUrl(mint) ? " has-banner" : ""}">
             ${livePairAvatarHtml(token)}
@@ -20139,6 +20504,7 @@ function smartChartHtml() {
           </div>
           ${smartChartMarketBarHtml(token, heldPosition)}
           ${smartChartDexFrameHtml(token, "chart")}
+          ${smartChartSplitterHtml()}
           ${smartChartTradeTapeHtml(token)}
         </article>
         <aside class="terminal-panel smart-chart-side smart-chart-clean-side">
@@ -23880,6 +24246,50 @@ document.addEventListener("focusin", (event) => {
   prefetchTokenChartFromElement(event.target instanceof Element ? event.target : null, "focus-prefetch");
 }, true);
 
+// DEXTools-style chart/tape divider. Pointer capture keeps the resize smooth
+// even when the finger/cursor crosses the embedded chart iframe.
+document.addEventListener("pointerdown", (event) => {
+  const splitter = event.target instanceof Element ? event.target.closest("[data-smart-chart-splitter]") : null;
+  if (!splitter) return;
+  const root = splitter.closest(".smart-chart-clean-main");
+  const frame = root?.querySelector(".smart-chart-frame");
+  if (!root || !frame) return;
+  event.preventDefault();
+  const startY = event.clientY;
+  const startHeight = frame.getBoundingClientRect().height;
+  splitter.setPointerCapture?.(event.pointerId);
+  splitter.dataset.dragging = "true";
+  document.documentElement.classList.add("smart-chart-resizing");
+  const move = (moveEvent) => {
+    if (moveEvent.pointerId !== event.pointerId) return;
+    applySmartChartSplit(startHeight + (moveEvent.clientY - startY), root, { persist: false });
+  };
+  const finish = (upEvent) => {
+    if (upEvent.pointerId !== event.pointerId) return;
+    splitter.releasePointerCapture?.(event.pointerId);
+    splitter.dataset.dragging = "false";
+    document.documentElement.classList.remove("smart-chart-resizing");
+    const height = Number.parseFloat(root.style.getPropertyValue("--smart-chart-user-height"));
+    applySmartChartSplit(height, root, { persist: true });
+    document.removeEventListener("pointermove", move, true);
+    document.removeEventListener("pointerup", finish, true);
+    document.removeEventListener("pointercancel", finish, true);
+  };
+  document.addEventListener("pointermove", move, true);
+  document.addEventListener("pointerup", finish, true);
+  document.addEventListener("pointercancel", finish, true);
+}, true);
+
+document.addEventListener("keydown", (event) => {
+  const splitter = event.target instanceof Element ? event.target.closest("[data-smart-chart-splitter]") : null;
+  if (!splitter || !["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const root = splitter.closest(".smart-chart-clean-main");
+  const current = Number.parseFloat(root?.style.getPropertyValue("--smart-chart-user-height")) || smartChartSplitMetrics().chartHeight;
+  const next = event.key === "Home" ? 380 : event.key === "End" ? 860 : current + (event.key === "ArrowDown" ? 40 : -40);
+  applySmartChartSplit(next, root, { persist: true });
+});
+
 // Desktop wheel fallback: guarantee the mouse wheel scrolls the page when hovering
 // anywhere over terminal content, not just over the scrollbar. Only acts when no
 // inner scroller can take the wheel (respects the sidebar, trade panel, chart iframe,
@@ -24800,6 +25210,14 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-call-post]")) { await postBoardCall(target.dataset.callPost); return; }
   if (target.matches("[data-telegram-link]")) { await startTelegramWinLink(); return; }
   if (target.matches("[data-trade-trace-close]")) { state.tradeTrace = null; renderTradeTrace(); return; }
+  if (target.matches("[data-launch-nft-retry]")) { event.preventDefault(); void retryLaunchNftCollection(target); return; }
+  if (target.matches("[data-nft-loyalty-load]")) { event.preventDefault(); void loadNftLoyaltyOverview(); return; }
+  if (target.matches("[data-nft-collection-create]")) { event.preventDefault(); void createLaterNftCollection(); return; }
+  if (target.matches("[data-nft-collection-link]")) { event.preventDefault(); void linkExistingNftCollection(); return; }
+  if (target.matches("[data-nft-slimecash-fund]")) { event.preventDefault(); void fundNftFromSlimeCash(target); return; }
+  if (target.matches("[data-nft-item-mint]")) { event.preventDefault(); void mintNftLoyaltyItem(); return; }
+  if (target.matches("[data-nft-campaign-create]")) { event.preventDefault(); void createNftRewardCampaign(); return; }
+  if (target.matches("[data-nft-campaign-claim]")) { event.preventDefault(); void claimNftRewardCampaign(target); return; }
   if (target.matches("[data-launch-kit-close]")) { state.launchShareKit = null; render(); return; }
   if (target.matches("[data-create-wallets]")) await createWalletSet();
   if (target.matches("[data-distribute-fresh]")) { await distributeFreshWallets(); return; }
