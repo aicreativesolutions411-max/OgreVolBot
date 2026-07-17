@@ -9749,6 +9749,8 @@ function volumeBotListHtml() {
           <div><span>Wallets</span><strong>${escapeHtml(Number(bot.walletCount || 0))}</strong></div>
           <div><span>Buys</span><strong>${escapeHtml(Number(stats.buys || 0))}</strong></div>
           <div><span>Sells</span><strong>${escapeHtml(Number(stats.sells || 0))}</strong></div>
+          <div><span>Flat fee</span><strong>0.05 SOL / 50 tx</strong></div>
+          <div><span>Next fee</span><strong>${escapeHtml(Number(stats.nextFlatFeeIn || 50))} tx</strong></div>
           <div><span>Errors</span><strong>${escapeHtml(Number(stats.errors || 0))}</strong></div>
         </div>
         <small>${escapeHtml(bot.message || "")}</small>
@@ -10434,6 +10436,40 @@ function launchShareKitHtml() {
   `;
 }
 
+function nftStudioManagerHtml(studio = {}) {
+  const job = studio.currentJob;
+  if (job) {
+    const previews = (job.previews || []).map((preview, index) => `<label class="read-card"><img src="${escapeHtml(preview.imageUri || "")}" alt="Direction ${index + 1}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:12px"><span><input type="radio" name="nft-studio-preview" value="${index}"${job.selectedPreview === index ? " checked" : ""}> Direction ${index + 1}</span></label>`).join("");
+    return `<details class="tool-disclosure" open><summary>Funded Collection Studio</summary>
+      <div class="read-card"><strong>${escapeHtml(job.status || "Studio job")} · ${Number(job.mintedCount || 0)}/${Number(job.quantity || 0)} minted</strong><p>Reserved ${Number(job.quotedSol || 0)} SOL · used ${Number(job.consumedSol || 0)} SOL · up to ${Number(job.refundableSol || 0)} SOL refundable</p></div>
+      ${previews ? `<div class="nft-campaign-list">${previews}</div>` : ""}
+      ${job.error ? `<p class="trade-status">${escapeHtml(job.error)}</p>` : ""}
+      <div class="card-actions compact">
+        ${job.canGeneratePreviews ? `<button type="button" class="primary" data-nft-studio-previews>Generate 4 previews</button>` : ""}
+        ${job.canApprove ? `<button type="button" class="primary" data-nft-studio-approve>Approve direction</button>` : ""}
+        ${job.canBuild ? `<button type="button" class="primary" data-nft-studio-build>${job.mintedCount ? "Resume" : "Build"} collection</button>` : ""}
+        ${job.canCancel ? `<button type="button" data-nft-studio-cancel>Cancel & refund unused</button>` : ""}
+        <button type="button" data-nft-loyalty-load>Refresh</button>
+      </div><small>Every image and mint is checkpointed. Close the page and resume later without restarting the paid work.</small></details>`;
+  }
+  if (!studio.enabled) {
+    return `<details class="tool-disclosure"><summary>AI NFT generation · Coming soon</summary>
+      <p class="muted">Automatic collection artwork is being prepared. For now, upload your finished artwork and mint it directly below.</p>
+    </details>`;
+  }
+  return `<details class="tool-disclosure" open><summary>Funded Collection Studio</summary><div class="volume-grid">
+    <p class="muted full-span">${escapeHtml(studio.note || "Paid generation is not configured yet. Manual artwork minting remains available.")}</p>
+    <label>Items<input data-nft-studio-quantity type="number" min="1" max="${Number(studio.maxItems || 100)}" value="10"></label>
+    <label>Style<select data-nft-studio-style>${(studio.styles || []).map((style) => `<option value="${escapeHtml(style.id)}">${escapeHtml(style.label)}</option>`).join("")}</select></label>
+    <label>Name<input data-nft-studio-name type="text" maxlength="64" placeholder="Collection NFT"></label>
+    <label class="full-span">Art direction<textarea data-nft-studio-prompt rows="2" maxlength="500" placeholder="Swamp syndicate, gold chains, cinematic green lighting"></textarea></label>
+    <label class="full-span">Reference art (optional)<input data-nft-studio-reference type="file" accept="image/*"><small>Defaults to the coin/collection image.</small></label>
+    <p class="trade-status full-span" data-nft-studio-quote-status>Get one locked all-in SOL price. Unused reserve returns automatically.</p>
+    <button type="button" data-nft-studio-quote${studio.enabled ? "" : " disabled"}>Get exact quote</button>
+    <button type="button" class="primary" data-nft-studio-start disabled>Fund & start</button>
+  </div></details>`;
+}
+
 function nftLoyaltyManagerHtml(draft = {}) {
   const overview = state.nftLoyaltyOverview;
   const mint = overview?.tokenMint || draft.tokenMint || state.launchShareKit?.tokenMint || "";
@@ -10473,14 +10509,15 @@ function nftLoyaltyManagerHtml(draft = {}) {
               : `<p class="muted">Create or restore a SlimeCash wallet to fund NFT minting here.</p>`}
         </div>` : ""}
         ${collection?.status === "COMPLETE" ? `
-          <details class="tool-disclosure"><summary>Mint an NFT item</summary><div class="volume-grid">
+          <details class="tool-disclosure" open><summary>Upload your own NFT artwork</summary><div class="volume-grid">
             <label>Name<input data-nft-item-name type="text" maxlength="64" placeholder="Slime #1"></label>
             <label>Rarity<select data-nft-item-rarity>${(overview.rarityTiers || []).map((tier) => `<option value="${escapeHtml(tier.key)}">${escapeHtml(tier.label)} · ${(Number(tier.multiplierBps || 10000) / 10000).toFixed(2)}x</option>`).join("")}</select></label>
             <label class="full-span">Description<textarea data-nft-item-description rows="2" maxlength="800"></textarea></label>
             <label>Recipient wallet<input data-nft-item-recipient type="text" placeholder="Defaults to creator wallet"></label>
-            <label>Artwork<input data-nft-item-image type="file" accept="image/*"></label>
-            <button type="button" class="primary" data-nft-item-mint>Mint NFT</button>
+            <label>Artwork<input data-nft-item-image type="file" accept="image/*" required><small>Required · PNG, JPG, WEBP or GIF.</small></label>
+            <button type="button" class="primary" data-nft-item-mint>Upload & mint NFT</button>
           </div></details>
+          ${nftStudioManagerHtml(overview.artStudio || {})}
           <details class="tool-disclosure"><summary>Fund a holder reward campaign</summary><div class="volume-grid">
             <label>Reward token CA<input data-nft-reward-mint type="text" placeholder="Future meme coin CA"></label>
             <label>Reward ticker<input data-nft-reward-symbol type="text" maxlength="16" placeholder="SLIME"></label>
@@ -10633,6 +10670,7 @@ async function mintNftLoyaltyItem() {
   setNftLoyaltyStatus("Uploading artwork and minting the NFT...");
   try {
     const file = $("[data-nft-item-image]")?.files?.[0];
+    if (!file) { setNftLoyaltyStatus("Choose an artwork image before minting."); return; }
     const imageDataUrl = file ? await readFileAsDataUrl(file) : "";
     await api("/api/web/nft/item/mint", {
       method: "POST",
@@ -10649,6 +10687,113 @@ async function mintNftLoyaltyItem() {
     state.nftLoyaltyStatus = `${name} minted into the linked collection.`;
     await loadNftLoyaltyOverview(tokenMint);
   } catch (error) { setNftLoyaltyStatus(error?.message || "Could not mint that NFT."); }
+}
+
+function nftStudioDraftFromForm() {
+  return {
+    tokenMint: nftManagerMintValue(),
+    quantity: Math.max(1, Math.min(100, Number($("[data-nft-studio-quantity]")?.value || 10))),
+    nameBase: ($("[data-nft-studio-name]")?.value || "Collection NFT").trim() || "Collection NFT",
+    artStyle: $("[data-nft-studio-style]")?.value || "slime-degen",
+    artPrompt: ($("[data-nft-studio-prompt]")?.value || "").trim()
+  };
+}
+
+async function quoteNftStudio() {
+  const status = $("[data-nft-studio-quote-status]");
+  const start = $("[data-nft-studio-start]");
+  writeText(status, "Calculating a locked SOL quote...");
+  try {
+    const draft = nftStudioDraftFromForm();
+    const data = await api("/api/web/nft/studio/quote", { method: "POST", body: JSON.stringify(draft), preserveSafeError: true });
+    state.nftStudioDraft = draft;
+    state.nftStudioQuote = data.quote;
+    state.nftStudioQuoteToken = data.quoteToken;
+    writeText(status, `${data.quote.totalSol} SOL all-in maximum (about $${data.quote.estimatedUsd}). Unused reserve returns automatically; mint network costs remain separate.`);
+    if (start) start.disabled = false;
+  } catch (error) {
+    state.nftStudioQuote = null;
+    state.nftStudioQuoteToken = null;
+    if (start) start.disabled = true;
+    writeText(status, publicErrorMessage(error?.message || "Could not calculate the quote."));
+  }
+}
+
+async function startNftStudio() {
+  if (!state.nftStudioQuote || !state.nftStudioQuoteToken) { setNftLoyaltyStatus("Get the exact Studio quote first."); return; }
+  if (!window.confirm(`Fund ${state.nftStudioQuote.totalSol} SOL from the collection creator wallet? Only completed generation is charged.`)) return;
+  const button = $("[data-nft-studio-start]");
+  if (button) { button.disabled = true; button.textContent = "Funding..."; }
+  try {
+    const file = $("[data-nft-studio-reference]")?.files?.[0];
+    const referenceImageDataUrl = file ? await readFileAsDataUrl(file) : "";
+    const data = await api("/api/web/nft/studio/start", {
+      method: "POST",
+      body: JSON.stringify({ ...(state.nftStudioDraft || nftStudioDraftFromForm()), quoteToken: state.nftStudioQuoteToken, referenceImageDataUrl, clientRequestId: state.nftStudioStartId || (state.nftStudioStartId = createClientAttemptId("nft-studio")) }),
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS,
+      preserveSafeError: true
+    });
+    state.nftStudioQuote = null;
+    state.nftStudioQuoteToken = null;
+    state.nftStudioStartId = null;
+    state.nftLoyaltyStatus = `Studio reserve funded: ${data.job.quotedSol} SOL maximum.`;
+    await loadNftLoyaltyOverview();
+  } catch (error) {
+    setNftLoyaltyStatus(error?.message || "Could not fund the Studio job.");
+    if (button) { button.disabled = false; button.textContent = "Fund & start"; }
+  }
+}
+
+function currentNftStudioJob() {
+  return state.nftLoyaltyOverview?.artStudio?.currentJob || null;
+}
+
+async function generateNftStudioPreviews() {
+  const job = currentNftStudioJob();
+  if (!job) return;
+  setNftLoyaltyStatus("Generating and permanently storing four directions...");
+  try {
+    await api("/api/web/nft/studio/previews", { method: "POST", body: JSON.stringify({ jobId: job.id }), timeoutMs: API_LONG_ACTION_TIMEOUT_MS, preserveSafeError: true });
+    state.nftLoyaltyStatus = "Four art directions are ready. Choose one to approve.";
+  } catch (error) { state.nftLoyaltyStatus = error?.message || "Preview generation paused; completed work is saved."; }
+  await loadNftLoyaltyOverview();
+}
+
+async function approveNftStudioPreview() {
+  const job = currentNftStudioJob();
+  const selected = document.querySelector('input[name="nft-studio-preview"]:checked');
+  if (!job || !selected) { setNftLoyaltyStatus("Choose one preview direction first."); return; }
+  try {
+    await api("/api/web/nft/studio/approve", { method: "POST", body: JSON.stringify({ jobId: job.id, selectedPreview: Number(selected.value) }), preserveSafeError: true });
+    state.nftLoyaltyStatus = "Direction approved. Build now or resume later.";
+    await loadNftLoyaltyOverview();
+  } catch (error) { setNftLoyaltyStatus(error?.message || "Could not approve that preview."); }
+}
+
+async function buildNftStudio() {
+  let job = currentNftStudioJob();
+  if (!job) return;
+  setNftLoyaltyStatus("Building the collection one saved item at a time...");
+  try {
+    while (job?.canBuild) {
+      const data = await api("/api/web/nft/studio/next", { method: "POST", body: JSON.stringify({ jobId: job.id }), timeoutMs: API_LONG_ACTION_TIMEOUT_MS, preserveSafeError: true });
+      job = data.job;
+      setNftLoyaltyStatus(`Minted ${job.mintedCount}/${job.quantity}. Progress saved.`);
+      if (data.complete || job.status === "COMPLETE") break;
+    }
+    state.nftLoyaltyStatus = job?.status === "COMPLETE" ? "Collection batch complete and unused reserve returned." : state.nftLoyaltyStatus;
+  } catch (error) { state.nftLoyaltyStatus = error?.message || "Build paused; progress is saved."; }
+  await loadNftLoyaltyOverview();
+}
+
+async function cancelNftStudio() {
+  const job = currentNftStudioJob();
+  if (!job || !window.confirm("Cancel this Studio job and return every unused reserved lamport? Completed generation is still charged.")) return;
+  try {
+    await api("/api/web/nft/studio/cancel", { method: "POST", body: JSON.stringify({ jobId: job.id }), timeoutMs: API_LONG_ACTION_TIMEOUT_MS, preserveSafeError: true });
+    state.nftLoyaltyStatus = "Studio job canceled and unused reserve returned.";
+    await loadNftLoyaltyOverview();
+  } catch (error) { setNftLoyaltyStatus(error?.message || "Could not settle the Studio reserve."); }
 }
 
 async function createNftRewardCampaign() {
@@ -25216,6 +25361,12 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-nft-collection-link]")) { event.preventDefault(); void linkExistingNftCollection(); return; }
   if (target.matches("[data-nft-slimecash-fund]")) { event.preventDefault(); void fundNftFromSlimeCash(target); return; }
   if (target.matches("[data-nft-item-mint]")) { event.preventDefault(); void mintNftLoyaltyItem(); return; }
+  if (target.matches("[data-nft-studio-quote]")) { event.preventDefault(); void quoteNftStudio(); return; }
+  if (target.matches("[data-nft-studio-start]")) { event.preventDefault(); void startNftStudio(); return; }
+  if (target.matches("[data-nft-studio-previews]")) { event.preventDefault(); void generateNftStudioPreviews(); return; }
+  if (target.matches("[data-nft-studio-approve]")) { event.preventDefault(); void approveNftStudioPreview(); return; }
+  if (target.matches("[data-nft-studio-build]")) { event.preventDefault(); void buildNftStudio(); return; }
+  if (target.matches("[data-nft-studio-cancel]")) { event.preventDefault(); void cancelNftStudio(); return; }
   if (target.matches("[data-nft-campaign-create]")) { event.preventDefault(); void createNftRewardCampaign(); return; }
   if (target.matches("[data-nft-campaign-claim]")) { event.preventDefault(); void claimNftRewardCampaign(target); return; }
   if (target.matches("[data-launch-kit-close]")) { state.launchShareKit = null; render(); return; }
