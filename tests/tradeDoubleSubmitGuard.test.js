@@ -3622,3 +3622,57 @@ test("Telegram /c and /chart render CA, crypto, and stock charts in chat with ti
   assert.doesNotMatch(messageHandler, /query\.data\?\.startsWith\("chart(?:ca|st):"\)/);
   assert.match(functionBody(serverSource, "handleChannelPostCommands"), /\["chart", "c"\]/);
 });
+
+test("Telegram /i resolves a CA, ticker, or coin name into an in-chat market info card", () => {
+  const register = functionBody(serverSource, "registerTelegramBotCommands");
+  const command = functionBody(serverSource, "handleTelegramInfoCommand");
+  const resolver = functionBody(serverSource, "resolveTelegramInfoTarget");
+  const card = functionBody(serverSource, "sendTelegramTokenInfoCard");
+  const cryptoCard = functionBody(serverSource, "sendTelegramCryptoInfoCard");
+  const callbackHandler = functionBody(serverSource, "handleCallback");
+
+  assert.match(register, /command: "i"/);
+  assert.match(command, /INFO_MAJOR_CRYPTO_IDS/);
+  assert.match(command, /resolveTelegramInfoTarget/);
+  assert.match(resolver, /resolveTickerToScanTarget/);
+  assert.match(resolver, /webTokenSearch/);
+  assert.match(card, /24h High/);
+  assert.match(card, /24h Low/);
+  assert.match(card, /24h Volume/);
+  assert.match(card, /Mkt\. Cap \(FDV\)/);
+  assert.match(card, /telegramInfoSocialLine/);
+  assert.match(card, /telegramTokenInfoKeyboard/);
+  assert.match(cryptoCard, /price_change_percentage_7d_in_currency/);
+  assert.match(callbackHandler, /startsWith\("info:"\)/);
+  assert.match(callbackHandler, /startsWith\("infocg:"\)/);
+  assert.match(functionBody(serverSource, "handleMessage"), /\["i", "info", "coininfo"\]/);
+  assert.match(functionBody(serverSource, "handleChannelPostCommands"), /\["i", "info", "coininfo"\]/);
+});
+
+test("Buy Bot posts one persisted active-coin statistics recap every eight hours", () => {
+  const solBuy = functionBody(serverSource, "postGroupBuy");
+  const rhBuy = functionBody(serverSource, "postGroupBuyRh");
+  const snapshot = functionBody(serverSource, "buildGroupBuyStatsSnapshot");
+  const text = functionBody(serverSource, "groupBuyStatsText");
+  const tick = functionBody(serverSource, "pollGroupBuyStats");
+  const start = functionBody(serverSource, "startGroupBuyBot");
+  const queue = functionBody(serverSource, "queueGroupBuyAlert");
+
+  assert.match(serverSource, /GROUP_BUY_STATS_INTERVAL_MS = 8 \* 60 \* 60_000/);
+  assert.match(solBuy, /recordGroupBuyStats\(mint/);
+  assert.match(rhBuy, /recordGroupBuyStats\(address/);
+  assert.match(snapshot, /gatherSlimeScan|scanMarketStatsFromSources/);
+  assert.match(snapshot, /gatherRhScan/);
+  assert.match(text, /Market cap/);
+  assert.match(text, /Volume 1H/);
+  assert.match(text, /Volume 24H/);
+  assert.match(text, /Whale buys observed 24H/);
+  assert.match(text, /Biggest buy observed 24H/);
+  assert.match(text, /Smart-wallet buys observed 24H/);
+  assert.match(tick, /groupBotFeatureOn\(entry, "buybot"\)/);
+  assert.match(tick, /entry\.buyStats = \{ token, lastAt: now \}/);
+  assert.match(tick, /now - Number\(entry\.buyStats\.lastAt\) >= GROUP_BUY_STATS_INTERVAL_MS/);
+  assert.match(tick, /if \(!delivered\) return/);
+  assert.match(queue, /return delivered/);
+  assert.match(start, /setInterval\(\(\) => \{ void pollGroupBuyStats\(\); \}, 5 \* 60_000\)/);
+});
