@@ -722,7 +722,7 @@
   const ALERT_RULE_KEY="ggSwampAlertRules";
   const state={route:"trending",mint:null,trendTab:"best",trenchTab:"board",volTf:"h1",rows:[],pollT:null,
     token:localStorage.getItem(TOKEN_KEY)||"",user:null,wallets:[],activeWallet:Number(localStorage.getItem(ACTIVE_WALLET_KEY))||null,
-    presets:{trade:[],bundle:[]},activeTradePreset:localStorage.getItem("ggTradePreset")||"",searchTerm:"",pendingSell:null,portfolioTab:"positions",
+    presets:{trade:[],bundle:[]},activeTradePreset:localStorage.getItem("ggTradePreset")||"",searchTerm:"",pendingSell:null,portfolioTab:"positions",lcNftMint:"",lcNftOverview:null,lcNftItemImage:null,
     watch:new Set(),watchRows:[],
     // Seed positions from the last session so the Portfolio paints INSTANTLY on load, then refreshes.
     posCache:(function(){try{return JSON.parse(localStorage.getItem("ggPosCache")||"null");}catch(e){return null;}})(),
@@ -4381,6 +4381,42 @@
     const amount=Number(raw.replace(/[^0-9.+-]/g,""));
     return Number.isFinite(amount)&&amount>0?amount:0;
   }
+  function lcNftManagerMint(){return String(($("#lcNftExistingMint")||{}).value||state.lcNftMint||"").trim();}
+  function lcNftManagerHtml(data){
+    if(!data)return '<p class="mut" style="font-size:11px;margin:0">Paste a launched coin CA and tap <b>Open NFT manager</b>.</p>';
+    const c=data.collection||{},items=Array.isArray(data.items)?data.items:[],fund=data.funding||null,ready=String(c.status||"").toUpperCase()==="COMPLETE"&&c.address;
+    const itemRows=items.slice(-6).reverse().map(x=>'<div class="factor-list"><span>'+esc(x.name||("NFT #"+(x.editionNumber||"")))+' · '+esc(x.rarity||"common")+'</span><span>'+esc(short(x.address||"pending"))+'</span></div>').join("");
+    const authority=fund&&fund.creatorWallet?'<div class="lcnote" style="margin-top:8px">Creator wallet: <b>'+esc(fund.creatorWallet.label||"Dev wallet")+'</b> · '+esc(short(fund.creatorWallet.publicKey||""))+'</div>':'<div class="lcnote" style="margin-top:8px">Log into the SlimeWire profile that launched this coin and make sure its original dev wallet is loaded.</div>';
+    return '<div class="feebox"><div class="launch-summary"><span class="mark">'+(ready?'✓':'◆')+'</span><div><b>'+(ready?esc(c.name||"NFT collection ready"):"No linked collection yet")+'</b><br><span class="mut">'+(ready?(esc(short(c.address))+' · '+items.length+'/'+esc(c.supplyCap||500)+' NFTs minted'):'Create a collection from the settings above, or link one controlled by this coin\'s dev wallet.')+'</span></div></div>'+authority+
+      (ready?'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:9px"><a class="wbtn ghost" href="'+esc(c.explorerUrl||("https://solscan.io/account/"+c.address))+'" target="_blank" rel="noopener noreferrer">View collection</a><button class="wbtn" type="button" id="lcNftRefresh">Refresh</button></div>'+
+        '<details class="launch-advanced" open style="margin-top:10px"><summary>Mint an NFT item</summary><div><div class="field row2"><div><label>Name</label><input id="lcNftItemName" maxlength="64" placeholder="'+esc((c.name||"Slime")+" #"+(items.length+1))+'"></div><div><label>Rarity</label><select id="lcNftItemRarity">'+(data.rarityTiers||[]).map(t=>'<option value="'+esc(t.key)+'">'+esc(t.label)+' · '+(Number(t.multiplierBps||10000)/10000).toFixed(2)+'x</option>').join("")+'</select></div></div><div class="field"><label>Description <span style="text-transform:none">(optional)</span></label><textarea id="lcNftItemDescription" rows="2" maxlength="800"></textarea></div><div class="field"><label>Recipient wallet <span style="text-transform:none">(optional · defaults to dev wallet)</span></label><input id="lcNftItemRecipient" placeholder="Solana wallet"></div><div class="field"><label>Artwork <span style="text-transform:none">(optional · defaults to collection art)</span></label><input id="lcNftItemImage" type="file" accept="image/*"><span id="lcNftItemImageName" class="mut" style="font-size:10px">PNG, JPG, WEBP or GIF · max 6 MB</span></div><button class="wbtn" type="button" id="lcNftItemMint" style="width:100%">Mint NFT</button></div></details>'+(itemRows?'<div style="margin-top:10px"><b style="font-size:11px">Recent NFTs</b>'+itemRows+'</div>':''):
+        '<div style="display:grid;gap:8px;margin-top:10px"><button class="wbtn" type="button" id="lcNftCreateLater">Create collection from settings above</button><div class="field" style="margin:0"><label>Existing Metaplex Core collection address</label><input id="lcNftLinkAddress" placeholder="Collection address"></div><button class="wbtn ghost" type="button" id="lcNftLinkExisting">Verify &amp; link existing collection</button></div>')+
+      '<p id="lcNftManagerStatus" class="mut" style="font-size:11px;margin:10px 0 0">'+esc(state.lcNftStatus||"")+'</p></div>';
+  }
+  function lcPaintNftManager(){const out=$("#lcNftManagerOut");if(out)out.innerHTML=lcNftManagerHtml(state.lcNftOverview);lcWireNftManager();}
+  function lcNftLongPost(pathname,body){const opts={method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})};try{if(typeof AbortSignal!=="undefined"&&AbortSignal.timeout)opts.signal=AbortSignal.timeout(180000);}catch(e){}return api(pathname,opts);}
+  async function lcLoadNftManager(){
+    const mint=lcNftManagerMint();if(!mint){toast("Paste the launched coin CA first.",true);return;}if(!state.token){toast("Log into the same SlimeWire profile that launched this coin.",true);go("wallet");return;}
+    state.lcNftMint=mint;state.lcNftStatus="Loading collection and NFTs…";lcPaintNftManager();
+    const {ok,d}=await api("/api/web/nft/loyalty?tokenMint="+encodeURIComponent(mint));
+    if(ok&&d&&d.ok){state.lcNftOverview=d;state.lcNftStatus=d.collection&&d.collection.address?"Collection is ready.":"No collection is linked yet.";}else state.lcNftStatus=apiMessage(d,"Could not open this NFT manager.");lcPaintNftManager();
+  }
+  async function lcCreateLaterNftCollection(){
+    if(!(await ensureTradeReady()))return;const btn=$("#lcNftCreateLater");if(btn){btn.disabled=true;btn.textContent="Creating on-chain collection…";}
+    const body={tokenMint:state.lcNftMint,name:String(($("#lcNftName")||{}).value||"").trim(),description:String(($("#lcNftDescription")||{}).value||"").trim(),supplyMode:String(($("#lcNftSupplyMode")||{}).value||"expandable"),supplyCap:Math.max(1,Math.min(500,Number(($("#lcNftSupplyCap")||{}).value||500))),royaltyBps:Math.max(0,Math.min(1000,Number(($("#lcNftRoyalty")||{}).value||500)))};
+    const {ok,d}=await lcNftLongPost("/api/web/nft/collection/create",body);if(ok&&d&&d.ok){toast("NFT collection linked");await lcLoadNftManager();}else{state.lcNftStatus=apiMessage(d,"Could not create the collection.");lcPaintNftManager();}
+  }
+  async function lcLinkExistingNftCollection(){
+    const address=String(($("#lcNftLinkAddress")||{}).value||"").trim();if(!address){toast("Paste the collection address.",true);return;}if(!(await ensureTradeReady()))return;
+    const {ok,d}=await lcNftLongPost("/api/web/nft/collection/link",{tokenMint:state.lcNftMint,collectionAddress:address});if(ok&&d&&d.ok){toast("Existing collection linked");await lcLoadNftManager();}else{state.lcNftStatus=apiMessage(d,"Could not link that collection.");lcPaintNftManager();}
+  }
+  async function lcReadNftItemImage(file){if(!file)return;if(file.size>6*1024*1024){toast("Use artwork under 6 MB.",true);return;}const dataUrl=await new Promise(r=>{const rd=new FileReader();rd.onload=()=>r(String(rd.result||""));rd.onerror=()=>r("");rd.readAsDataURL(file);});if(!dataUrl){toast("Could not read that artwork.",true);return;}state.lcNftItemImage={dataUrl,name:file.name||"nft.png"};const label=$("#lcNftItemImageName");if(label)label.textContent=(file.name||"Artwork")+" ready";}
+  async function lcMintNftItem(){
+    if(!(await ensureTradeReady()))return;const name=String(($("#lcNftItemName")||{}).value||"").trim();if(!name){toast("Give this NFT a name.",true);return;}const btn=$("#lcNftItemMint");if(btn){btn.disabled=true;btn.textContent="Minting NFT…";}
+    const body={tokenMint:state.lcNftMint,name,description:String(($("#lcNftItemDescription")||{}).value||"").trim(),rarity:String(($("#lcNftItemRarity")||{}).value||"common"),recipient:String(($("#lcNftItemRecipient")||{}).value||"").trim(),clientRequestId:attemptId()};if(state.lcNftItemImage){body.imageDataUrl=state.lcNftItemImage.dataUrl;body.imageName=state.lcNftItemImage.name;}
+    const {ok,d}=await lcNftLongPost("/api/web/nft/item/mint",body);if(ok&&d&&d.ok){state.lcNftItemImage=null;toast("NFT minted");await lcLoadNftManager();}else{state.lcNftStatus=apiMessage(d,"Could not mint this NFT.");lcPaintNftManager();}
+  }
+  function lcWireNftManager(){const load=$("#lcNftManagerLoad"),refresh=$("#lcNftRefresh"),create=$("#lcNftCreateLater"),link=$("#lcNftLinkExisting"),mint=$("#lcNftItemMint"),img=$("#lcNftItemImage");if(load)load.onclick=lcLoadNftManager;if(refresh)refresh.onclick=lcLoadNftManager;if(create)create.onclick=lcCreateLaterNftCollection;if(link)link.onclick=lcLinkExistingNftCollection;if(mint)mint.onclick=lcMintNftItem;if(img)img.onchange=e=>lcReadNftItemImage(e.target.files&&e.target.files[0]);}
   function lcRestore(){const root=$("#v-launch");if(!root)return;const f=state.launchForm;if(f){root.querySelectorAll("input,textarea,select").forEach(el=>{if(!el.id||el.type==="file"||el.id==="lcChatCa"||!(el.id in f))return;if(el.type==="checkbox")el.checked=!!f[el.id];else if(f[el.id]!=null&&f[el.id]!=="")el.value=f[el.id];});}
     if(state.launchImg&&$("#lcImgPrev"))$("#lcImgPrev").innerHTML='<img src="'+state.launchImg.dataUrl+'" style="height:64px;width:64px;border-radius:10px;object-fit:cover;border:1px solid var(--border)">';
     if(state.launchBanner&&$("#lcBannerPrev"))$("#lcBannerPrev").innerHTML='<img src="'+state.launchBanner.dataUrl+'" style="height:40px;border-radius:10px;object-fit:cover;border:1px solid var(--border)">';
@@ -4420,6 +4456,11 @@
           '<div class="field"><label>Marketplace royalty</label><select id="lcNftRoyalty"><option value="0">0%</option><option value="250">2.5%</option><option value="500" selected>5%</option><option value="750">7.5%</option><option value="1000">10%</option></select></div>'+
           '<div class="lcnote">Uses the coin image as collection art. The collection is linked on-chain and can appear on compatible NFT marketplaces. Individual NFT art and rarity can be added after launch.</div>'+
         '</div>'+
+        '<div class="launch-section-title" style="margin-top:14px">Already launched?</div>'+
+        '<div class="launch-summary"><span class="mark">+</span><div><b>Add NFTs to an existing SlimeWire launch.</b><br><span class="mut">Paste the Solana coin CA. SlimeWire verifies that this account still has the original dev wallet before creating or linking anything.</span></div></div>'+
+        '<div class="field"><label>Launched coin CA</label><input id="lcNftExistingMint" placeholder="Paste Solana coin CA" value="'+esc(state.lcNftMint||'')+'"></div>'+
+        '<button class="wbtn" type="button" id="lcNftManagerLoad" style="width:100%">Open NFT manager</button>'+
+        '<div id="lcNftManagerOut" style="margin-top:10px">'+lcNftManagerHtml(state.lcNftOverview)+'</div>'+
       '</div>'+
       '<div data-lpanel="dev"'+show("dev")+'>'+
         '<div class="field"><label>Creator / dev wallet</label>'+walletSelectHtml("lcDevWallet")+'<span class="mut" style="font-size:10px">This wallet creates the coin, receives creator fees, and pays launch costs.</span></div><div id="lcDevRhNote" style="display:none"></div>'+
@@ -4457,6 +4498,7 @@
     lcWireLaunchStrategies();
     const syncNft=()=>{const on=!!($("#lcNftEnabled")&&$("#lcNftEnabled").checked),box=$("#lcNftSetup"),mode=$("#lcNftSupplyMode"),lab=$("#lcNftSupplyLabel");if(box)box.style.display=on?"":"none";if(lab)lab.textContent=mode&&mode.value==="fixed"?"Fixed item cap":"Starting / max items";};
     const nftOn=$("#lcNftEnabled"),nftMode=$("#lcNftSupplyMode");if(nftOn)nftOn.onchange=()=>{syncNft();lcSnapshot();};if(nftMode)nftMode.onchange=()=>{syncNft();lcSnapshot();};syncNft();
+    lcWireNftManager();
     const pm=$("#lcPromo");if(pm)pm.onchange=()=>{const e=$("#lcPromoRows"),pp=$("#lcPayPromo");if(e)e.style.display=pm.checked?"":"none";if(pp)pp.style.display=pm.checked?"":"none";};
     lcWireHolderRewards("lc");lcWireHolderRewards("lcRh");
     const pp=$("#lcPayPromo");if(pp)pp.onclick=()=>payPromotersModal();

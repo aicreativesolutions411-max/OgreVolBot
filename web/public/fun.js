@@ -2221,7 +2221,7 @@
       frame.dataset.loaded = "true";
       frame.setAttribute("aria-busy", "true");
       frame.addEventListener("load", () => frame.removeAttribute("aria-busy"), { once: true });
-      frame.src = "/?from=fun&embed=fun-launch#launch";
+      frame.src = "/?from=fun&embed=fun-launch&v=nft-manager-1#launch";
     }
     history.replaceState(null, "", "#launch");
   }

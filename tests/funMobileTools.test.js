@@ -31,6 +31,17 @@ test("the launcher visible inside Fun exposes linked NFT collection settings", (
   assert.match(serverSource, /normalizeLinkedNftCollection\(body\.nftCollection/);
 });
 
+test("Fun NFT tab manages coins that were already launched", () => {
+  for (const marker of ["lcNftExistingMint", "lcNftManagerLoad", "lcNftCreateLater", "lcNftLinkExisting", "lcNftItemMint"]) {
+    assert.match(ggSource, new RegExp(marker));
+  }
+  assert.match(ggSource, /\/api\/web\/nft\/loyalty\?tokenMint=/);
+  assert.match(ggSource, /\/api\/web\/nft\/collection\/create/);
+  assert.match(ggSource, /\/api\/web\/nft\/collection\/link/);
+  assert.match(ggSource, /\/api\/web\/nft\/item\/mint/);
+  assert.match(ggSource, /same SlimeWire profile that launched this coin/);
+});
+
 test("Telegram admin stats include paged per-profile trade and referral usage", () => {
   assert.match(serverSource, /const profileRows = Object\.entries\(auth\.profiles/);
   assert.match(serverSource, /volumeSol: referralSolString\(totals\.volume\)/);
