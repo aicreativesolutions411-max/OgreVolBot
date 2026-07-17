@@ -550,12 +550,14 @@
     html,body{overflow-x:hidden}
   }
   /* Same launcher, embedded inside SlimeWire Go without Terminal chrome. */
-  body.fun-launch-embed #app{height:100dvh!important;zoom:1!important}
-  body.fun-launch-embed .topbar,body.fun-launch-embed #subbar,body.fun-launch-embed .statusbar,body.fun-launch-embed .botnav{display:none!important}
-  body.fun-launch-embed main{padding:0!important;overflow:hidden}
+  body.fun-launch-embed #app,body.fun-tool-embed #app{height:100dvh!important;zoom:1!important}
+  body.fun-launch-embed .topbar,body.fun-launch-embed #subbar,body.fun-launch-embed .statusbar,body.fun-launch-embed .botnav,body.fun-tool-embed .topbar,body.fun-tool-embed #subbar,body.fun-tool-embed .statusbar,body.fun-tool-embed .botnav{display:none!important}
+  body.fun-launch-embed main,body.fun-tool-embed main{padding:0!important;overflow:hidden}
   body.fun-launch-embed #v-launch{inset:0;overflow:auto;padding:0 0 24px}
   body.fun-launch-embed #v-launch .wgrid{padding:8px 6px 24px}
   body.fun-launch-embed #v-launch .launch-card{max-width:640px}
+  body.fun-tool-embed .view.on{inset:0;overflow:auto;padding:0 0 24px}
+  body.fun-tool-embed .view.on .wgrid{padding:8px 6px 24px}
   /* DEXTools-style chart / tape splitter. It resizes the live panes in place, so neither
      the chart iframe nor the trade stream reloads while the trader makes room. */
   .chartTapeSplit{position:relative;display:flex;align-items:center;justify-content:center;flex:0 0 18px;height:18px;border:0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:#080d09;cursor:row-resize;touch-action:none;user-select:none;z-index:6;outline:none}
@@ -570,7 +572,7 @@
 </style>
 </head>
 <body>
-<script>if(new URLSearchParams(location.search).get("embed")==="fun-launch")document.body.classList.add("fun-launch-embed");</script>
+<script>{const embed=new URLSearchParams(location.search).get("embed");if(embed==="fun-launch")document.body.classList.add("fun-launch-embed");if(embed==="fun-tool")document.body.classList.add("fun-tool-embed");}</script>
 <div id="app">
   <header class="topbar">
     <a class="brand" href="#trending">
@@ -4387,12 +4389,12 @@
     lcWireHolderRewards("lc");lcWireHolderRewards("lcRh");lcWireLaunchStrategies();}
   async function renderLaunch(){
     setActiveView("v-launch");subbarTool("🚀 Launch a Coin");if(state.token)await refreshWallets();if(state.route!=="launch")return;
-    const tab=["coin","social","dev"].includes(state.launchTab)?state.launchTab:"coin";const mint=state.launchedMint||"";const rail=["pump","robinhood"].includes(state.launchRail)?state.launchRail:"pump";
+    const tab=["coin","social","nft","dev"].includes(state.launchTab)?state.launchTab:"coin";const mint=state.launchedMint||"";const rail=["pump","robinhood"].includes(state.launchRail)?state.launchRail:"pump";
     state.launchTab=tab;state.launchRail=rail;
     const tb=(id,lab)=>'<button data-ltab="'+id+'" class="'+(tab===id?"on":"")+'">'+lab+'</button>';
     const show=(id)=>tab===id?"":' style="display:none"';
     $("#v-launch").innerHTML='<div class="wgrid"><div class="wbox launch-card" style="grid-column:1/-1"><div class="launch-head"><div><h3>Launch a coin</h3><p class="sub">Create it, choose your launch wallet, and go live. Creator fees route back to that wallet automatically.</p></div><button class="wbtn ghost" type="button" onclick="GG.launchesModal()">Your launches</button></div>'+
-      '<div class="tabs launch-tabs">'+tb("coin","Coin")+tb("social","Socials")+tb("dev","Dev &amp; Bundle")+'</div>'+
+      '<div class="tabs launch-tabs">'+tb("coin","Coin")+tb("social","Socials")+tb("nft","NFT Collection")+tb("dev","Dev &amp; Bundle")+'</div>'+
       '<div data-lpanel="coin"'+show("coin")+'>'+
         '<div class="launch-section-title">Launch network</div><div class="field"><div class="railsel" id="lcRails">'+
           '<button type="button" data-rail="pump"'+(rail==="pump"?' class="on"':'')+'><b>💊 Pump</b><span>Solana · largest launch crowd</span></button>'+
@@ -4408,6 +4410,16 @@
         '<div class="field"><label>X / Twitter</label><input id="lcX" placeholder="https://x.com/yourcoin"></div>'+
         '<div class="field"><label>Telegram</label><input id="lcTg" placeholder="https://t.me/yourcoin"></div>'+
         '<div class="field"><label>Website</label><input id="lcWeb" placeholder="https://yourcoin.com"></div>'+
+      '</div>'+
+      '<div data-lpanel="nft"'+show("nft")+'><div class="launch-summary"><span class="mark">◆</span><div><b>Link an official NFT collection to this coin.</b><br><span class="mut">SlimeWire creates a marketplace-ready Solana collection after the coin launches. Start small and expand later, or set a fixed cap.</span></div></div>'+
+        '<label class="lcheck"><input type="checkbox" id="lcNftEnabled"> <span><b>Create and link an NFT collection</b> — funded from the selected creator wallet.</span></label>'+
+        '<div id="lcNftSetup" class="feebox" style="display:none;margin-top:8px">'+
+          '<div class="field"><label>Collection name <span style="text-transform:none">(optional)</span></label><input id="lcNftName" maxlength="64" placeholder="Defaults to Coin Name NFT Collection"></div>'+
+          '<div class="field"><label>Description <span style="text-transform:none">(optional)</span></label><textarea id="lcNftDescription" maxlength="800" rows="3" placeholder="Official holder collection linked to this coin"></textarea></div>'+
+          '<div class="field row2"><div><label>Supply</label><select id="lcNftSupplyMode"><option value="expandable">Expandable up to 500</option><option value="fixed">Fixed cap</option></select></div><div><label id="lcNftSupplyLabel">Starting / max items</label><input id="lcNftSupplyCap" type="number" min="1" max="500" step="1" value="500"></div></div>'+
+          '<div class="field"><label>Marketplace royalty</label><select id="lcNftRoyalty"><option value="0">0%</option><option value="250">2.5%</option><option value="500" selected>5%</option><option value="750">7.5%</option><option value="1000">10%</option></select></div>'+
+          '<div class="lcnote">Uses the coin image as collection art. The collection is linked on-chain and can appear on compatible NFT marketplaces. Individual NFT art and rarity can be added after launch.</div>'+
+        '</div>'+
       '</div>'+
       '<div data-lpanel="dev"'+show("dev")+'>'+
         '<div class="field"><label>Creator / dev wallet</label>'+walletSelectHtml("lcDevWallet")+'<span class="mut" style="font-size:10px">This wallet creates the coin, receives creator fees, and pays launch costs.</span></div><div id="lcDevRhNote" style="display:none"></div>'+
@@ -4443,6 +4455,8 @@
     $("#lcImg").onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchImg","lcImgPrev",false);
     const lb=$("#lcBanner");if(lb)lb.onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchBanner","lcBannerPrev",true);
     lcWireLaunchStrategies();
+    const syncNft=()=>{const on=!!($("#lcNftEnabled")&&$("#lcNftEnabled").checked),box=$("#lcNftSetup"),mode=$("#lcNftSupplyMode"),lab=$("#lcNftSupplyLabel");if(box)box.style.display=on?"":"none";if(lab)lab.textContent=mode&&mode.value==="fixed"?"Fixed item cap":"Starting / max items";};
+    const nftOn=$("#lcNftEnabled"),nftMode=$("#lcNftSupplyMode");if(nftOn)nftOn.onchange=()=>{syncNft();lcSnapshot();};if(nftMode)nftMode.onchange=()=>{syncNft();lcSnapshot();};syncNft();
     const pm=$("#lcPromo");if(pm)pm.onchange=()=>{const e=$("#lcPromoRows"),pp=$("#lcPayPromo");if(e)e.style.display=pm.checked?"":"none";if(pp)pp.style.display=pm.checked?"":"none";};
     lcWireHolderRewards("lc");lcWireHolderRewards("lcRh");
     const pp=$("#lcPayPromo");if(pp)pp.onclick=()=>payPromotersModal();
@@ -4451,7 +4465,7 @@
     // Persist every edit so navigating away (Wallet/dev wallet) and back keeps text + images. One
     // delegated handler on the container survives innerHTML swaps and never double-binds (property, not addEventListener).
     const lroot=$("#v-launch");if(lroot){lroot.oninput=lcSnapshot;lroot.onchange=lcSnapshot;}
-    lcRestore();   // re-fill fields + image previews from state right after the rebuild
+    lcRestore();syncNft();   // re-fill fields + image previews from state right after the rebuild
     $("#lcGo").onclick=async()=>{
       const name=$("#lcName").value.trim(),sym=$("#lcSym").value.trim();
       if(!name||!sym){toast("Name and ticker are required (Coin tab).",true);state.launchTab="coin";renderLaunch();return;}
@@ -4508,7 +4522,7 @@
       const devW=(state.wallets||[]).find(w=>String(w.index)===devIdx);
       // Creator fee is now a simple toggle: checked = MAX (1000 bps) to the dev wallet, unchecked = none.
       const creatorFeeBps="1000";
-      const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps,holderRewards:lcReadHolderRewards("lc"),rail:state.launchRail||"pump"};
+      const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps,holderRewards:lcReadHolderRewards("lc"),rail:state.launchRail||"pump",nftCollection:{enabled:!!($("#lcNftEnabled")&&$("#lcNftEnabled").checked),name:String(($("#lcNftName")||{}).value||"").trim(),description:String(($("#lcNftDescription")||{}).value||"").trim(),useCoinArt:true,supplyMode:String(($("#lcNftSupplyMode")||{}).value||"expandable"),supplyCap:Math.max(1,Math.min(500,Number(($("#lcNftSupplyCap")||{}).value||500))),royaltyBps:Math.max(0,Math.min(1000,Number(($("#lcNftRoyalty")||{}).value||500)))}};
       if(devW&&devW.publicKey)body.creatorFeeRecipient=devW.publicKey;
       // Promoter fee-split (up to 4 wallets + %) stored on the coin; paid out via "Pay promoters".
       if($("#lcPromo")&&$("#lcPromo").checked){const sp=[0,1,2,3].map(i=>({wallet:(($("#lcPmW"+i)||{}).value||"").trim(),pct:Number((($("#lcPmP"+i)||{}).value||"").trim())})).filter(r=>r.wallet&&r.pct>0);if(sp.length)body.creatorFeeSplit=sp;}

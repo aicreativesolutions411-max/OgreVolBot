@@ -992,10 +992,10 @@ test("positive launch dev buy amount is authoritative across both web launchers 
   assert.match(server, /amountSol: devBuyAmountSol/);
 });
 
-test("launch UI is Pump-simple: Pump + Robinhood only, three clean tabs, dormant tools stay off-page", () => {
+test("launch UI is Pump-simple: Pump + Robinhood only, NFT-ready tabs, dormant tools stay off-page", () => {
   for (const src of [ggSource, indexSource]) {
     const render = functionBody(src, "renderLaunch");
-    assert.match(render, /tb\("coin","Coin"\)\+tb\("social","Socials"\)\+tb\("dev","Dev &amp; Bundle"\)/);
+    assert.match(render, /tb\("coin","Coin"\)\+tb\("social","Socials"\)\+tb\("nft","NFT Collection"\)\+tb\("dev","Dev &amp; Bundle"\)/);
     assert.match(render, /data-rail="pump"/);
     assert.match(render, /data-rail="robinhood"/);
     assert.doesNotMatch(render, /data-rail="bonk"|data-rail="meteora"/);

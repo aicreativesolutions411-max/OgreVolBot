@@ -72,6 +72,8 @@
     pendingTokenSend: null,
     pendingWalletManagerAction: null,
     launchReturnView: "home",
+    toolReturnView: "home",
+    activeTool: "",
     deferredInstall: null
   };
 
@@ -548,9 +550,9 @@
     if (view !== "home") clearTimeout(state.feedTimer);
     $$("[data-view]").forEach((node) => node.classList.toggle("active", node.dataset.view === view));
     $$("[data-nav]").forEach((node) => node.classList.toggle("active", node.dataset.nav === view || (view === "coin" && node.dataset.nav === "home")));
-    $(".fun-header").style.display = ["coin", "quick", "launch"].includes(view) ? "none" : "flex";
+    $(".fun-header").style.display = ["coin", "quick", "launch", "tool"].includes(view) ? "none" : "flex";
     $(".bottom-nav").style.display = options.hideNav ? "none" : "grid";
-    $("[data-open-global-tools]")?.classList.toggle("active", view === "launch");
+    $("[data-open-global-tools]")?.classList.toggle("active", ["launch", "tool"].includes(view));
     window.scrollTo({ top: 0, behavior: "instant" });
     if (view === "home") loadFeed();
     if (view === "leaders") loadLeaders();
@@ -1636,7 +1638,8 @@
       ${toolCard("pnl", "Volume bot", "Rolling-wallet controls", "volume")}
       ${toolCard("bundle", "Bundle", "Multi-wallet entry", "bundle")}
       ${toolCard("kol", "Trader copy", "Follow a public wallet", "copy")}
-      ${toolCard("snipe", "Launch sniper", "Watch deployers", "sniper")}
+      ${toolCard("snipe", "Launch snipe", "Watch ticker or name", "sniper")}
+      ${toolCard("snipe", "Wallet launch snipe", "Watch creator or deployer", "walletLaunch")}
       ${toolCard("launch", "Launch", "Solana or Robinhood", "launch")}
       ${toolCard("pnl", "Full portfolio", "PnL and receipts", "portfolio")}
       ${global ? toolCard("wallet", "Install SlimeWire Go", "Focused mobile layout", "install") : ""}
@@ -2167,14 +2170,46 @@
     if (action === "profile") { closeSheet(); state.profileTab = "social"; $$('[data-profile]').forEach((button) => button.classList.toggle("active", button.dataset.profile === "social")); setView("wallet"); loadWalletView(); return; }
     if (action === "traders") { closeSheet(); setView("leaders"); return; }
     if (action === "portfolio") { closeSheet(); state.profileTab = "positions"; setView("wallet"); return; }
-    if (action === "liquidity") { location.href = `/#rhtrade/${encodeURIComponent(key)}`; return; }
+    if (action === "liquidity") { openFunTool("liquidity", { route: `rhtrade/${encodeURIComponent(key)}`, title: "Open trading", note: "Create or manage Robinhood liquidity · stays inside SlimeWire Go" }); return; }
     if (action === "volume") { openVolumeSheet(); return; }
     if (action === "watch") { ensureAccount().then((ready) => ready ? post("/api/web/watchlist", { tokenMint: key, action: "add", symbol: coin.symbol || "", name: coin.name || "", imageUrl: coin.imageUrl || "" }) : { ok: false }).then((result) => toast(result.ok ? "Saved to Watchlist" : "Could not save coin", !result.ok)); closeSheet(); return; }
     if (action === "telegram") { window.open(`https://t.me/${window.OGRE_PORTAL_CONFIG?.telegramBotUsername || "SlimeWiredBot"}?start=scan_${encodeURIComponent(key)}`, "_blank", "noopener"); return; }
     if (action === "install") { openFunInstall(); return; }
     if (action === "launch") { openFunLaunch(); return; }
-    const routes = { copy: "copy", sniper: "sniper" };
-    if (routes[action]) location.href = `/#${routes[action]}`;
+    if (["copy", "sniper", "walletLaunch"].includes(action)) { openFunTool(action); return; }
+  }
+
+  const FUN_TOOL_ROUTES = {
+    copy: { route: "copy", title: "Trader copy", note: "Follow a public wallet · stays inside SlimeWire Go" },
+    sniper: { route: "sniper", title: "Launch snipe", note: "Watch a ticker or name · runs server-side" },
+    walletLaunch: { route: "walletLaunch", title: "Wallet launch snipe", note: "Watch a creator or deployer · runs server-side" }
+  };
+  function openFunTool(action, override = null) {
+    const config = override || FUN_TOOL_ROUTES[action];
+    if (!config) return;
+    if (state.view !== "tool") state.toolReturnView = state.view || "home";
+    state.activeTool = action;
+    closeSheet();
+    setView("tool");
+    const title = $("[data-tool-view-title]"), note = $("[data-tool-view-note]"), frame = $("[data-tool-frame]");
+    if (title) title.textContent = config.title;
+    if (note) note.textContent = config.note;
+    if (frame) {
+      const nextSrc = `/?from=fun&embed=fun-tool#${config.route}`;
+      if (frame.dataset.tool !== action || !frame.src) {
+        frame.dataset.tool = action;
+        frame.setAttribute("aria-busy", "true");
+        frame.addEventListener("load", () => frame.removeAttribute("aria-busy"), { once: true });
+        frame.src = nextSrc;
+      }
+    }
+    history.replaceState(null, "", `#tool/${encodeURIComponent(action)}`);
+  }
+  function closeFunTool() {
+    state.activeTool = "";
+    history.replaceState(null, "", "#");
+    setView(state.toolReturnView && state.toolReturnView !== "tool" ? state.toolReturnView : "home");
+    if (state.token) Promise.all([loadWallets(true), loadPositions({ force: true })]).catch(() => {});
   }
 
   function openFunLaunch() {
@@ -2310,6 +2345,7 @@
     const leaderTab = event.target.closest("[data-leader-tab]"); if (leaderTab) { state.leaderTab = leaderTab.dataset.leaderTab || "top"; state.traderSearch = ""; const input = $("[data-trader-search]"); if (input) input.value = ""; syncLeaderTabs(); await loadLeaders(); return; }
     if (event.target.closest("[data-refresh-feed]")) { loadFeed(true); return; }
     if (event.target.closest("[data-launch-back]")) { closeFunLaunch(); return; }
+    if (event.target.closest("[data-tool-back]")) { closeFunTool(); return; }
     if (event.target.closest("[data-coin-back]")) { history.replaceState(null, "", "#"); setView(state.previousView || "home"); return; }
     if (event.target.closest("[data-copy-coin]")) { navigator.clipboard?.writeText(coinKey(state.selected)); toast("Contract copied"); return; }
     const detail = event.target.closest("[data-detail]"); if (detail) { state.detailTab = detail.dataset.detail; $$("[data-detail]").forEach((button) => button.classList.toggle("active", button === detail)); renderDetailPanel(); return; }
@@ -2440,6 +2476,10 @@
     const match = location.hash.match(/^#coin\/(.+)$/);
     if (match) openCoin(decodeURIComponent(match[1]));
     else if (/^#launch\/?$/i.test(location.hash)) openFunLaunch();
+    else {
+      const toolMatch = location.hash.match(/^#tool\/(copy|sniper|walletLaunch)$/i);
+      if (toolMatch) openFunTool(toolMatch[1].toLowerCase() === "walletlaunch" ? "walletLaunch" : toolMatch[1].toLowerCase());
+    }
   });
   async function loadCreatedCoinsSilently() { if (!state.token || state.launches.length) return; const result = await request("/api/web/launches"); if (result.ok) state.launches = result.data?.coins || []; }
 
@@ -2473,6 +2513,10 @@
     } else {
       const match = location.hash.match(/^#coin\/(.+)$/); if (match) openCoin(decodeURIComponent(match[1]));
       else if (/^#launch\/?$/i.test(location.hash)) openFunLaunch();
+      else {
+        const toolMatch = location.hash.match(/^#tool\/(copy|sniper|walletLaunch)$/i);
+        if (toolMatch) openFunTool(toolMatch[1].toLowerCase() === "walletlaunch" ? "walletLaunch" : toolMatch[1].toLowerCase());
+      }
       if (routeParams.get("tab") === "wallet") setView("wallet");
       if (routeParams.get("profile") === "1") {
         state.profileTab = "social";
