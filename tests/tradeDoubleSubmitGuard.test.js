@@ -2098,6 +2098,23 @@ test("vanity pool AUTO-STOCK: gentle bg grinder keeps pump mints stocked, no use
   assert.doesNotMatch(serverSource, /async function pollVanityPoolLow/);
   assert.doesNotMatch(serverSource, /solana-keygen grind/);
 });
+
+test("every Pump launch requires an exact lowercase pump-ending mint", () => {
+  assert.match(serverSource, /launchVanityEnabled: parseBoolean\(process\.env\.LAUNCH_VANITY_ENABLED \|\| "true"\)/);
+  assert.match(serverSource, /launchVanitySuffix: \(process\.env\.LAUNCH_VANITY_SUFFIX \|\| "pump"\)/);
+  assert.match(serverSource, /LAUNCH_VANITY_POOL_FILE/);
+  assert.match(serverSource, /\/var\/data\/vanity-mint-pool\.json/);
+  const strictMint = functionBody(serverSource, "generatePumpLaunchMintKeypair");
+  assert.match(strictMint, /configuredSuffix !== requiredSuffix/);
+  assert.match(strictMint, /!mint\.endsWith\(requiredSuffix\)/);
+  assert.match(strictMint, /PUMP_VANITY_POOL_EMPTY/);
+  assert.match(strictMint, /No transaction was sent/);
+  const bundledLaunch = functionBody(serverSource, "webLaunchPumpJitoBundle");
+  assert.match(bundledLaunch, /generatePumpLaunchMintKeypair\(\)/);
+  assert.doesNotMatch(bundledLaunch, /const mintKeypair = Keypair\.generate\(\)/);
+  const localLaunch = functionBody(serverSource, "webLaunchPumpPortalLocal");
+  assert.match(localLaunch, /basePayload\.rail === "pump" \? generatePumpLaunchMintKeypair/);
+});
 test("🏆⚡ Throne Bundle: atomic Jito waves of 4 by opt-in order, safe RPC fallback", () => {
   assert.match(serverSource, /async function fireCommunitySnipeThroneBundle/);
   assert.match(serverSource, /async function buildSignedPumpBuyTx/);   // build+sign, no send

@@ -609,6 +609,7 @@ export function formatPumpLaunchUserError(error) {
   const launchAttemptId = error?.launchAttemptId ? ` launchAttemptId=${error.launchAttemptId}` : "";
 
   if (code === "PUMP_LAUNCH_NOT_ENABLED") return `Direct Pump launch is not enabled on the backend.${launchAttemptId}`;
+  if (code === "PUMP_VANITY_NOT_READY" || code === "PUMP_VANITY_POOL_EMPTY") return `${message}${launchAttemptId}`;
   if (code === "PUMP_LAUNCH_API_URL_INVALID") return `${message}${launchAttemptId}`;
   if (code === "PUMP_METADATA_CONFIG_MISSING") return `Metadata upload is not configured. Contact support with${launchAttemptId || " the launch attempt ID"}.`;
   if (code === "PUMP_METADATA_CONFIG_PLACEHOLDER") return `Metadata upload is not configured. Contact support with${launchAttemptId || " the launch attempt ID"}.`;
