@@ -121,13 +121,14 @@
   </div>
 
   <a class="cta" href="/t?ca=DEMO">⚡ Quick Buy on SlimeWire</a>
-  <div class="foot">Live candles from our server: Solana Tracker primary, swap-api fallback and trade tape, DexScreener stats.</div>
+  <div class="foot">Live candles and trades from SlimeWire's chain-aware market resolver.</div>
 <script src="/vendor/lightweight-charts.standalone.production.js"></script>
 
 <script>
 (function(){
   var el=document.getElementById('chart'); if(!el||!window.LightweightCharts) return;
   var QP=new URLSearchParams(location.search),CA=(QP.get('ca')||'').trim(),EMBED=QP.get('embed')==='1',TF=QP.get('tf')||'5m';
+  var NETWORK=/^0x[0-9a-f]{40}$/i.test(CA)?'robinhood':'solana';
   var SYMP=(QP.get('sym')||'').trim();
   // INSTANT HEADER — kill the "$OGRE flash". The demo coin ($OGRE · Swamp Ogre) is hardcoded in the
   // markup and used to show until the live stats fetch finished (seconds), so when a real coin is
@@ -322,14 +323,15 @@
     if(!CA)return Promise.resolve(null);
     return json('https://api.dexscreener.com/latest/dex/tokens/'+encodeURIComponent(CA)).then(function(j){
       var pairs=(j&&j.pairs)||[];
-      var best=pairs.filter(function(p){return p.chainId==='solana';}).sort(function(a,b){return ((b.liquidity&&b.liquidity.usd)||0)-((a.liquidity&&a.liquidity.usd)||0);})[0];
-      if(!best)return null; dexPair=best.pairAddress||null; var base=best.baseToken||{};
+      var best=pairs.filter(function(p){return String(p.chainId||'').toLowerCase()===NETWORK;}).filter(function(p){return String((p.baseToken&&p.baseToken.address)||'').toLowerCase()===CA.toLowerCase()||String((p.quoteToken&&p.quoteToken.address)||'').toLowerCase()===CA.toLowerCase();}).sort(function(a,b){return ((b.liquidity&&b.liquidity.usd)||0)-((a.liquidity&&a.liquidity.usd)||0);})[0];
+      if(!best)return null; dexPair=best.pairAddress||null; var base=String((best.baseToken&&best.baseToken.address)||'').toLowerCase()===CA.toLowerCase()?(best.baseToken||{}):(best.quoteToken||best.baseToken||{});
       var s={symbol:base.symbol||'',name:base.name||'',priceUsd:+best.priceUsd||0,mc:+best.marketCap||+best.fdv||0,liq:+(best.liquidity&&best.liquidity.usd)||0,vol24:+(best.volume&&best.volume.h24)||0,change24:+(best.priceChange&&best.priceChange.h24)||0,buys24:+(best.txns&&best.txns.h24&&best.txns.h24.buys)||0,sells24:+(best.txns&&best.txns.h24&&best.txns.h24.sells)||0};
       applyDexStats(s); return s;
     });
   }
   function applyChartData(d){
     if(!d||!d.candles||!d.candles.length)return false;
+    if(d.pairAddress)dexPair=d.pairAddress;
     applyStats(d,false);
     if(!(mcScale>0)&&d.mc>0&&d.priceUsd>0)mcScale=d.mc/d.priceUsd;       // fallback anchor so the axis shows MC even before DexScreener lands
     var cs=d.candles, seen={}, candles=[], vols=[];

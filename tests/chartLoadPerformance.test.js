@@ -83,6 +83,30 @@ test("native chart API uses Solana Tracker primary with swap-api fallback", () =
   assert.doesNotMatch(body, /gtFetch|GT_API|fetchGeckoOhlcv|resolveGeckoPoolForMint/);
 });
 
+test("native chart accepts Robinhood CAs and uses the saved Sushi pool before public indexing", () => {
+  assert.match(serverSource, /const rhMint = normalizeRobinhoodTokenAddress\(cmint\)/);
+  assert.match(serverSource, /await buildRhChartData\(rhMint/);
+  const body = functionBody(serverSource, "buildRhChartData");
+  assert.match(body, /rhLaunchMetaByAddress/);
+  assert.match(body, /launch\?\.pairAddress/);
+  assert.match(body, /webOhlcvPayload\(address, tf, \{ network: "robinhood", poolAddress: launchPool/);
+  assert.match(body, /fetchGeckoPoolTrades\(poolAddress, \{ network: "robinhood"/);
+  assert.match(body, /source = "current-price-anchor"/);
+  assert.match(body, /pairAddress: poolAddress/);
+});
+
+test("chart bootstrap and browser fast path are chain-aware for Robinhood", () => {
+  const bootstrap = functionBody(serverSource, "buildWebChartBootstrap");
+  assert.match(bootstrap, /chartNetworkForAddress\(mint\) === "robinhood"/);
+  assert.match(bootstrap, /rhLaunchMetaByAddress/);
+  assert.match(bootstrap, /providerSource = "slimewire-launch-store"/);
+  assert.match(functionBody(serverSource, "fetchDexScreenerTokenPairsFallback"), /\? "robinhood" : "solana"/);
+  assert.match(functionBody(appSource, "fastDirectDexLookup"), /\? "robinhood" : "solana"/);
+  assert.match(chartLabSource, /NETWORK=\/\^0x\[0-9a-f\]\{40\}\$\/i\.test\(CA\)\?'robinhood':'solana'/);
+  assert.match(chartLabSource, /toLowerCase\(\)===NETWORK/);
+  assert.match(functionBody(appSource, "tokenRefFromMint"), /\? "robinhood" : "solana"/);
+});
+
 test("chart prefetch and debug commands are wired", () => {
   assert.match(functionBody(appSource, "prefetchTokenChart"), /queueSmartChartBootstrap/);
   const interactionPrefetch = functionBody(appSource, "prefetchTokenChartFromElement");

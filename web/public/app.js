@@ -2569,7 +2569,8 @@ function setError(message = "") {
 
 function dexUrl(tokenMint) {
   const mint = String(tokenMint || "").trim();
-  return mint ? `https://dexscreener.com/solana/${encodeURIComponent(mint)}` : "#";
+  const chain = /^0x[0-9a-f]{40}$/i.test(mint) ? "robinhood" : "solana";
+  return mint ? `https://dexscreener.com/${chain}/${encodeURIComponent(mint)}` : "#";
 }
 
 function pumpUrl(tokenMint) {
@@ -14961,7 +14962,7 @@ async function openGlobalTokenSearch(rawValue = "") {
   const value = String(rawValue || "").trim();
   if (!value) return;
   const bare = value.replace(/^\$+/, "").trim();
-  const looksLikeMint = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(bare);
+  const looksLikeMint = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(bare) || /^0x[0-9a-f]{40}$/i.test(bare);
   const open = (mint, extra = {}) => openTokenChart(
     tokenRefFromMint(mint, { source: "global-search", ...extra }),
     { defaultTab: "buy", view: "chartTxns", focusAmountInput: true, source: "global-search" }
@@ -14977,7 +14978,13 @@ async function openGlobalTokenSearch(rawValue = "") {
       setError(`No coin found for "${value}". Try the exact ticker or paste the contract address.`);
       return;
     }
-    open(best.tokenMint, { symbol: best.symbol, name: best.name });
+    open(best.tokenMint, {
+      chain: best.chain,
+      symbol: best.symbol,
+      name: best.name,
+      imageUri: best.imageUrl,
+      pairAddress: best.pairAddress
+    });
   } catch (error) {
     setError(error.message || "Token search failed.");
   }
@@ -14989,7 +14996,7 @@ function tokenRefFromMint(tokenMint = "", extra = {}) {
     ? allVisibleSignalRows().find((item) => String(item?.tokenMint || "") === mint)
     : null;
   return {
-    chain: "solana",
+    chain: extra.chain || row?.chain || (/^0x[0-9a-f]{40}$/i.test(mint) ? "robinhood" : "solana"),
     tokenMint: mint,
     tokenAddress: mint,
     mint,
@@ -15012,6 +15019,7 @@ function tokenRefFromMint(tokenMint = "", extra = {}) {
 function tokenRefFromRow(row = {}, extra = {}) {
   return tokenRefFromMint(row?.tokenMint || row?.mint || row?.tokenAddress || "", {
     ...extra,
+    chain: row?.chain || extra.chain || "",
     pairAddress: row?.pairAddress || row?.pairId || extra.pairAddress || "",
     symbol: row?.symbol || extra.symbol || "",
     name: row?.name || extra.name || "",
@@ -17083,6 +17091,7 @@ function mergeSmartChartDexResolution(row = null) {
   if (!resolved || resolved.status === "failed") return row;
   return {
     ...row,
+    chain: row.chain || resolved.chain || (/^0x[0-9a-f]{40}$/i.test(mint) ? "robinhood" : "solana"),
     pairAddress: row.pairAddress || resolved.pairAddress || "",
     pairId: row.pairId || resolved.pairAddress || "",
     dexUrl: row.dexUrl || resolved.dexUrl || resolved.pairUrl || "",
@@ -17139,6 +17148,7 @@ function rememberSmartChartDexResolution(tokenRef = {}) {
     [mint]: {
       ...(state.smartChartDexResolution?.[mint] || {}),
       tokenMint: mint,
+      chain: tokenRef.chain || (/^0x[0-9a-f]{40}$/i.test(mint) ? "robinhood" : "solana"),
       pairAddress,
       dexUrl: tokenRef.dexUrl || dexUrl(pairAddress || mint),
       dexId: tokenRef.dex || tokenRef.dexId || "",
@@ -17199,18 +17209,38 @@ const fastDexLookupAt = new Map();
 async function fastDirectDexLookup(mint) {
   const key = String(mint || "").trim();
   if (!key) return;
+  const network = /^0x[0-9a-f]{40}$/i.test(key) ? "robinhood" : "solana";
   const last = fastDexLookupAt.get(key) || 0;
   if (Date.now() - last < 30_000) return;
   fastDexLookupAt.set(key, Date.now());
   const directLookup = async () => {
     const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(key)}`, { cache: "no-store" });
     const data = await response.json();
-    const pairs = (data?.pairs || []).filter((pair) => pair?.chainId === "solana");
+    const pairs = (data?.pairs || []).filter((pair) => String(pair?.chainId || "").toLowerCase() === network);
     const best = pairs.sort((a, b) => (Number(b?.liquidity?.usd) || 0) - (Number(a?.liquidity?.usd) || 0))[0];
     if (!best) throw new Error("no pair");
     return best;
   };
   const serverLookup = async () => {
+    if (network === "robinhood") {
+      const data = await api(`/api/web/chart/bootstrap?token=${encodeURIComponent(key)}`, { timeoutMs: 5_000 });
+      const chart = data?.chart || null;
+      if (!chart?.pairAddress && !chart?.symbol && !chart?.name) throw new Error("no pair");
+      return {
+        chainId: "robinhood",
+        pairAddress: chart.pairAddress || "",
+        url: chart.dexUrl || chart.pairUrl || "",
+        dexId: chart.dexId || chart.dexName || "sushiswap",
+        baseToken: { address: key, symbol: chart.symbol || "", name: chart.name || "" },
+        priceUsd: chart.priceUsd || 0,
+        marketCap: chart.marketCap || chart.fdv || 0,
+        fdv: chart.fdv || chart.marketCap || 0,
+        liquidity: { usd: chart.liquidityUsd || 0 },
+        volume: chart.volume || { h24: chart.volumeH24 || 0, h1: chart.volumeH1 || 0 },
+        priceChange: { h1: chart.h1 || 0 },
+        info: { imageUrl: chart.imageUrl || "" }
+      };
+    }
     const data = await api(`/api/web/pair-lite?mint=${encodeURIComponent(key)}`, { timeoutMs: 5_000 });
     if (!data?.pair) throw new Error("no pair");
     return data.pair;
@@ -17219,6 +17249,7 @@ async function fastDirectDexLookup(mint) {
     const best = await Promise.any([directLookup(), serverLookup()]);
     rememberSmartChartBootstrap({
       tokenMint: key,
+      chain: network,
       symbol: best.baseToken?.symbol || "",
       name: best.baseToken?.name || "",
       priceUsd: best.priceUsd,
