@@ -750,7 +750,7 @@
     }
     return r;
   }
-  function jpost(path,body){return api(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})});}
+  function jpost(path,body,timeoutMs){const opts={method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})};try{if(timeoutMs&&typeof AbortSignal!=="undefined"&&AbortSignal.timeout)opts.signal=AbortSignal.timeout(timeoutMs);}catch(e){}return api(path,opts);}
   function setToken(t){state.token=t||"";if(t)localStorage.setItem(TOKEN_KEY,t);else localStorage.removeItem(TOKEN_KEY);}
   function apiMessage(d,fallback){return (d&&(d.message||d.error))||fallback||"Something went wrong.";}
 
@@ -3239,7 +3239,7 @@
   // pump.fun outside this site — so we list every one of your wallets with a claim button, not just
   // coins we have a launch record for. The record list below is a bonus (per-coin Meteora claims live there).
   async function launchesModal(){
-    openModal('<h3>Your launches</h3><p class="sub mut" style="font-size:12px">Coins launched from your managed wallets. Pump creator fees are claimed automatically after eligible trading activity; Robinhood creator fees are paid in ETH as SlimeWire trades settle.</p><div id="lchSimple"><div class="loading"><span class="spin"></span></div></div>');
+    openModal('<h3>Your launches</h3><p class="sub mut" style="font-size:12px">Coins launched from your managed wallets. Pump creator fees and locked Sushi V3 pool fees are collected automatically to the original creator wallet.</p><div id="lchSimple"><div class="loading"><span class="spin"></span></div></div>');
     const body=$("#lchSimple");if(!body)return;
     const {ok,d}=await api("/api/web/launches").catch(()=>({}));const coins=(ok&&d&&d.coins)||[];
     if(!coins.length){body.innerHTML='<div class="launch-summary"><span class="mark">🚀</span><div><b>No launches yet.</b><br><span class="mut">Complete the three short launch tabs and your coins will appear here.</span></div></div>';return;}
@@ -4350,7 +4350,7 @@
       '<div class="lcnote"><b>Pay only with SOL.</b> SlimeWire converts the small Robinhood network amount automatically.'+(automatic?' The full token supply goes into the launch curve; your first buy is your starting position.':'')+'</div>'+
       '<label class="lcheck"><input type="checkbox" id="lcRhAutoBundle"> <span><b>Buy from my other wallets when trading opens</b> — each wallet pays in SOL and SlimeWire handles conversion automatically.</span></label>'+
       '<div class="field row2"><div><label>Min buy (SOL)</label><input id="lcRhBundleMin" inputmode="decimal" value="0.01"></div><div><label>Max buy (SOL)</label><input id="lcRhBundleMax" inputmode="decimal" value="0.05"></div></div>'+
-      '<div class="lcnote">'+(automatic?'<b>Sushi V3 · 1% launch pool.</b> Liquidity cannot be withdrawn. Pool fees can be collected by the creator wallet.':'Tokens deploy first; use <b>Open trading</b> after launch to seed the legacy pool.')+'</div>';
+      '<div class="lcnote">'+(automatic?'<b>Sushi V3 · 1% launch pool.</b> Liquidity cannot be withdrawn. Earned pool fees are automatically collected back to this creator wallet.':'Tokens deploy first; use <b>Open trading</b> after launch to seed the legacy pool.')+'</div>';
   }
   // Robinhood Chain rail: each saved SlimeWire wallet already has a deterministic EVM address.
   // The automatic path creates the token and its locked Sushi V3 market from one user action.
@@ -4561,7 +4561,7 @@
           creatorFeeEnabled:true,holderRewards:rhHolderRewards,
           description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim()};
         if(state.launchImg)rhBody.imageDataUrl=state.launchImg.dataUrl;
-        const {ok,d}=await jpost("/api/web/launch/rh-coin",rhBody);
+        const {ok,d}=await jpost("/api/web/launch/rh-coin",rhBody,330000);
         b.disabled=false;b.textContent="Review & launch";
         if(ok&&d&&d.ok){
           let bundleArmed=false;

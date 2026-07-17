@@ -167,6 +167,7 @@ const RH_SUSHI_MAX_USABLE_TICK = 887_200;
 const RH_SUSHI_MIN_USABLE_TICK = -887_200;
 const sushiFactoryArtifact = sushiLaunchArtifact.contracts.SlimeSushiLaunchFactoryRH;
 const sushiTokenArtifact = sushiLaunchArtifact.contracts.SlimeSushiTokenRH;
+const sushiLockerArtifact = sushiLaunchArtifact.contracts.SlimeSushiPositionLockerRH;
 
 function normalizedEvmAddress(value) {
   const clean = String(value || "").trim();
@@ -295,6 +296,86 @@ export async function rhLaunchTokenOnSushi({
     explorerToken: rhExplorerToken(tokenAddress),
     explorerTx: rhExplorerTx(tx.hash),
     sushiPoolUrl: RH_SUSHI.poolUrl,
+  };
+}
+
+/**
+ * Collect the trading fees earned by one permanently locked Sushi V3 launch
+ * position. The locker contract sends both assets directly to the creator; the
+ * caller cannot redirect them. We still require the managed wallet to be the
+ * recorded creator so SlimeWire never spends a user's gas on someone else's
+ * position.
+ */
+export async function rhCollectSushiPositionFees({
+  solanaSecretKey,
+  lockerAddress,
+  tokenId,
+  rpcUrl,
+  confirmTimeoutMs = 120_000,
+}) {
+  const locker = normalizedEvmAddress(lockerAddress);
+  if (!locker) throw new Error("The Sushi fee locker address is missing or invalid.");
+  let positionId;
+  try { positionId = BigInt(String(tokenId)); }
+  catch { throw new Error("The Sushi liquidity position id is invalid."); }
+  if (positionId < 0n) throw new Error("The Sushi liquidity position id is invalid.");
+
+  const wallet = evmWalletFromSolana(solanaSecretKey, rpcUrl);
+  const code = await wallet.provider.getCode(locker);
+  if (!code || code === "0x") throw new Error("The Sushi fee locker is not deployed on Robinhood Chain.");
+  const contract = new ethers.Contract(locker, sushiLockerArtifact.abi, wallet);
+  const creator = normalizedEvmAddress(await contract.creatorOf(positionId));
+  if (!creator) throw new Error("This Sushi position is not registered with a creator.");
+  if (creator.toLowerCase() !== wallet.address.toLowerCase()) {
+    throw new Error("This managed wallet is not the creator of that Sushi position.");
+  }
+
+  const preview = await contract.collectFees.staticCall(positionId);
+  const preview0 = BigInt(preview?.[0] || 0);
+  const preview1 = BigInt(preview?.[1] || 0);
+  if (preview0 === 0n && preview1 === 0n) {
+    return { ok: true, claimed: false, creator, tokenId: positionId.toString(), amount0: "0", amount1: "0", txHash: "" };
+  }
+
+  let gas;
+  try { gas = await contract.collectFees.estimateGas(positionId); }
+  catch (error) {
+    const message = String(error?.shortMessage || error?.reason || error?.message || error);
+    throw new Error(`Sushi fee collection simulation failed (nothing was spent): ${message.slice(0, 300)}`);
+  }
+  const feeData = await wallet.provider.getFeeData();
+  const gasPrice = feeData.maxFeePerGas || feeData.gasPrice || 0n;
+  const required = gas * gasPrice;
+  const balance = await wallet.provider.getBalance(wallet.address);
+  if (balance < required) {
+    const error = new Error(`The creator wallet needs about ${ethers.formatEther(required)} ETH to collect its Sushi fees, but has ${ethers.formatEther(balance)} ETH.`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const tx = await contract.collectFees(positionId, { gasLimit: (gas * 13n) / 10n });
+  const receipt = await tx.wait(1, confirmTimeoutMs);
+  let amount0 = preview0;
+  let amount1 = preview1;
+  for (const log of receipt?.logs || []) {
+    try {
+      const parsed = contract.interface.parseLog(log);
+      if (parsed?.name === "FeesCollected") {
+        amount0 = BigInt(parsed.args?.amount0 || 0);
+        amount1 = BigInt(parsed.args?.amount1 || 0);
+        break;
+      }
+    } catch { /* another contract's log */ }
+  }
+  return {
+    ok: true,
+    claimed: amount0 > 0n || amount1 > 0n,
+    creator,
+    tokenId: positionId.toString(),
+    amount0: amount0.toString(),
+    amount1: amount1.toString(),
+    txHash: tx.hash,
+    explorerTx: rhExplorerTx(tx.hash),
   };
 }
 

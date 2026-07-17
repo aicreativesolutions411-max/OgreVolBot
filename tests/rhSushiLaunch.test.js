@@ -67,3 +67,23 @@ test("web launch defaults to the live automatic Sushi factory", () => {
   assert.match(web, /liquidity permanently locked/);
   assert.match(web, /d\.automaticMarket\?'Sushi V3 market live/);
 });
+
+test("Robinhood launches cannot overlap and wait for the long chain confirmation", () => {
+  const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+  const web = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
+  assert.match(server, /web-rh-launch-wallet:/);
+  assert.match(server, /This wallet already has a Robinhood launch confirming/);
+  assert.match(server, /waitForRhEthBalanceAtLeast\(evmAddress, targetEth, 90_000\)/);
+  assert.match(web, /jpost\("\/api\/web\/launch\/rh-coin",rhBody,330000\)/);
+});
+
+test("locked Sushi pool fees are automatically returned to the creator", () => {
+  const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+  const chain = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
+  assert.match(chain, /export async function rhCollectSushiPositionFees/);
+  assert.match(chain, /creator\.toLowerCase\(\) !== wallet\.address\.toLowerCase\(\)/);
+  assert.match(chain, /collectFees\.staticCall/);
+  assert.match(server, /startRhSushiFeeAutoClaimRunner\(\)/);
+  assert.match(server, /processRhSushiFeeAutoClaims/);
+  assert.match(server, /rhPoolFeesAutoClaimStatus/);
+});

@@ -1160,7 +1160,7 @@
     const feeCard = pumpLaunches.length ? `<div class="read-card account-status"><span>PUMP CREATOR FEES</span><h3>${lastClaim ? `${Number(lastClaim.creatorFeeClaimedSol).toFixed(6)} SOL claimed last` : "Accruing on-chain"}</h3><p>Pump creator fees are separate from SlimeWire trade fees. Auto-claim watches new activity, or claim a coin now. ${pendingVolume > 0 ? `${pendingVolume.toFixed(3)} SOL of new trade volume is waiting for the next automatic check.` : "An empty claim is never shown as earnings."}</p></div>` : "";
     panel.innerHTML = feeCard + state.launches.map((coin) => {
       const key = coin.mint || coin.tokenAddress || coin.address || "", rh = ["robinhood", "rh"].includes(String(coin.rail || "").toLowerCase()) || isRh(key);
-      const feeStatus = rh ? "Paid during SlimeWire trades" : ({ claimed: "Claimed", watching: "Watching", nothing_to_claim: "No fees yet", failed: "Claim retry available", activity_unavailable: "Checking activity" }[String(coin.creatorFeeStatus || "watching")] || "Watching");
+      const feeStatus = rh ? ({ claimed: "Sushi fees sent to creator", watching: "Sushi fees auto-collecting", nothing_to_claim: "No Sushi fees yet", failed: "Sushi fee retry queued", creator_wallet_missing: "Creator wallet unavailable" }[String(coin.rhPoolFeeStatus || "watching")] || "Sushi fees auto-collecting") : ({ claimed: "Claimed", watching: "Watching", nothing_to_claim: "No fees yet", failed: "Claim retry available", activity_unavailable: "Checking activity" }[String(coin.creatorFeeStatus || "watching")] || "Watching");
       const claim = !rh && coin.devWalletIndex ? `<button class="recovery-button" type="button" data-claim-creator-fees="${Number(coin.devWalletIndex)}" data-claim-creator-mint="${escapeHtml(key)}">Claim fees</button>` : "";
       return `<div class="created-coin-wrap"><button class="coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="${rh ? "rh" : "sol"}"><span class="coin-avatar"><img src="${escapeHtml(coin.imageUri || mascot(key))}" alt=""></span><span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span></span><span class="coin-meta"><i>${escapeHtml(coin.rail || "Solana")}</i><i>${escapeHtml(feeStatus)}</i></span></span><span class="coin-value"><b>Open</b><span>CREATOR</span></span></button>${claim}</div>`;
     }).join("");
@@ -2217,11 +2217,13 @@
     closeSheet();
     setView("launch");
     const frame = $("[data-launch-frame]");
-    if (frame && !frame.dataset.loaded) {
-      frame.dataset.loaded = "true";
+    if (frame) {
       frame.setAttribute("aria-busy", "true");
       frame.addEventListener("load", () => frame.removeAttribute("aria-busy"), { once: true });
-      frame.src = "/?from=fun&embed=fun-launch&v=nft-manager-1#launch";
+      // A launch is a new action, not a navigation back into the last coin.
+      // Reload the embedded launcher every time so Cash -> Fun and repeated
+      // mobile launches always begin with an empty form and a fresh attempt id.
+      frame.src = `/?from=fun&embed=fun-launch&freshLaunch=1&v=nft-manager-2&t=${Date.now()}#launch`;
     }
     history.replaceState(null, "", "#launch");
   }

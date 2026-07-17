@@ -388,7 +388,7 @@ test("Robinhood Chain rail: derived EVM wallet + self-deployed ERC-20 (gas-estim
   // Server: routes + idempotent launch that records into the launches tracker.
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/wallet"/);
   assert.match(serverSource, /pathname === "\/api\/web\/launch\/rh-coin"/);
-  assert.match(functionBody(serverSource, "webLaunchRhCoin"), /runIdempotentMoneyOp\("web-rh-launch"/);
+  assert.match(functionBody(serverSource, "webLaunchRhCoin"), /runIdempotentMoneyOp\(\s*"web-rh-launch"/);
   const core = functionBody(serverSource, "webLaunchRhCoinCore");
   assert.match(core, /rhDeployToken/);
   assert.match(core, /rail: "robinhood"/);
