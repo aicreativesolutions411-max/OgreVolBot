@@ -9,6 +9,7 @@ const pro = read("../web/public/terminal-pro.js");
 const css = read("../web/public/terminal-pro.css");
 const chart = read("../web/public/chart-lab.html");
 const indicators = read("../web/public/fun-indicators.js");
+const fun = read("../web/public/fun.js");
 const noxa = read("../src/lib/noxaLaunchpad.js");
 const server = read("../src/index.js");
 
@@ -113,6 +114,8 @@ test("Robinhood chart and transactions fall back to exact on-chain pool swaps", 
 test("Telegram Slime Chart links land on the exact terminal coin route", () => {
   assert.match(server, /function slimewireCoinRouteUrl/);
   assert.match(server, /\/fun\/\?\$\{params\.toString\(\)\}/);
+  assert.match(fun, /const linkedCa = routeParams\.get\("ca"\) \|\| routeParams\.get\("token"\) \|\| ""/);
+  assert.match(fun, /if \(linkedCa\) openCoin\(linkedCa\)/);
   assert.match(gg, /const targetHash=isEvm\?"#rhtrade\/"\+dl:\(isSol\?"#trade\/"\+dl:""\)/);
   assert.match(gg, /if\(targetHash&&location\.hash!==targetHash\)location\.hash=targetHash/);
   assert.doesNotMatch(server, /site: `\$\{siteBase\}\/terminal\/chart\?token=/);

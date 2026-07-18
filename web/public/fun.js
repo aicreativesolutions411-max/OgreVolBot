@@ -2664,7 +2664,12 @@
       const ca = routeParams.get("ca") || routeParams.get("token") || "";
       if (ca) void loadQuickTarget(ca);
     } else {
-      const match = location.hash.match(/^#coin\/(.+)$/); if (match) openCoin(decodeURIComponent(match[1]));
+      // Telegram's Slime Chart button uses a query-string CA because Android/PWA
+      // handoffs can drop #fragments. On /fun that means the full coin/chart view,
+      // while /quick and quick=1 continue to open the compact buy panel above.
+      const linkedCa = routeParams.get("ca") || routeParams.get("token") || "";
+      const match = location.hash.match(/^#coin\/(.+)$/); if (linkedCa) openCoin(linkedCa);
+      else if (match) openCoin(decodeURIComponent(match[1]));
       else if (/^#launch\/?$/i.test(location.hash)) openFunLaunch();
       else {
         const toolMatch = location.hash.match(/^#tool\/(copy|sniper|walletLaunch)$/i);
