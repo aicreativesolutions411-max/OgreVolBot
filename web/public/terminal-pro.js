@@ -25,7 +25,7 @@
   }
 
   function nativeChartUrl(context, timeframe, pool) {
-    const query = new URLSearchParams({ ca: context.token, tf: timeframe, embed: "1", cv: "4", sym: context.symbol || "" });
+    const query = new URLSearchParams({ ca: context.token, tf: timeframe, embed: "1", cv: "6", sym: context.symbol || "" });
     if (pool) query.set("pool", pool);
     return `/chart-lab?${query.toString()}`;
   }

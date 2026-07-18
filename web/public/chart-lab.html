@@ -363,7 +363,16 @@
   window.addEventListener('message',function(ev){
     if(ev.origin!==location.origin||NETWORK!=='robinhood'||!ev.data||ev.data.type!=='slimewire:rh-pool-trades')return;
     if(ev.data.pool&&dexPair&&String(ev.data.pool).toLowerCase()!==String(dexPair).toLowerCase())return;
-    var rows=candlesFromTradeRows(ev.data.trades);if(rows.length>=3)applyChartData({candles:rows,pairAddress:ev.data.pool||dexPair});
+    var tapeTrades=Array.isArray(ev.data.trades)?ev.data.trades:[];
+    // The parent tape only carries the latest ~60 swaps. It may seed an empty chart, but it must
+    // never replace the full server history every four seconds (that made the chart alternate
+    // between a real mixed history and a short, often all-red tape snapshot). Once history exists,
+    // fold those swaps into the live forming candle only.
+    if(bars.length>=3){
+      applyTradeTicks(tapeTrades.map(function(x){return {price:Number(x&&x.price)||0,t:Math.floor(Date.parse(x&&x.ts||'')/1000)||0};}).filter(function(x){return x.price>0&&x.t>0;}));
+      return;
+    }
+    var rows=candlesFromTradeRows(tapeTrades);if(rows.length>=3)applyChartData({candles:rows,pairAddress:ev.data.pool||dexPair});
   });
   function loadDex(){
     if(!CA)return Promise.resolve(null);

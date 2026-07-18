@@ -1998,7 +1998,7 @@
     }catch(e){return false;}
   }
   function rhNativeChartFrame(address,r){
-    return '<iframe src="/chart-lab?ca='+encodeURIComponent(address)+'&tf=5m&embed=1&cv=3&sym='+encodeURIComponent((r&&r.symbol)||'')+'&pool='+encodeURIComponent((r&&r.pairAddress)||'')+'" title="Robinhood live chart" loading="eager"></iframe>';
+    return '<iframe src="/chart-lab?ca='+encodeURIComponent(address)+'&tf=5m&embed=1&cv=6&sym='+encodeURIComponent((r&&r.symbol)||'')+'&pool='+encodeURIComponent((r&&r.pairAddress)||'')+'" title="Robinhood live chart" loading="eager"></iframe>';
   }
   function rhTradeLinksHtml(r,address){
     return ((r.x||r.twitterUrl)?'<a href="'+esc(/^https?:/.test(r.x||r.twitterUrl)?(r.x||r.twitterUrl):("https://x.com/"+String(r.x||r.twitterUrl).replace(/^@/,"")))+'" target="_blank" rel="noopener noreferrer" title="X / Twitter">𝕏</a>':'')+

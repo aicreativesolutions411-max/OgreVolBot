@@ -76,6 +76,8 @@ test("native chart uses our server first and a pool-scoped browser fallback only
   assert.match(functionBody(chartLabSource, "loadServer"), /&pool=/);
   assert.match(functionBody(chartLabSource, "candlesFromTradeRows"), /Math\.floor\(stamp\/sec\)\*sec/);
   assert.match(chartLabSource, /slimewire:rh-pool-trades/);
+  assert.match(chartLabSource, /if\(bars\.length>=3\)/);
+  assert.match(chartLabSource, /applyTradeTicks\(tapeTrades\.map/);
   assert.match(functionBody(chartLabSource, "applyChartData"), /cs\.length<3&&bars\.length>=3/);
   assert.match(functionBody(terminalSource, "loadInlineTape"), /postMessage\(\{type:"slimewire:rh-pool-trades"/);
 });
@@ -85,7 +87,7 @@ test("native chart never hides real candles behind the optional slime texture", 
   assert.match(chartLabSource, /downColor:'#ff445c'/);
   assert.match(chartLabSource, /Slime\/blood is enhancement only/);
   assert.doesNotMatch(chartLabSource, /applyOptions\(\{upColor:'rgba\(0,0,0,0\)'/);
-  assert.match(functionBody(terminalSource, "rhNativeChartFrame"), /cv=3/);
+  assert.match(functionBody(terminalSource, "rhNativeChartFrame"), /cv=6/);
 });
 
 test("native chart API uses Solana Tracker primary with swap-api fallback", () => {
