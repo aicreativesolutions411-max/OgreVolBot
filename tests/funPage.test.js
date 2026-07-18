@@ -170,10 +170,10 @@ test("connected funding wallets stay separate from managed positions", () => {
   assert.match(terminalApp, /never mixed into your SlimeWire portfolio/);
 });
 
-test("web positions require user-mint acquisition proof while preserving managed-wallet sweeps", () => {
+test("web positions preserve tracked and market-backed managed-wallet holdings without admitting unmarketed dust", () => {
   const shared = server.slice(server.indexOf("async function buildPositionsOverview"), server.indexOf("async function showSniperScan"));
   const normalizer = server.slice(server.indexOf("function normalizeWebTokenHolding"), server.indexOf("function positionValueCacheKey"));
-  const projection = server.slice(server.indexOf("function webPrimaryPositionProjection"), server.indexOf("async function estimatePositionValueFromMarket"));
+  const projection = server.slice(server.indexOf("function webPositionHasMarketEvidence"), server.indexOf("async function estimatePositionValueFromMarket"));
   const webRows = server.slice(server.indexOf("async function webPositionRows"), server.indexOf("async function webPnlSummary"));
   assert.match(shared, /for \(const account of accounts\.filter\(\(item\) => item\.rawAmount > 0n\)\)/);
   assert.match(shared, /options\.webPortfolioOnly[\s\S]{0,180}!wallet\.volumeBot && !wallet\.ephemeral/);
@@ -181,20 +181,37 @@ test("web positions require user-mint acquisition proof while preserving managed
   assert.match(shared, /tradeType === "launch" && positiveBigIntOrZero\(trade\.solLamportsSpent\) > 0n/);
   assert.match(projection, /hasAcquisitionProvenance = Number\(position\?\.buys \|\| 0\) > 0/);
   assert.match(projection, /positiveBigIntOrZero\(position\?\.spent\) > 0n/);
+  assert.match(projection, /webPositionHasMarketEvidence/);
+  assert.match(projection, /hasBuyProvenance: hasAcquisitionProvenance/);
+  assert.match(projection, /hasMarketEvidence/);
   assert.doesNotMatch(projection, /buyWallets/);
-  assert.match(webRows, /\.map\(webPrimaryPositionProjection\)/);
+  assert.match(webRows, /webPrimaryPositionProjection\(position, metadataByMint\.get\(position\.tokenMint\)/);
+  assert.match(webRows, /tokenMetadataMapForMints\(candidates\.map/);
   assert.match(webRows, /webPortfolioOnly: true/);
   assert.match(webRows, /position\.buys > 0 && position\.spent > 0n/);
   assert.doesNotMatch(server.slice(server.indexOf("async function estimatePositionValueFromMarket"), server.indexOf("async function pnlSummaryText")), /accounts\.slice\(0, 8\)/);
 
   const positiveBigIntOrZero = (value) => { try { const parsed = BigInt(String(value ?? "0")); return parsed > 0n ? parsed : 0n; } catch { return 0n; } };
-  const project = Function("positiveBigIntOrZero", `${normalizer}\n${projection}\nreturn webPrimaryPositionProjection;`)(positiveBigIntOrZero);
+  const firstString = (...values) => values.find((value) => typeof value === "string" && value.trim()) || "";
+  const firstMeaningfulNumber = (...values) => values.map(Number).find((value) => Number.isFinite(value) && value > 0) || null;
+  const project = Function("positiveBigIntOrZero", "firstString", "firstMeaningfulNumber", `${normalizer}\n${projection}\nreturn webPrimaryPositionProjection;`)(positiveBigIntOrZero, firstString, firstMeaningfulNumber);
   const swept = project({ tokenMint: "mint", buys: 1, sells: 0, spent: 100n, received: 0n, accounts: [
     { walletPublicKey: "destination-wallet", rawAmount: 123400n, decimals: 2 }
   ] });
   assert.equal(swept.walletCount, 1);
   assert.equal(swept.rawAmount, 123400n);
   assert.equal(swept.uiAmount, 1234);
+  const recovered = project({ tokenMint: "CTTqPmJqnDPuTquiBmoQgvgHug8eG9rXvFaXpFetpump", buys: 0, spent: 0n, accounts: [
+    { walletPublicKey: "wallet", rawAmount: 1439697019817n, decimals: 6 }
+  ] });
+  assert.equal(recovered.uiAmount, 1439697.019817);
+  assert.equal(recovered.marketVerified, true);
+  assert.equal(recovered.acquisitionTracked, false);
+  const marketBacked = project({ tokenMint: "market-mint", buys: 0, spent: 0n, accounts: [
+    { walletPublicKey: "wallet", rawAmount: 2500n, decimals: 2 }
+  ] }, { pairAddress: "pool-address", liquidityUsd: 1000 });
+  assert.equal(marketBacked.uiAmount, 25);
+  assert.equal(marketBacked.marketVerified, true);
   assert.equal(project({ tokenMint: "spam", buys: 0, spent: 0n, accounts: [{ walletPublicKey: "wallet", rawAmount: 1n, decimals: 0 }] }), null);
 });
 
