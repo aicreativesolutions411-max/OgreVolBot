@@ -35,7 +35,7 @@
   });
   const TF_MAP = { "1": "1m", "5": "5m", "15": "15m", "60": "1h" };
   const AUTO_REFRESH_MS = 25_000;
-  const CANDLE_TIMEOUT_MS = 6_500;
+  const CANDLE_TIMEOUT_MS = 9_000;
   const enabled = readEnabled();
   let fibSettings = readFibSettings();
   let harmonicSettings = readHarmonicSettings();
@@ -673,14 +673,18 @@
   }
 
   function showProviderFallback(message) {
-    analysisActive = false;
+    analysisActive = true;
     clearTimeout(autoRefreshTimer);
     restoreProviderChart();
     syncButtons();
     const panels = $("[data-indicator-panels]");
-    if (panels) panels.innerHTML = `<div class="analysis-fallback"><b>Indicators are off — regular chart restored</b><small>${escapeHtml(message)} Overlays are only marked active after they are painted on real candles.</small><button type="button" data-indicator-retry>Retry analysis</button></div>`;
+    if (panels) panels.innerHTML = `<div class="analysis-fallback"><b>Regular chart stays ready while indicators reconnect</b><small>${escapeHtml(message)} Your indicator choices are saved and SlimeWire will retry automatically.</small><button type="button" data-indicator-retry>Retry now</button></div>`;
     toggleDrawer(true, false);
-    setStatus("Saved indicators are off until candle history loads.", true);
+    setStatus("Indicators saved — retrying candle history…", true);
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+      if (analysisActive && anyEnabled()) void renderIndicators({ background: true });
+    }, 4_000);
   }
 
   async function renderIndicators({ background = false } = {}) {

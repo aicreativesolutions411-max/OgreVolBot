@@ -95,6 +95,8 @@ test("desktop charts preserve the full indicator workspace", () => {
   }
   assert.match(indicators, /#\(\?:coin\|trade\|rhtrade\)/);
   assert.match(indicators, /syncIndicatorProvider/);
+  assert.match(indicators, /Indicators saved — retrying candle history/);
+  assert.match(indicators, /renderIndicators\(\{ background: true \}\)/);
   assert.match(css, /\.tradeMain\.indicator-analysis-open/);
 });
 
@@ -108,9 +110,9 @@ test("Robinhood chart and transactions fall back to exact on-chain pool swaps", 
   assert.match(gg, /token-trades\?pool=.*&ca=/);
 });
 
-test("Telegram Slime Chart links land on the exact Fun coin route", () => {
+test("Telegram Slime Chart links land on the exact terminal coin route", () => {
   assert.match(server, /function slimewireCoinRouteUrl/);
   assert.match(server, /route = normalizeRobinhoodTokenAddress\(mint\) \? "rhtrade" : "trade"/);
-  assert.match(server, /\/fun\?\$\{params\.toString\(\)\}#\$\{route\}/);
+  assert.match(server, /\/\?\$\{params\.toString\(\)\}#\$\{route\}/);
   assert.doesNotMatch(server, /site: `\$\{siteBase\}\/terminal\/chart\?token=/);
 });
