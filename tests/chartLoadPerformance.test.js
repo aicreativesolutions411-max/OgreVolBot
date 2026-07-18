@@ -62,14 +62,18 @@ test("chart iframe uses cached bootstrap URLs and does not wait on feed refresh"
   assert.doesNotMatch(smartChartBranch, /refreshLivePairBuckets|loadLivePairs|loadKolScan|loadWatchlist|loadAll/);
 });
 
-test("native chart loads candles from our server first and has no browser GeckoTerminal candle path", () => {
+test("native chart uses our server first and a pool-scoped browser fallback only for blank Robinhood candles", () => {
   assert.match(chartLabSource, /\/api\/chart\?ca=/);
   assert.match(chartLabSource, /function loadReal\(\)\{ if\(!CA\)return; loadBootstrap\(\); loadServer\(\); loadDex\(\); \}/);
   assert.match(chartLabSource, /setInterval\(loadServer,15000\)/);
   assert.match(chartLabSource, /applyStats\(d,false\)/);
   assert.match(chartLabSource, /applyTradeTicks\(d\.trades\)/);
   assert.match(chartLabSource, /id="s_holders"/);
-  assert.doesNotMatch(chartLabSource, /function loadGT|api\.geckoterminal\.com|GTB=|\/ohlcv\//);
+  const fallback = functionBody(chartLabSource, "loadGeckoFallback");
+  assert.match(fallback, /NETWORK!==['"]robinhood['"]\|\|bars\.length>2\|\|!dexPair/);
+  assert.match(fallback, /api\.geckoterminal\.com\/api\/v2\/networks\/robinhood\/pools/);
+  assert.match(fallback, /token=['"]?\+dexTokenSide/);
+  assert.match(functionBody(chartLabSource, "loadServer"), /&pool=/);
 });
 
 test("native chart never hides real candles behind the optional slime texture", () => {
@@ -77,7 +81,7 @@ test("native chart never hides real candles behind the optional slime texture", 
   assert.match(chartLabSource, /downColor:'#ff445c'/);
   assert.match(chartLabSource, /Slime\/blood is enhancement only/);
   assert.doesNotMatch(chartLabSource, /applyOptions\(\{upColor:'rgba\(0,0,0,0\)'/);
-  assert.match(functionBody(terminalSource, "rhNativeChartFrame"), /cv=2/);
+  assert.match(functionBody(terminalSource, "rhNativeChartFrame"), /cv=3/);
 });
 
 test("native chart API uses Solana Tracker primary with swap-api fallback", () => {
@@ -96,7 +100,9 @@ test("native chart API uses Solana Tracker primary with swap-api fallback", () =
 test("native chart accepts Robinhood CAs and uses the saved Sushi pool before public indexing", () => {
   assert.match(serverSource, /const rhMint = normalizeRobinhoodTokenAddress\(cmint\)/);
   assert.match(serverSource, /await buildRhChartData\(rhMint/);
+  assert.match(serverSource, /poolAddress: requestUrl\.searchParams\.get\("pool"\)/);
   const body = functionBody(serverSource, "buildRhChartData");
+  assert.match(body, /requestedPool = normalizeRobinhoodTokenAddress\(options\.poolAddress\)/);
   assert.match(body, /rhLaunchMetaByAddress/);
   assert.match(body, /launch\?\.pairAddress/);
   assert.match(body, /webOhlcvPayload\(address, tf, \{ network: "robinhood", poolAddress: launchPool/);

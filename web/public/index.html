@@ -1952,7 +1952,7 @@
     }catch(e){return false;}
   }
   function rhNativeChartFrame(address,r){
-    return '<iframe src="/chart-lab?ca='+encodeURIComponent(address)+'&tf=5m&embed=1&cv=2&sym='+encodeURIComponent((r&&r.symbol)||'')+'" title="Robinhood live chart" loading="eager"></iframe>';
+    return '<iframe src="/chart-lab?ca='+encodeURIComponent(address)+'&tf=5m&embed=1&cv=3&sym='+encodeURIComponent((r&&r.symbol)||'')+'&pool='+encodeURIComponent((r&&r.pairAddress)||'')+'" title="Robinhood live chart" loading="eager"></iframe>';
   }
   // Robinhood coin trade modal — same one-tap concept as Solana coins: instant buy (ETH amount) and
   // sell (% of bag) from the active wallet's Robinhood account, routed through the chain's live pools.

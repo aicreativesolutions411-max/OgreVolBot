@@ -128,6 +128,7 @@
 (function(){
   var el=document.getElementById('chart'); if(!el||!window.LightweightCharts) return;
   var QP=new URLSearchParams(location.search),CA=(QP.get('ca')||'').trim(),EMBED=QP.get('embed')==='1',TF=QP.get('tf')||'5m';
+  var POOL=(QP.get('pool')||'').trim(); if(!/^0x[0-9a-f]{40}$/i.test(POOL))POOL='';
   var NETWORK=/^0x[0-9a-f]{40}$/i.test(CA)?'robinhood':'solana';
   var SYMP=(QP.get('sym')||'').trim();
   // INSTANT HEADER — kill the "$OGRE flash". The demo coin ($OGRE · Swamp Ogre) is hardcoded in the
@@ -150,7 +151,8 @@
     return location.hostname.indexOf('onrender.com')>=0 ? '' : 'https://app.slimewire.org'; })();
   if(EMBED&&document.body)document.body.classList.add('embed');
   var LWC=window.LightweightCharts;
-  var mcScale=0, dexStats=null, dexPair=null, realPrice=null, chg24=null, haveCandles=false;
+  var mcScale=0, dexStats=null, dexPair=POOL||null, dexTokenSide='base', realPrice=null, chg24=null, haveCandles=false;
+  var gtFallbackBusy=false,gtFallbackAt=0;
   // ---- formatters ----
   function fmtUsd(p){p=Number(p)||0;if(p<=0)return '$0';if(p>=1)return '$'+p.toLocaleString(undefined,{maximumFractionDigits:3});if(p>=0.001)return '$'+p.toFixed(5);return '$'+p.toPrecision(3);}
   function fmtMcRaw(v){v=Number(v)||0;return v>=1e9?'$'+(v/1e9).toFixed(2)+'B':v>=1e6?'$'+(v/1e6).toFixed(2)+'M':v>=1e3?'$'+Math.round(v/1e3)+'K':'$'+Math.round(v);}
@@ -321,14 +323,30 @@
 
   // ---- data: our chart API for candles/trades + DexScreener for exact live stats ----
   function json(u){return fetch(u).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});}
+  // Render's shared IP can be soft-rate-limited by both market indexes immediately after a deploy,
+  // while the user's browser can still reach the public pool feed. The backend stays primary; this
+  // Robinhood-only pool fallback runs only when it returned no candles, so an indexed market never
+  // becomes a flat one-candle chart just because one server-side lookup blinked.
+  function loadGeckoFallback(){
+    if(NETWORK!=='robinhood'||bars.length>2||!dexPair||gtFallbackBusy||Date.now()-gtFallbackAt<5000)return Promise.resolve(false);
+    gtFallbackBusy=true;gtFallbackAt=Date.now();
+    var spec=TF==='1h'?{path:'hour',aggregate:1}:TF==='15m'?{path:'minute',aggregate:15}:TF==='1m'?{path:'minute',aggregate:1}:{path:'minute',aggregate:5};
+    var url='https://api.geckoterminal.com/api/v2/networks/robinhood/pools/'+encodeURIComponent(dexPair)+'/ohlcv/'+spec.path+'?aggregate='+spec.aggregate+'&limit=300&currency=usd&token='+dexTokenSide;
+    return json(url).then(function(j){
+      var list=j&&j.data&&j.data.attributes&&j.data.attributes.ohlcv_list;
+      if(!Array.isArray(list)||!list.length)return false;
+      var rows=list.map(function(k){return {t:Number(k&&k[0])||0,o:Number(k&&k[1])||0,h:Number(k&&k[2])||0,l:Number(k&&k[3])||0,c:Number(k&&k[4])||0,v:Number(k&&k[5])||0};}).filter(function(k){return k.t>0&&k.c>0;});
+      return rows.length?applyChartData({candles:rows,pairAddress:dexPair}):false;
+    }).then(function(ok){gtFallbackBusy=false;return ok;},function(){gtFallbackBusy=false;return false;});
+  }
   function loadDex(){
     if(!CA)return Promise.resolve(null);
     return json('https://api.dexscreener.com/latest/dex/tokens/'+encodeURIComponent(CA)).then(function(j){
       var pairs=(j&&j.pairs)||[];
       var best=pairs.filter(function(p){return String(p.chainId||'').toLowerCase()===NETWORK;}).filter(function(p){return String((p.baseToken&&p.baseToken.address)||'').toLowerCase()===CA.toLowerCase()||String((p.quoteToken&&p.quoteToken.address)||'').toLowerCase()===CA.toLowerCase();}).sort(function(a,b){return ((b.liquidity&&b.liquidity.usd)||0)-((a.liquidity&&a.liquidity.usd)||0);})[0];
-      if(!best)return null; dexPair=best.pairAddress||null; var base=String((best.baseToken&&best.baseToken.address)||'').toLowerCase()===CA.toLowerCase()?(best.baseToken||{}):(best.quoteToken||best.baseToken||{});
+      if(!best)return null; dexPair=best.pairAddress||dexPair; var baseMatches=String((best.baseToken&&best.baseToken.address)||'').toLowerCase()===CA.toLowerCase(); dexTokenSide=baseMatches?'base':'quote'; var base=baseMatches?(best.baseToken||{}):(best.quoteToken||best.baseToken||{});
       var s={symbol:base.symbol||'',name:base.name||'',priceUsd:+best.priceUsd||0,mc:+best.marketCap||+best.fdv||0,liq:+(best.liquidity&&best.liquidity.usd)||0,vol24:+(best.volume&&best.volume.h24)||0,change24:+(best.priceChange&&best.priceChange.h24)||0,buys24:+(best.txns&&best.txns.h24&&best.txns.h24.buys)||0,sells24:+(best.txns&&best.txns.h24&&best.txns.h24.sells)||0};
-      applyDexStats(s); return s;
+      applyDexStats(s); if(bars.length<3)loadGeckoFallback(); return s;
     });
   }
   function applyChartData(d){
@@ -346,7 +364,7 @@
     try{ if(CA) sessionStorage.setItem('cl2:'+CA, JSON.stringify({at:Date.now(),tf:TF,d:{candles:cs.slice(-150),trades:(d.trades||[]).slice(0,40),mc:d.mc,priceUsd:d.priceUsd,liq:d.liq,vol24:d.vol24,change24h:d.change24h,buys24:d.buys24,sells24:d.sells24,holders:d.holders,symbol:d.symbol,name:d.name}})); }catch(e){}
     return true;
   }
-  function loadServer(){ if(!CA)return; fetch(API+'/api/chart?ca='+encodeURIComponent(CA)+'&tf='+encodeURIComponent(TF)).then(function(r){return r.json();}).then(function(d){ if(d&&d.candles)applyChartData(d); }).catch(function(){}); }
+  function loadServer(){ if(!CA)return; fetch(API+'/api/chart?ca='+encodeURIComponent(CA)+'&tf='+encodeURIComponent(TF)+(dexPair?'&pool='+encodeURIComponent(dexPair):'')).then(function(r){return r.json();}).then(function(d){ if(d&&d.candles){applyChartData(d);if(bars.length<3)loadGeckoFallback();} }).catch(function(){loadGeckoFallback();}); }
   function loadBootstrap(){ if(!CA)return; json(API+'/api/web/chart/bootstrap?token='+encodeURIComponent(CA)).then(function(j){
     var c=j&&j.chart;if(!c)return;if(c.pairAddress)dexPair=c.pairAddress;
     applyStats({symbol:c.symbol,name:c.name,imageUrl:c.imageUrl,priceUsd:c.priceUsd,mc:c.marketCap||c.fdv,liq:c.liquidityUsd,vol24:c.volumeH24,buys24:c.txns&&c.txns.h24&&c.txns.h24.buys,sells24:c.txns&&c.txns.h24&&c.txns.h24.sells},false);
