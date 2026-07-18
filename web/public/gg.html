@@ -2827,6 +2827,7 @@
     if(!target)return;if(inlineTapePollT){clearTimeout(inlineTapePollT);inlineTapePollT=null;}inlineTapeKey=key;
     const old=target._trades||[];if(!old.length)target.innerHTML=tapeTableHtml([],network,true,pool?"":"Resolving the strongest pool…");
     const tr=pool?await fetchPoolTrades(pool,network):(network==="solana"?await fetchPumpTrades(mint):[]);
+    if(network==="robinhood"&&pool&&tr.length){const f=$("#rhTvChart iframe");try{if(f&&f.contentWindow)f.contentWindow.postMessage({type:"slimewire:rh-pool-trades",pool,trades:tr.slice(0,60)},location.origin);}catch(e){}}
     if(inlineTapeKey!==key||!target.isConnected)return;target._trades=tr.length?tr:old;target.innerHTML=tapeTableHtml(target._trades,network,false,pool?"No recent swaps in this pool yet.":"Resolving the strongest pool…");
     inlineTapePollT=setTimeout(()=>{const live=(network==="robinhood"?state.route==="rhtrade"&&state.rhMint===mint:state.route==="trade"&&state.mint===mint);if(live)loadInlineTape(mint,r,network,targetId,{silent:true});},4000);
   }

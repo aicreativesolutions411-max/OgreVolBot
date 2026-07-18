@@ -74,6 +74,10 @@ test("native chart uses our server first and a pool-scoped browser fallback only
   assert.match(fallback, /api\.geckoterminal\.com\/api\/v2\/networks\/robinhood\/pools/);
   assert.match(fallback, /token=['"]?\+dexTokenSide/);
   assert.match(functionBody(chartLabSource, "loadServer"), /&pool=/);
+  assert.match(functionBody(chartLabSource, "candlesFromTradeRows"), /Math\.floor\(stamp\/sec\)\*sec/);
+  assert.match(chartLabSource, /slimewire:rh-pool-trades/);
+  assert.match(functionBody(chartLabSource, "applyChartData"), /cs\.length<3&&bars\.length>=3/);
+  assert.match(functionBody(terminalSource, "loadInlineTape"), /postMessage\(\{type:"slimewire:rh-pool-trades"/);
 });
 
 test("native chart never hides real candles behind the optional slime texture", () => {

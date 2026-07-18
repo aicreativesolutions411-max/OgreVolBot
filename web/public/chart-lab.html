@@ -339,6 +339,23 @@
       return rows.length?applyChartData({candles:rows,pairAddress:dexPair}):false;
     }).then(function(ok){gtFallbackBusy=false;return ok;},function(){gtFallbackBusy=false;return false;});
   }
+  function candlesFromTradeRows(list){
+    var buckets={},sec=tfSec();
+    (Array.isArray(list)?list:[]).slice().sort(function(a,b){return Date.parse(a&&a.ts||0)-Date.parse(b&&b.ts||0);}).forEach(function(x){
+      var price=Number(x&&x.price)||0,stamp=Math.floor(Date.parse(x&&x.ts||'')/1000);if(!(price>0)||!(stamp>0))return;
+      var t=Math.floor(stamp/sec)*sec,b=buckets[t],usd=Math.max(0,Number(x&&x.usd)||0);
+      if(!b)buckets[t]={t:t,o:price,h:price,l:price,c:price,v:usd};else{b.h=Math.max(b.h,price);b.l=Math.min(b.l,price);b.c=price;b.v+=usd;}
+    });
+    return Object.keys(buckets).map(function(k){return buckets[k];}).sort(function(a,b){return a.t-b.t;});
+  }
+  // The parent trade tape already has a separate, fast pool-trade path. Reuse those exact swaps as
+  // an immediate candle source when the heavier OHLCV endpoint is cold or rate-limited after deploy.
+  // This also keeps the chart and the visible tape mathematically consistent.
+  window.addEventListener('message',function(ev){
+    if(ev.origin!==location.origin||NETWORK!=='robinhood'||!ev.data||ev.data.type!=='slimewire:rh-pool-trades')return;
+    if(ev.data.pool&&dexPair&&String(ev.data.pool).toLowerCase()!==String(dexPair).toLowerCase())return;
+    var rows=candlesFromTradeRows(ev.data.trades);if(rows.length>=3)applyChartData({candles:rows,pairAddress:ev.data.pool||dexPair});
+  });
   function loadDex(){
     if(!CA)return Promise.resolve(null);
     return json('https://api.dexscreener.com/latest/dex/tokens/'+encodeURIComponent(CA)).then(function(j){
@@ -355,6 +372,9 @@
     applyStats(d,false);
     if(!(mcScale>0)&&d.mc>0&&d.priceUsd>0)mcScale=d.mc/d.priceUsd;       // fallback anchor so the axis shows MC even before DexScreener lands
     var cs=d.candles, seen={}, candles=[], vols=[];
+    // Never let a later one-point "still indexing" response erase a real chart loaded from the pool
+    // or the live trade tape. This was the second cause of charts reverting to a flat line.
+    if(cs.length<3&&bars.length>=3)return true;
     for(var i=0;i<cs.length;i++){var k=cs[i],tt=k.t;if(!tt||seen[tt])continue;seen[tt]=1;
       candles.push({time:tt,open:+k.o||0,high:+k.h||0,low:+k.l||0,close:+k.c||0});
       vols.push({time:tt,value:Math.max(0,k.v||0),color:(k.c>=k.o)?'rgba(57,224,138,.34)':'rgba(255,68,92,.34)'});}
