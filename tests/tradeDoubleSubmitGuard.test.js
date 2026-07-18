@@ -784,6 +784,32 @@ test("RH power tools: TP/SL guards + bundle + volume bot, all through the safe t
   }
 });
 
+test("Robinhood terminal exposes quick TP and executable market-cap limit orders", () => {
+  const arm = functionBody(serverSource, "webRhArmGuard");
+  const tick = functionBody(serverSource, "rhGuardTick");
+  assert.match(arm, /"limit-buy", "limit-sell"/);
+  assert.match(arm, /targetMarketCapUsd/);
+  assert.match(arm, /targetPriceUsd = kind !== "exit" && supply > 0 \? targetMarketCapUsd \/ supply/);
+  assert.match(arm, /triggerDirection: kind !== "exit" \? \(targetPriceUsd >= entryPriceUsd \? ">=" : "<="\)/);
+  assert.match(tick, /hitLimit/);
+  assert.match(tick, /kind === "limit-buy" \? "buy" : "sell"/);
+  assert.match(tick, /payCurrency: "SOL", amountSol: guard\.amountSol/);
+  assert.match(tick, /tradeAttemptId: `rh-order-\$\{guard\.id\}`/);
+  for (const src of [ggSource, indexSource]) {
+    const trade = functionBody(src, "renderRhTrade");
+    const limit = functionBody(src, "rhLimitModal");
+    assert.match(trade, /Take profit after buy/);
+    assert.match(trade, /data-tp="25"/);
+    assert.match(trade, /data-tp="50"/);
+    assert.match(trade, /data-tp="100"/);
+    assert.match(trade, /GG\.rhLimitModal/);
+    assert.match(limit, /Buy at target MC/);
+    assert.match(limit, /Sell at target MC/);
+    assert.match(limit, /targetMarketCapUsd/);
+    assert.match(functionBody(src, "rhBuyAmount"), /rhArmQuickTakeProfit/);
+  }
+});
+
 test("RH: auto-bundle-when-pool-opens + coin age everywhere + 75% sells", () => {
   // Server: arm store + watcher folded into the guard tick (fires webRhBundleCore on pool detection).
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/auto-bundle"/);
