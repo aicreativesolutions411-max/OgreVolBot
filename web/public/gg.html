@@ -571,6 +571,7 @@
   .chartSplitMain.chartSplitAdjusted .tapeTable{max-height:none;min-height:58px;flex:1 1 auto}
   @media(max-width:820px){.chartTapeSplit{flex-basis:24px;height:24px}.chartTapeSplit:before{width:72px}.chartTapeSplit span{right:8px;font-size:8px}.chartSplitMain.chartSplitAdjusted .marketTape{padding-bottom:8px}}
 </style>
+<link rel="stylesheet" href="/terminal-pro.css?v=20260718a">
 </head>
 <body>
 <script>{const embed=new URLSearchParams(location.search).get("embed");if(embed==="fun-launch")document.body.classList.add("fun-launch-embed");if(embed==="fun-tool")document.body.classList.add("fun-tool-embed");}</script>
@@ -721,7 +722,7 @@
   const ACTIVE_WALLET_KEY="slimecashActiveWalletIndex"; // shared with SlimeCash + /fun
   const SCOUT_QUEUE_KEY="ggSwampScoutQueue";
   const ALERT_RULE_KEY="ggSwampAlertRules";
-  const state={route:"trending",mint:null,trendTab:"best",trenchTab:"board",volTf:"h1",rows:[],pollT:null,
+  const state={route:"trending",mint:null,trendTab:"best",trenchTab:"board",volTf:"h1",marketChain:localStorage.getItem("ggMarketChain")||"all",rows:[],pollT:null,
     token:localStorage.getItem(TOKEN_KEY)||"",user:null,wallets:[],activeWallet:Number(localStorage.getItem(ACTIVE_WALLET_KEY))||null,
     presets:{trade:[],bundle:[]},activeTradePreset:localStorage.getItem("ggTradePreset")||"",searchTerm:"",pendingSell:null,portfolioTab:"positions",lcNftMint:"",lcNftOverview:null,lcNftItemImage:null,
     watch:new Set(),watchRows:[],
@@ -1483,6 +1484,9 @@
   function subbarTrending(){
     const sb=$("#subbar");sb.innerHTML="";
     const h=el("h1");h.textContent="Market";sb.appendChild(h);
+    const chains=el("div","marketChainSwitch");
+    [["all","All"],["solana","Solana"],["robinhood","Robinhood"]].forEach(([id,label])=>{const b=el("button");b.textContent=label;b.className=id===state.marketChain?"on":"";b.onclick=()=>{state.marketChain=id;localStorage.setItem("ggMarketChain",id);render();};chains.appendChild(b);});
+    sb.appendChild(chains);
     const tabs=el("div","tabs");
     TREND_TABS.forEach(t=>{const b=el("button");b.textContent=t.label;b.className=t.id===state.trendTab?"on":"";b.onclick=()=>{state.trendTab=t.id;render();};tabs.appendChild(b);});
     sb.appendChild(tabs);
@@ -1519,6 +1523,7 @@
   }
   function riskChips(r){
     let out="";const score=Number(r.score||r.bestPickScore);
+    if(r.chain==="robinhood"||isRobinhoodAddress(r.tokenMint))out+='<span class="chip edge2">RH</span>';
     if(isFinite(score)&&score>0){const cls=score>=70?"g":score>=45?"y":"r";out+='<span class="chip '+cls+'">'+Math.round(score)+'</span>';}
     if(r.bestPickLabel)out+='<span class="chip">'+esc(r.bestPickLabel)+'</span>';
     const rug=Number(r.rugRisk);if(isFinite(rug)&&rug>=55)out+='<span class="chip r">rug '+Math.round(rug)+'</span>';
@@ -1528,10 +1533,10 @@
   }
   function pairMetaInner(r){
     const links=[];
-    if(r.twitterUrl)links.push('<a href="'+esc(r.twitterUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">𝕏</a>');
-    if(r.telegramUrl)links.push('<a href="'+esc(r.telegramUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">✈</a>');
-    if(r.websiteUrl)links.push('<a href="'+esc(r.websiteUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">🌐</a>');
-    return'<span class="age">'+esc(ageLabel(r))+'</span>'+(links.length?'<span class="ic">'+links.join("")+'</span>':'')+
+    if(r.twitterUrl||r.x)links.push('<a href="'+esc(r.twitterUrl||r.x)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">𝕏</a>');
+    if(r.telegramUrl||r.telegram)links.push('<a href="'+esc(r.telegramUrl||r.telegram)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">✈</a>');
+    if(r.websiteUrl||r.website)links.push('<a href="'+esc(r.websiteUrl||r.website)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">🌐</a>');
+    return'<span class="chainMini '+(r.chain==="robinhood"?'rh':'sol')+'">'+(r.chain==="robinhood"?'RH':'SOL')+'</span><span class="age">'+esc(ageLabel(r))+'</span>'+(links.length?'<span class="ic">'+links.join("")+'</span>':'')+
       '<span class="ic"><a onclick="event.stopPropagation();GG.copy(\''+esc(r.tokenMint)+'\')" title="Copy CA">⧉</a></span>';
   }
   function pairCellHtml(r){
@@ -1542,6 +1547,7 @@
   function mcCellInner(r){return'<span class="mc">'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</span>'+pctHtml(r.m5);}
   function txnsCellInner(r){const buys=r.buys5m??r.buysH1,sells=r.sells5m??r.sellsH1;if(buys==null&&sells==null)return'<span class="mut">checking</span>';return'<span class="txns"><span class="b">'+(buys??'—')+'</span> / <span class="s">'+(sells??'—')+'</span></span>';}
   function rowHtml(r){
+    const rh=r.chain==="robinhood"||isRobinhoodAddress(r.tokenMint),buy=rh?'<button class="buybtn sm" onclick="event.stopPropagation();GG.rhQuick(\''+esc(r.tokenMint)+'\')">⚡ Buy</button>':'<button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button>';
     return'<tr data-mint="'+esc(r.tokenMint)+'" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
       '<td class="l c-pair">'+pairCellHtml(r)+'</td>'+
       '<td class="c-mc">'+mcCellInner(r)+'</td>'+
@@ -1549,7 +1555,7 @@
       '<td class="c-vol">'+esc(volLabel(r))+'</td>'+
       '<td class="hideMb c-tx">'+txnsCellInner(r)+'</td>'+
       '<td class="hideMb c-info"><div class="tkinfo">'+riskChips(r)+'</div></td>'+
-      '<td><div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">'+starBtn(r)+'<button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></div></td></tr>';
+      '<td><div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">'+(rh?'':starBtn(r))+buy+'</div></td></tr>';
   }
   // In-place patch: update an existing <tr>'s mutable cells (price/liq/vol/txns/chips/socials) WITHOUT
   // touching its <img> — so the row never flickers and scroll/hover are preserved. Only writes a cell
@@ -1614,6 +1620,8 @@
   }
   function shownRows(){
     let rows=state.rows||[];
+    if(state.marketChain==="solana")rows=rows.filter(r=>r.chain!=="robinhood"&&!isRobinhoodAddress(r.tokenMint));
+    else if(state.marketChain==="robinhood")rows=rows.filter(r=>r.chain==="robinhood"||isRobinhoodAddress(r.tokenMint));
     // Established tabs (Trending/Surging/Volume/Graduating/Migrated) should NEVER show a totally
     // dataless row — no MC, no liquidity, no volume — those are the "half empty" rows from feed sources
     // that didn't carry stats. Client enrichment fills DexScreener-listed coins within a cycle, so real
@@ -1650,11 +1658,24 @@
     const isWatch=state.trendTab==="watch";
     let rows;
     if(isWatch){await loadWatch();rows=state.watchRows||[];}
-    else rows=await fetchPairs(tabById(state.trendTab));
+    else{
+      const wantSol=state.marketChain!=="robinhood",wantRh=state.marketChain!=="solana";
+      const rhCategory=state.trendTab==="fresh"?"new":"trending";
+      const [solRows,rhResult]=await Promise.all([
+        wantSol?fetchPairs(tabById(state.trendTab)):Promise.resolve([]),
+        wantRh?api("/api/web/rh/pairs?category="+rhCategory).catch(()=>({})):Promise.resolve({})
+      ]);
+      const rhRaw=(rhResult&&rhResult.ok&&rhResult.d&&rhResult.d.rows)||[];
+      state.rhRows=state.rhRows||{};rhRaw.forEach(r=>{if(r.address)state.rhRows[r.address.toLowerCase()]=r;});
+      const rhRows=rhRaw.map(r=>({tokenMint:r.address,chain:"robinhood",symbol:r.symbol||"?",name:r.name||"Robinhood coin",imageUrl:r.imageUrl||r.iconUrl||"",createdAt:r.createdAt||"",marketCap:Number(r.marketCapUsd)||0,marketCapLabel:r.marketCapUsd?fmtUsd(r.marketCapUsd):"—",liquidityUsd:Number(r.liquidityUsd)||0,liquidityLabel:r.liquidityUsd?fmtUsd(r.liquidityUsd):"—",volumeH24:Number(r.volume24hUsd)||0,volumeH24Label:r.volume24hUsd?fmtUsd(r.volume24hUsd):"—",m5:Number(r.m5)||0,x:r.x||"",telegram:r.telegram||"",website:r.website||""}));
+      rows=solRows.concat(rhRows);
+      if(state.marketChain==="all"&&rhRows.length){const metric=state.trendTab==="fresh"?(r=>Date.parse(r.createdAt||0)||0):state.trendTab==="vol"?(r=>Number(r.volumeH24||r.volumeH1||0)):(r=>Number(r.marketCap||0)+Number(r.volumeH24||r.volumeH1||0)*.35);rows.sort((a,b)=>metric(b)-metric(a));}
+      if(rhRaw.length)void rhEnrichRows(rhRaw).then(changed=>{if(!changed||state.route!=="trending")return;rhRaw.forEach(raw=>{const row=state.rows.find(x=>String(x.tokenMint).toLowerCase()===String(raw.address).toLowerCase());if(!row)return;row.imageUrl=raw.imageUrl||row.imageUrl;row.marketCap=Number(raw.marketCapUsd)||row.marketCap;row.marketCapLabel=row.marketCap?fmtUsd(row.marketCap):"—";row.liquidityUsd=Number(raw.liquidityUsd)||row.liquidityUsd;row.liquidityLabel=row.liquidityUsd?fmtUsd(row.liquidityUsd):"—";row.volumeH24=Number(raw.volume24hUsd)||row.volumeH24;row.volumeH24Label=row.volumeH24?fmtUsd(row.volumeH24):"—";});applyTrendingFilter();});
+    }
     if(state.route!=="trending")return;
     // A failed live fetch with no cached rows yet = "still connecting", NOT "feed empty" — don't blank
     // an already-populated table on a transient failure, and show an honest reconnecting note instead.
-    const feedDown=!isWatch&&!lastPairsOk;
+    const feedDown=!isWatch&&state.marketChain!=="robinhood"&&!lastPairsOk;
     const detailsPending=rows.some(r=>!(Number(r.liquidityUsd)>0)||((r.buys5m??r.buysH1)==null&&(r.sells5m??r.sellsH1)==null));
     setFeedFreshness(!feedDown,detailsPending);
     if(feedDown&&!rows.length&&state.rows&&state.rows.length){
@@ -1666,7 +1687,7 @@
     else if(shown.length&&syncTrendingTable(shown)){}              // same table already up → patch rows in place (no teardown/flicker)
     else view.innerHTML=orientationHtml()+'<table class="tbl"><thead><tr><th class="l">Pair</th><th>Market Cap</th><th class="hideMb">Liquidity</th><th>Volume</th><th class="hideMb">Txns</th><th class="hideMb">Token Info</th><th></th></tr></thead><tbody>'+(shown.length?shown.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>')+'</tbody></table>';
     wireOrientation();
-    void enrichSocials(rows);
+    void enrichSocials(rows.filter(r=>r.chain!=="robinhood"));
     // Watchlist is static-ish — refresh it lazily (30s); live feeds stay snappy at 7s; retry fast when down.
     state.pollT=setTimeout(()=>{if(state.route==="trending")renderTrending();},feedDown?3000:(isWatch?30000:7000));
   }
@@ -2520,12 +2541,12 @@
   function fmtPrice(n){n=Number(n);if(!isFinite(n)||n<=0)return"—";if(n>=1)return n.toFixed(3);if(n>=0.001)return n.toFixed(5);return n.toExponential(2);}
   function curTradeRow(){return (state.tradeRow&&state.tradeRow.tokenMint===state.mint)?state.tradeRow:findRow(state.mint);}
   const CHART_TAPE_SPLIT_KEY="slimewireChartTapeSplitV1";
-  function chartTapeDefaultRatio(){return window.matchMedia("(max-width:820px)").matches?.58:.62;}
+  function chartTapeDefaultRatio(){return window.matchMedia("(max-width:820px)").matches?.58:.72;}
   function chartTapeSplitHtml(){return'<div class="chartTapeSplit" data-chart-tape-split role="separator" aria-orientation="horizontal" aria-label="Resize chart and live trades" aria-valuetext="Drag up for more trades or down for more chart" tabindex="0" title="Drag up for more trades · down for more chart. Double-click to reset."><span>Chart ↕ Trades</span></div>';}
   function chartTapeSplitParts(main){
     const chart=main&&main.querySelector(".chartwrap"),tape=main&&main.querySelector(".marketTape"),handle=main&&main.querySelector("[data-chart-tape-split]");
     if(!chart||!tape||!handle)return null;
-    const mobile=window.matchMedia("(max-width:820px)").matches,minChart=mobile?220:240,minTape=mobile?185:205;
+    const mobile=window.matchMedia("(max-width:820px)").matches,minChart=mobile?220:280,minTape=mobile?185:155;
     return{chart,tape,handle,minChart,minTape,total:Math.max(minChart+minTape,chart.offsetHeight+tape.offsetHeight)};
   }
   function applyChartTapeSplit(main,height,persist,totalOverride){
@@ -4934,5 +4955,6 @@
   });
 })();
 </script>
+<script src="/terminal-pro.js?v=20260718a"></script>
 </body>
 </html>

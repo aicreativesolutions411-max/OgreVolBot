@@ -1,0 +1,88 @@
+/* Desktop market + trade workspace additions. Kept separate so the mobile /fun shell stays untouched. */
+.marketChainSwitch{display:flex;align-items:center;gap:3px;padding:3px;border:1px solid var(--border);border-radius:10px;background:#071008;flex:0 0 auto}
+.marketChainSwitch button{padding:5px 10px;border-radius:7px;color:var(--muted);font-size:11px;font-weight:800;white-space:nowrap}
+.marketChainSwitch button.on{color:#071006;background:linear-gradient(180deg,var(--green2),var(--green));box-shadow:0 2px 10px rgba(114,255,35,.18)}
+.chainMini{display:inline-flex;align-items:center;justify-content:center;min-width:25px;height:15px;padding:0 4px;border:1px solid var(--border);border-radius:5px;font-size:8px;font-weight:900;line-height:1;letter-spacing:.04em}
+.chainMini.sol{color:#b995ff;background:rgba(130,80,255,.10)}
+.chainMini.rh{color:#69c9ff;background:rgba(40,170,255,.11)}
+
+@media(min-width:821px){
+  .trade{grid-template-columns:minmax(0,1fr) 360px}
+  .tradeMain{position:relative}
+  .marketTape{min-height:155px;padding:10px 12px}
+  .tapeGauges{margin-bottom:7px}
+  .tapeGauges article{padding:7px 9px}
+  .tapeTable{max-height:190px}
+}
+
+.chartProBar{display:flex;align-items:center;gap:7px;min-height:38px;padding:5px 10px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,rgba(10,17,11,.98),rgba(5,9,6,.96));flex:0 0 auto;overflow-x:auto;scrollbar-width:none;z-index:12}
+.chartProBar::-webkit-scrollbar{display:none}
+.chartProBar .proIntervals{display:flex;align-items:center;gap:2px;white-space:nowrap}
+.chartProBar button{height:27px;padding:0 8px;border:1px solid transparent;border-radius:7px;color:var(--muted);font:800 10px/1 var(--mono);white-space:nowrap}
+.chartProBar button:hover{color:var(--text);border-color:var(--border)}
+.chartProBar button.on{color:var(--green);border-color:rgba(114,255,35,.25);background:var(--green-dim)}
+.chartProBar .proDivider{width:1px;height:19px;background:var(--border);flex:0 0 auto}
+.chartProBar .proActions{display:flex;align-items:center;gap:4px;margin-left:auto;white-space:nowrap}
+.chartProBar .proQuick{color:#071006;background:linear-gradient(180deg,var(--green2),var(--green));border-color:transparent;font-family:var(--sans)}
+.chartProBar .proQuick:hover{color:#071006;filter:brightness(1.06)}
+.chartProBar .proFull,.chartProBar .proWide{font-family:var(--sans);font-size:10px}
+
+.trade.proWide{grid-template-columns:minmax(0,1fr)}
+.trade.proWide>.tradeSide{display:none}
+.trade.proFullscreen,.trade:fullscreen{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:150!important;grid-template-columns:minmax(0,1fr)!important;background:#030603!important}
+.trade.proFullscreen>.tradeSide,.trade:fullscreen>.tradeSide,.trade.proFullscreen .thead,.trade:fullscreen .thead,.trade.proFullscreen .tstrip,.trade:fullscreen .tstrip,.trade.proFullscreen .chartTapeSplit,.trade:fullscreen .chartTapeSplit,.trade.proFullscreen .marketTape,.trade:fullscreen .marketTape{display:none!important}
+.trade.proFullscreen .tradeMain,.trade:fullscreen .tradeMain{border:0!important}
+.trade.proFullscreen .chartwrap,.trade:fullscreen .chartwrap{height:auto!important;flex:1 1 auto!important}
+.trade.proFullscreen .chartProBar,.trade:fullscreen .chartProBar{min-height:46px;padding:8px 12px}
+body.proNoScroll{overflow:hidden!important}
+
+.proQuickPanel{position:absolute;top:150px;right:14px;z-index:45;width:min(430px,calc(100% - 28px));max-height:calc(100% - 170px);overflow:auto;padding:12px;border:1px solid rgba(137,255,67,.28);border-radius:14px;background:rgba(8,13,9,.97);box-shadow:0 20px 60px rgba(0,0,0,.62),0 0 30px rgba(114,255,35,.09);backdrop-filter:blur(16px);display:none}
+.proQuickPanel.open{display:block}
+.trade.proFullscreen .proQuickPanel,.trade:fullscreen .proQuickPanel{top:58px;right:18px;max-height:calc(100% - 76px)}
+.proQuickHead{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.proQuickHead .proWallet{display:flex;align-items:center;gap:6px;min-width:0;flex:1;padding:7px 9px;border:1px solid var(--border);border-radius:9px;background:#070d08;color:var(--text);font-size:11px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.proQuickHead .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 7px var(--green);flex:0 0 auto}
+.proProfiles{display:flex;gap:3px}
+.proProfiles button{min-width:30px;height:29px;padding:0 7px;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:10px;font-weight:900}
+.proProfiles button.on{color:var(--green);border-color:rgba(114,255,35,.38);background:var(--green-dim)}
+.proClose{width:29px;height:29px;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:16px}
+.proQuickTabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:9px}
+.proQuickTabs button{height:36px;border:1px solid var(--border);border-radius:10px;color:var(--muted);font-size:12px;font-weight:900}
+.proQuickTabs .buy.on{color:#061006;background:linear-gradient(180deg,var(--green2),var(--green));border-color:transparent}
+.proQuickTabs .sell.on{color:#1c0507;background:linear-gradient(180deg,#ff8b9a,var(--red));border-color:transparent}
+.proAmount{display:flex;align-items:center;gap:8px;margin-bottom:9px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#050a06}
+.proAmount input{min-width:0;flex:1;border:0;outline:0;background:transparent;color:var(--text);font:800 18px/1 var(--mono)}
+.proAmount span{color:var(--muted);font-size:11px;font-weight:900}
+.proPresetGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px}
+.proPresetGrid button{height:41px;border:1px solid var(--border);border-radius:10px;color:var(--green);background:rgba(114,255,35,.045);font:850 12px/1 var(--mono)}
+.proPresetGrid.sell button{color:#ff7181;background:rgba(255,93,93,.045)}
+.proPresetGrid button:hover{border-color:currentColor}
+.proTradeMeta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:7px 0 10px;color:var(--muted);font-size:10px}
+.proTradeMeta span{padding:5px 7px;border:1px solid var(--border);border-radius:7px;background:#071008}
+.proExecute{width:100%;height:45px;border-radius:11px;color:#061006;background:linear-gradient(180deg,var(--green2),var(--green));font-size:14px;font-weight:950;box-shadow:0 4px 16px rgba(114,255,35,.22)}
+.proExecute.sell{color:#1c0507;background:linear-gradient(180deg,#ff8b9a,var(--red));box-shadow:0 4px 16px rgba(255,93,93,.16)}
+.proToolsLabel{display:flex;align-items:center;justify-content:space-between;margin:12px 1px 7px;color:var(--muted);font-size:9px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}
+.proTools{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
+.proTools button{min-width:0;padding:8px 3px;border:1px solid var(--border);border-radius:9px;color:var(--text);background:#080e09;font-size:9px;font-weight:850;white-space:nowrap}
+.proTools button:hover{color:var(--green);border-color:rgba(114,255,35,.35)}
+.proPanelNote{margin:8px 1px 0;color:var(--muted);font-size:9px;line-height:1.35}
+
+.proSideTools{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin:0 0 12px}
+.proSideTools button{min-width:0;padding:8px 2px;border:1px solid var(--border);border-radius:8px;color:var(--muted);background:#080e09;font-size:9px;font-weight:850}
+.proSideTools button:hover{color:var(--green);border-color:rgba(114,255,35,.35)}
+
+.proOrders .fieldGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.proOrders .orderCard{padding:11px;margin:9px 0;border:1px solid var(--border);border-radius:11px;background:#081009}
+.proOrders .orderCard h4{margin:0 0 8px;font-size:12px}
+.proOrders .orderList{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+.proOrders .orderRow{display:flex;align-items:center;gap:8px;padding:8px 9px;border:1px solid var(--border2);border-radius:9px;background:#070c08;font-size:10px}
+.proOrders .orderRow b{color:var(--green)}
+.proOrders .orderRow span{min-width:0;flex:1;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.proOrders .orderRow button{width:26px;height:26px;border:1px solid rgba(255,93,93,.3);border-radius:7px;color:var(--red)}
+
+@media(max-width:820px){
+  .marketChainSwitch{order:-1}.marketChainSwitch button{padding:5px 8px}
+  .chartProBar{padding:5px 7px}.chartProBar .proIntervals button{padding:0 6px}.chartProBar .proWide{display:none}
+  .proQuickPanel{position:fixed;left:8px;right:8px;top:auto;bottom:calc(var(--botnav) + 8px);width:auto;max-height:68vh;border-radius:16px}
+  .proTools{grid-template-columns:repeat(2,1fr)}
+}

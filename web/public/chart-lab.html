@@ -160,7 +160,7 @@
   function axisFmt(p){return mcScale>0?fmtMcRaw(p*mcScale):fmtUsd(p);}   // axis/crosshair shows MARKET CAP (price × the anchor)
   function esc(s){return String(s||'').replace(/[<>&"]/g,'');}
   function chartH(){return Math.max(280,Math.min(470,Math.round((window.innerHeight||640)*0.52)));}
-  var TFSEC={'1m':60,'5m':300,'15m':900,'1h':3600};
+  var TFSEC={'1s':1,'15s':15,'30s':30,'1m':60,'5m':300,'15m':900,'1h':3600,'4h':14400,'12h':43200,'1d':86400};
   function tfSec(){return TFSEC[TF]||TFSEC['5m'];}
 
   // ---- the REAL chart (TradingView lightweight-charts) — slime-green up / blood-red down ----
@@ -169,7 +169,7 @@
     layout:{background:{type:'solid',color:'transparent'},textColor:'#7fae90',fontSize:11,fontFamily:'-apple-system,BlinkMacSystemFont,system-ui,sans-serif'},
     grid:{vertLines:{color:'rgba(124,255,79,.05)'},horzLines:{color:'rgba(124,255,79,.06)'}},
     rightPriceScale:{borderColor:'rgba(124,255,79,.12)',scaleMargins:{top:0.07,bottom:0.26},entireTextOnly:true},
-    timeScale:{borderColor:'rgba(124,255,79,.12)',timeVisible:true,secondsVisible:false,rightOffset:4,barSpacing:7},
+    timeScale:{borderColor:'rgba(124,255,79,.12)',timeVisible:true,secondsVisible:tfSec()<60,rightOffset:4,barSpacing:7},
     crosshair:{mode:LWC.CrosshairMode?LWC.CrosshairMode.Normal:0,vertLine:{color:'rgba(124,255,79,.35)',width:1,style:2,labelBackgroundColor:'#1c5a2e'},horzLine:{color:'rgba(124,255,79,.35)',width:1,style:2,labelBackgroundColor:'#1c5a2e'}},
     handleScroll:true,handleScale:true
   });
@@ -330,7 +330,7 @@
   function loadGeckoFallback(){
     if(NETWORK!=='robinhood'||bars.length>2||!dexPair||gtFallbackBusy||Date.now()-gtFallbackAt<5000)return Promise.resolve(false);
     gtFallbackBusy=true;gtFallbackAt=Date.now();
-    var spec=TF==='1h'?{path:'hour',aggregate:1}:TF==='15m'?{path:'minute',aggregate:15}:TF==='1m'?{path:'minute',aggregate:1}:{path:'minute',aggregate:5};
+    var spec=TF==='1d'?{path:'day',aggregate:1}:TF==='12h'?{path:'hour',aggregate:12}:TF==='4h'?{path:'hour',aggregate:4}:TF==='1h'?{path:'hour',aggregate:1}:TF==='15m'?{path:'minute',aggregate:15}:TF==='1m'||tfSec()<60?{path:'minute',aggregate:1}:{path:'minute',aggregate:5};
     var url='https://api.geckoterminal.com/api/v2/networks/robinhood/pools/'+encodeURIComponent(dexPair)+'/ohlcv/'+spec.path+'?aggregate='+spec.aggregate+'&limit=300&currency=usd&token='+dexTokenSide;
     return json(url).then(function(j){
       var list=j&&j.data&&j.data.attributes&&j.data.attributes.ohlcv_list;
@@ -343,6 +343,15 @@
     var buckets={},sec=tfSec();
     (Array.isArray(list)?list:[]).slice().sort(function(a,b){return Date.parse(a&&a.ts||0)-Date.parse(b&&b.ts||0);}).forEach(function(x){
       var price=Number(x&&x.price)||0,stamp=Math.floor(Date.parse(x&&x.ts||'')/1000);if(!(price>0)||!(stamp>0))return;
+      var t=Math.floor(stamp/sec)*sec,b=buckets[t],usd=Math.max(0,Number(x&&x.usd)||0);
+      if(!b)buckets[t]={t:t,o:price,h:price,l:price,c:price,v:usd};else{b.h=Math.max(b.h,price);b.l=Math.min(b.l,price);b.c=price;b.v+=usd;}
+    });
+    return Object.keys(buckets).map(function(k){return buckets[k];}).sort(function(a,b){return a.t-b.t;});
+  }
+  function candlesFromApiTrades(list){
+    var buckets={},sec=tfSec();
+    (Array.isArray(list)?list:[]).slice().sort(function(a,b){return Number(a&&a.t||0)-Number(b&&b.t||0);}).forEach(function(x){
+      var price=Number(x&&x.price)||0,stamp=Number(x&&x.t)||0;if(!(price>0)||!(stamp>0))return;
       var t=Math.floor(stamp/sec)*sec,b=buckets[t],usd=Math.max(0,Number(x&&x.usd)||0);
       if(!b)buckets[t]={t:t,o:price,h:price,l:price,c:price,v:usd};else{b.h=Math.max(b.h,price);b.l=Math.min(b.l,price);b.c=price;b.v+=usd;}
     });
@@ -371,7 +380,7 @@
     if(d.pairAddress)dexPair=d.pairAddress;
     applyStats(d,false);
     if(!(mcScale>0)&&d.mc>0&&d.priceUsd>0)mcScale=d.mc/d.priceUsd;       // fallback anchor so the axis shows MC even before DexScreener lands
-    var cs=d.candles, seen={}, candles=[], vols=[];
+    var micro=tfSec()<60?candlesFromApiTrades(d.trades):[],cs=micro.length?micro:d.candles, seen={}, candles=[], vols=[];
     // Never let a later one-point "still indexing" response erase a real chart loaded from the pool
     // or the live trade tape. This was the second cause of charts reverting to a flat line.
     if(cs.length<3&&bars.length>=3)return true;
