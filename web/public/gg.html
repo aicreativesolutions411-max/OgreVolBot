@@ -1481,11 +1481,17 @@
     else renderTrending();
   }
   // ---------- subbars ----------
+  function setMarketChain(chain){
+    const next=["all","solana","robinhood"].includes(chain)?chain:"all";
+    state.marketChain=next;localStorage.setItem("ggMarketChain",next);
+    document.querySelectorAll("[data-market-chain]").forEach(b=>b.classList.toggle("on",b.dataset.marketChain===next));
+    if(state.route==="trending")render();
+  }
   function subbarTrending(){
     const sb=$("#subbar");sb.innerHTML="";
     const h=el("h1");h.textContent="Market";sb.appendChild(h);
     const chains=el("div","marketChainSwitch");
-    [["all","All"],["solana","Solana"],["robinhood","Robinhood"]].forEach(([id,label])=>{const b=el("button");b.textContent=label;b.className=id===state.marketChain?"on":"";b.onclick=()=>{state.marketChain=id;localStorage.setItem("ggMarketChain",id);render();};chains.appendChild(b);});
+    [["all","Both"],["solana","Solana"],["robinhood","Robinhood"]].forEach(([id,label])=>{const b=el("button");b.textContent=label;b.dataset.marketChain=id;b.className=id===state.marketChain?"on":"";b.onclick=()=>setMarketChain(id);chains.appendChild(b);});
     sb.appendChild(chains);
     const tabs=el("div","tabs");
     TREND_TABS.forEach(t=>{const b=el("button");b.textContent=t.label;b.className=t.id===state.trendTab?"on":"";b.onclick=()=>{state.trendTab=t.id;render();};tabs.appendChild(b);});
@@ -1635,6 +1641,10 @@
     if(rows.length&&syncTrendingTable(rows))return;                 // patch in place (no flicker)
     tb.innerHTML=rows.length?rows.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>';}
   const ORIENTATION_KEY="slimewireOrientationSeenV1";
+  function feedChainBarHtml(){
+    const button=(id,label,sub)=>'<button type="button" data-market-chain="'+id+'" class="'+(state.marketChain===id?'on':'')+'" onclick="GG.setMarketChain(\''+id+'\')"><b>'+label+'</b><span>'+sub+'</span></button>';
+    return '<section class="feedChainBar" aria-label="Choose coin feed"><div><strong>Coin feed</strong><span>Choose both chains or focus one.</span></div><nav>'+button("all","Both","SOL + RH")+button("solana","Solana","SOL")+button("robinhood","Robinhood","RH")+'</nav></section>';
+  }
   function orientationHtml(){
     try{if(localStorage.getItem(ORIENTATION_KEY)==="1")return"";}catch(e){}
     return '<section class="orientation" id="orientation"><div class="ocopy"><b>Trade Solana + Robinhood coins</b><span>Every advanced tool stays one tap away.</span></div><div class="oa"><button class="primary" type="button" id="orientationExplore">Explore</button><button type="button" id="orientationConnect">Connect</button></div></section>';
@@ -1653,7 +1663,7 @@
   async function renderTrending(){
     setActiveView("v-trending");subbarTrending();
     const view=$("#v-trending");
-    if(!view.querySelector("table"))view.innerHTML=orientationHtml()+'<div class="loading"><span class="spin"></span></div>';
+    if(!view.querySelector("table"))view.innerHTML=feedChainBarHtml()+orientationHtml()+'<div class="loading"><span class="spin"></span></div>';
     wireOrientation();
     const isWatch=state.trendTab==="watch";
     let rows;
@@ -1683,9 +1693,9 @@
     }
     state.rows=rows;
     const shown=shownRows();
-    if(!rows.length)view.innerHTML=orientationHtml()+'<div class="msg">'+(feedDown?'Reconnecting to the live feed… <span class="spin"></span>':(isWatch?"No saved coins yet — tap ☆ on any coin to add it here.":"No pairs in this view right now — try another tab."))+'</div>';
+    if(!rows.length)view.innerHTML=feedChainBarHtml()+orientationHtml()+'<div class="msg">'+(feedDown?'Reconnecting to the live feed… <span class="spin"></span>':(isWatch?"No saved coins yet — tap ☆ on any coin to add it here.":"No pairs in this view right now — try another tab."))+'</div>';
     else if(shown.length&&syncTrendingTable(shown)){}              // same table already up → patch rows in place (no teardown/flicker)
-    else view.innerHTML=orientationHtml()+'<table class="tbl"><thead><tr><th class="l">Pair</th><th>Market Cap</th><th class="hideMb">Liquidity</th><th>Volume</th><th class="hideMb">Txns</th><th class="hideMb">Token Info</th><th></th></tr></thead><tbody>'+(shown.length?shown.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>')+'</tbody></table>';
+    else view.innerHTML=feedChainBarHtml()+orientationHtml()+'<table class="tbl"><thead><tr><th class="l">Pair</th><th>Market Cap</th><th class="hideMb">Liquidity</th><th>Volume</th><th class="hideMb">Txns</th><th class="hideMb">Token Info</th><th></th></tr></thead><tbody>'+(shown.length?shown.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>')+'</tbody></table>';
     wireOrientation();
     void enrichSocials(rows.filter(r=>r.chain!=="robinhood"));
     // Watchlist is static-ish — refresh it lazily (30s); live feeds stay snappy at 7s; retry fast when down.
@@ -2528,12 +2538,16 @@
   // Chart pane — GeckoTerminal (it indexes PumpSwap/Raydium pools DexScreener leaves stuck on
   // "Loading pair…"). Chart-ONLY now (swaps=0) since Transactions is its own tab — lighter embed =
   // faster paint. A skeleton spinner sits behind the iframe and is removed on load (instant feel).
-  // Needs the POOL address (from the feed row); fresh tokens with no pool fall back to DexScreener.
-  function chartIframe(mint,r){
+  // Needs the POOL address (from the feed row); fresh/deep-linked tokens use our real-candle chart
+  // until the browser resolves their strongest pair and upgrades the embed.
+  function solChartUrl(mint,r){
     const pool=(r&&(r.pairAddress||r.raydiumPool))||"";
-    const u=pool
+    return pool
       ? "https://www.geckoterminal.com/solana/pools/"+encodeURIComponent(pool)+"?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&chart_type=price&resolution=15m"
-      : "https://dexscreener.com/solana/"+encodeURIComponent(mint)+"?embed=1&theme=dark&trades=0&info=0&chartLeftToolbar=0&interval=15";
+      : "/chart-lab?ca="+encodeURIComponent(mint)+"&tf=15m&embed=1&cv=5&sym="+encodeURIComponent((r&&r.symbol)||"");
+  }
+  function chartIframe(mint,r){
+    const u=solChartUrl(mint,r);
     return'<div class="chartskel"><span class="spin"></span></div>'+
       '<iframe src="'+u+'" title="chart" loading="eager" allow="clipboard-write" onload="var s=this.parentNode.querySelector(\'.chartskel\');if(s)s.remove()" style="position:relative;z-index:2;width:100%;height:100%;border:0;display:block;background:#060906"></iframe>';
   }
@@ -3029,11 +3043,10 @@
     wireTradePanel(mint,r);updateWselLine();paintPresetSel();wireCtab();wireChartTapeSplit(view.querySelector(".chartSplitMain"));loadTradePnl(mint);loadTradeStats(mint);loadInlineTape(mint,r||{},"solana","tradeTape");
     const mb=$("#ctMoreBtn");if(mb)mb.onclick=(e)=>{e.stopPropagation();mb.parentNode.classList.toggle("open");};
     if(state.token&&!(state.presets.trade||[]).length){loadPresets().then(()=>{if(state.route==="trade")paintPresetSel();});}
-    if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){state.tradeRow=r;rememberTradeRecent(r);$("#thead").innerHTML=theadHtml(r);fillPerf(r);}}
+    if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){state.tradeRow=r;rememberTradeRecent(r);subbarTrade(r);$("#thead").innerHTML=theadHtml(r);fillPerf(r);}}
     else fillPerf(r);
-    // Cold deep-link / shared trade link: the row isn't in the feed yet, so chartIframe fell back to
-    // DexScreener (which can't index PumpSwap pools → stuck on "Loading pair…"). Resolve the pool from
-    // GeckoTerminal (CORS-OK) and upgrade the chart + Transactions so direct links work like clicks.
+    // Cold deep-link / shared trade link: resolve the pool and upgrade the real-candle fallback to the
+    // full Gecko chart so direct links work exactly like feed clicks.
     if(state.route==="trade"&&state.mint===mint&&!(r&&(r.pairAddress||r.raydiumPool))){
       try{
         const j=await fetch("https://api.geckoterminal.com/api/v2/networks/solana/tokens/"+encodeURIComponent(mint)+"/pools?page=1",{headers:{Accept:"application/json"}}).then(x=>x.ok?x.json():null);
@@ -3086,7 +3099,17 @@
         for(const s of (info.socials||[])){const t=String(s.type||s.platform||"").toLowerCase();if((t==="twitter"||t==="x")&&!r.twitterUrl)r.twitterUrl=s.url;if(t==="telegram"&&!r.telegramUrl)r.telegramUrl=s.url;}
         if(info.websites&&info.websites[0]&&info.websites[0].url&&!r.websiteUrl)r.websiteUrl=info.websites[0].url;
         const img=info.imageUrl||info.image||(best.baseToken&&best.baseToken.imageUrl)||"";if(img&&!r.imageUrl)r.imageUrl=img;  // always fill the coin pfp
+        const resolvedPool=String(best.pairAddress||"").trim();
+        if(resolvedPool)r.pairAddress=resolvedPool;
         state.tradeRow=r;rememberTradeRecent(r);const th=$("#thead");if(th)th.innerHTML=theadHtml(r);fillPerf(r);
+        const subTitle=$("#subbar h1"),wantedTitle=String(r.symbol||short(mint));if(subTitle&&subTitle.textContent!==wantedTitle)subbarTrade(r);
+        // DexScreener's embed needs a PAIR address, not a token mint. Until the pair resolves we show
+        // SlimeWire's own real-candle chart; once this browser-side market read supplies the pair,
+        // upgrade to the full Gecko chart. Never interrupt a deliberately selected sub-minute view.
+        if(resolvedPool){
+          const cw=$('[data-pane="chart"]'),tf=(cw&&cw.closest(".trade")&&cw.closest(".trade").dataset.proTf)||localStorage.getItem("ggSolChartTf")||"15m",micro=["1s","15s","30s"].includes(tf);
+          if(cw){cw.dataset.proStandardSrc=solChartUrl(mint,r);const frame=cw.querySelector("iframe");if(!micro&&frame&&!/geckoterminal\.com/i.test(frame.src))cw.innerHTML=chartIframe(mint,r);}
+        }
         // Capture the LIVE price (SOL per token) so the PnL bar can mark-to-market instantly. Use the
         // SOL-quoted native price when the pair quotes in SOL; else convert USD via a live SOL/USD we
         // keep from any SOL-quoted pair we see.
@@ -3116,7 +3139,7 @@
     sel.onchange=()=>{setActiveTradePreset(sel.value);const p=activeTradePresetObj();if(p&&p.amountSol&&tradeSide==="buy"){const amt=$("#amt");if(amt){amt.value=String(p.amountSol);tradeAmt=amt.value;}}toast(sel.value?"Preset on — TP/SL arm on buy":"Manual buys");};
   }
   function wireTradePanel(mint,r){
-    const chipsBuy=["0.1","0.2","0.5","1"],chipsSell=["25%","50%","75%","100%"];
+    const chipsBuy=["0.1","0.5","1","2"],chipsSell=["25%","50%","75%","100%"];
     const amt=$("#amt"),unit=$("#amtUnit"),big=$("#bigbuy"),chips=$("#chips");
     function paint(){
       $("#sideBuy").classList.toggle("on",tradeSide==="buy");$("#sideSell").classList.toggle("on",tradeSide==="sell");
@@ -4904,7 +4927,7 @@
   document.addEventListener("click",(e)=>{if(!e.target.closest(".ctmore"))document.querySelectorAll(".ctmore.open").forEach(x=>x.classList.remove("open"));});
 
   // ---------- expose + boot ----------
-  window.GG={open:openCoinRoute,openSell:(m)=>{state.pendingSell=m;go("trade",m);},sellPos:(m,s)=>quickSellModal(m,s),sendPos:(m,s)=>sendTokenModal(m,s),armPos:(m,s)=>armExitsModal(m,s),go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
+  window.GG={open:openCoinRoute,openSell:(m)=>{state.pendingSell=m;go("trade",m);},sellPos:(m,s)=>quickSellModal(m,s),sendPos:(m,s)=>sendTokenModal(m,s),armPos:(m,s)=>armExitsModal(m,s),go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,setMarketChain,
     escrowModal,renderEscrow,escrowFinalize,escrowRefund,launchesModal,claimFees,toast,
     launchRh:()=>{state.launchRail="robinhood";state.launchTab="coin";go("launch");},
     rhTrade:(a)=>rhTradeModal(a),rhBuy:(a,amt)=>rhBuyAmount(a,amt),rhBuyAmount:(a,amt)=>rhBuyAmount(a,amt),rhSell:(a,p)=>rhTrade(a,"sell",{percent:p}),rhQuick:(a)=>rhBuyAmount(a,rhQuickEth()),

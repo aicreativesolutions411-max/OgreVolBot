@@ -17,7 +17,9 @@ test("desktop terminal mirrors ship the same market and trade workspace", () => 
 });
 
 test("desktop market can view both chains together or independently", () => {
-  assert.match(gg, /\[\["all","All"\],\["solana","Solana"\],\["robinhood","Robinhood"\]\]/);
+  assert.match(gg, /\[\["all","Both"\],\["solana","Solana"\],\["robinhood","Robinhood"\]\]/);
+  assert.match(gg, /aria-label="Choose coin feed"/);
+  assert.match(gg, /GG\.setMarketChain/);
   assert.match(gg, /api\("\/api\/web\/rh\/pairs\?category="\+rhCategory\)/);
   assert.match(gg, /state\.marketChain==="all"/);
   assert.match(gg, /GG\.rhQuick/);
@@ -43,6 +45,15 @@ test("compact quick panel reuses the existing guarded execution buttons", () => 
   assert.match(pro, /data-pro-tool="bundle"/);
   assert.match(pro, /data-pro-tool="volume"/);
   assert.match(pro, /Server-side exits/);
+  assert.match(pro, /\["0\.1", "0\.5", "1", "2"\]/);
+});
+
+test("Solana charts never use a token address as a DexScreener pool", () => {
+  assert.match(gg, /function solChartUrl/);
+  assert.match(gg, /\/chart-lab\?ca=/);
+  assert.match(gg, /resolvedPool=String\(best\.pairAddress/);
+  assert.match(gg, /cw\.dataset\.proStandardSrc=solChartUrl/);
+  assert.doesNotMatch(gg, /dexscreener\.com\/solana\/"\+encodeURIComponent\(mint\)\+"\?embed=1/);
 });
 
 test("desktop market-cap orders use the existing server-side engine", () => {

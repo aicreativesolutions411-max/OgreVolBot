@@ -137,7 +137,7 @@
   }
 
   function quickPanelHtml(context) {
-    const buyAmounts = context.rh ? ["0.01", "0.025", "0.05", "0.10"] : ["0.1", "0.2", "0.5", "1"];
+    const buyAmounts = context.rh ? ["0.01", "0.025", "0.05", "0.10"] : ["0.1", "0.5", "1", "2"];
     return `<section class="proQuickPanel" data-side="buy" aria-label="Quick trade panel">
       <div class="proQuickHead"><button class="proWallet" type="button" data-pro-wallet><i class="dot"></i><span>Active wallet · pays with SOL</span></button><div class="proProfiles">${[0, 1, 2].map((i) => `<button type="button" data-pro-profile="${i}" title="Quick profile ${i + 1}">P${i + 1}</button>`).join("")}</div><button class="proClose" type="button" data-pro-close aria-label="Close quick trade">×</button></div>
       <div class="proQuickTabs"><button class="buy on" type="button" data-pro-side="buy">Buy</button><button class="sell" type="button" data-pro-side="sell">Sell</button></div>

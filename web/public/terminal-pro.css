@@ -2,6 +2,11 @@
 .marketChainSwitch{display:flex;align-items:center;gap:3px;padding:3px;border:1px solid var(--border);border-radius:10px;background:#071008;flex:0 0 auto}
 .marketChainSwitch button{padding:5px 10px;border-radius:7px;color:var(--muted);font-size:11px;font-weight:800;white-space:nowrap}
 .marketChainSwitch button.on{color:#071006;background:linear-gradient(180deg,var(--green2),var(--green));box-shadow:0 2px 10px rgba(114,255,35,.18)}
+.feedChainBar{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:11px 16px;border-bottom:1px solid var(--border);background:linear-gradient(90deg,rgba(114,255,35,.055),rgba(6,11,7,.82));position:sticky;top:0;z-index:8}
+.feedChainBar>div{display:flex;align-items:baseline;gap:8px;min-width:0}.feedChainBar strong{font-size:12px;white-space:nowrap}.feedChainBar>div span{color:var(--muted);font-size:10px;white-space:nowrap}
+.feedChainBar nav{display:grid;grid-template-columns:repeat(3,minmax(96px,1fr));gap:5px;min-width:330px}
+.feedChainBar button{display:flex;align-items:center;justify-content:center;gap:6px;min-width:0;height:34px;padding:0 10px;border:1px solid var(--border);border-radius:9px;background:#071008;color:var(--muted)}
+.feedChainBar button b{font-size:11px}.feedChainBar button span{font:800 8px/1 var(--mono);opacity:.66}.feedChainBar button.on{color:#071006;border-color:transparent;background:linear-gradient(180deg,var(--green2),var(--green));box-shadow:0 3px 14px rgba(114,255,35,.17)}
 .chainMini{display:inline-flex;align-items:center;justify-content:center;min-width:25px;height:15px;padding:0 4px;border:1px solid var(--border);border-radius:5px;font-size:8px;font-weight:900;line-height:1;letter-spacing:.04em}
 .chainMini.sol{color:#b995ff;background:rgba(130,80,255,.10)}
 .chainMini.rh{color:#69c9ff;background:rgba(40,170,255,.11)}
@@ -82,6 +87,7 @@ body.proNoScroll{overflow:hidden!important}
 
 @media(max-width:820px){
   .marketChainSwitch{order:-1}.marketChainSwitch button{padding:5px 8px}
+  .feedChainBar{display:block;padding:8px;position:relative}.feedChainBar>div{display:none}.feedChainBar nav{min-width:0;grid-template-columns:repeat(3,1fr)}.feedChainBar button{height:38px;padding:0 4px}.feedChainBar button span{display:none}
   .chartProBar{padding:5px 7px}.chartProBar .proIntervals button{padding:0 6px}.chartProBar .proWide{display:none}
   .proQuickPanel{position:fixed;left:8px;right:8px;top:auto;bottom:calc(var(--botnav) + 8px);width:auto;max-height:68vh;border-radius:16px}
   .proTools{grid-template-columns:repeat(2,1fr)}
