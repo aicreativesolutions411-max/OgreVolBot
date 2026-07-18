@@ -101,7 +101,7 @@ test("desktop charts preserve the full indicator workspace", () => {
 test("Robinhood chart and transactions fall back to exact on-chain pool swaps", () => {
   assert.match(noxa, /export async function fetchPoolSwaps/);
   assert.match(noxa, /SWAP_TOPIC_V3, SWAP_TOPIC_V2/);
-  assert.match(noxa, /eth_getBlockByNumber/);
+  assert.match(noxa, /historySecondsPerBlock/);
   assert.match(server, /rhCandlesFromSwaps/);
   assert.match(server, /source = "robinhood rpc swaps"/);
   assert.match(server, /pathname === "\/api\/web\/token-trades"/);

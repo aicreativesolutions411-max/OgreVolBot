@@ -210,35 +210,6 @@ async function poolSwapMeta(provider, poolAddr) {
   return value;
 }
 
-async function blockTimestamps(rpcUrl, blockNumbers) {
-  const unique = [...new Set(blockNumbers.map(Number).filter(Number.isFinite))];
-  const out = new Map();
-  const chunks = [];
-  for (let offset = 0; offset < unique.length; offset += 100) chunks.push(unique.slice(offset, offset + 100));
-  const results = await Promise.all(chunks.map(async (chunk) => {
-    try {
-      const response = await fetch(rpcUrl || NOXA_RH.rpcUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(chunk.map((block, index) => ({
-          jsonrpc: "2.0", id: index + 1, method: "eth_getBlockByNumber",
-          params: [`0x${block.toString(16)}`, false]
-        })))
-      });
-      if (!response.ok) return [];
-      const rows = await response.json();
-      return (Array.isArray(rows) ? rows : []).map((row) => ({
-        block: chunk[Number(row?.id) - 1],
-        timestamp: Number.parseInt(String(row?.result?.timestamp || ""), 16)
-      }));
-    } catch { return []; }
-  }));
-  for (const row of results.flat()) {
-    if (Number.isFinite(row.block) && row.timestamp > 0) out.set(row.block, row.timestamp);
-  }
-  return out;
-}
-
 // Ground-truth RH tape for pools that GeckoTerminal does not index. Supports both V2 and V3 and is
 // bounded/cached so the chart remains fast without growing Render memory.
 export async function fetchPoolSwaps(pool, tokenAddress, {
@@ -270,7 +241,11 @@ export async function fetchPoolSwaps(pool, tokenAddress, {
   let logs = settled.flatMap((row) => row.status === "fulfilled" ? row.value : []);
   logs.sort((a, b) => Number(b.blockNumber) - Number(a.blockNumber) || Number(b.index ?? b.logIndex ?? 0) - Number(a.index ?? a.logIndex ?? 0));
   if (logs.length > maxLogs) logs = logs.slice(0, maxLogs);
-  const timestamps = await blockTimestamps(rpcUrl || NOXA_RH.rpcUrl, logs.map((log) => log.blockNumber));
+  const oldestBlock = logs.length ? Math.min(...logs.map((log) => Number(log.blockNumber))) : latest;
+  const oldestInfo = oldestBlock < latest ? await provider.getBlock(oldestBlock).catch(() => null) : latestInfo;
+  const historySecondsPerBlock = oldestInfo && latest > oldestBlock
+    ? Math.max(0.05, (Number(latestInfo?.timestamp) - Number(oldestInfo.timestamp)) / (latest - oldestBlock) || secondsPerBlock)
+    : secondsPerBlock;
 
   const tokenDecimals = tokenIs0 ? meta.dec0 : meta.dec1;
   const quoteDecimals = tokenIs0 ? meta.dec1 : meta.dec0;
@@ -307,8 +282,7 @@ export async function fetchPoolSwaps(pool, tokenAddress, {
       const quoteAmount = Number(ethers.formatUnits(quoteRaw, quoteDecimals));
       if (!(tokens > 0) || !(quoteAmount > 0)) continue;
       const block = Number(log.blockNumber);
-      const t = timestamps.get(block)
-        || Math.max(1, Math.round(Number(latestInfo?.timestamp || Date.now() / 1000) - (latest - block) * secondsPerBlock));
+      const t = Math.max(1, Math.round(Number(latestInfo?.timestamp || Date.now() / 1000) - (latest - block) * historySecondsPerBlock));
       swaps.push({
         t, ts: new Date(t * 1000).toISOString(), side, kind: side, tokens, quoteAmount,
         priceQuote: quoteAmount / tokens,
