@@ -1971,20 +1971,39 @@
   async function rhHydrateChartRow(r){
     const address=String((r&&r.address)||"").trim();if(!/^0x[0-9a-fA-F]{40}$/.test(address))return false;
     try{
-      const {ok,d}=await api("/api/web/chart/bootstrap?token="+encodeURIComponent(address)+"&force=true");
-      const c=ok&&d&&d.chart;if(!c)return false;let changed=false;
+      const [chartResult,tokenResult]=await Promise.all([
+        api("/api/web/chart/bootstrap?token="+encodeURIComponent(address)+"&force=true").catch(()=>({})),
+        api("/api/web/rh/token?address="+encodeURIComponent(address)).catch(()=>({}))
+      ]);
+      const c=(chartResult.ok&&chartResult.d&&chartResult.d.chart)||{};
+      const coin=(tokenResult.ok&&tokenResult.d&&tokenResult.d.coin)||{};
+      if(!Object.keys(c).length&&!Object.keys(coin).length)return false;let changed=false;
       const put=(key,value,valid)=>{if(valid&&!Object.is(r[key],value)){r[key]=value;changed=true;}};
-      put("pairAddress",String(c.pairAddress||""),Boolean(c.pairAddress));
-      put("symbol",String(c.symbol||""),Boolean(c.symbol));put("name",String(c.name||""),Boolean(c.name));
-      put("imageUrl",String(c.imageUrl||""),Boolean(c.imageUrl));put("priceUsd",Number(c.priceUsd),Number(c.priceUsd)>0);
-      put("marketCapUsd",Number(c.marketCap||c.fdv),Number(c.marketCap||c.fdv)>0);
-      put("liquidityUsd",Number(c.liquidityUsd),Number(c.liquidityUsd)>0);
-      put("volume24hUsd",Number(c.volumeH24),Number(c.volumeH24)>0);
+      const first=(...values)=>values.find(v=>String(v==null?"":v).trim())||"";
+      put("pairAddress",String(first(coin.pairAddress,c.pairAddress)),Boolean(first(coin.pairAddress,c.pairAddress)));
+      put("symbol",String(first(coin.symbol,c.symbol)),Boolean(first(coin.symbol,c.symbol)));put("name",String(first(coin.name,c.name)),Boolean(first(coin.name,c.name)));
+      put("imageUrl",String(first(coin.imageUrl,coin.iconUrl,c.imageUrl)),Boolean(first(coin.imageUrl,coin.iconUrl,c.imageUrl)));
+      put("twitterUrl",String(first(coin.twitterUrl,c.twitterUrl)),Boolean(first(coin.twitterUrl,c.twitterUrl)));
+      put("telegramUrl",String(first(coin.telegramUrl,c.telegramUrl)),Boolean(first(coin.telegramUrl,c.telegramUrl)));
+      put("websiteUrl",String(first(coin.websiteUrl,c.websiteUrl)),Boolean(first(coin.websiteUrl,c.websiteUrl)));
+      put("x",String(first(coin.twitterUrl,c.twitterUrl)),Boolean(first(coin.twitterUrl,c.twitterUrl)));
+      put("telegram",String(first(coin.telegramUrl,c.telegramUrl)),Boolean(first(coin.telegramUrl,c.telegramUrl)));
+      put("website",String(first(coin.websiteUrl,c.websiteUrl)),Boolean(first(coin.websiteUrl,c.websiteUrl)));
+      put("priceUsd",Number(coin.priceUsd||c.priceUsd),Number(coin.priceUsd||c.priceUsd)>0);
+      put("marketCapUsd",Number(coin.mc||c.marketCap||c.fdv),Number(coin.mc||c.marketCap||c.fdv)>0);
+      put("liquidityUsd",Number(coin.liq||c.liquidityUsd),Number(coin.liq||c.liquidityUsd)>0);
+      put("volume24hUsd",Number(coin.vol24||c.volumeH24),Number(coin.vol24||c.volumeH24)>0);
       return changed;
     }catch(e){return false;}
   }
   function rhNativeChartFrame(address,r){
     return '<iframe src="/chart-lab?ca='+encodeURIComponent(address)+'&tf=5m&embed=1&cv=3&sym='+encodeURIComponent((r&&r.symbol)||'')+'&pool='+encodeURIComponent((r&&r.pairAddress)||'')+'" title="Robinhood live chart" loading="eager"></iframe>';
+  }
+  function rhTradeLinksHtml(r,address){
+    return ((r.x||r.twitterUrl)?'<a href="'+esc(/^https?:/.test(r.x||r.twitterUrl)?(r.x||r.twitterUrl):("https://x.com/"+String(r.x||r.twitterUrl).replace(/^@/,"")))+'" target="_blank" rel="noopener noreferrer" title="X / Twitter">𝕏</a>':'')+
+      ((r.telegram||r.telegramUrl)?'<a href="'+esc(r.telegram||r.telegramUrl)+'" target="_blank" rel="noopener noreferrer" title="Telegram">✈</a>':'')+
+      ((r.website||r.websiteUrl)?'<a href="'+esc(r.website||r.websiteUrl)+'" target="_blank" rel="noopener noreferrer" title="Website">🌐</a>':'')+
+      '<a href="'+esc(r.explorer||("https://robinhoodchain.blockscout.com/token/"+address))+'" target="_blank" rel="noopener noreferrer" title="Blockscout">◈</a>';
   }
   // Robinhood coin trade modal — same one-tap concept as Solana coins: instant buy (ETH amount) and
   // sell (% of bag) from the active wallet's Robinhood account, routed through the chain's live pools.
@@ -2028,7 +2047,7 @@
     const preset=el("button","chip qbpill");preset.style.marginLeft="auto";preset.textContent="⚡ RH presets";preset.onclick=()=>rhPresetModal();sb.appendChild(preset);
     const stat=v=>v>0?fmtUsd(Number(v)):"—",age=iso=>{const s=(Date.now()-Date.parse(iso||0))/1000;return !isFinite(s)||s<0?"":s<5400?Math.round(s/60)+"m":s<129600?Math.round(s/3600)+"h":Math.round(s/86400)+"d";};
     const statsHtml=()=>'<div><span>MC</span><b>'+stat(r.marketCapUsd)+'</b></div><div><span>Vol 24h</span><b>'+stat(r.volume24hUsd)+'</b></div><div><span>Liquidity</span><b>'+stat(r.liquidityUsd)+'</b></div>';
-    const links=(r.x?'<a href="'+esc(/^https?:/.test(r.x)?r.x:("https://x.com/"+String(r.x).replace(/^@/,"")))+'" target="_blank" rel="noopener noreferrer">𝕏</a>':'')+(r.telegram?'<a href="'+esc(r.telegram)+'" target="_blank" rel="noopener noreferrer">✈</a>':'')+(r.website?'<a href="'+esc(r.website)+'" target="_blank" rel="noopener noreferrer">🌐</a>':'')+'<a href="'+esc(r.explorer||("https://robinhoodchain.blockscout.com/token/"+address))+'" target="_blank" rel="noopener noreferrer">◈</a>';
+    const links=rhTradeLinksHtml(r,address);
     state.rhTradeSide=state.rhTradeSide==="sell"?"sell":"buy";const buys=["0.01","0.025","0.05","0.10"];
     $("#v-rhtrade").innerHTML='<div class="trade rhTradeUnified" data-focus="chart"><div class="tradeMain chartSplitMain"><div class="thead"><div id="rhTvAvatar">'+rhAvatar(r,46,"12px")+'</div><div class="ti"><b id="rhTvSym">'+esc(r.symbol||"?")+'</b><div id="rhTvName" class="sub">'+esc((r.name||"")+' · Robinhood Chain'+(r.createdAt?' · '+age(r.createdAt):''))+'</div><span class="ic chartsoc">'+links+'</span></div><div class="st" id="rhTvStats">'+statsHtml()+'</div></div>'+
       '<div class="tstrip"><button class="on" type="button" onclick="document.getElementById(\'rhTvChart\').scrollIntoView({behavior:\'smooth\'})">Chart</button><button type="button" onclick="document.getElementById(\'rhTradeTape\').scrollIntoView({behavior:\'smooth\'})">Transactions</button><button type="button" onclick="document.querySelector(\'#v-rhtrade .tradeSide\').scrollIntoView({behavior:\'smooth\'})">Position &amp; Trade</button></div>'+
@@ -2036,7 +2055,7 @@
       '<div class="tradeSide"><div class="pnlbar"><div><span>ETH</span><b id="rhEthBal">—</b></div><div><span>Holdings</span><b id="rhTokenBal">—</b></div><div><span>PNL</span><b class="mut" id="rhPnlVal">—</b></div><button class="posref" title="Refresh balance" onclick="GG.rhRefresh()">↻</button></div><div class="sidepad"><div class="wsel" onclick="GG.go(\'wallet\')"><span class="dot"></span><b>Wallet '+esc(String(state.activeWallet||1))+' · pays with SOL</b><span class="ar">⇄</span></div><div class="psel"><label>Preset</label><button class="chip" type="button" onclick="GG.rhPresetModal()">Edit RH presets ＋</button></div><div class="bsrow"><button class="buy" id="rhSideBuy">Buy</button><button class="sell" id="rhSideSell">Sell</button></div><div class="amtin"><input id="rhTmAmt" inputmode="decimal" value="0.01"><span id="rhAmtUnit">SOL</span></div><div class="chips" id="rhChips"></div><button class="bigbuy" id="rhTmBuy">Buy</button><div class="secbox" style="margin-top:10px"><h4>🎯 Take profit after buy</h4><div class="chips" id="rhQuickTpChips"><button data-tp="0">Hold</button><button data-tp="25">+25%</button><button data-tp="50">+50%</button><button data-tp="100">+100%</button></div><div style="display:flex;gap:6px;margin-top:8px"><button class="wbtn ghost" style="flex:1" onclick="GG.rhGuardModal(\''+esc(address)+'\')">Custom TP / SL</button><button class="wbtn ghost" style="flex:1" onclick="GG.rhLimitModal(\''+esc(address)+'\')">⏰ Limit order</button></div></div><div id="rhTmBal" class="mut" style="font-size:11px;margin:8px 0">Checking your wallet…</div><div class="perf"><div><span>5M</span><b class="'+(Number(r.m5)>=0?'up':'down')+'">'+(isFinite(Number(r.m5))?((Number(r.m5)>=0?'+':'')+Number(r.m5).toFixed(1)+'%'):'—')+'</b></div><div><span>PAY</span><b>◎ SOL</b></div><div><span>CHAIN</span><b>RH</b></div><div><span>SWAP</span><b>AUTO</b></div></div><div class="secbox"><h4>🛡 Token Data &amp; Security</h4><div id="rhSafety" class="mut" style="font-size:11px">Scanning coin for honeypot / sell traps…</div></div><div class="rhSideTools"><button class="wbtn ghost" onclick="GG.rhGuardModal(\''+esc(address)+'\')">🎯 TP / SL</button><button class="wbtn ghost" onclick="GG.rhBundleModal(\''+esc(address)+'\')">📦 Bundle</button><button class="wbtn ghost" onclick="GG.rhVolumeModal(\''+esc(address)+'\')">🔁 Volume</button></div><p class="wnote">One SOL wallet trades both chains. Robinhood conversion is automatic.</p></div></div></div>';
     function paint(){const sell=state.rhTradeSide==="sell",amt=$("#rhTmAmt"),unit=$("#rhAmtUnit"),big=$("#rhTmBuy"),chips=$("#rhChips");$("#rhSideBuy").classList.toggle("on",!sell);$("#rhSideSell").classList.toggle("on",sell);big.classList.toggle("sell",sell);unit.textContent=sell?"%":"SOL";big.textContent=(sell?"Sell ":"Buy ")+(r.symbol||"");const vals=sell?["25%","50%","75%","100%"]:buys;chips.innerHTML=vals.map(v=>'<button data-v="'+v+'">'+v+'</button>').join("");chips.querySelectorAll("button").forEach(b=>b.onclick=()=>{amt.value=b.dataset.v.replace("%","");});amt.value=sell?"100":"0.01";}
     $("#rhSideBuy").onclick=()=>{state.rhTradeSide="buy";paint();};$("#rhSideSell").onclick=()=>{state.rhTradeSide="sell";paint();};$("#rhTmBuy").onclick=()=>{const a=($("#rhTmAmt")||{}).value;if(!(Number(a)>0)){toast("Enter a valid amount.",true);return;}state.rhTradeSide==="sell"?rhTrade(address,"sell",{percent:Number(a)}):rhBuyAmount(address,String(a),true);};paint();document.querySelectorAll("#rhQuickTpChips button[data-tp]").forEach(button=>{button.classList.toggle("on",Number(button.dataset.tp)===rhQuickTp());button.onclick=()=>rhSetQuickTp(button.dataset.tp);});wireChartTapeSplit($("#v-rhtrade .chartSplitMain"));loadInlineTape(address,r,"robinhood","rhTradeTape");
-    Promise.all([rhEnrichRows([r]),rhHydrateChartRow(r)]).then(results=>{const changed=results.some(Boolean);if(state.route!=="rhtrade")return;if(changed){const s=$("#rhTvStats");if(s)s.innerHTML=statsHtml();const av=$("#rhTvAvatar");if(av)av.innerHTML=rhAvatar(r,46,"12px");const sy=$("#rhTvSym");if(sy&&r.symbol)sy.textContent=r.symbol;const nm=$("#rhTvName");if(nm)nm.textContent=(r.name||"")+' · Robinhood Chain';if(r.symbol)h.textContent=r.symbol;loadInlineTape(address,r,"robinhood","rhTradeTape");}if(!(r.priceUsd>0))loadNoxaFallback(r,address,statsHtml,h);});
+    Promise.all([rhEnrichRows([r]),rhHydrateChartRow(r)]).then(results=>{const changed=results.some(Boolean);if(state.route!=="rhtrade")return;if(changed){const s=$("#rhTvStats");if(s)s.innerHTML=statsHtml();const av=$("#rhTvAvatar");if(av)av.innerHTML=rhAvatar(r,46,"12px");const sy=$("#rhTvSym");if(sy&&r.symbol)sy.textContent=r.symbol;const nm=$("#rhTvName");if(nm)nm.textContent=(r.name||"")+' · Robinhood Chain';const soc=$("#v-rhtrade .chartsoc");if(soc)soc.innerHTML=rhTradeLinksHtml(r,address);if(r.symbol)h.textContent=r.symbol;loadInlineTape(address,r,"robinhood","rhTradeTape");}if(!(r.priceUsd>0))loadNoxaFallback(r,address,statsHtml,h);});
     rhTmRefreshBal(address);loadRhSafety(address);
   }
   async function renderRhTradeLegacy(){
@@ -3075,6 +3094,15 @@
     return avImg(r,"av")+'<div class="ti"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><div class="sub">'+esc(r.name||"")+' · '+esc(ageLabel(r))+'</div>'+socHtml+'</div>'+
       '<div class="st"><div><span>MC</span><b>'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</b></div><div><span>Vol 1h</span><b>'+esc(r.volumeH1Label||r.volumeLabel||"—")+'</b></div><div><span>Liquidity</span><b>'+esc(r.liquidityLabel||fmtUsd(r.liquidityUsd))+'</b></div></div>';
   }
+  function mergeTradeIdentity(r,meta){
+    if(!r||!meta)return false;let changed=false;
+    const put=(key,value)=>{value=String(value||"").trim();if(value&&!r[key]){r[key]=value;changed=true;}};
+    const ident=(key,value)=>{value=String(value||"").trim();const old=String(r[key]||"").trim();if(value&&(!old||old==="?"||old===short(r.tokenMint||"")||old===(r.tokenMint||""))){r[key]=value;changed=true;}};
+    ident("symbol",meta.symbol);ident("name",meta.name);put("imageUrl",meta.imageUrl||meta.avatarUrl);
+    put("twitterUrl",meta.twitterUrl||meta.x);put("telegramUrl",meta.telegramUrl||meta.telegram);put("websiteUrl",meta.websiteUrl||meta.website);
+    if(!r.pairAddress&&meta.pairAddress){r.pairAddress=String(meta.pairAddress);changed=true;}
+    return changed;
+  }
   // Keep the chart header's MC / liquidity / volume / % moving LIVE while you watch the chart. The row
   // snapshot from the feed is a point-in-time value; this re-pulls DexScreener (over the user's IP, every
   // ~6s) for the open coin and repaints the header + perf row, also backfilling its socials.
@@ -3083,7 +3111,8 @@
     if(statPollT){clearTimeout(statPollT);statPollT=null;}
     if(state.route!=="trade"||state.mint!==mint)return;
     try{
-      const j=await fetch("https://api.dexscreener.com/latest/dex/tokens/"+encodeURIComponent(mint)).then(x=>x.ok?x.json():null);
+      const identityPromise=api("/api/web/token-search?q="+encodeURIComponent(mint)).catch(()=>({}));
+      const j=await fetch("https://api.dexscreener.com/latest/dex/tokens/"+encodeURIComponent(mint)).then(x=>x.ok?x.json():null).catch(()=>null);
       const pairs=(j&&j.pairs)||[];let best=null,bestLiq=-1;
       for(const p of pairs){if(!p||!p.baseToken||p.baseToken.address!==mint)continue;const liq=Number((p.liquidity&&p.liquidity.usd)||0);if(liq>bestLiq){bestLiq=liq;best=p;}}
       if(best&&state.route==="trade"&&state.mint===mint){
@@ -3119,6 +3148,16 @@
         let priceSol=0;
         if(quoteIsSol&&pn>0)priceSol=pn; else if(pu>0&&Number(state.solUsd)>0)priceSol=pu/Number(state.solUsd);
         if(priceSol>0){state.markPrice={mint:mint,priceSol:priceSol};if(state.lastTradePos&&state.lastTradePos.tokenMint===mint)paintTradePnl(state.lastTradePos);}
+      }
+      const identityResult=await identityPromise;
+      const matches=identityResult&&identityResult.d&&Array.isArray(identityResult.d.matches)?identityResult.d.matches:[];
+      const identity=matches.find(x=>String(x.tokenMint||x.address||"").toLowerCase()===String(mint).toLowerCase())||matches[0];
+      if(identity&&state.route==="trade"&&state.mint===mint){
+        const r=state.tradeRow||{tokenMint:mint};
+        if(mergeTradeIdentity(r,identity)){
+          state.tradeRow=r;rememberTradeRecent(r);const th=$("#thead");if(th)th.innerHTML=theadHtml(r);fillPerf(r);
+          const subTitle=$("#subbar h1"),wantedTitle=String(r.symbol||short(mint));if(subTitle&&subTitle.textContent!==wantedTitle)subbarTrade(r);
+        }
       }
     }catch(e){}
     statPollT=setTimeout(()=>{if(state.route==="trade"&&state.mint===mint)loadTradeStats(mint);},6000);

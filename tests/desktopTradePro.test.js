@@ -56,6 +56,18 @@ test("Solana charts never use a token address as a DexScreener pool", () => {
   assert.doesNotMatch(gg, /dexscreener\.com\/solana\/"\+encodeURIComponent\(mint\)\+"\?embed=1/);
 });
 
+test("coin chart headers hydrate artwork and published socials on both chains", () => {
+  assert.match(gg, /function mergeTradeIdentity/);
+  assert.match(gg, /\/api\/web\/token-search\?q=/);
+  assert.match(gg, /put\("twitterUrl",meta\.twitterUrl\|\|meta\.x\)/);
+  assert.match(gg, /\/api\/web\/rh\/token\?address=/);
+  assert.match(gg, /function rhTradeLinksHtml/);
+  assert.match(gg, /soc\.innerHTML=rhTradeLinksHtml\(r,address\)/);
+  assert.match(server, /websiteUrl: chart\?\.websiteUrl/);
+  assert.match(server, /twitterUrl: chart\?\.twitterUrl/);
+  assert.match(server, /telegramUrl: chart\?\.telegramUrl/);
+});
+
 test("desktop market-cap orders use the existing server-side engine", () => {
   assert.match(pro, /\/api\/web\/market-orders/);
   assert.match(pro, /\/api\/web\/profile\/automation/);

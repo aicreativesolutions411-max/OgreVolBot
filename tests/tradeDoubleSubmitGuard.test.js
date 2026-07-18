@@ -1534,6 +1534,8 @@ test("buy cards use the compact TG/Web/More keyboard", () => {
   const compact = functionBody(serverSource, "compactTradeCardKeyboard");
   assert.match(compact, /TG Quick Buy/);
   assert.match(compact, /Web Quick Buy/);
+  assert.match(compact, /Slime Chart/);
+  assert.match(compact, /url: links\.site/);
   assert.match(compact, /if \(src === "b"\)/);
   assert.match(compact, /📊 Dex Chart/);
   assert.match(compact, /dexscreener\.com\/robinhood/);
