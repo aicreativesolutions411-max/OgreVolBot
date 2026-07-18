@@ -1403,6 +1403,28 @@ test("Buy bot (SpyDefi parity): whale-tier badge + new-holder flag + volume", ()
   assert.match(buy, /bonding\?\.graduated \|\| bonding\?\.isGraduated \|\| \(bondPct != null && bondPct >= 100\)/);
 });
 
+test("Buy Bot saves and renders Telegram custom emoji entities with a safe fallback", () => {
+  const parseSource = functionBody(serverSource, "telegramCustomEmojiFromMessage");
+  const markupSource = functionBody(serverSource, "groupBuyEmojiMarkup");
+  const stripSource = functionBody(serverSource, "stripTelegramCustomEmojiHtml");
+  const parseCustom = Function("message", parseSource);
+  const customText = "/setbuyemoji 🐸 0.1";
+  const custom = parseCustom({
+    text: customText,
+    entities: [{ type: "custom_emoji", offset: customText.indexOf("🐸"), length: 2, custom_emoji_id: "5368324170671202286" }]
+  });
+  assert.deepEqual(custom, { id: "5368324170671202286", fallback: "🐸" });
+  const markup = (entry, count) => Function("entry", "count", "escapeTelegramHtml", markupSource)(entry, count, (value) => String(value));
+  assert.equal(markup({ buyEmoji: "🐸", buyEmojiId: custom.id }, 3), '<tg-emoji emoji-id="5368324170671202286">🐸</tg-emoji>'.repeat(3));
+  const strip = (text) => Function("text", stripSource)(text);
+  assert.equal(strip(markup({ buyEmoji: "🐸", buyEmojiId: custom.id }, 2)), "🐸🐸");
+  assert.match(functionBody(serverSource, "applyGbInput"), /buyEmojiId = custom\?\.id \|\| ""/);
+  assert.match(functionBody(serverSource, "handleGroupBotCommand"), /e\.buyEmojiId = custom\?\.id \|\| ""/);
+  assert.match(functionBody(serverSource, "postGroupBuy"), /groupBuyEmojiMarkup\(e, count\)/);
+  assert.match(functionBody(serverSource, "postGroupBuyRh"), /groupBuyEmojiMarkup\(e, count\)/);
+  assert.match(functionBody(serverSource, "sendGroupAlertMedia"), /stripTelegramCustomEmojiHtml\(caption\)/);
+});
+
 test("Robinhood buy cards keep complete market rows during intermittent scan gaps", () => {
   const merge = functionBody(serverSource, "mergeRhGroupBuyInfo");
   const buy = functionBody(serverSource, "postGroupBuyRh");
