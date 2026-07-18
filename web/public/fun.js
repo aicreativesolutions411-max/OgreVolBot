@@ -2059,14 +2059,15 @@
         <div class="volume-actions"><button class="submit-trade" type="button" data-start-volume>Start with SOL</button><button type="button" data-stop-volume>Stop</button></div>
         <div data-volume-status class="volume-status">Checking status…</div><p class="fineprint">Conversion happens once before trading. SlimeWire chooses the ETH trade range from the converted balance, so there is no ETH setup.</p>`);
     } else {
-      openSheet(`<div class="sheet-title"><img ${coinImageAttrs(coin)} alt=""><div><h2>Rolling wallet volume</h2><p>Fresh ghost wallets · offset sells · automatic sweep</p></div></div>
-        <div class="read-card"><h3>Natural cadence controls</h3><p>Buys and sells use different points in the rolling wallet pool, varied sizes, and the selected pattern. It keeps running server-side.</p></div>
+      openSheet(`<div class="sheet-title"><img ${coinImageAttrs(coin)} alt=""><div><h2>Volume bot</h2><p>Auto buy → sell → sweep → new wallet, until you Stop</p></div></div>
+        <div class="read-card"><h3>How it runs</h3><p>Round-trip funds a fresh wallet, buys, sells it back down to one token, sweeps the SOL to your funding wallet, retires the wallet, and repeats — until Stop or your SOL runs out. Rolling pool keeps a few wallets open for a more organic tape.</p></div>
         <div class="field"><label>Token contract</label><input data-volume-token data-volume-chain="solana" value="${escapeHtml(key)}" placeholder="Solana contract address"></div>
         <div class="field"><label>Fund from wallet</label><select data-volume-wallet>${volumeWalletOptions()}</select></div>
+        <div class="field"><label>Style</label><select data-volume-pool><option value="1" selected>Round-trip · one wallet at a time</option><option value="3">Rolling pool · 3 wallets (organic)</option><option value="5">Wide pool · 5 wallets</option></select></div>
         <div class="field-row"><div class="field"><label>Min buy SOL</label><input data-volume-min inputmode="decimal" value="0.012"></div><div class="field"><label>Max buy SOL</label><input data-volume-max inputmode="decimal" value="0.03"></div></div>
         <div class="field-row"><div class="field"><label>Cadence</label><select data-volume-speed><option value="20">Calm</option><option value="8" selected>Natural</option><option value="3">Fast</option></select></div><div class="field"><label>Pattern</label><select data-volume-pattern><option value="organic" selected>Organic mix</option><option value="waves">Waves</option><option value="steady">Steady</option><option value="ladder">Uptrend bias</option></select></div></div>
-        <div class="check-row"><span aria-hidden="true">✓</span> Retire each ghost wallet with exactly 1 target token and zero native SOL</div>
-        <label class="check-row"><input type="checkbox" data-volume-offset checked> Offset sells to older wallets</label>
+        <div class="check-row"><span aria-hidden="true">✓</span> Retire each wallet with exactly 1 target token and zero native SOL</div>
+        <label class="check-row"><input type="checkbox" data-volume-offset checked> Offset sells to older wallets (rolling pool only)</label>
         <div class="volume-actions"><button class="submit-trade" type="button" data-start-volume>Start</button><button type="button" data-stop-volume>Stop & sweep</button></div>
         <button class="recovery-button" type="button" data-sweep-volume>Sweep any stranded ghost wallets</button>
         <div data-volume-status class="volume-status">Checking status…</div><p class="fineprint">Wallet addresses cannot be burned. Empty ghost wallets are drained, removed from your list, and retired automatically. Keeping residue intentionally preserves a tiny token balance.</p>`);
@@ -2088,7 +2089,8 @@
           ? '<button class="recovery-button" type="button" disabled>Settling last action...</button>'
           : `<button class="recovery-button danger-button" type="button" data-release-volume="${escapeHtml(bot.id)}">Halt &amp; Release</button>`)
         : (running ? `<button class="recovery-button" type="button" data-stop-volume-plan="${escapeHtml(bot.id)}">Stop &amp; sweep</button>` : "");
-      return `<div class="volume-run"><b>${escapeHtml(bot.shortMint || short(bot.tokenMint))}<span>${escapeHtml(running ? bot.stage || "running" : "complete")}</span></b><p>Buys ${Number(stats.buys || 0)} · sells ${Number(stats.sells || 0)} · volume ${Number(stats.volumeSol || 0).toFixed(3)} SOL${Number(stats.sweptSol || 0) ? ` · swept ${Number(stats.sweptSol).toFixed(3)}` : ""}</p>${(bot.log || []).slice(0, 4).map((row) => `<small>${escapeHtml(typeof row === "string" ? row : row.message || "")}</small>`).join("")}${action}</div>`;
+      const logLines = (bot.log || []).slice(-8).reverse().map((row) => `<small>${escapeHtml(typeof row === "string" ? row : row.message || "")}</small>`).join("");
+      return `<div class="volume-run"><b>${escapeHtml(bot.shortMint || short(bot.tokenMint))}<span>${escapeHtml(running ? bot.stage || "running" : "complete")}</span></b><p>Buys ${Number(stats.buys || 0)} · sells ${Number(stats.sells || 0)} · volume ${Number(stats.volumeSol || 0).toFixed(3)} SOL${Number(stats.sweptSol || 0) ? ` · swept ${Number(stats.sweptSol).toFixed(3)}` : ""}</p><div class="volume-log">${logLines || '<small>Starting…</small>'}</div>${action}</div>`;
     }).join("");
   }
   async function pollFunVolume(rh) {
@@ -2113,7 +2115,8 @@
     } else {
       const pattern = $("[data-volume-pattern]")?.value || "organic", delaySecs = $("[data-volume-speed]")?.value || "8";
       const sourceWallet = state.wallets.find((wallet) => Number(wallet.index) === walletIndex);
-      result = await post("/api/web/volume-bot/start", { tokenMint: token, sourceWalletIndex: walletIndex, sourceWalletPublicKey: sourceWallet?.publicKey || "", rollingWallets: true, buyAmountSol: String((Number(min) + Number(max)) / 2), minBuyAmountSol: min, maxBuyAmountSol: max, poolSize: "3", maxRounds: "60", sellPercent: "100", buyBias: pattern === "ladder" ? "75" : "55", delaySecs, slippageBps: 600, sweepBack: true, keepDust: true, offsetSell: Boolean($("[data-volume-offset]")?.checked), staggerPattern: pattern, tradeAttemptId: attemptId("fun-volume") });
+      const poolSize = $("[data-volume-pool]")?.value || "1";   // 1 = clean round-trip, one wallet at a time
+      result = await post("/api/web/volume-bot/start", { tokenMint: token, sourceWalletIndex: walletIndex, sourceWalletPublicKey: sourceWallet?.publicKey || "", rollingWallets: true, buyAmountSol: String((Number(min) + Number(max)) / 2), minBuyAmountSol: min, maxBuyAmountSol: max, poolSize, maxRounds: "0", sellPercent: "100", buyBias: pattern === "ladder" ? "75" : "55", delaySecs, slippageBps: 600, sweepBack: true, keepDust: true, offsetSell: Boolean($("[data-volume-offset]")?.checked), staggerPattern: pattern, tradeAttemptId: attemptId("fun-volume") });
     }
     button.disabled = false; button.textContent = rh ? "Start with SOL" : "Start";
     if (result.ok && result.data?.ok) { toast("Volume run started"); pollFunVolume(rh); }
