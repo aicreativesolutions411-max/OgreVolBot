@@ -2042,11 +2042,14 @@
   }
 
   function volumeWalletOptions() { return state.wallets.map((wallet) => `<option value="${wallet.index}" ${wallet.index === state.activeWallet ? "selected" : ""}>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)} · ${Number(wallet.sol || 0).toFixed(3)} SOL</option>`).join(""); }
-  async function openVolumeSheet() {
+  async function openVolumeSheet(tokenOverride = "") {
     if (!(await ensureAccount())) { toast("Connect a wallet to configure volume.", true); return; }
     await loadWallets();
     if (!state.wallets.length) { await openWalletManager(); return; }
-    const coin = state.selected || {}, key = coinKey(coin), rh = coin.chain === "robinhood" || isRh(key);
+    const coin = state.selected || {}, selectedKey = coinKey(coin), key = String(tokenOverride || selectedKey).trim();
+    // A pasted contract is authoritative. This keeps a global/previously-opened
+    // Solana panel from submitting a valid Robinhood address to the wrong flow.
+    const rh = isRh(key) || (!tokenOverride && coin.chain === "robinhood");
     if (rh) {
       openSheet(`<div class="sheet-title"><img ${coinImageAttrs(coin)} alt=""><div><h2>Robinhood volume</h2><p>Native controls · ${escapeHtml(coin.symbol || short(key))}</p></div></div>
         <div class="read-card"><h3>SOL-powered round trips</h3><p>Choose SOL once. SlimeWire converts it for this wallet and automatically sizes randomized Robinhood buys and sells.</p></div>
@@ -2097,9 +2100,9 @@
   }
   async function startFunVolume(button) {
     if (!(await ensureTradeReady())) return;
-    const tokenField = $("[data-volume-token]"), token = String(tokenField?.value || "").trim(), configuredRh = tokenField?.dataset.volumeChain === "robinhood", detectedRh = isRh(token), rh = configuredRh, walletIndex = Number($("[data-volume-wallet]")?.value || state.activeWallet), min = $("[data-volume-min]")?.value || "", max = $("[data-volume-max]")?.value || "";
+    const tokenField = $("[data-volume-token]"), token = String(tokenField?.value || "").trim(), configuredRh = tokenField?.dataset.volumeChain === "robinhood", detectedRh = isRh(token), rh = detectedRh, walletIndex = Number($("[data-volume-wallet]")?.value || state.activeWallet), min = $("[data-volume-min]")?.value || "", max = $("[data-volume-max]")?.value || "";
+    if (configuredRh !== detectedRh) { openVolumeSheet(token); toast(`Switched to the ${detectedRh ? "Robinhood" : "Solana"} volume controls. Review the settings and tap Start.`); return; }
     if (!token || (!rh && (!(Number(min) > 0) || !(Number(max) >= Number(min))))) { toast(rh ? "Check the Robinhood contract." : "Check the contract and min/max size.", true); return; }
-    if (configuredRh !== detectedRh) { toast(`This volume panel is set up for ${configuredRh ? "Robinhood" : "Solana"}. Open the coin on the correct chain and try again.`, true); return; }
     button.disabled = true; button.textContent = "Starting…";
     let result;
     if (rh) {
@@ -2457,6 +2460,17 @@
     reader.readAsText(file);
   });
   document.addEventListener("input", (event) => {
+    if (event.target.matches("[data-volume-token]")) {
+      const token = String(event.target.value || "").trim();
+      const configuredRh = event.target.dataset.volumeChain === "robinhood";
+      const detectedRh = isRh(token);
+      const looksSolana = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(token);
+      if ((detectedRh && !configuredRh) || (looksSolana && configuredRh)) {
+        openVolumeSheet(token);
+        toast(`Switched to ${detectedRh ? "Robinhood" : "Solana"} volume controls.`);
+      }
+      return;
+    }
     if (!event.target.matches("[data-send-token-amount]")) return;
     delete event.target.dataset.sendTokenPercent;
     if (state.pendingTokenSend) state.pendingTokenSend.percent = 0;

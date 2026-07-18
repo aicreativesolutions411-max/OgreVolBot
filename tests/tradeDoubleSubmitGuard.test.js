@@ -182,6 +182,19 @@ test("volume recovery queues active plans before touching ghost wallets", () => 
   assert.match(sweep, /remaining !== null && remaining <= 20_000/);
 });
 
+test("volume sweep math converts formatted SOL strings before arithmetic", () => {
+  const cleanupGas = functionBody(serverSource, "topUpVolumeCleanupGas");
+  const standard = functionBody(serverSource, "processVolumeBotPlan");
+  const rolling = functionBody(serverSource, "runRollingVolumeBotStep");
+  assert.match(cleanupGas, /Number\(lamportsToSol\(needed\)\)\.toFixed\(4\)/);
+  assert.doesNotMatch(cleanupGas, /lamportsToSol\(needed\)\.toFixed/);
+  for (const body of [standard, rolling]) {
+    assert.doesNotMatch(body, /\+ lamportsToSol\(cleanup\.sentLamports/);
+  }
+  assert.match(standard, /\+ Number\(lamportsToSol\(cleanup\.sentLamports \|\| 0\)\)/);
+  assert.match(rolling, /\+ Number\(lamportsToSol\(cleanup\.sentLamports \|\| 0\)\)/);
+});
+
 test("Halt & Release only closes a settled Stop & Sweep and keeps recovery custody discoverable", () => {
   const stop = functionBody(serverSource, "webStopVolumeBot");
   const release = functionBody(serverSource, "webHaltAndReleaseVolumeBot");

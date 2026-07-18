@@ -20,7 +20,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "53", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "54", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -33,7 +33,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v45/);
+  assert.match(funWorker, /slimewire-fun-v46/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -78,7 +78,7 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
   assert.match(html, /fun\.css\?v=34/);
-  assert.match(funWorker, /slimewire-fun-v45/);
+  assert.match(funWorker, /slimewire-fun-v46/);
   assert.match(funWorker, /fun\.css\?v=34/);
 });
 
@@ -88,8 +88,19 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=53/);
-  assert.match(funWorker, /fun\.js\?v=53/);
+  assert.match(html, /fun\.js\?v=54/);
+  assert.match(funWorker, /fun\.js\?v=54/);
+});
+
+test("Fun volume switches pasted contracts to their authoritative chain", () => {
+  const openVolume = js.slice(js.indexOf("async function openVolumeSheet"), js.indexOf("function funVolumeRunActive"));
+  const startVolume = js.slice(js.indexOf("async function startFunVolume"), js.indexOf("async function stopFunVolume"));
+  assert.match(openVolume, /const rh = isRh\(key\) \|\| \(!tokenOverride && coin\.chain === "robinhood"\)/);
+  assert.match(startVolume, /detectedRh = isRh\(token\), rh = detectedRh/);
+  assert.match(startVolume, /openVolumeSheet\(token\)/);
+  assert.doesNotMatch(startVolume, /This volume panel is set up for/);
+  assert.match(js, /event\.target\.matches\("\[data-volume-token\]"\)/);
+  assert.match(js, /Switched to \$\{detectedRh \? "Robinhood" : "Solana"\} volume controls/);
 });
 
 test("Connect and Deposit share one simple funding flow without surprise wallet downloads", () => {
@@ -140,7 +151,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v45"/);
+  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v46"/);
   assert.match(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
   assert.match(funWorker, /self\.clients\.claim\(\)/);
