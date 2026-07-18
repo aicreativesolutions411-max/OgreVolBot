@@ -16665,7 +16665,10 @@ function walletPositionPnlPercent(position) {
   const buys = Number(position?.buys);
   const spent = Number(position?.spentSol);
   const value = Number.parseFloat(String(position?.openPnlPercent ?? "").replace("%", ""));
-  return buys > 0 && spent > 0 && Number.isFinite(value) ? value : null;
+  const hasTrackedCost = buys > 0 && spent > 0;
+  const hasRecoveredCost = position?.pnlSource === "onchain-wallet" && Number(position?.costBasisUsd) > 0;
+  const hasRecoveredSolCost = position?.pnlSource === "onchain-rpc" && Number(position?.costBasisSol) > 0;
+  return (hasTrackedCost || hasRecoveredCost || hasRecoveredSolCost) && Number.isFinite(value) ? value : null;
 }
 
 function walletPositionRowHtml(entry, wallet) {
@@ -21053,10 +21056,14 @@ function positionIntelHtml(position) {
 function positionRowHtml(position) {
   const hasEstimatedValue = position.estimatedValueSol !== null && position.estimatedValueSol !== undefined && position.estimatedValueSol !== "";
   const hasOpenPnl = position.openPnlSol !== null && position.openPnlSol !== undefined && position.openPnlSol !== "";
+  const hasEstimatedValueUsd = position.estimatedValueUsd !== null && position.estimatedValueUsd !== undefined && Number.isFinite(Number(position.estimatedValueUsd));
+  const hasOpenPnlUsd = position.openPnlUsd !== null && position.openPnlUsd !== undefined && Number.isFinite(Number(position.openPnlUsd));
   const isValueUpdating = Boolean(position.valuePending || (!hasEstimatedValue && /refreshing|updating|background/i.test(position.valueError || "")));
   const isConnectedWalletPosition = Boolean(position.viewOnly || position.source === "connected-wallet");
   const valueLabel = hasEstimatedValue
     ? `${position.estimatedValueSol} SOL`
+    : hasEstimatedValueUsd
+      ? `$${Number(position.estimatedValueUsd).toFixed(2)}`
     : isValueUpdating
       ? "updating"
       : isConnectedWalletPosition
@@ -21064,6 +21071,8 @@ function positionRowHtml(position) {
         : "Price unavailable";
   const pnlLabel = hasOpenPnl
     ? position.openPnlSol
+    : hasOpenPnlUsd
+      ? `${Number(position.openPnlUsd) >= 0 ? "+" : ""}$${Number(position.openPnlUsd).toFixed(2)}${position.openPnlPercent != null ? ` (${position.openPnlPercent}%)` : ""}`
     : isValueUpdating
       ? "updating"
       : isConnectedWalletPosition

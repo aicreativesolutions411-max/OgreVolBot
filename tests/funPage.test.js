@@ -20,7 +20,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "54", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "55", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -33,7 +33,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v46/);
+  assert.match(funWorker, /slimewire-fun-v47/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -77,9 +77,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=34/);
-  assert.match(funWorker, /slimewire-fun-v46/);
-  assert.match(funWorker, /fun\.css\?v=34/);
+  assert.match(html, /fun\.css\?v=35/);
+  assert.match(funWorker, /slimewire-fun-v47/);
+  assert.match(funWorker, /fun\.css\?v=35/);
 });
 
 test("/fun keeps the wallet funding card compact and scannable", () => {
@@ -88,8 +88,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=54/);
-  assert.match(funWorker, /fun\.js\?v=54/);
+  assert.match(html, /fun\.js\?v=55/);
+  assert.match(funWorker, /fun\.js\?v=55/);
 });
 
 test("Fun volume switches pasted contracts to their authoritative chain", () => {
@@ -151,7 +151,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v46"/);
+  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v47"/);
   assert.match(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
   assert.match(funWorker, /self\.clients\.claim\(\)/);
@@ -213,6 +213,64 @@ test("web positions preserve tracked and market-backed managed-wallet holdings w
   assert.equal(marketBacked.uiAmount, 25);
   assert.equal(marketBacked.marketVerified, true);
   assert.equal(project({ tokenMint: "spam", buys: 0, spent: 0n, accounts: [{ walletPublicKey: "wallet", rawAmount: 1n, decimals: 0 }] }), null);
+});
+
+test("market-backed positions recover honest wallet PnL without converting missing values to zero", () => {
+  const recovery = server.slice(server.indexOf("function mergeRecoveredWebPositionPnl"), server.indexOf("async function webPositionRows"));
+  const webRows = server.slice(server.indexOf("async function webPositionRows"), server.indexOf("async function webPnlSummary"));
+  assert.match(recovery, /normalizeSolWalletPositions/);
+  assert.match(recovery, /filter: "holding"/);
+  assert.match(recovery, /finiteWalletNumber\(row\.unrealizedUsd, row\.pnlUsd\)/);
+  assert.match(recovery, /costBasisUsd/);
+  assert.match(recovery, /openPnlPercent/);
+  assert.match(recovery, /recoverWebPositionPnlFromRpc/);
+  assert.match(recovery, /getSignaturesForAddress/);
+  assert.match(recovery, /getParsedTransaction/);
+  assert.match(recovery, /computeRecoveredSolPositionCost/);
+  assert.match(webRows, /costBasisSol: recoveredCostBasisLamports/);
+  assert.match(webRows, /recoveredOpenPnl !== null \? "onchain-rpc"/);
+  assert.match(webRows, /recoveredWebPositionPnlByMint\(limited\.slice\(0, 10\)/);
+  assert.match(terminalApp, /position\?\.pnlSource === "onchain-wallet"/);
+  assert.match(terminalApp, /position\?\.pnlSource === "onchain-rpc"/);
+  assert.match(terminalApp, /position\.openPnlUsd/);
+  assert.match(js, /position\?\.openPnlUsd/);
+  assert.match(js, /position\?\.costBasisUsd/);
+  assert.match(js, /position\?\.pnlSource === "onchain-rpc"/);
+
+  const mergeSource = recovery.slice(0, recovery.indexOf("async function recoveredWebPositionPnlByMint"));
+  const merge = Function("finiteWalletNumber", `${mergeSource}; return mergeRecoveredWebPositionPnl;`)(
+    (...values) => {
+      for (const value of values) {
+        if (value == null || value === "" || typeof value === "boolean") continue;
+        const number = Number(value);
+        if (Number.isFinite(number)) return number;
+      }
+      return null;
+    }
+  );
+  const aggregate = { costBasisUsd: 0, estimatedValueUsd: 0, openPnlUsd: 0, hasCost: false, hasValue: false, hasPnl: false, walletCount: 0 };
+  merge(aggregate, { costUsd: null, valueUsd: null, unrealizedUsd: null, pnlUsd: null });
+  assert.equal(aggregate.hasCost, false);
+  assert.equal(aggregate.hasPnl, false);
+  merge(aggregate, { costUsd: 50, valueUsd: 40, unrealizedUsd: -10, pnlUsd: null });
+  assert.deepEqual({ cost: aggregate.costBasisUsd, value: aggregate.estimatedValueUsd, pnl: aggregate.openPnlUsd }, { cost: 50, value: 40, pnl: -10 });
+});
+
+test("Fun chart exposes server-side market-cap buy, ladder, and stop-loss orders", () => {
+  assert.match(html, /data-market-orders>[^<]*Orders/);
+  assert.match(js, /function parseMarketCapInput/);
+  assert.match(js, /data-order-buy-mc/);
+  assert.match(js, /data-order-ladder-mc/);
+  assert.match(js, /data-order-stop-mc/);
+  assert.match(js, /post\("\/api\/web\/market-orders"/);
+  assert.match(js, /post\("\/api\/web\/market-orders\/cancel"/);
+  assert.match(js, /keep running server-side/);
+  assert.match(server, /async function webCreateMarketCapOrders/);
+  assert.match(server, /source: "web"/);
+  assert.match(server, /webTradeBuy\(o\.userId/);
+  assert.match(server, /webTradeSell\(o\.userId/);
+  assert.match(server, /webRhArmGuard\(userId/);
+  assert.match(server, /pathname === "\/api\/web\/market-orders"/);
 });
 
 test("position cache warmer fills the connected-wallet scoped v2 fast and full keys from one snapshot", () => {
@@ -617,7 +675,7 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, MACD, and 
   assert.ok(html.indexOf("lightweight-charts.standalone.production.js") < html.indexOf("fun-indicators.js"));
   assert.match(html, /fun-indicators\.js\?v=7/);
   assert.match(funWorker, /fun-indicators\.js\?v=7/);
-  assert.match(funWorker, /fun\.css\?v=34/);
+  assert.match(funWorker, /fun\.css\?v=35/);
   assert.match(indicators, /\/api\/chart\?ca=/);
   assert.match(indicators, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/pools/);
   assert.match(indicators, /function fibonacciPanel/);

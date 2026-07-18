@@ -325,12 +325,25 @@
   }
   function positionOpenPnl(position) {
     const buys = positionNumber(position?.buys), spentSol = positionNumber(position?.spentSol);
-    if (buys == null || buys <= 0 || spentSol == null || spentSol <= 0) return null;
-    return positionNumber(position?.openPnlSol);
+    if (buys != null && buys > 0 && spentSol != null && spentSol > 0) return positionNumber(position?.openPnlSol);
+    const recoveredSolCost = positionNumber(position?.costBasisSol);
+    if (position?.pnlSource === "onchain-rpc" && recoveredSolCost != null && recoveredSolCost > 0) {
+      return positionNumber(position?.openPnlSol);
+    }
+    const recoveredCost = positionNumber(position?.costBasisUsd);
+    if (position?.pnlSource === "onchain-wallet" && recoveredCost != null && recoveredCost > 0) {
+      return positionNumber(position?.openPnlUsd);
+    }
+    return null;
+  }
+  function positionPnlUnit(position) {
+    return position?.pnlSource === "onchain-wallet" ? "USD" : "SOL";
   }
   function positionValueText(position, pendingText = "Value updating…") {
     const value = positionEstimatedSol(position);
     if (value != null) return `${formatPositionSol(value)} SOL`;
+    const valueUsd = positionNumber(position?.estimatedValueUsd);
+    if (valueUsd != null) return formatWalletUsd(valueUsd);
     return position?.valuePending ? pendingText : "Value unavailable";
   }
   function displayablePositions(rows) {
@@ -770,9 +783,9 @@
     if (!position) { card.className = "position-card empty"; card.innerHTML = "No open SlimeWire position on this coin yet. Your chart and safety read stay available."; return; }
     const quantity = positionQuantity(position);
     if (quantity == null) { card.className = "position-card empty"; card.innerHTML = "No open SlimeWire position on this coin yet. Your chart and safety read stay available."; return; }
-    const valueSol = positionEstimatedSol(position), pnl = positionOpenPnl(position), pct = pnl == null ? null : positionPercent(position.openPnlPercent), cls = pnl == null ? "" : (pnl >= 0 ? "up" : "down");
+    const valueSol = positionEstimatedSol(position), pnl = positionOpenPnl(position), pnlUnit = positionPnlUnit(position), pct = pnl == null ? null : positionPercent(position.openPnlPercent), cls = pnl == null ? "" : (pnl >= 0 ? "up" : "down");
     card.className = "position-card";
-    card.innerHTML = `<div class="pos-head"><span>YOUR POSITION</span><span>${escapeHtml(position.walletCount || 1)} wallet${Number(position.walletCount) === 1 ? "" : "s"}</span></div><div class="pos-main"><div><b>${valueSol != null ? `◎ ${escapeHtml(formatPositionSol(valueSol))} SOL` : escapeHtml(positionValueText(position))}</b><span>${escapeHtml(formatTokenQuantity(quantity))} ${escapeHtml(position.symbol || state.selected?.symbol || "tokens")}</span></div><strong class="${cls}">${pnl != null ? `${pnl >= 0 ? "+" : ""}${pnl.toFixed(4)} SOL` : ""}<small>${pct != null ? ` ${formatPct(pct)}` : ""}</small></strong></div>`;
+    card.innerHTML = `<div class="pos-head"><span>YOUR POSITION</span><span>${escapeHtml(position.walletCount || 1)} wallet${Number(position.walletCount) === 1 ? "" : "s"}</span></div><div class="pos-main"><div><b>${valueSol != null ? `◎ ${escapeHtml(formatPositionSol(valueSol))} SOL` : escapeHtml(positionValueText(position))}</b><span>${escapeHtml(formatTokenQuantity(quantity))} ${escapeHtml(position.symbol || state.selected?.symbol || "tokens")}</span></div><strong class="${cls}">${pnl != null ? (pnlUnit === "USD" ? `${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)}` : `${pnl >= 0 ? "+" : ""}${pnl.toFixed(4)} SOL`) : ""}<small>${pct != null ? ` ${formatPct(pct)}` : ""}</small></strong></div>`;
   }
   function renderDetailPanel() {
     const coin = state.selected || {}, detail = state.selectedDetail || {}, panel = $("[data-detail-panel]");
@@ -1712,6 +1725,73 @@
     const coin = state.selected || {};
     openSheet(`<div class="sheet-title"><img src="${escapeHtml(coinImage(coin))}" alt=""><div><h2>Auto exits</h2><p>Protect your existing ${escapeHtml(coin.symbol || "coin")} position</p></div></div><div class="field-row"><div class="field"><label>Take profit %</label><input data-exit-tp inputmode="decimal" value="50"></div><div class="field"><label>Stop loss %</label><input data-exit-sl inputmode="decimal" value="15"></div></div><div class="field"><label>Sell % when hit</label><input data-exit-percent inputmode="numeric" value="100"></div><button class="submit-trade" type="button" data-arm-exits>Arm server-side exits</button><p class="fineprint">The backend monitors and executes this rule. The browser does not need to stay open.</p>`);
   }
+  function parseMarketCapInput(value) {
+    const match = String(value || "").trim().toLowerCase().replace(/[$,\s]/g, "").match(/^([0-9]*\.?[0-9]+)(k|m|b)?$/);
+    if (!match) return 0;
+    let amount = Number(match[1]);
+    if (!Number.isFinite(amount) || amount <= 0) return 0;
+    if (match[2] === "k") amount *= 1e3;
+    else if (match[2] === "m") amount *= 1e6;
+    else if (match[2] === "b") amount *= 1e9;
+    return Math.round(amount);
+  }
+  function marketOrderStatusHtml(order) {
+    const side = String(order.kind || order.side || "").includes("buy") ? "BUY" : "SELL";
+    const target = Number(order.targetMarketCapUsd || order.triggerMc || 0);
+    const status = String(order.status || "active");
+    const amount = side === "BUY" ? `${order.amountSol || "?"} SOL` : `${order.sellPercent || order.pct || 100}%`;
+    return `<div class="preset-manage-row"><div><b>${side} / ${escapeHtml(formatUsd(target))}</b><span>${escapeHtml(amount)} / ${escapeHtml(status.replace(/_/g, " "))}</span></div>${["active", "armed"].includes(status) ? `<div><button class="danger" type="button" aria-label="Cancel order" data-cancel-market-order="${escapeHtml(order.id)}" data-order-chain="${escapeHtml(order.chain || "solana")}">X</button></div>` : ""}</div>`;
+  }
+  async function refreshMarketOrderList() {
+    const target = $("[data-market-order-list]"), key = coinKey(state.selected);
+    if (!target || !key) return;
+    const result = await request(`/api/web/market-orders?token=${encodeURIComponent(key)}`);
+    const rows = result.ok && result.data?.ok ? (result.data.orders || []) : [];
+    target.innerHTML = rows.length ? rows.map(marketOrderStatusHtml).join("") : '<div class="read-card"><h3>No orders on this coin</h3><p>Buy triggers and exits will stay active on the server after you close the app.</p></div>';
+  }
+  async function openMarketOrdersSheet() {
+    if (!(await ensureAccount())) { toast("Log in to create orders.", true); return; }
+    if (!state.wallets.length) await loadWallets();
+    const coin = state.selected || {}, key = coinKey(coin), wallet = activeWallet(), currentMc = Number(coin.marketCap || coin.mc || state.selectedDetail?.mc || state.selectedDetail?.marketCapUsd || 0);
+    if (!wallet) { openFundingSheet(); return; }
+    const wallets = state.wallets.map((item) => `<option value="${item.index}" ${item.index === state.activeWallet ? "selected" : ""}>${escapeHtml(item.label || `Wallet ${item.index}`)} / ${Number(item.sol || 0).toFixed(3)} SOL</option>`).join("");
+    openSheet(`<div class="sheet-title"><img src="${escapeHtml(coinImage(coin))}" alt=""><div><h2>Market-cap orders</h2><p>${escapeHtml(coin.symbol || short(key))} / current MC ${escapeHtml(formatUsd(currentMc))}</p></div></div>
+      <div class="field"><label>Wallet</label><select data-order-wallet>${wallets}</select></div>
+      <div class="read-card"><h3>Auto buy</h3><div class="field-row"><div class="field"><label>Buy when MC touches</label><input data-order-buy-mc inputmode="decimal" placeholder="30k"></div><div class="field"><label>Spend SOL</label><input data-order-buy-sol inputmode="decimal" value="0.1"></div></div></div>
+      <div class="read-card"><h3>Profit ladder</h3><div class="field-row"><div class="field"><label>MC targets</label><input data-order-ladder-mc placeholder="75k, 100k, 150k"></div><div class="field"><label>Sell % at each</label><input data-order-ladder-sell placeholder="25, 25, 50"></div></div></div>
+      <div class="read-card"><h3>Stop loss by MC</h3><div class="field-row"><div class="field"><label>Exit if MC touches</label><input data-order-stop-mc inputmode="decimal" placeholder="20k"></div><div class="field"><label>Sell %</label><input data-order-stop-sell inputmode="numeric" value="100"></div></div></div>
+      <button class="submit-trade" type="button" data-submit-market-orders>Arm selected orders</button><p class="fineprint">Use any one section or combine them. Targets automatically work above or below the current MC and keep running server-side.</p><div class="preset-manager-list" data-market-order-list><div class="read-card"><p>Loading active orders...</p></div></div>`);
+    await refreshMarketOrderList();
+  }
+  async function submitMarketOrders(button) {
+    const coin = state.selected || {}, key = coinKey(coin), walletIndex = Number($("[data-order-wallet]")?.value || state.activeWallet || 1), wallet = state.wallets.find((item) => item.index === walletIndex) || activeWallet();
+    const orders = [], buyMcText = String($("[data-order-buy-mc]")?.value || "").trim(), buyMc = parseMarketCapInput(buyMcText), buySol = Number($("[data-order-buy-sol]")?.value || 0);
+    if (buyMcText) {
+      if (!buyMc || !(buySol >= 0.005)) { toast("Add a valid buy MC and SOL amount.", true); return; }
+      orders.push({ side: "buy", targetMarketCapUsd: buyMc, amountSol: buySol });
+    }
+    const ladderTargets = String($("[data-order-ladder-mc]")?.value || "").split(",").map(parseMarketCapInput).filter((value) => value > 0).slice(0, 4);
+    const ladderSells = String($("[data-order-ladder-sell]")?.value || "").split(",").map(Number);
+    ladderTargets.forEach((target, index) => orders.push({ side: "sell", targetMarketCapUsd: target, sellPercent: ladderSells[index] > 0 ? ladderSells[index] : Math.max(1, Math.floor(100 / ladderTargets.length)) }));
+    const stopMc = parseMarketCapInput($("[data-order-stop-mc]")?.value), stopSell = Number($("[data-order-stop-sell]")?.value || 100);
+    if (stopMc) orders.push({ side: "sell", targetMarketCapUsd: stopMc, sellPercent: stopSell });
+    if (!orders.length) { toast("Add a buy target, profit target, or stop loss.", true); return; }
+    if (orders.some((order) => order.side === "sell" && (!(order.sellPercent >= 1) || order.sellPercent > 100))) { toast("Sell percentages must be 1-100%.", true); return; }
+    button.disabled = true; button.textContent = "Arming...";
+    await ensureAutomation();
+    const result = await post("/api/web/market-orders", { token: key, symbol: coin.symbol || "", walletIndex: String(walletIndex), walletPublicKey: wallet?.publicKey || "", currentMarketCapUsd: Number(coin.marketCap || coin.mc || 0), entryPriceUsd: Number(coin.priceUsd || state.selectedDetail?.priceUsd || 0), orders });
+    button.disabled = false; button.textContent = "Arm selected orders";
+    if (!result.ok || !result.data?.ok) { toast(apiMessage(result.data, "Could not arm orders"), true); return; }
+    toast(`${result.data.armed?.length || orders.length} order${orders.length === 1 ? "" : "s"} armed`);
+    await refreshMarketOrderList();
+  }
+  async function cancelMarketOrder(button) {
+    button.disabled = true;
+    const result = await post("/api/web/market-orders/cancel", { id: button.dataset.cancelMarketOrder, chain: button.dataset.orderChain || "solana" });
+    if (!result.ok) toast(apiMessage(result.data, "Could not cancel order"), true);
+    else toast("Order cancelled");
+    await refreshMarketOrderList();
+  }
   async function createWallet() {
     if (!(await ensureAccount())) { toast("Could not start your account.", true); return false; }
     const previousWallets = new Set(state.wallets.map((wallet) => String(wallet.publicKey || "")));
@@ -2460,6 +2540,9 @@
     if (event.target.closest("[data-sweep-volume]")) { await sweepFunVolume(); return; }
     const submitBundle = event.target.closest("[data-submit-bundle]"); if (submitBundle) { await submitFunBundle(submitBundle); return; }
     if (event.target.closest("[data-copy-wallet]")) { const wallet = activeWallet(); if (wallet) { await navigator.clipboard?.writeText(wallet.publicKey); toast("Wallet address copied"); } return; }
+    if (event.target.closest("[data-market-orders]")) { await openMarketOrdersSheet(); return; }
+    const submitMarketOrder = event.target.closest("[data-submit-market-orders]"); if (submitMarketOrder) { await submitMarketOrders(submitMarketOrder); return; }
+    const cancelOrder = event.target.closest("[data-cancel-market-order]"); if (cancelOrder) { await cancelMarketOrder(cancelOrder); return; }
     if (event.target.closest("[data-price-alert]")) { openSheet(`<div class="sheet-title"><img src="${escapeHtml(coinImage(state.selected || {}))}" alt=""><div><h2>Coin alerts</h2><p>Keep the chart clean and send alerts where they matter.</p></div></div><div class="tool-grid">${toolCard("watchlist", "Watch coin", "Save to your list", "watch")}${toolCard("warning", "Telegram alert", "Open SlimeWiredBot", "telegram")}</div>`); return; }
   });
 

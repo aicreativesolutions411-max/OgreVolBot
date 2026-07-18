@@ -2917,12 +2917,12 @@
     if(state.route!=="trade"||state.mint!==mint||state.tradeTab!=="pos")return;
     const mine=((d&&d.positions)||[]).filter(p=>p.tokenMint===mint);
     if(!ok||!mine.length){pane.innerHTML='<div class="panemsg"><div style="font-size:30px">🫧</div><div>No position in this token yet.<br>Buy on the right and it shows up here.</div></div>';return;}
-    pane.innerHTML='<div class="poscard">'+mine.map(p=>{const pnl=Number(p.openPnlSol),pct=p.openPnlPercent,cls=isFinite(pnl)?(pnl>=0?"up":"down"):"mut";
+    pane.innerHTML='<div class="poscard">'+mine.map(p=>{const hasSolPnl=p.openPnlSol!==null&&p.openPnlSol!==undefined&&p.openPnlSol!=="",hasUsdPnl=p.openPnlUsd!==null&&p.openPnlUsd!==undefined&&isFinite(Number(p.openPnlUsd)),pnl=hasSolPnl?Number(p.openPnlSol):(hasUsdPnl?Number(p.openPnlUsd):NaN),pct=p.openPnlPercent,cls=isFinite(pnl)?(pnl>=0?"up":"down"):"mut";
       return '<div class="wbox" style="margin:0 0 12px"><h3 style="margin-bottom:8px">'+esc(p.symbol||short(mint))+'</h3><div class="secgrid">'+
         '<div class="cell"><b>'+(p.uiAmount?esc(String(p.uiAmount)):"—")+'</b><span>holdings</span></div>'+
-        '<div class="cell"><b>'+(p.estimatedValueSol!=null?"◎"+Number(p.estimatedValueSol).toFixed(3):"—")+'</b><span>value</span></div>'+
-        '<div class="cell"><b>'+(isFinite(Number(p.spentSol))?"◎"+Number(p.spentSol).toFixed(3):"—")+'</b><span>cost</span></div>'+
-        '<div class="cell"><b class="'+cls+'">'+(isFinite(pnl)?(pnl>=0?"+":"")+pnl.toFixed(3)+"◎":"—")+(pct!=null?" ("+pct+"%)":"")+'</b><span>pnl</span></div></div>'+
+        '<div class="cell"><b>'+(p.estimatedValueSol!=null?"◎"+Number(p.estimatedValueSol).toFixed(3):(p.estimatedValueUsd!=null&&isFinite(Number(p.estimatedValueUsd))?"$"+Number(p.estimatedValueUsd).toFixed(2):"—"))+'</b><span>value</span></div>'+
+        '<div class="cell"><b>'+(Number(p.spentSol)>0?"◎"+Number(p.spentSol).toFixed(3):(p.costBasisSol!=null&&isFinite(Number(p.costBasisSol))?"◎"+Number(p.costBasisSol).toFixed(3):(p.costBasisUsd!=null&&isFinite(Number(p.costBasisUsd))?"$"+Number(p.costBasisUsd).toFixed(2):"—")))+'</b><span>cost</span></div>'+
+        '<div class="cell"><b class="'+cls+'">'+(isFinite(pnl)?(pnl>=0?"+":"")+(hasSolPnl?pnl.toFixed(3)+"◎":"$"+pnl.toFixed(2)):"—")+(pct!=null?" ("+pct+"%)":"")+'</b><span>pnl</span></div></div>'+
         '<div style="display:flex;gap:8px;margin-top:10px"><button class="wbtn" style="flex:1;background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606" onclick="GG.sellPos(\''+esc(mint)+'\',\''+esc(p.symbol||"")+'\')">Sell '+esc(p.symbol||"")+'</button><button class="wbtn ghost" style="flex:0 0 auto" title="Auto-sell at a target / floor" onclick="GG.armPos(\''+esc(mint)+'\',\''+esc(p.symbol||"")+'\')">🎯 TP/SL</button></div></div>';
     }).join("")+'</div>';
   }
@@ -3581,11 +3581,11 @@
     if(state.route!=="portfolio"||state.portfolioTab!=="positions")return;
     if(!pos.length){view.innerHTML='<div class="empty"><div class="big">🫧</div><div><b>No open positions</b><br><span class="mut">Buy something from Trending or Trenches and it shows up here.</span></div><div class="cta" onclick="GG.go(\'trending\')">Find a play</div></div>'+'<div id="rhPosWrap">'+(state.rhPosHtml||"")+'</div>';void loadRhPositions();return;}
     view.innerHTML='<div class="poshead"><b style="font-size:13px">Open positions</b><button class="posref" title="Refresh holdings &amp; PnL" onclick="GG.refreshPos()">↻ Refresh</button></div><div class="pcard"><table class="tbl"><thead><tr><th class="l">Asset</th><th>Cost</th><th>Value</th><th>PNL</th><th class="hideMb">Amount</th><th></th></tr></thead><tbody>'+
-      pos.map(p=>{const pnl=Number(p.openPnlSol),pct=p.openPnlPercent,cls=isFinite(pnl)?(pnl>=0?"up":"down"):"mut";
+      pos.map(p=>{const hasSolPnl=p.openPnlSol!==null&&p.openPnlSol!==undefined&&p.openPnlSol!=="",hasUsdPnl=p.openPnlUsd!==null&&p.openPnlUsd!==undefined&&isFinite(Number(p.openPnlUsd)),pnl=hasSolPnl?Number(p.openPnlSol):(hasUsdPnl?Number(p.openPnlUsd):NaN),pct=p.openPnlPercent,cls=isFinite(pnl)?(pnl>=0?"up":"down"):"mut";
         return'<tr onclick="GG.open(\''+esc(p.tokenMint)+'\')"><td class="l">'+pairCellHtml({tokenMint:p.tokenMint,symbol:p.symbol,name:p.name,imageUrl:p.imageUrl})+'</td>'+
-          '<td>'+(isFinite(Number(p.spentSol))?"◎ "+Number(p.spentSol).toFixed(3):"—")+'</td>'+
-          '<td>'+(p.estimatedValueSol!=null?"◎ "+Number(p.estimatedValueSol).toFixed(3):"—")+'</td>'+
-          '<td class="'+cls+'">'+(isFinite(pnl)?(pnl>=0?"+":"")+pnl.toFixed(3)+"◎":"—")+(pct!=null?'<span class="chg '+cls+'">'+pct+'%</span>':'')+'</td>'+
+          '<td>'+(Number(p.spentSol)>0?"◎ "+Number(p.spentSol).toFixed(3):(p.costBasisSol!=null&&isFinite(Number(p.costBasisSol))?"◎ "+Number(p.costBasisSol).toFixed(3):(p.costBasisUsd!=null&&isFinite(Number(p.costBasisUsd))?"$"+Number(p.costBasisUsd).toFixed(2):"—")))+'</td>'+
+          '<td>'+(p.estimatedValueSol!=null?"◎ "+Number(p.estimatedValueSol).toFixed(3):(p.estimatedValueUsd!=null&&isFinite(Number(p.estimatedValueUsd))?"$"+Number(p.estimatedValueUsd).toFixed(2):"—"))+'</td>'+
+          '<td class="'+cls+'">'+(isFinite(pnl)?(pnl>=0?"+":"")+(hasSolPnl?pnl.toFixed(3)+"◎":"$"+pnl.toFixed(2)):"—")+(pct!=null?'<span class="chg '+cls+'">'+pct+'%</span>':'')+'</td>'+
           '<td class="hideMb mut">'+esc(p.uiAmount||"")+'</td>'+
           '<td><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap"><button class="buybtn sm" title="Auto-sell at a target / floor" onclick="event.stopPropagation();GG.armPos(\''+esc(p.tokenMint)+'\',\''+esc(p.symbol||"")+'\')">🎯</button><button class="buybtn sm" onclick="event.stopPropagation();GG.sendPos(\''+esc(p.tokenMint)+'\',\''+esc(p.symbol||"")+'\')">Send</button><button class="buybtn sm" style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606" onclick="event.stopPropagation();GG.sellPos(\''+esc(p.tokenMint)+'\',\''+esc(p.symbol||"")+'\')">Sell</button></div></td></tr>';
       }).join("")+'</tbody></table></div>'+'<div id="rhPosWrap">'+(state.rhPosHtml||"")+'</div>';
