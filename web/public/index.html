@@ -4995,9 +4995,12 @@
   // directly (this is what "Buy Now" on the scan card lands on). EVM (0x…) → Robinhood trade, base58 → Solana.
   try{const u=new URL(location.href);const dl=(u.searchParams.get("token")||u.searchParams.get("ca")||"").trim();
     const wantBuy=u.searchParams.get("buy")==="1";const amt=parseFloat(u.searchParams.get("amount")||"");
-    if(dl&&!location.hash.startsWith("#trade")&&!location.hash.startsWith("#rhtrade")){
+    if(dl){
       const isEvm=/^0x[0-9a-fA-F]{40}$/.test(dl),isSol=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(dl);
-      if(isEvm)location.hash="#rhtrade/"+dl;else if(isSol)location.hash="#trade/"+dl;
+      // A Telegram/PWA deep link always wins over an old route already open in the
+      // installed app. This also repairs mobile handoffs where Telegram drops #hash.
+      const targetHash=isEvm?"#rhtrade/"+dl:(isSol?"#trade/"+dl:"");
+      if(targetHash&&location.hash!==targetHash)location.hash=targetHash;
       // Telegram POS "Buy X" buttons → land on the coin + pop the 1-click buy preloaded (the user
       // still taps confirm; fee is taken in-app on the buy). Solana only for now.
       if(wantBuy&&isSol)window.__pendingBuyLink={mint:dl,amount:(isFinite(amt)&&amt>0)?amt:0};

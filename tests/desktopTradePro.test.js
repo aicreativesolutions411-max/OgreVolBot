@@ -112,7 +112,8 @@ test("Robinhood chart and transactions fall back to exact on-chain pool swaps", 
 
 test("Telegram Slime Chart links land on the exact terminal coin route", () => {
   assert.match(server, /function slimewireCoinRouteUrl/);
-  assert.match(server, /route = normalizeRobinhoodTokenAddress\(mint\) \? "rhtrade" : "trade"/);
-  assert.match(server, /\/\?\$\{params\.toString\(\)\}#\$\{route\}/);
+  assert.match(server, /\/fun\/\?\$\{params\.toString\(\)\}/);
+  assert.match(gg, /const targetHash=isEvm\?"#rhtrade\/"\+dl:\(isSol\?"#trade\/"\+dl:""\)/);
+  assert.match(gg, /if\(targetHash&&location\.hash!==targetHash\)location\.hash=targetHash/);
   assert.doesNotMatch(server, /site: `\$\{siteBase\}\/terminal\/chart\?token=/);
 });
