@@ -8,6 +8,8 @@ const index = read("../web/public/index.html");
 const pro = read("../web/public/terminal-pro.js");
 const css = read("../web/public/terminal-pro.css");
 const chart = read("../web/public/chart-lab.html");
+const indicators = read("../web/public/fun-indicators.js");
+const noxa = read("../src/lib/noxaLaunchpad.js");
 const server = read("../src/index.js");
 
 test("desktop terminal mirrors ship the same market and trade workspace", () => {
@@ -80,4 +82,35 @@ test("sub-minute native charts aggregate real recent trades instead of fabricati
   assert.match(chart, /candlesFromApiTrades/);
   assert.match(chart, /tfSec\(\)<60\?candlesFromApiTrades\(d\.trades\)/);
   assert.match(server, /webChartTimeframes = \["1s", "15s", "30s"/);
+});
+
+test("desktop charts preserve the full indicator workspace", () => {
+  assert.match(gg, /fun-indicators\.js/);
+  assert.match(pro, /data-indicators-toggle/);
+  for (const kind of ["fib", "rsi", "macd", "harmonics"]) {
+    assert.match(pro, new RegExp(`data-indicator-kind=\\"${kind}\\"`));
+  }
+  for (const pattern of ["bat", "gartley", "shark", "butterfly", "crab", "five0"]) {
+    assert.match(indicators, new RegExp(`\\b${pattern}\\b`));
+  }
+  assert.match(indicators, /#\(\?:coin\|trade\|rhtrade\)/);
+  assert.match(indicators, /syncIndicatorProvider/);
+  assert.match(css, /\.tradeMain\.indicator-analysis-open/);
+});
+
+test("Robinhood chart and transactions fall back to exact on-chain pool swaps", () => {
+  assert.match(noxa, /export async function fetchPoolSwaps/);
+  assert.match(noxa, /SWAP_TOPIC_V3, SWAP_TOPIC_V2/);
+  assert.match(noxa, /eth_getBlockByNumber/);
+  assert.match(server, /rhCandlesFromSwaps/);
+  assert.match(server, /source = "robinhood rpc swaps"/);
+  assert.match(server, /pathname === "\/api\/web\/token-trades"/);
+  assert.match(gg, /token-trades\?pool=.*&ca=/);
+});
+
+test("Telegram Slime Chart links land on the exact Fun coin route", () => {
+  assert.match(server, /function slimewireCoinRouteUrl/);
+  assert.match(server, /route = normalizeRobinhoodTokenAddress\(mint\) \? "rhtrade" : "trade"/);
+  assert.match(server, /\/fun\?\$\{params\.toString\(\)\}#\$\{route\}/);
+  assert.doesNotMatch(server, /site: `\$\{siteBase\}\/terminal\/chart\?token=/);
 });

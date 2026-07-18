@@ -571,7 +571,8 @@
   .chartSplitMain.chartSplitAdjusted .tapeTable{max-height:none;min-height:58px;flex:1 1 auto}
   @media(max-width:820px){.chartTapeSplit{flex-basis:24px;height:24px}.chartTapeSplit:before{width:72px}.chartTapeSplit span{right:8px;font-size:8px}.chartSplitMain.chartSplitAdjusted .marketTape{padding-bottom:8px}}
 </style>
-<link rel="stylesheet" href="/terminal-pro.css?v=20260718b">
+<link rel="stylesheet" href="/terminal-pro.css?v=20260718c">
+<script defer src="/vendor/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
 <script>{const embed=new URLSearchParams(location.search).get("embed");if(embed==="fun-launch")document.body.classList.add("fun-launch-embed");if(embed==="fun-tool")document.body.classList.add("fun-tool-embed");}</script>
@@ -2899,7 +2900,7 @@
   // Live swaps fetched CLIENT-SIDE straight from GeckoTerminal (CORS-enabled). This uses the user's
   // own IP, dodging the rate-limit that throttles our shared Render IP — far more reliable than a
   // server proxy. Falls back to our /api/web/token-trades proxy only if the direct call is blocked.
-  async function fetchPoolTrades(pool,network){
+  async function fetchPoolTrades(pool,network,token,price){
     network=network==="robinhood"?"robinhood":"solana";
     const map=t=>{const a=(t&&t.attributes)||{};const kind=/sell/i.test(String(a.kind||""))?"sell":"buy";
       // Always the TRADED token's USD price: on a buy it's the "to" token, on a sell the "from" token
@@ -2911,7 +2912,7 @@
       const tr=((j&&j.data)||[]).slice(0,60).map(map).filter(t=>t.tx);
       if(tr.length)return tr;
     }catch(e){}
-    try{const {d}=await api("/api/web/token-trades?pool="+encodeURIComponent(pool)+"&network="+encodeURIComponent(network));return (d&&d.trades)||[];}catch(e){return [];}
+    try{const {d}=await api("/api/web/token-trades?pool="+encodeURIComponent(pool)+"&network="+encodeURIComponent(network)+"&ca="+encodeURIComponent(token||"")+"&price="+encodeURIComponent(Number(price)||0));return (d&&d.trades)||[];}catch(e){return [];}
   }
   // Pre-DEX pump.fun coins have NO GeckoTerminal pool, so their swaps come off our PumpPortal tape.
   async function fetchPumpTrades(mint){try{const {d}=await api("/api/web/pump-trades?mint="+encodeURIComponent(mint));return (d&&d.trades)||[];}catch(e){return [];}}
@@ -2934,7 +2935,7 @@
     opts=opts||{};network=network==="robinhood"?"robinhood":"solana";const pool=(r&&(r.pairAddress||r.raydiumPool))||"",key=network+":"+(pool||mint),target=$("#"+targetId);
     if(!target)return;if(inlineTapePollT){clearTimeout(inlineTapePollT);inlineTapePollT=null;}inlineTapeKey=key;
     const old=target._trades||[];if(!old.length)target.innerHTML=tapeTableHtml([],network,true,pool?"":"Resolving the strongest pool…");
-    const tr=pool?await fetchPoolTrades(pool,network):(network==="solana"?await fetchPumpTrades(mint):[]);
+    const tr=pool?await fetchPoolTrades(pool,network,mint,r&&r.priceUsd):(network==="solana"?await fetchPumpTrades(mint):[]);
     if(network==="robinhood"&&pool&&tr.length){const f=$("#rhTvChart iframe");try{if(f&&f.contentWindow)f.contentWindow.postMessage({type:"slimewire:rh-pool-trades",pool,trades:tr.slice(0,60)},location.origin);}catch(e){}}
     if(inlineTapeKey!==key||!target.isConnected)return;target._trades=tr.length?tr:old;target.innerHTML=tapeTableHtml(target._trades,network,false,pool?"No recent swaps in this pool yet.":"Resolving the strongest pool…");
     inlineTapePollT=setTimeout(()=>{const live=(network==="robinhood"?state.route==="rhtrade"&&state.rhMint===mint:state.route==="trade"&&state.mint===mint);if(live)loadInlineTape(mint,r,network,targetId,{silent:true});},4000);
@@ -5017,6 +5018,7 @@
   });
 })();
 </script>
-<script src="/terminal-pro.js?v=20260718b"></script>
+<script src="/terminal-pro.js?v=20260718c"></script>
+<script src="/fun-indicators.js?v=20260718c"></script>
 </body>
 </html>

@@ -1,8 +1,13 @@
 "use strict";
 
 (() => {
-  const $ = (selector, root = document) => root.querySelector(selector);
-  const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+  function activeIndicatorScope() {
+    if (location.hash.startsWith("#rhtrade/")) return document.querySelector("#v-rhtrade") || document;
+    if (location.hash.startsWith("#trade/")) return document.querySelector("#v-trade") || document;
+    return document;
+  }
+  const $ = (selector, root) => (root || activeIndicatorScope()).querySelector(selector);
+  const $$ = (selector, root) => [...(root || activeIndicatorScope()).querySelectorAll(selector)];
   const API_BASE = window.OGRE_PORTAL_CONFIG?.apiBase || location.origin;
   const STORAGE_KEY = "slimewireFunIndicators:v1";
   const FIB_STORAGE_KEY = "slimewireFunFibSettings:v1";
@@ -43,6 +48,10 @@
   let nativeChart = null;
   let nativeResizeObserver = null;
   let analysisActive = false;
+  const providerMarkup = new WeakMap();
+
+  function indicatorFrame() { return $("[data-chart-frame]"); }
+  function indicatorCard(frame = indicatorFrame()) { return frame?.closest(".chart-card, .tradeMain"); }
 
   function readEnabled() {
     try {
@@ -125,13 +134,15 @@
     if (panel) panel.hidden = true;
   }
   function selectedKey() {
-    const match = String(location.hash || "").match(/^#coin\/(.+)$/);
+    const match = String(location.hash || "").match(/^#(?:coin|trade|rhtrade)\/(.+)$/);
     if (match) {
       try { return decodeURIComponent(match[1]).trim(); } catch { return match[1].trim(); }
     }
     return String(new URLSearchParams(location.search).get("ca") || "").trim();
   }
   function activeTimeframe() {
+    const pro = $(".chartProBar [data-pro-tf].on")?.dataset.proTf;
+    if (pro) return pro;
     const value = $("[data-chart-interval].active")?.dataset.chartInterval || "15";
     return TF_MAP[value] || "15m";
   }
@@ -160,7 +171,7 @@
   }
   function toggleDrawer(force, renderWhenOpen = true) {
     const drawer = $("[data-indicator-drawer]");
-    const card = drawer?.closest(".chart-card");
+    const card = drawer?.closest(".chart-card, .tradeMain");
     const trigger = $("[data-indicators-toggle]");
     if (!drawer || !card || !trigger) return;
     const open = typeof force === "boolean" ? force : drawer.hidden;
@@ -179,7 +190,8 @@
   function indicatorSurfaceActive() {
     const coinView = $(".coin-view");
     const transactions = $('[data-chart-mode="transactions"]')?.classList.contains("active");
-    return Boolean(analysisActive && coinView?.classList.contains("active") && !transactions && !document.hidden && anyEnabled());
+    const desktopTrade = /^#(?:trade|rhtrade)\//.test(String(location.hash || "")) && Boolean(indicatorFrame());
+    return Boolean(analysisActive && (desktopTrade || coinView?.classList.contains("active")) && !transactions && !document.hidden && anyEnabled());
   }
   function scheduleAutoRefresh() {
     clearTimeout(autoRefreshTimer);
@@ -272,16 +284,16 @@
     if (pendingCandleRequests.has(cacheKey)) return pendingCandleRequests.get(cacheKey);
     const pending = (async () => {
       let primaryError = null;
-      if (!robinhood) {
-        try {
-          const payload = await fetchCandleJson(`${API_BASE}/api/chart?ca=${encodeURIComponent(key)}&tf=${encodeURIComponent(timeframe)}`);
-          const nativeResult = { candles: normalizeCandles(payload?.candles), source: String(payload?.source || "native chart"), stale: false };
-          if (nativeResult.candles.length) {
-            candleCache.set(cacheKey, { at: Date.now(), payload: nativeResult });
-            return nativeResult;
-          }
-        } catch (error) { primaryError = error; }
-      }
+      try {
+        const query = new URLSearchParams({ ca: key, tf: timeframe });
+        if (pool) query.set("pool", pool);
+        const payload = await fetchCandleJson(`${API_BASE}/api/chart?${query.toString()}`);
+        const nativeResult = { candles: normalizeCandles(payload?.candles), source: String(payload?.source || "native chart"), stale: false };
+        if (nativeResult.candles.length) {
+          candleCache.set(cacheKey, { at: Date.now(), payload: nativeResult });
+          return nativeResult;
+        }
+      } catch (error) { primaryError = error; }
       try {
         const fallback = await loadBrowserGeckoCandles(network, key, timeframe, pool, side);
         if (fallback.candles.length) candleCache.set(cacheKey, { at: Date.now(), payload: fallback });
@@ -428,11 +440,18 @@
   }
 
   function restoreProviderChart() {
-    const frame = $("[data-chart-frame]");
-    const card = frame?.closest(".chart-card");
+    const frame = indicatorFrame();
+    const card = indicatorCard(frame);
     destroyNativeChart();
     card?.classList.remove("indicator-analysis-open");
-    if (frame?.querySelector("[data-indicator-analysis]")) window.SlimeWireFunChart?.render?.();
+    if (frame?.querySelector("[data-indicator-analysis]")) {
+      const saved = providerMarkup.get(frame);
+      if (saved != null) frame.innerHTML = saved;
+      else window.SlimeWireFunChart?.render?.();
+      if (/^#(?:trade|rhtrade)\//.test(String(location.hash || ""))) {
+        setTimeout(() => window.SlimeWirePro?.syncIndicatorProvider?.(), 0);
+      }
+    }
   }
 
   function analysisHeader(subtitle, badge = "LIVE") {
@@ -463,10 +482,11 @@
   }
 
   function mountAnalysisLoading(timeframe) {
-    const frame = $("[data-chart-frame]");
+    const frame = indicatorFrame();
     if (!frame) return;
+    if (!frame.querySelector("[data-indicator-analysis]")) providerMarkup.set(frame, frame.innerHTML);
     destroyNativeChart();
-    frame.closest(".chart-card")?.classList.add("indicator-analysis-open");
+    indicatorCard(frame)?.classList.add("indicator-analysis-open");
     frame.innerHTML = `<div class="indicator-analysis indicator-analysis-loading" data-indicator-analysis>${analysisHeader(`Native candle chart · ${timeframe}`)}<div class="analysis-loading"><span></span><b>Loading candle history</b><small>Painting your selected indicators directly on the chart…</small></div></div>`;
   }
 
@@ -597,10 +617,11 @@
   }
 
   function mountNativeAnalysis(candles, source, timeframe, stale) {
-    const frame = $("[data-chart-frame]");
+    const frame = indicatorFrame();
     if (!frame) return false;
+    if (!frame.querySelector("[data-indicator-analysis]")) providerMarkup.set(frame, frame.innerHTML);
     destroyNativeChart();
-    frame.closest(".chart-card")?.classList.add("indicator-analysis-open");
+    indicatorCard(frame)?.classList.add("indicator-analysis-open");
     frame.innerHTML = nativeAnalysisMarkup(candles, source, timeframe, stale);
     const priceNode = $("[data-analysis-price]", frame);
     if (!priceNode || typeof window.LightweightCharts?.createChart !== "function") {
@@ -670,7 +691,7 @@
     if (!analysisActive) { clearTimeout(autoRefreshTimer); return; }
     if ($('[data-chart-mode="transactions"]')?.classList.contains("active")) {
       destroyNativeChart();
-      $("[data-chart-frame]")?.closest(".chart-card")?.classList.remove("indicator-analysis-open");
+      indicatorCard()?.classList.remove("indicator-analysis-open");
       clearTimeout(autoRefreshTimer);
       return;
     }
@@ -772,7 +793,7 @@
       return;
     }
     if (event.target.closest("[data-indicator-retry]")) { candleCache.clear(); geckoPoolCache.clear(); activateAnalysis({ openDrawer: true }); return; }
-    if (event.target.closest("[data-chart-interval]")) { requestVersion += 1; clearTimeout(autoRefreshTimer); scheduleRender(25); return; }
+    if (event.target.closest("[data-chart-interval], [data-pro-tf]")) { requestVersion += 1; clearTimeout(autoRefreshTimer); scheduleRender(25); return; }
     if (event.target.closest("[data-chart-mode]")) { analysisActive = false; requestVersion += 1; clearTimeout(autoRefreshTimer); destroyNativeChart(); toggleDrawer(false, false); syncChartMode(); }
   });
   document.addEventListener("change", (event) => {
@@ -830,6 +851,7 @@
   });
   window.addEventListener("hashchange", () => { analysisActive = false; requestVersion += 1; clearTimeout(autoRefreshTimer); toggleDrawer(false, false); syncButtons(); });
   document.addEventListener("slimewire:chart-rendered", () => { if (analysisActive && anyEnabled()) scheduleRender(0); });
+  document.addEventListener("slimewire:pro-timeframe", () => { if (analysisActive && anyEnabled()) { requestVersion += 1; clearTimeout(autoRefreshTimer); scheduleRender(25); } });
   document.addEventListener("visibilitychange", () => {
     clearTimeout(autoRefreshTimer);
     if (!document.hidden && analysisActive) scheduleRender(0);

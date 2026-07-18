@@ -36,6 +36,7 @@ const ERC20 = new ethers.Interface([
 const POOL = new ethers.Interface([
   "function slot0() view returns (uint160 sqrtPriceX96,int24 tick,uint16,uint16,uint16,uint8,bool)",
   "function token0() view returns (address)",
+  "function token1() view returns (address)",
 ]);
 // The factory's O(1) view: confirms a coin is a NOXA launch + gives its paired token + pool fee tier, so a
 // single-coin lookup never has to scan log history (which the RPC rejects/times-out over the full range).
@@ -183,6 +184,156 @@ const POOL_SWAP_V2_IFACE = new ethers.Interface([
   "event Swap(address indexed sender,uint256 amount0In,uint256 amount1In,uint256 amount0Out,uint256 amount1Out,address indexed to)",
 ]);
 const poolToken0Cache = new Map();   // pool → token0 addr (immutable)
+const poolSwapMetaCache = new Map();
+const poolSwapHistoryCache = new Map();
+
+async function poolSwapMeta(provider, poolAddr) {
+  const cached = poolSwapMetaCache.get(poolAddr);
+  if (cached) return cached;
+  const [token0, token1] = await multicall(provider, [
+    { target: poolAddr, iface: POOL, fn: "token0" },
+    { target: poolAddr, iface: POOL, fn: "token1" }
+  ]);
+  if (!token0 || !token1) return null;
+  const [dec0, dec1, sym0, sym1] = await multicall(provider, [
+    { target: token0, iface: ERC20, fn: "decimals" },
+    { target: token1, iface: ERC20, fn: "decimals" },
+    { target: token0, iface: ERC20, fn: "symbol" },
+    { target: token1, iface: ERC20, fn: "symbol" }
+  ]);
+  const value = {
+    token0: ethers.getAddress(token0), token1: ethers.getAddress(token1),
+    dec0: Number(dec0 ?? 18), dec1: Number(dec1 ?? 18),
+    sym0: String(sym0 || ""), sym1: String(sym1 || "")
+  };
+  poolSwapMetaCache.set(poolAddr, value);
+  return value;
+}
+
+async function blockTimestamps(rpcUrl, blockNumbers) {
+  const unique = [...new Set(blockNumbers.map(Number).filter(Number.isFinite))];
+  const out = new Map();
+  const chunks = [];
+  for (let offset = 0; offset < unique.length; offset += 100) chunks.push(unique.slice(offset, offset + 100));
+  const results = await Promise.all(chunks.map(async (chunk) => {
+    try {
+      const response = await fetch(rpcUrl || NOXA_RH.rpcUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(chunk.map((block, index) => ({
+          jsonrpc: "2.0", id: index + 1, method: "eth_getBlockByNumber",
+          params: [`0x${block.toString(16)}`, false]
+        })))
+      });
+      if (!response.ok) return [];
+      const rows = await response.json();
+      return (Array.isArray(rows) ? rows : []).map((row) => ({
+        block: chunk[Number(row?.id) - 1],
+        timestamp: Number.parseInt(String(row?.result?.timestamp || ""), 16)
+      }));
+    } catch { return []; }
+  }));
+  for (const row of results.flat()) {
+    if (Number.isFinite(row.block) && row.timestamp > 0) out.set(row.block, row.timestamp);
+  }
+  return out;
+}
+
+// Ground-truth RH tape for pools that GeckoTerminal does not index. Supports both V2 and V3 and is
+// bounded/cached so the chart remains fast without growing Render memory.
+export async function fetchPoolSwaps(pool, tokenAddress, {
+  rpcUrl, lookbackSeconds = 86_400, maxLogs = 2_500, currentPriceUsd = 0, ttlMs = 8_000
+} = {}) {
+  const poolAddr = ethers.getAddress(pool);
+  const token = ethers.getAddress(tokenAddress);
+  const cacheKey = `${poolAddr.toLowerCase()}:${token.toLowerCase()}:${Math.round(Number(lookbackSeconds) || 0)}`;
+  const cached = poolSwapHistoryCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < ttlMs) return cached.value;
+
+  const provider = noxaProvider(rpcUrl);
+  const [latest, meta] = await Promise.all([provider.getBlockNumber(), poolSwapMeta(provider, poolAddr)]);
+  if (!meta) return { toBlock: latest, swaps: [] };
+  const tokenIs0 = meta.token0.toLowerCase() === token.toLowerCase();
+  const tokenIs1 = meta.token1.toLowerCase() === token.toLowerCase();
+  if (!tokenIs0 && !tokenIs1) return { toBlock: latest, swaps: [] };
+
+  const sampleBlock = Math.max(0, latest - 10_000);
+  const [latestInfo, sampleInfo] = await Promise.all([provider.getBlock(latest), provider.getBlock(sampleBlock)]);
+  const secondsPerBlock = Math.max(0.05, (Number(latestInfo?.timestamp) - Number(sampleInfo?.timestamp)) / Math.max(1, latest - sampleBlock) || 0.1);
+  const requestedSpan = Math.ceil(Math.max(900, Number(lookbackSeconds) || 86_400) / secondsPerBlock);
+  const start = Math.max(0, latest - Math.min(requestedSpan, 14_400_000));
+  const ranges = [];
+  for (let from = start; from <= latest; from += 900_000) ranges.push([from, Math.min(latest, from + 899_999)]);
+  const settled = await Promise.allSettled(ranges.map(([fromBlock, toBlock]) =>
+    provider.getLogs({ address: poolAddr, topics: [[SWAP_TOPIC_V3, SWAP_TOPIC_V2]], fromBlock, toBlock })
+  ));
+  let logs = settled.flatMap((row) => row.status === "fulfilled" ? row.value : []);
+  logs.sort((a, b) => Number(b.blockNumber) - Number(a.blockNumber) || Number(b.index ?? b.logIndex ?? 0) - Number(a.index ?? a.logIndex ?? 0));
+  if (logs.length > maxLogs) logs = logs.slice(0, maxLogs);
+  const timestamps = await blockTimestamps(rpcUrl || NOXA_RH.rpcUrl, logs.map((log) => log.blockNumber));
+
+  const tokenDecimals = tokenIs0 ? meta.dec0 : meta.dec1;
+  const quoteDecimals = tokenIs0 ? meta.dec1 : meta.dec0;
+  const quoteAddress = tokenIs0 ? meta.token1 : meta.token0;
+  const quoteSymbol = tokenIs0 ? meta.sym1 : meta.sym0;
+  const anchor = Number(currentPriceUsd) || 0;
+  const ethUsd = !anchor && quoteAddress.toLowerCase() === NOXA_RH.weth.toLowerCase()
+    ? Number(await rhEthUsd().catch(() => 0)) || 0 : 0;
+  const quoteUsd = ethUsd || (/^(?:USDC|USDT|USDCE|DAI)$/i.test(quoteSymbol) ? 1 : 0);
+  const swaps = [];
+  for (const log of logs) {
+    try {
+      let side = "buy", maker = "", tokenRaw = 0n, quoteRaw = 0n;
+      if (log.topics[0] === SWAP_TOPIC_V3) {
+        const decoded = POOL_SWAP_IFACE.parseLog(log);
+        const tokenDelta = tokenIs0 ? decoded.args.amount0 : decoded.args.amount1;
+        const quoteDelta = tokenIs0 ? decoded.args.amount1 : decoded.args.amount0;
+        side = tokenDelta < 0n ? "buy" : "sell";
+        tokenRaw = tokenDelta < 0n ? -tokenDelta : tokenDelta;
+        quoteRaw = quoteDelta < 0n ? -quoteDelta : quoteDelta;
+        maker = String(decoded.args.recipient || decoded.args.sender || "");
+      } else {
+        const decoded = POOL_SWAP_V2_IFACE.parseLog(log);
+        const tokenIn = tokenIs0 ? decoded.args.amount0In : decoded.args.amount1In;
+        const tokenOut = tokenIs0 ? decoded.args.amount0Out : decoded.args.amount1Out;
+        const quoteIn = tokenIs0 ? decoded.args.amount1In : decoded.args.amount0In;
+        const quoteOut = tokenIs0 ? decoded.args.amount1Out : decoded.args.amount0Out;
+        side = tokenOut > 0n ? "buy" : "sell";
+        tokenRaw = tokenOut > 0n ? tokenOut : tokenIn;
+        quoteRaw = quoteIn > 0n ? quoteIn : quoteOut;
+        maker = String(decoded.args.to || decoded.args.sender || "");
+      }
+      const tokens = Number(ethers.formatUnits(tokenRaw, tokenDecimals));
+      const quoteAmount = Number(ethers.formatUnits(quoteRaw, quoteDecimals));
+      if (!(tokens > 0) || !(quoteAmount > 0)) continue;
+      const block = Number(log.blockNumber);
+      const t = timestamps.get(block)
+        || Math.max(1, Math.round(Number(latestInfo?.timestamp || Date.now() / 1000) - (latest - block) * secondsPerBlock));
+      swaps.push({
+        t, ts: new Date(t * 1000).toISOString(), side, kind: side, tokens, quoteAmount,
+        priceQuote: quoteAmount / tokens,
+        price: quoteUsd > 0 ? (quoteAmount / tokens) * quoteUsd : 0,
+        usd: quoteUsd > 0 ? quoteAmount * quoteUsd : 0,
+        maker: /^0x[0-9a-f]{40}$/i.test(maker) ? ethers.getAddress(maker) : maker,
+        tx: log.transactionHash, block
+      });
+    } catch { /* incompatible swap log */ }
+  }
+  swaps.sort((a, b) => b.t - a.t || b.block - a.block);
+  const latestRatio = swaps.find((swap) => swap.priceQuote > 0)?.priceQuote || 0;
+  const ratioUsd = anchor > 0 && latestRatio > 0 ? anchor / latestRatio : 0;
+  if (ratioUsd > 0) {
+    for (const swap of swaps) { swap.price = swap.priceQuote * ratioUsd; swap.usd = swap.tokens * swap.price; }
+  }
+  const value = { toBlock: latest, swaps, tokenDecimals, quoteDecimals, quoteAddress, quoteSymbol };
+  poolSwapHistoryCache.set(cacheKey, { at: Date.now(), value });
+  if (poolSwapHistoryCache.size > 80) {
+    const oldest = [...poolSwapHistoryCache.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 30);
+    for (const [oldKey] of oldest) poolSwapHistoryCache.delete(oldKey);
+  }
+  return value;
+}
+
 export async function fetchPoolBuys(pool, tokenAddress, { fromBlock, rpcUrl, maxSpan = 4000 } = {}) {
   const provider = noxaProvider(rpcUrl);
   const poolAddr = ethers.getAddress(pool);

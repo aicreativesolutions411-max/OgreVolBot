@@ -53,7 +53,14 @@
   function setTimeframe(trade, timeframe) {
     if (!TIMEFRAMES.some(([value]) => value === timeframe)) return;
     const context = currentContext(trade), chart = one(".chartwrap", trade), frame = chart && one("iframe", chart), toolbar = one(".chartProBar", trade);
-    if (!chart || !frame || !context.token) return;
+    if (!chart || !context.token) return;
+    if (!frame) {
+      trade.dataset.proTf = timeframe;
+      localStorage.setItem(context.rh ? "ggRhChartTf" : "ggSolChartTf", timeframe);
+      if (toolbar) paintTimeframeButtons(toolbar, timeframe);
+      document.dispatchEvent(new CustomEvent("slimewire:pro-timeframe", { detail: { timeframe, token: context.token } }));
+      return;
+    }
     if (!chart.dataset.proStandardSrc && !/\/chart-lab/i.test(frame.src)) chart.dataset.proStandardSrc = frame.src;
     const pool = poolFromUrl(frame.src) || poolFromUrl(chart.dataset.proStandardSrc || "");
     let next = frame.src;
@@ -76,6 +83,7 @@
     trade.dataset.proTf = timeframe;
     localStorage.setItem(context.rh ? "ggRhChartTf" : "ggSolChartTf", timeframe);
     if (toolbar) paintTimeframeButtons(toolbar, timeframe);
+    document.dispatchEvent(new CustomEvent("slimewire:pro-timeframe", { detail: { timeframe, token: context.token } }));
   }
 
   function setSide(trade, side) {
@@ -89,7 +97,7 @@
     one(".proPresetGrid.buy", panel).hidden = side !== "buy";
     one(".proPresetGrid.sell", panel).hidden = side !== "sell";
     const input = one("[data-pro-amount]", panel), unit = one("[data-pro-unit]", panel), action = one("[data-pro-execute]", panel);
-    if (input) input.value = side === "sell" ? "100" : (context.rh ? "0.01" : "0.1");
+    if (input) input.value = side === "sell" ? "100" : "0.1";
     if (unit) unit.textContent = side === "sell" ? "%" : "SOL";
     if (action) { action.classList.toggle("sell", side === "sell"); action.textContent = `${side === "sell" ? "Sell" : "Buy"} ${context.symbol}`; }
   }
@@ -137,11 +145,11 @@
   }
 
   function quickPanelHtml(context) {
-    const buyAmounts = context.rh ? ["0.01", "0.025", "0.05", "0.10"] : ["0.1", "0.5", "1", "2"];
+    const buyAmounts = ["0.1", "0.5", "1", "2"];
     return `<section class="proQuickPanel" data-side="buy" aria-label="Quick trade panel">
       <div class="proQuickHead"><button class="proWallet" type="button" data-pro-wallet><i class="dot"></i><span>Active wallet · pays with SOL</span></button><div class="proProfiles">${[0, 1, 2].map((i) => `<button type="button" data-pro-profile="${i}" title="Quick profile ${i + 1}">P${i + 1}</button>`).join("")}</div><button class="proClose" type="button" data-pro-close aria-label="Close quick trade">×</button></div>
       <div class="proQuickTabs"><button class="buy on" type="button" data-pro-side="buy">Buy</button><button class="sell" type="button" data-pro-side="sell">Sell</button></div>
-      <div class="proAmount"><input data-pro-amount inputmode="decimal" value="${context.rh ? "0.01" : "0.1"}" aria-label="Quick trade amount"><span data-pro-unit>SOL</span></div>
+      <div class="proAmount"><input data-pro-amount inputmode="decimal" value="0.1" aria-label="Quick trade amount"><span data-pro-unit>SOL</span></div>
       <div class="proPresetGrid buy">${buyAmounts.map((value) => `<button type="button" data-pro-quick="buy" data-value="${value}">${value} ◎</button>`).join("")}</div>
       <div class="proPresetGrid sell" hidden>${[25, 50, 75, 100].map((value) => `<button type="button" data-pro-quick="sell" data-value="${value}">${value}%</button>`).join("")}</div>
       <div class="proTradeMeta"><span>◎ SOL funding</span><span>${context.rh ? "RH auto-convert" : "Solana direct"}</span><span>Server-side exits</span></div>
@@ -153,7 +161,11 @@
   }
 
   function toolbarHtml(active) {
-    return `<div class="chartProBar" aria-label="Professional chart controls"><div class="proIntervals">${TIMEFRAMES.map(([value, label]) => `<button type="button" class="${value === active ? "on" : ""}" data-pro-tf="${value}">${label}</button>`).join("")}</div><i class="proDivider"></i><div class="proActions"><button class="proQuick" type="button" data-pro-quick-toggle>⚡ Quick trade</button><button class="proWide" type="button" data-pro-wide>↔ Wider chart</button><button class="proFull" type="button" data-pro-full>⛶ Fullscreen</button></div></div>`;
+    return `<div class="chartProBar" aria-label="Professional chart controls"><div class="proIntervals">${TIMEFRAMES.map(([value, label]) => `<button type="button" class="${value === active ? "on" : ""}" data-pro-tf="${value}">${label}</button>`).join("")}</div><i class="proDivider"></i><div class="proActions"><button class="proIndicator" type="button" data-indicators-toggle aria-expanded="false" aria-pressed="false">⌁ Indicators</button><button class="proQuick" type="button" data-pro-quick-toggle>⚡ Quick trade</button><button class="proWide" type="button" data-pro-wide>↔ Wider chart</button><button class="proFull" type="button" data-pro-full>⛶ Fullscreen</button></div></div>`;
+  }
+
+  function indicatorDrawerHtml() {
+    return `<section class="indicator-drawer proIndicatorDrawer" data-indicator-drawer hidden aria-label="Technical indicators"><div class="indicator-picker"><button type="button" data-indicator-kind="fib" aria-pressed="false">Fibonacci ⚙</button><button type="button" data-indicator-kind="rsi" aria-pressed="false">RSI</button><button type="button" data-indicator-kind="macd" aria-pressed="false">MACD</button><button type="button" data-indicator-kind="harmonics" aria-pressed="false">Harmonics ◇</button></div><section class="fib-settings" data-fib-settings hidden aria-label="Fibonacci settings"></section><section class="harmonic-settings" data-harmonic-settings hidden aria-label="Harmonic pattern settings"></section><div class="indicator-status" data-indicator-status role="status" aria-live="polite">Choose an indicator or stack several.</div><div class="indicator-panels" data-indicator-panels></div><p class="indicator-note">Fibonacci, RSI, MACD, Bat, Gartley, Shark, Butterfly, Crab and 5-0 are calculated from live SlimeWire candles.</p></section>`;
   }
 
   function injectTradeWorkspace(trade) {
@@ -163,7 +175,11 @@
     const context = currentContext(trade), stored = localStorage.getItem(context.rh ? "ggRhChartTf" : "ggSolChartTf"), inferred = inferTimeframe(frame), active = TIMEFRAMES.some(([value]) => value === stored) ? stored : (TIMEFRAMES.some(([value]) => value === inferred) ? inferred : "15m");
     trade.dataset.proReady = "1";
     chart.dataset.proStandardSrc = /\/chart-lab/i.test(frame.src) ? "" : frame.src;
+    chart.classList.add("proIndicatorFrame");
+    chart.setAttribute("data-chart-frame", "");
+    chart.dataset.poolAddress = poolFromUrl(frame.src);
     chart.insertAdjacentHTML("beforebegin", toolbarHtml(active));
+    chart.insertAdjacentHTML("afterend", indicatorDrawerHtml());
     main.insertAdjacentHTML("beforeend", quickPanelHtml(context));
     const toolbar = one(".chartProBar", trade), panel = one(".proQuickPanel", trade);
     all("[data-pro-tf]", toolbar).forEach((button) => button.addEventListener("click", () => setTimeframe(trade, button.dataset.proTf)));
@@ -271,6 +287,15 @@
   let scanQueued = false;
   function scheduleScan() { if (scanQueued) return; scanQueued = true; requestAnimationFrame(() => { scanQueued = false; scan(); }); }
   const observer = new MutationObserver(scheduleScan); observer.observe(document.documentElement, { childList: true, subtree: true });
-  window.SlimeWirePro = { scan, openMarketOrders: () => { const trade = one("#v-trade .trade, #v-rhtrade .trade"); if (trade) openMarketOrders(trade); } };
+  window.SlimeWirePro = {
+    scan,
+    syncIndicatorProvider: () => {
+      const trade = one(location.hash.startsWith("#rhtrade/") ? "#v-rhtrade .trade" : "#v-trade .trade");
+      if (!trade) return;
+      const timeframe = one(".chartProBar [data-pro-tf].on", trade)?.dataset.proTf || trade.dataset.proTf || "15m";
+      setTimeframe(trade, timeframe);
+    },
+    openMarketOrders: () => { const trade = one("#v-trade .trade, #v-rhtrade .trade"); if (trade) openMarketOrders(trade); }
+  };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", scan, { once: true }); else scan();
 })();
