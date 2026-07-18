@@ -2052,13 +2052,13 @@
     const rh = isRh(key) || (!tokenOverride && coin.chain === "robinhood");
     if (rh) {
       openSheet(`<div class="sheet-title"><img ${coinImageAttrs(coin)} alt=""><div><h2>Robinhood volume</h2><p>Native controls · ${escapeHtml(coin.symbol || short(key))}</p></div></div>
-        <div class="read-card"><h3>Fresh-wallet round trips</h3><p>Convert SOL once, then a NEW throwaway wallet each cycle buys, sells (leaving one token), sweeps the ETH back to your funding wallet, and retires — running until you Stop or the SOL runs low.</p></div>
+        <div class="read-card"><h3>Fresh-wallet round trips</h3><p>Convert SOL once, then a NEW throwaway wallet each cycle buys, sells (leaving one token), sweeps the ETH back to your funding wallet, and retires — running until you Stop or the SOL runs low. When it ends, the leftover ETH is auto-converted back to SOL.</p></div>
         <div class="field"><label>Token contract</label><input data-volume-token data-volume-chain="robinhood" value="${escapeHtml(key)}"></div>
         <div class="field"><label>Funding wallet</label><select data-volume-wallet>${volumeWalletOptions()}</select></div>
         <div class="field"><label>SOL budget</label><input data-rh-volume-fund inputmode="decimal" value="0.10" placeholder="0.10"></div>
         <input type="hidden" data-volume-rounds value="1">
         <div class="volume-actions"><button class="submit-trade" type="button" data-start-volume>Start with SOL</button><button type="button" data-stop-volume>Stop &amp; sweep</button></div>
-        <div data-volume-status class="volume-status">Checking status…</div><p class="fineprint">One SOL→ETH conversion up front. Each cycle sweeps its ETH back to your funding wallet, so at most one cycle is ever exposed.</p>`);
+        <div data-volume-status class="volume-status">Checking status…</div><p class="fineprint">One SOL→ETH conversion up front; each cycle sweeps its ETH back, so at most one cycle is ever exposed. On Stop the leftover ETH is bridged back to SOL automatically.</p>`);
     } else {
       openSheet(`<div class="sheet-title"><img ${coinImageAttrs(coin)} alt=""><div><h2>Volume bot</h2><p>Auto buy → sell → sweep → new wallet, until you Stop</p></div></div>
         <div class="read-card"><h3>How it runs</h3><p>Round-trip funds a fresh wallet, buys, sells it back down to one token, sweeps the SOL to your funding wallet, retires the wallet, and repeats — until Stop or your SOL runs out. Rolling pool keeps a few wallets open for a more organic tape.</p></div>
@@ -2108,7 +2108,8 @@
         const logLines = (d.log || []).slice(-8).reverse().map((row) => `<small>${escapeHtml(typeof row === "string" ? row : row.message || "")}</small>`).join("");
         const tradeLines = logLines ? "" : (d.trades || []).slice(-5).reverse().map((t) => `<small>${t.ok ? `Wallet ${t.walletIndex} · buy + sell` : escapeHtml(t.error || "Trade failed")}</small>`).join("");
         const stopBtn = runningRh ? `<button class="recovery-button danger-button" type="button" data-stop-volume>Stop &amp; sweep</button>` : "";
-        status.innerHTML = `<div class="volume-run"><b>${escapeHtml(d.tokenAddress ? short(d.tokenAddress) : "Robinhood")}<span>${escapeHtml(d.status || "running")}</span></b><p>${head} · ${Number(d.fundSolPerWallet || 0).toFixed(3)} SOL${churn ? " · fresh wallet each cycle" : ""}</p><div class="volume-log">${logLines || tradeLines || '<small>Starting…</small>'}</div>${stopBtn}</div>`;
+        const cashed = (!runningRh && Number(d.cashedOutSol) > 0) ? `<p class="volume-cashed">Cashed out ${Number(d.cashedOutSol).toFixed(4)} SOL back to your wallet.</p>` : "";
+        status.innerHTML = `<div class="volume-run"><b>${escapeHtml(d.tokenAddress ? short(d.tokenAddress) : "Robinhood")}<span>${escapeHtml(d.status || "running")}</span></b><p>${head} · ${Number(d.fundSolPerWallet || 0).toFixed(3)} SOL${churn ? " · fresh wallet each cycle" : ""}</p><div class="volume-log">${logLines || tradeLines || '<small>Starting…</small>'}</div>${cashed}${stopBtn}</div>`;
       }
     }
     if ($("[data-volume-status]")) state.volumePoll = setTimeout(() => pollFunVolume(rh), 4000);
