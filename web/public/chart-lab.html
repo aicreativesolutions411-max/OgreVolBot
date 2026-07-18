@@ -293,11 +293,19 @@
   // ========================================================================================
 
   // ---- stats (DexScreener = same source as the app top bar, so the numbers MATCH) ----
-  function applyStats(s,tick){
+  function applyStats(s,tick,marketAnchor){
     if(!s)return; var e,price=Number(s.priceUsd)||0,mc=Number(s.mc)||0,liq=Number(s.liq)||0,vol24=Number(s.vol24)||0,holders=Number(s.holders)||0;
+    // Providers disagree on Robinhood `marketCap` versus FDV. DexScreener is also what
+    // the surrounding trade header uses, so once it lands keep that exact price/MC pair
+    // authoritative. The 15s bootstrap/history refresh must not switch the candle axis
+    // between circulating MC (~$9M) and FDV (~$78M) every few seconds.
+    if(!marketAnchor&&dexStats){
+      if(Number(dexStats.priceUsd)>0)price=Number(dexStats.priceUsd);
+      if(Number(dexStats.mc)>0)mc=Number(dexStats.mc);
+    }
     var change=(s.change24!=null&&isFinite(s.change24))?Number(s.change24):((s.change24h!=null&&isFinite(s.change24h))?Number(s.change24h):null);
     realPrice=price||realPrice;
-    if(mc>0&&price>0)mcScale=mc/price;
+    if(mc>0&&price>0&&(marketAnchor||!dexStats))mcScale=mc/price;
     if(change!=null)chg24=change;
     if(price>0&&(e=document.getElementById('px')))e.textContent=fmtUsd(price);
     if(mc>0&&(e=document.getElementById('s_mc')))e.textContent=fmtMcRaw(mc);
@@ -312,7 +320,7 @@
     if(tick&&price>0)liveTick(price);
   }
   function applyDexStats(s){
-    if(!s||!(s.priceUsd>0))return; dexStats=s; applyStats(s,true);
+    if(!s||!(s.priceUsd>0))return; dexStats=s; applyStats(s,true,true);
   }
 
   // ---- transaction tape ----

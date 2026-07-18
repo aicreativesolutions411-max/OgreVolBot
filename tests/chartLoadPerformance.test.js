@@ -90,6 +90,13 @@ test("native chart never hides real candles behind the optional slime texture", 
   assert.match(functionBody(terminalSource, "rhNativeChartFrame"), /cv=6/);
 });
 
+test("Robinhood chart keeps one market-cap scale after Dex stats land", () => {
+  assert.match(chartLabSource, /function applyStats\(s,tick,marketAnchor\)/);
+  assert.match(chartLabSource, /if\(!marketAnchor&&dexStats\)/);
+  assert.match(chartLabSource, /marketAnchor\|\|!dexStats/);
+  assert.match(chartLabSource, /applyStats\(s,true,true\)/);
+});
+
 test("native chart API uses Solana Tracker primary with swap-api fallback", () => {
   const body = functionBody(serverSource, "buildChartData");
   assert.match(body, /solanaTrackerJson\(`\/chart\/\$\{mint\}\?type=\$\{encodeURIComponent\(tf\)\}&currency=usd`/);
