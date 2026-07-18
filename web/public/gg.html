@@ -1957,6 +1957,7 @@
       let changed=false;
       for(const r of rows){
         const o=byLc[String(r.address).toLowerCase()];if(!o)continue;changed=true;
+        r._dexMarketResolved=true;
         if(o.price>0)r.priceUsd=o.price;if(o.mc>0)r.marketCapUsd=o.mc;if(o.liq>0)r.liquidityUsd=o.liq;if(o.v24>0)r.volume24hUsd=o.v24;
         if(Number.isFinite(o.m5))r.m5=o.m5;if(o.pair)r.pairAddress=o.pair;
         if(o.sym&&!r.symbol)r.symbol=o.sym;if(o.name&&!r.name)r.name=o.name;   // pasted-fresh RH coin: fill ticker/name so the page isn't "?"
@@ -1990,10 +1991,15 @@
       put("x",String(first(coin.twitterUrl,c.twitterUrl)),Boolean(first(coin.twitterUrl,c.twitterUrl)));
       put("telegram",String(first(coin.telegramUrl,c.telegramUrl)),Boolean(first(coin.telegramUrl,c.telegramUrl)));
       put("website",String(first(coin.websiteUrl,c.websiteUrl)),Boolean(first(coin.websiteUrl,c.websiteUrl)));
-      put("priceUsd",Number(coin.priceUsd||c.priceUsd),Number(coin.priceUsd||c.priceUsd)>0);
-      put("marketCapUsd",Number(coin.mc||c.marketCap||c.fdv),Number(coin.mc||c.marketCap||c.fdv)>0);
-      put("liquidityUsd",Number(coin.liq||c.liquidityUsd),Number(coin.liq||c.liquidityUsd)>0);
-      put("volume24hUsd",Number(coin.vol24||c.volumeH24),Number(coin.vol24||c.volumeH24)>0);
+      // The bootstrap may report fully-diluted value as marketCap. If the user's
+      // direct Dex read already landed, never overwrite its circulating MC/price
+      // quartet. If bootstrap wins the race, the Dex enrichment below still wins last.
+      if(!r._dexMarketResolved){
+        put("priceUsd",Number(coin.priceUsd||c.priceUsd),Number(coin.priceUsd||c.priceUsd)>0);
+        put("marketCapUsd",Number(coin.mc||c.marketCap||c.fdv),Number(coin.mc||c.marketCap||c.fdv)>0);
+        put("liquidityUsd",Number(coin.liq||c.liquidityUsd),Number(coin.liq||c.liquidityUsd)>0);
+        put("volume24hUsd",Number(coin.vol24||c.volumeH24),Number(coin.vol24||c.volumeH24)>0);
+      }
       return changed;
     }catch(e){return false;}
   }

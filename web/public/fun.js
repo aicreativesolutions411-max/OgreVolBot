@@ -608,6 +608,9 @@
     history.replaceState(null, "", quick ? `/quick?ca=${encodeURIComponent(key)}` : `#coin/${encodeURIComponent(key)}`);
     const path = chain === "robinhood" ? `/api/web/rh/token?address=${encodeURIComponent(key)}` : `/api/web/token-read?mint=${encodeURIComponent(key)}`;
     const detailPromise = request(path);
+    const dexMarketPromise = chain === "robinhood"
+      ? funDexBatch([key]).then((by) => by[key] || Object.entries(by).find(([address]) => address.toLowerCase() === String(key).toLowerCase())?.[1] || null).catch(() => null)
+      : Promise.resolve(null);
     void loadPositions().then(() => { if (state.view === "coin" && coinKey(state.selected).toLowerCase() === String(key).toLowerCase()) renderPositionCard(); });
     const searchResult = await request(`/api/web/token-search?q=${encodeURIComponent(key)}`);
     const searchMatch = searchResult.ok
@@ -621,10 +624,10 @@
       addRecent(coin);
       if (quick) renderQuickRoute(); else renderCoinShell();
     }
-    const detailResult = await detailPromise;
+    const [detailResult, dexMarket] = await Promise.all([detailPromise, dexMarketPromise]);
     if (detailResult.ok && detailResult.data?.ok) {
       const raw = detailResult.data.coin || detailResult.data;
-      coin = chain === "robinhood" ? normalizeRh({ ...coin, ...raw, address: raw.address || key, marketCapUsd: raw.mc || raw.marketCapUsd, volume24hUsd: raw.vol24 || raw.volume24hUsd, priceChange1h: raw.ch1, createdAt: raw.createdAt }) : normalizeSol({ ...coin, ...raw, tokenMint: key, marketCap: raw.marketCapUsd, volumeH24: raw.volumeH24, h1: raw.changeH1 });
+      coin = chain === "robinhood" ? normalizeRh({ ...coin, ...raw, address: raw.address || key, marketCapUsd: dexMarket?.mc || raw.mc || raw.marketCapUsd, liquidityUsd: dexMarket?.liq || raw.liq || raw.liquidityUsd, volume24hUsd: dexMarket?.v24 || raw.vol24 || raw.volume24hUsd, imageUrl: coin.imageUrl || dexMarket?.img || raw.imageUrl || raw.iconUrl, priceChange1h: raw.ch1, createdAt: raw.createdAt }) : normalizeSol({ ...coin, ...raw, tokenMint: key, marketCap: raw.marketCapUsd, volumeH24: raw.volumeH24, h1: raw.changeH1 });
       state.selected = coin;
       state.selectedDetail = raw;
       addRecent(coin);

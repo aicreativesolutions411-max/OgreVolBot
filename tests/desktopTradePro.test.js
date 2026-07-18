@@ -120,3 +120,10 @@ test("Telegram Slime Chart links land on the exact terminal coin route", () => {
   assert.match(gg, /if\(targetHash&&location\.hash!==targetHash\)location\.hash=targetHash/);
   assert.doesNotMatch(server, /site: `\$\{siteBase\}\/terminal\/chart\?token=/);
 });
+
+test("Robinhood headers keep Dex market cap instead of relabeling FDV as MC", () => {
+  assert.match(gg, /r\._dexMarketResolved=true/);
+  assert.match(gg, /if\(!r\._dexMarketResolved\)/);
+  assert.match(fun, /const dexMarketPromise = chain === "robinhood"/);
+  assert.match(fun, /marketCapUsd: dexMarket\?\.mc \|\| raw\.mc/);
+});
