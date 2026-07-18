@@ -1403,6 +1403,30 @@ test("Buy bot (SpyDefi parity): whale-tier badge + new-holder flag + volume", ()
   assert.match(buy, /bonding\?\.graduated \|\| bonding\?\.isGraduated \|\| \(bondPct != null && bondPct >= 100\)/);
 });
 
+test("Buy bot keeps transaction price and market cap aligned on both chains", () => {
+  const body = functionBody(serverSource, "resolveGroupBuyMarketSnapshot");
+  const first = (...values) => values.map(Number).find((value) => Number.isFinite(value) && value > 0) || null;
+  const resolve = Function("firstMeaningfulNumber", `return ({
+    eventPriceUsd = 0, eventMarketCapUsd = 0, nativeAmount = 0, tokens = 0,
+    nativeUsd = 0, scanPriceUsd = 0, scanMarketCapUsd = 0, supply = 0
+  } = {}) => {${body}}`)(first);
+
+  // A direct trade-feed price moves the scan's implied stable supply to the new price.
+  assert.deepEqual(resolve({ eventPriceUsd: 0.002, scanPriceUsd: 0.001, scanMarketCapUsd: 1_000_000 }), {
+    priceUsd: 0.002, marketCapUsd: 2_000_000, supply: 1_000_000_000, executionPriceUsd: 0
+  });
+  // Robinhood can derive the exact execution price from ETH spent / tokens received.
+  assert.deepEqual(resolve({ nativeAmount: 0.5, nativeUsd: 100, tokens: 100_000, scanPriceUsd: 0.0004, scanMarketCapUsd: 400_000 }), {
+    priceUsd: 0.0005, marketCapUsd: 500_000, supply: 1_000_000_000, executionPriceUsd: 0.0005
+  });
+  // PumpPortal sometimes supplies live MC without a separate price; supply fills that price exactly.
+  assert.deepEqual(resolve({ eventMarketCapUsd: 750_000, supply: 1_000_000_000 }), {
+    priceUsd: 0.00075, marketCapUsd: 750_000, supply: 1_000_000_000, executionPriceUsd: 0
+  });
+  assert.match(functionBody(serverSource, "postGroupBuy"), /resolveGroupBuyMarketSnapshot/);
+  assert.match(functionBody(serverSource, "postGroupBuyRh"), /resolveGroupBuyMarketSnapshot/);
+});
+
 test("Buy Bot saves and renders Telegram custom emoji entities with a safe fallback", () => {
   const parseSource = functionBody(serverSource, "telegramCustomEmojiFromMessage");
   const markupSource = functionBody(serverSource, "groupBuyEmojiMarkup");
@@ -1432,7 +1456,7 @@ test("Robinhood buy cards keep complete market rows during intermittent scan gap
   assert.match(merge, /priceUsd[\s\S]*mc[\s\S]*liq[\s\S]*vol24/);
   assert.match(buy, /mergeRhGroupBuyInfo\(freshInfo, rhGroupBuyLastGood\.get/);
   assert.match(buy, /Price <b>\$\{priceUsd > 0 \? fmtPx\(priceUsd\) : "n\/a"\}/);
-  assert.match(buy, /MC <b>\$\{info\?\.mc > 0 \? fmtUsd0\(info\.mc\) : "checking"\}/);
+  assert.match(buy, /MC <b>\$\{marketCapUsd > 0 \? fmtUsd0\(marketCapUsd\) : "checking"\}/);
   assert.match(buy, /Liq <b>\$\{info\?\.liq > 0/);
   assert.match(buy, /24h Vol <b>\$\{info\?\.vol24 > 0/);
   const noxaMarkets = functionBody(noxaSource, "readNoxaMarkets");
