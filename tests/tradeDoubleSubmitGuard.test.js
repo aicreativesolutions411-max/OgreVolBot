@@ -2890,6 +2890,13 @@ test("Smart Call messages carry website Chart/Quick Buy and verified milestone r
   const keyboard = functionBody(serverSource, "smartCallKeyboard");
   assert.match(keyboard, /links\.site/);
   assert.match(keyboard, /links\.siteBuy/);
+  const broadcast = functionBody(serverSource, "broadcastSmartCall");
+  assert.match(broadcast, /smartCallContextHtml\(call\)/);
+  assert.match(broadcast, /handleTelegramLookCommand/);             // full normal scan card, not a thin alert
+  assert.match(broadcast, /contextHtml/);                           // caller identity stays above the scan
+  assert.match(functionBody(serverSource, "smartCallContextHtml"), /Called by/);
+  assert.match(functionBody(serverSource, "smartCallContextHtml"), /x\.com/);
+  assert.match(record, /sourceProfiles/);                           // durable caller name/social/wallet attribution
   const receipts = functionBody(serverSource, "smartCallReceiptTick");
   assert.match(receipts, /SMART_CALL_MILESTONES/);
   assert.match(receipts, /call\.peakMc \/ call\.entryMc/);
@@ -3749,6 +3756,17 @@ test("airdrop and holder maps expose real cluster summaries + liquidity fallback
   assert.match(graph, /direct holder-to-holder funding/i);
   assert.match(graph, /addRelationship\(funder, wallet, "direct"/);
   assert.match(graph, /directLinkCount/);
+  assert.match(graph, /mapHolderTokenTransferLinks/);
+  assert.match(graph, /addRelationship\(edge\.a, edge\.b, "token"/);
+  assert.match(graph, /tokenLinkCount/);
+  const transferLinks = functionBody(serverSource, "mapHolderTokenTransferLinks");
+  assert.match(transferLinks, /tokenTransfers/);
+  assert.match(transferLinks, /fromUserAccount/);
+  assert.match(transferLinks, /toUserAccount/);
+  const mapKeyboard = functionBody(serverSource, "mapCardKeyboard");
+  assert.match(mapKeyboard, /mapDrillButtonText/);
+  assert.doesNotMatch(mapKeyboard, /n\.name \|\| "wallet"/);
+  assert.match(functionBody(serverSource, "mapTelegramClusterLines"), /Connected wallets/);
   assert.match(serverSource, /pathname === "\/api\/airdrop\/graph"/);
   assert.match(serverSource, /summary: graph\.summary \|\| null/);
   const holder = functionBody(serverSource, "buildTokenHolderMap");

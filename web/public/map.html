@@ -356,7 +356,7 @@ function renderClusterLegend(cl,edges){
   const linkN=clusterEdgesData.length;
   el.innerHTML='<h3>🕸️ Clusters ('+cl.length+')'+(linkN?' · '+linkN+' linked':'')+' · tap to dive</h3>'+cl.map((c,k)=>{
     const outN=clusterEdgesData.filter(e=>e.from===c.id).length;
-    const direct=+c.directLinkCount||0,shared=+c.sharedLinkCount||0,rel=direct?(direct+' direct link'+(direct===1?'':'s')):(shared+' shared-funder link'+(shared===1?'':'s'));
+    const token=+c.tokenLinkCount||0,direct=+c.directLinkCount||0,shared=+c.sharedLinkCount||0,rel=token?(token+' token-transfer link'+(token===1?'':'s')):direct?(direct+' direct link'+(direct===1?'':'s')):(shared+' shared-funder link'+(shared===1?'':'s'));
     return '<div class="krow" data-k="'+k+'"><span style="width:14px;height:14px;border-radius:4px;flex:0 0 14px;background:'+c.color+';box-shadow:0 0 8px '+c.color+'"></span><div><div class="nm">Cluster '+c.letter+' · '+c.members.length+' wallets'+(outN?' <span style="color:'+c.color+';font-size:11px">→'+outN+'</span>':'')+'</div><div class="sub">COMBINED '+(+c.pct).toFixed(1)+'% · $'+fmt(c.usd)+' · '+rel+' →</div></div></div>';
   }).join('');
   [...el.querySelectorAll('.krow')].forEach(r=>r.onclick=()=>openCluster(clustersData[+r.dataset.k]));
@@ -378,7 +378,7 @@ function openCluster(cl){
   const connLine=(outN||inN)?('<div style="margin-top:6px">🔗 connected to <b style="color:'+cl.color+'">'+(outN+inN)+'</b> other cluster'+((outN+inN)>1?'s':'')+(outN?' · funded from '+outN:'')+(inN?' · feeds '+inN:'')+'</div>'):'';
   c.innerHTML='<div class="dh"><b><span style="color:'+cl.color+'">◆</span> Cluster '+cl.letter+' · '+cl.members.length+' wallets</b><button class="x" onclick="closeDrill()">×</button></div>'+
     '<div class="sub" style="color:var(--dim);font-size:12.5px;margin-bottom:8px;line-height:1.45">'+cl.members.length+' wallets connected by proven funding paths · <b style="color:'+cl.color+'">COMBINED '+(+cl.pct).toFixed(1)+'%</b> of supply · $'+fmt(cl.usd)+' combined — likely one actor (insider / bundle).'+
-    (cl.funder?'<div style="margin-top:5px">💰 funding wallet: <a href="/map?wallet='+esc(cl.funder)+'" style="color:'+cl.color+';font-family:ui-monospace,monospace">'+esc(cl.funderShort||short(cl.funder))+'</a></div>':'')+connLine+'<div style="margin-top:6px;opacity:.85">Solid arrows = direct funding. Dashed lines = shared outside funder. Tap a wallet to map it.</div></div>'+
+    (cl.funder?'<div style="margin-top:5px">💰 funding wallet: <a href="/map?wallet='+esc(cl.funder)+'" style="color:'+cl.color+';font-family:ui-monospace,monospace">'+esc(cl.funderShort||short(cl.funder))+'</a></div>':'')+connLine+'<div style="margin-top:6px;opacity:.85">Purple arrows = same-token transfers. Green arrows = direct funding. Dashed lines = shared outside funder. Tap a wallet to map it.</div></div>'+
     '<div id="hrows">'+rows+'</div>';
   [...c.querySelectorAll('.hrow')].forEach(r=>r.onclick=()=>{const w=r.dataset.w;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w)){closeDrill();loadTarget('wallet',w,'bags',true)}});
 }

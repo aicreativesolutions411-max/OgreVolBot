@@ -178,6 +178,7 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
         const s = posByI.get(edge.source != null ? edge.source : edge.a);
         const t = posByI.get(edge.target != null ? edge.target : edge.b);
         if (!c || !s || !t) return "";
+        if (edge.kind === "token") return arrowSvg(s.x, s.y, t.x, t.y, "#b975ff", 2.8, t.size);
         if (edge.kind === "direct") return arrowSvg(s.x, s.y, t.x, t.y, c.color, 2.2, t.size);
         return `<line x1="${s.x.toFixed(1)}" y1="${s.y.toFixed(1)}" x2="${t.x.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="${c.color}" stroke-width="1.8" stroke-opacity="0.82" stroke-dasharray="5 3"/>`;
       }).join("")
@@ -197,11 +198,11 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
     clusterArrows = memberArrows + xArrows;
     clusterCards = cls.map((c) => {
       const outN = (clusterEdges || []).filter((e) => e.from === c.id).length;
-      const direct = Number(c.directLinkCount) || 0, shared = Number(c.sharedLinkCount) || 0;
-      const relationship = direct ? `${direct} direct link${direct === 1 ? "" : "s"}` : `${shared} shared-funder link${shared === 1 ? "" : "s"}`;
+      const token = Number(c.tokenLinkCount) || 0, direct = Number(c.directLinkCount) || 0, shared = Number(c.sharedLinkCount) || 0;
+      const relationship = token ? `${token} token-transfer link${token === 1 ? "" : "s"}` : direct ? `${direct} direct link${direct === 1 ? "" : "s"}` : `${shared} shared-funder link${shared === 1 ? "" : "s"}`;
       const l1 = `${c.size || (c.members || []).length} wallets · COMBINED ${(+c.pct).toFixed(1)}%`;
       const l2 = `${fmtUsd(c.usd)} · ${relationship}${outN ? ` · →${outN} cluster${outN > 1 ? "s" : ""}` : ""}`;
-      const l3 = direct ? `◆${c.letter} · linked on-chain` : `◆${c.letter} · shared ${esc(c.funderShort || shortAddr(c.funder))}`;
+      const l3 = token || direct ? `◆${c.letter} · linked on-chain` : `◆${c.letter} · shared ${esc(c.funderShort || shortAddr(c.funder))}`;
       const wpx = Math.max(l1.length, l2.length, l3.length) * 6.9 + 22;
       const yTop = c._cy - (c._blobR || 40) - 30;
       return `<g>
