@@ -20,7 +20,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "55", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "58", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -33,7 +33,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v47/);
+  assert.match(funWorker, /slimewire-fun-v48/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -52,6 +52,17 @@ test("/fun keeps the reference layout clean while carrying SlimeWire features", 
   assert.doesNotMatch(html, /community chat/i);
   assert.match(html, /class="feed-search-btn"[\s\S]{0,140}data-open-search[\s\S]{0,100}Search CA/);
   assert.match(css, /\.feed-actions\{display:flex/);
+});
+
+test("Fun New feed overlays live Pump launches and refreshes both chains without blanking", () => {
+  assert.match(server, /realtimeOverlay: true/);
+  assert.match(server, /getCreationCandidates\(\{ maxAgeMs: 30 \* 60_000, limit: 100 \}\)/);
+  assert.match(server, /const freshMs = cat === "new" \? 4_000 : 10_000/);
+  assert.match(server, /cachedWebRhPairs\(requestUrl\.searchParams\.get\("category"\)[\s\S]{0,120}\{ force \}/);
+  assert.match(js, /state\.feed === "new" \? 5000/);
+  assert.match(js, /query\.set\("force", "true"\)/);
+  assert.match(js, /const stableSol = sol\.length \? sol/);
+  assert.match(js, /const stableRh = rh\.length \? rh/);
 });
 
 test("Fun Launch keeps the complete existing launcher inside the Go layout", () => {
@@ -78,7 +89,7 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
   assert.match(html, /fun\.css\?v=35/);
-  assert.match(funWorker, /slimewire-fun-v47/);
+  assert.match(funWorker, /slimewire-fun-v48/);
   assert.match(funWorker, /fun\.css\?v=35/);
 });
 
@@ -88,8 +99,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=55/);
-  assert.match(funWorker, /fun\.js\?v=55/);
+  assert.match(html, /fun\.js\?v=58/);
+  assert.match(funWorker, /fun\.js\?v=58/);
 });
 
 test("Fun volume switches pasted contracts to their authoritative chain", () => {
@@ -151,7 +162,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v47"/);
+  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v48"/);
   assert.match(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
   assert.match(funWorker, /self\.clients\.claim\(\)/);
@@ -534,7 +545,7 @@ test("unified search and Robinhood detail support the two-chain mobile experienc
   assert.match(js, /marketCapLabel: coin\.marketCapLabel/);
   assert.match(js, /class="recent-list"/);
   assert.match(css, /\.recent-list>button\{display:grid/);
-  assert.match(server, /rhListTokens\(1\)[\s\S]{0,120}rhRecentActiveTokens\(1\)/);
+  assert.match(server, /rhListTokens\(1\)[\s\S]{0,160}rhRecentActiveTokens\(options\.fresh \? 2 : 1\)/);
 });
 
 test("coin art stays metadata-first while wallet identities use slime PFPs", () => {

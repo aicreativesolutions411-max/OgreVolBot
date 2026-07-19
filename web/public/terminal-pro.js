@@ -30,6 +30,32 @@
     return `/chart-lab?${query.toString()}`;
   }
 
+  function standardChartUrl(context, timeframe, pool, existing) {
+    const interval = ({ "1m": "1", "15m": "15", "1h": "60", "4h": "240", "12h": "720", "1d": "1D" })[timeframe] || "15";
+    const existingUrl = String(existing || "").trim();
+    const resolvedExternal = /^https?:\/\//i.test(existingUrl) && !/\/chart-lab/i.test(existingUrl);
+    const address = String(pool || "").trim();
+    // External charts require a real pool address. Never send a token mint through
+    // a provider's pool route: that produces misleading one-candle/404 frames. The
+    // native Slime chart remains visible until the exact-pool resolver completes.
+    let value = existingUrl;
+    if (!/^https?:\/\//i.test(value) || /\/chart-lab/i.test(value)) {
+      if (!address) return nativeChartUrl(context, timeframe, pool);
+      const network = context.rh ? "robinhood" : "solana";
+      if (context.rh && address) {
+        value = `https://dexscreener.com/${network}/${encodeURIComponent(address)}?embed=1&theme=dark&trades=0&info=0`;
+      } else {
+        value = `https://www.geckoterminal.com/${network}/pools/${encodeURIComponent(address)}?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&chart_type=price`;
+      }
+    }
+    try {
+      const url = new URL(value, location.origin);
+      if (/geckoterminal\.com$/i.test(url.hostname)) url.searchParams.set("resolution", timeframe);
+      else if (/dexscreener\.com$/i.test(url.hostname)) url.searchParams.set("interval", interval);
+      return url.toString();
+    } catch (_) { return value; }
+  }
+
   function poolFromUrl(value) {
     try {
       const url = new URL(value, location.origin);
@@ -50,6 +76,46 @@
     all("[data-pro-tf]", toolbar).forEach((button) => button.classList.toggle("on", button.dataset.proTf === timeframe));
   }
 
+  function paintChartMode(trade, slimeMode, microMode) {
+    const chart = one(".chartwrap", trade), toolbar = one(".chartProBar", trade), button = one("[data-pro-slime-mode]", toolbar);
+    const nativeVisible = Boolean(slimeMode || microMode);
+    trade.dataset.proChartMode = slimeMode ? "slime" : "pro";
+    chart?.classList.toggle("proSlimeChart", nativeVisible);
+    if (button) {
+      button.classList.toggle("on", slimeMode);
+      button.setAttribute("aria-pressed", slimeMode ? "true" : "false");
+      button.title = slimeMode ? "Return to the professional DEX chart" : "Open the SlimeWire native chart";
+    }
+    let mark = chart && one(".proSlimeWatermark", chart);
+    if (nativeVisible && chart && !mark) {
+      mark = document.createElement("div");
+      mark.className = "proSlimeWatermark";
+      mark.setAttribute("aria-hidden", "true");
+      mark.innerHTML = '<img src="/assets/slimewire/svg/slimewire-mark.svg" alt=""><span>SLIMEWIRE</span>';
+      chart.appendChild(mark);
+    } else if (!nativeVisible && mark) mark.remove();
+  }
+
+  function setChartMode(trade, mode) {
+    const context = currentContext(trade), chart = one(".chartwrap", trade), frame = chart && one("iframe", chart), toolbar = one(".chartProBar", trade);
+    if (!chart || !frame || !context.token) return;
+    const slimeMode = mode === "slime", timeframe = trade.dataset.proTf || inferTimeframe(frame) || "15m", pool = poolFromUrl(frame.src) || poolFromUrl(chart.dataset.proStandardSrc || "") || chart.dataset.poolAddress || "";
+    if (!chart.dataset.proStandardSrc || /\/chart-lab/i.test(chart.dataset.proStandardSrc)) {
+      chart.dataset.proStandardSrc = standardChartUrl(context, timeframe, pool, chart.dataset.proStandardSrc || "");
+    }
+    const next = slimeMode
+      ? nativeChartUrl(context, timeframe, pool)
+      : MICRO.has(timeframe)
+        ? nativeChartUrl(context, timeframe, pool)
+        : standardChartUrl(context, timeframe, pool, chart.dataset.proStandardSrc);
+    const replacement = frame.cloneNode(false);
+    replacement.src = next;
+    replacement.loading = "eager";
+    frame.replaceWith(replacement);
+    paintChartMode(trade, slimeMode, MICRO.has(timeframe) || /\/chart-lab/i.test(next));
+    if (toolbar) paintTimeframeButtons(toolbar, timeframe);
+  }
+
   function setTimeframe(trade, timeframe) {
     if (!TIMEFRAMES.some(([value]) => value === timeframe)) return;
     const context = currentContext(trade), chart = one(".chartwrap", trade), frame = chart && one("iframe", chart), toolbar = one(".chartProBar", trade);
@@ -61,21 +127,13 @@
       document.dispatchEvent(new CustomEvent("slimewire:pro-timeframe", { detail: { timeframe, token: context.token } }));
       return;
     }
+    const slimeMode = trade.dataset.proChartMode === "slime";
     if (!chart.dataset.proStandardSrc && !/\/chart-lab/i.test(frame.src)) chart.dataset.proStandardSrc = frame.src;
     const pool = poolFromUrl(frame.src) || poolFromUrl(chart.dataset.proStandardSrc || "");
-    let next = frame.src;
-    if (context.rh || MICRO.has(timeframe) || /\/chart-lab/i.test(frame.src) && !chart.dataset.proStandardSrc) {
-      next = nativeChartUrl(context, timeframe, pool);
-    } else if (MICRO.has(inferTimeframe(frame)) && chart.dataset.proStandardSrc) {
-      next = chart.dataset.proStandardSrc;
-    }
-    try {
-      const url = new URL(next, location.origin);
-      if (/geckoterminal\.com$/i.test(url.hostname)) url.searchParams.set("resolution", timeframe);
-      else if (/dexscreener\.com$/i.test(url.hostname)) url.searchParams.set("interval", ({ "1m": "1", "15m": "15", "1h": "60", "4h": "240", "12h": "720", "1d": "1D" })[timeframe] || "15");
-      else url.searchParams.set("tf", timeframe);
-      next = url.origin === location.origin ? `${url.pathname}${url.search}` : url.toString();
-    } catch (_) {}
+    if (!chart.dataset.proStandardSrc || /\/chart-lab/i.test(chart.dataset.proStandardSrc)) chart.dataset.proStandardSrc = standardChartUrl(context, timeframe, pool, chart.dataset.proStandardSrc || "");
+    const next = slimeMode || MICRO.has(timeframe)
+      ? nativeChartUrl(context, timeframe, pool)
+      : standardChartUrl(context, timeframe, pool, chart.dataset.proStandardSrc);
     const replacement = frame.cloneNode(false);
     replacement.src = next;
     replacement.loading = "eager";
@@ -83,6 +141,7 @@
     trade.dataset.proTf = timeframe;
     localStorage.setItem(context.rh ? "ggRhChartTf" : "ggSolChartTf", timeframe);
     if (toolbar) paintTimeframeButtons(toolbar, timeframe);
+    paintChartMode(trade, slimeMode, MICRO.has(timeframe) || /\/chart-lab/i.test(next));
     document.dispatchEvent(new CustomEvent("slimewire:pro-timeframe", { detail: { timeframe, token: context.token } }));
   }
 
@@ -161,11 +220,81 @@
   }
 
   function toolbarHtml(active) {
-    return `<div class="chartProBar" aria-label="Professional chart controls"><div class="proIntervals">${TIMEFRAMES.map(([value, label]) => `<button type="button" class="${value === active ? "on" : ""}" data-pro-tf="${value}">${label}</button>`).join("")}</div><i class="proDivider"></i><div class="proActions"><button class="proIndicator" type="button" data-indicators-toggle aria-expanded="false" aria-pressed="false">⌁ Indicators</button><button class="proQuick" type="button" data-pro-quick-toggle>⚡ Quick trade</button><button class="proWide" type="button" data-pro-wide>↔ Wider chart</button><button class="proFull" type="button" data-pro-full>⛶ Fullscreen</button></div></div>`;
+    return `<div class="chartProBar" aria-label="Professional chart controls"><div class="proIntervals">${TIMEFRAMES.map(([value, label]) => `<button type="button" class="${value === active ? "on" : ""}" data-pro-tf="${value}">${label}</button>`).join("")}</div><i class="proDivider"></i><div class="proActions"><button class="proSlime" type="button" data-pro-slime-mode aria-pressed="false"><img src="/assets/slimewire/svg/slimewire-mark.svg" alt=""> Slime Mode</button><button class="proIndicator" type="button" data-indicators-toggle aria-expanded="false" aria-pressed="false">⌁ Indicators</button><button class="proQuick" type="button" data-pro-quick-toggle>⚡ Quick trade</button><button class="proWide" type="button" data-pro-wide>↔ Wider chart</button><button class="proFull" type="button" data-pro-full>⛶ Fullscreen</button></div></div>`;
   }
 
   function indicatorDrawerHtml() {
     return `<section class="indicator-drawer proIndicatorDrawer" data-indicator-drawer hidden aria-label="Technical indicators"><div class="indicator-picker"><button type="button" data-indicator-kind="fib" aria-pressed="false">Fibonacci ⚙</button><button type="button" data-indicator-kind="rsi" aria-pressed="false">RSI</button><button type="button" data-indicator-kind="macd" aria-pressed="false">MACD</button><button type="button" data-indicator-kind="harmonics" aria-pressed="false">Harmonics ◇</button></div><section class="fib-settings" data-fib-settings hidden aria-label="Fibonacci settings"></section><section class="harmonic-settings" data-harmonic-settings hidden aria-label="Harmonic pattern settings"></section><div class="indicator-status" data-indicator-status role="status" aria-live="polite">Choose an indicator or stack several.</div><div class="indicator-panels" data-indicator-panels></div><p class="indicator-note">Fibonacci, RSI, MACD, Bat, Gartley, Shark, Butterfly, Crab and 5-0 are calculated from live SlimeWire candles.</p></section>`;
+  }
+
+  async function resolveStandardPool(trade, context, timeframe) {
+    const chart = one(".chartwrap", trade);
+    if (!chart || chart.dataset.proPoolResolving === "1") return;
+    chart.dataset.proPoolResolving = "1";
+    try {
+      const result = await request(`/api/web/chart/bootstrap?token=${encodeURIComponent(context.token)}`);
+      const resolved = result.ok && result.data?.ok ? result.data.chart : null;
+      let pair = String(resolved?.pairAddress || "").trim();
+      // Static/PWA hosts can briefly miss the backend bootstrap because of CORS or a
+      // sleeping service. DexScreener's public token endpoint is the same browser-side
+      // fallback already used by the terminal header; rank exact-chain pools by real
+      // liquidity + volume and never guess a pool from the token address.
+      if (!pair) {
+        const dex = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(context.token)}`, { headers: { Accept: "application/json" } })
+          .then((response) => response.ok ? response.json() : null)
+          .catch(() => null);
+        const tokenKey = context.rh ? context.token.toLowerCase() : context.token;
+        const network = context.rh ? "robinhood" : "solana";
+        const matching = (Array.isArray(dex?.pairs) ? dex.pairs : []).filter((row) => {
+          if (String(row?.chainId || "").toLowerCase() !== network) return false;
+          const base = String(row?.baseToken?.address || ""), quote = String(row?.quoteToken?.address || "");
+          return context.rh ? base.toLowerCase() === tokenKey || quote.toLowerCase() === tokenKey : base === tokenKey || quote === tokenKey;
+        });
+        const baseMatches = matching.filter((row) => context.rh
+          ? String(row?.baseToken?.address || "").toLowerCase() === tokenKey
+          : String(row?.baseToken?.address || "") === tokenKey);
+        const exact = (baseMatches.length ? baseMatches : matching).sort((a, b) => {
+          const weight = (row) => Number(row?.liquidity?.usd || 0) + Number(row?.volume?.h24 || 0) * .01;
+          return weight(b) - weight(a);
+        });
+        pair = String(exact[0]?.pairAddress || "").trim();
+      }
+      if (!pair) {
+        const network = context.rh ? "robinhood" : "solana";
+        const gecko = await fetch(`https://api.geckoterminal.com/api/v2/networks/${network}/tokens/${encodeURIComponent(context.token)}/pools?page=1`, {
+          headers: { Accept: "application/json;version=20230302" }
+        }).then((response) => response.ok ? response.json() : null).catch(() => null);
+        const tokenKey = context.rh ? context.token.toLowerCase() : context.token;
+        const prefix = `${network}_`;
+        const matching = (Array.isArray(gecko?.data) ? gecko.data : []).map((row) => {
+          const relationshipAddress = (relationship) => {
+            const id = String(relationship?.data?.id || "");
+            return id.toLowerCase().startsWith(prefix) ? id.slice(prefix.length) : "";
+          };
+          const base = relationshipAddress(row?.relationships?.base_token), quote = relationshipAddress(row?.relationships?.quote_token);
+          const matches = context.rh
+            ? base.toLowerCase() === tokenKey || quote.toLowerCase() === tokenKey
+            : base === tokenKey || quote === tokenKey;
+          return {
+            matches,
+            baseMatch: context.rh ? base.toLowerCase() === tokenKey : base === tokenKey,
+            address: String(row?.attributes?.address || String(row?.id || "").replace(new RegExp(`^${prefix}`, "i"), "")),
+            reserveUsd: Number(row?.attributes?.reserve_in_usd || 0),
+            volumeUsd: Number(row?.attributes?.volume_usd?.h24 || 0)
+          };
+        }).filter((row) => row.matches && row.address);
+        const baseMatches = matching.filter((row) => row.baseMatch);
+        const exact = (baseMatches.length ? baseMatches : matching).sort((a, b) => (b.reserveUsd + b.volumeUsd * .01) - (a.reserveUsd + a.volumeUsd * .01));
+        pair = String(exact[0]?.address || "").trim();
+      }
+      if (!pair || !document.documentElement.contains(trade)) return;
+      chart.dataset.poolAddress = pair;
+      chart.dataset.proStandardSrc = standardChartUrl(context, timeframe, pair, "");
+      const activeTimeframe = trade.dataset.proTf || timeframe;
+      if (trade.dataset.proChartMode !== "slime" && !MICRO.has(activeTimeframe)) setTimeframe(trade, activeTimeframe);
+    } finally {
+      chart.dataset.proPoolResolving = "0";
+    }
   }
 
   function injectTradeWorkspace(trade) {
@@ -174,7 +303,7 @@
     if (!main || !chart || !frame) return;
     const context = currentContext(trade), stored = localStorage.getItem(context.rh ? "ggRhChartTf" : "ggSolChartTf"), inferred = inferTimeframe(frame), active = TIMEFRAMES.some(([value]) => value === stored) ? stored : (TIMEFRAMES.some(([value]) => value === inferred) ? inferred : "15m");
     trade.dataset.proReady = "1";
-    chart.dataset.proStandardSrc = /\/chart-lab/i.test(frame.src) ? "" : frame.src;
+    chart.dataset.proStandardSrc = /\/chart-lab/i.test(frame.src) ? standardChartUrl(context, active, poolFromUrl(frame.src), "") : frame.src;
     chart.classList.add("proIndicatorFrame");
     chart.setAttribute("data-chart-frame", "");
     chart.dataset.poolAddress = poolFromUrl(frame.src);
@@ -183,6 +312,7 @@
     main.insertAdjacentHTML("beforeend", quickPanelHtml(context));
     const toolbar = one(".chartProBar", trade), panel = one(".proQuickPanel", trade);
     all("[data-pro-tf]", toolbar).forEach((button) => button.addEventListener("click", () => setTimeframe(trade, button.dataset.proTf)));
+    one("[data-pro-slime-mode]", toolbar)?.addEventListener("click", () => setChartMode(trade, trade.dataset.proChartMode === "slime" ? "pro" : "slime"));
     one("[data-pro-quick-toggle]", toolbar)?.addEventListener("click", () => panel.classList.toggle("open"));
     one("[data-pro-close]", panel)?.addEventListener("click", () => panel.classList.remove("open"));
     one("[data-pro-wallet]", panel)?.addEventListener("click", () => window.GG?.go?.("wallet"));
@@ -199,7 +329,10 @@
       const anchor = one(".perf", side) || one(".secbox", side); (anchor || side).insertAdjacentElement(anchor ? "afterend" : "beforeend", tools);
       all("[data-side-tool]", tools).forEach((button) => button.addEventListener("click", () => openTool(trade, button.dataset.sideTool)));
     }
-    if (active !== inferTimeframe(frame)) setTimeout(() => setTimeframe(trade, active), 0);
+    // Pro is the default for every 1m+ interval on both chains. Micro candles use
+    // SlimeWire's native tape, and the user can explicitly keep Slime Mode on.
+    setTimeout(() => setTimeframe(trade, active), 0);
+    void resolveStandardPool(trade, context, active);
   }
 
   async function toggleFullscreen(trade) {

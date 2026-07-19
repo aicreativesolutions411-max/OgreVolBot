@@ -368,6 +368,9 @@ const state = {
   smartChartTape: null,
   smartChartZoom: 100,
   smartChartView: "chart",
+  // Desktop charts open in the full market view. Slime Mode is an explicit
+  // alternate for SlimeWire's native sub-minute chart and indicator tools.
+  smartChartSlimeMode: false,
   chartTradeTab: new URLSearchParams(window.location.search || "").get("tab") === "sell" ? "sell" : "buy",
   chartFocusAmountInput: new URLSearchParams(window.location.search || "").get("focusAmount") === "1",
   chartScrollIntoView: window.location.pathname.includes("/terminal/chart"),
@@ -17390,13 +17393,16 @@ async function resolveSmartChartDexPair(mint = "") {
 
 function dexChartEmbedUrl(tokenOrMint, options = {}) {
   const address = chartAddressForToken(tokenOrMint);
+  const tokenAddress = String(tokenOrMint?.tokenMint || tokenOrMint?.mint || tokenOrMint?.tokenAddress || tokenOrMint || "").trim();
+  const chain = String(tokenOrMint?.chain || tokenOrMint?.chainId || tokenOrMint?.network || "").toLowerCase();
+  const network = /^0x[0-9a-f]{40}$/i.test(tokenAddress) || /robinhood|hood/.test(chain) ? "robinhood" : "solana";
   const params = new URLSearchParams({
     embed: "1",
     theme: "dark",
     trades: options.trades ? "1" : "0",
     info: options.info ? "1" : "0"
   });
-  return `https://dexscreener.com/solana/${encodeURIComponent(address)}?${params.toString()}`;
+  return `https://dexscreener.com/${network}/${encodeURIComponent(address)}?${params.toString()}`;
 }
 
 // The deployed build id (stamped on app.js?v=… by build-web). Parsed ONCE and cached, so the
@@ -17413,12 +17419,10 @@ function assetBuildVersion() {
 }
 function smartChartFrameUrl(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
-  // SlimeWire NATIVE chart is the only chart now — keep users on-site (it shows the same info via our
-  // free /api/chart: Solana Tracker candles primary, swap-api Pump candles for fresh launches).
-  // STABLE src — no live values in the URL (a changing ?mc= made the iframe reload/flash each
-  // refresh). Symbol is stable per coin, so it's safe to pass; the chart pulls real MC (market_cap_usd,
-  // not FDV) + live candles itself.
-  if (mint) {
+  // Pro mode is the desktop default: the DEX provider owns candle aggregation,
+  // drawing tools, volume, and 1m+ intervals. Slime Mode deliberately switches
+  // to the native chart, which also supports the experimental sub-minute views.
+  if (mint && state.smartChartSlimeMode) {
     const symq = String(token.symbol || "").slice(0, 12);
     // STABLE src — only ca + symbol, both fixed per coin. NO live values (a changing ?mc= made the
     // iframe reload/flash). The chart fetches its OWN authoritative stats straight from DexScreener
@@ -17437,6 +17441,22 @@ function smartChartFrameUrl(token = {}, mode = "chart") {
   }
   if (bootstrap?.chartUrl) return bootstrap.chartUrl;
   return dexChartEmbedUrl(token, { trades: mode === "chartTxns" || mode === "txns", info: mode === "info" });
+}
+
+function smartChartProviderControlsHtml() {
+  const slimeMode = Boolean(state.smartChartSlimeMode);
+  return `
+    <div class="smart-chart-provider-controls" aria-label="Chart display mode">
+      <div>
+        <strong>${slimeMode ? "SlimeWire native chart" : "Pro market chart"}</strong>
+        <small>${slimeMode ? "Native candles · sub-minute views · Slime indicators" : "Full DEX candles · drawing tools · 1m and longer"}</small>
+      </div>
+      <div class="smart-chart-provider-switch" role="group" aria-label="Chart provider">
+        <button type="button" data-smart-chart-provider="pro" data-active="${slimeMode ? "false" : "true"}" aria-pressed="${slimeMode ? "false" : "true"}">Pro Chart</button>
+        <button type="button" data-smart-chart-provider="slime" data-active="${slimeMode ? "true" : "false"}" aria-pressed="${slimeMode ? "true" : "false"}"><img src="/assets/slimewire/svg/slimewire-mark.svg" alt=""> Slime Mode</button>
+      </div>
+    </div>
+  `;
 }
 
 function pumpChartSeries(token = {}) {
@@ -17526,9 +17546,11 @@ function smartChartDexFrameHtml(token = {}, mode = "chart") {
   const loadingLabel = isInfo ? "Loading token info..." : isTransactions ? "Loading live chart..." : "Loading live chart...";
   const frameLoadingLabel = loadingLabel;
   const frameSrc = smartChartFrameUrl(token, mode);
+  const slimeMode = Boolean(state.smartChartSlimeMode);
   return `
-    <div class="${escapeHtml(className)}" data-chart-frame-loading="${escapeHtml(frameLoadingLabel)}" data-chart-resolving="${resolvingPair ? "true" : "false"}" data-chart-mint="${escapeHtml(mint)}" data-chart-mode="${escapeHtml(mode)}" data-chart-src="${escapeHtml(frameSrc)}">
+    <div class="${escapeHtml(className)}${slimeMode ? " is-slime-mode" : " is-pro-mode"}" data-chart-frame-loading="${escapeHtml(frameLoadingLabel)}" data-chart-resolving="${resolvingPair ? "true" : "false"}" data-chart-mint="${escapeHtml(mint)}" data-chart-mode="${escapeHtml(mode)}" data-chart-provider="${slimeMode ? "slime" : "pro"}" data-chart-src="${escapeHtml(frameSrc)}">
       <iframe title="${escapeHtml(title)}" src="${escapeHtml(frameSrc)}" loading="eager" fetchpriority="high" referrerpolicy="no-referrer-when-downgrade" onload="this.closest('.smart-chart-frame')?.setAttribute('data-loaded','true'); window.SlimeWireChartFrameLoaded?.('${escapeHtml(mode)}','${escapeHtml(mint)}')" allowfullscreen></iframe>
+      ${slimeMode ? `<div class="smart-chart-slime-watermark" aria-hidden="true"><img src="/assets/slimewire/svg/slimewire-mark.svg" alt=""><span>SLIMEWIRE</span></div>` : ""}
     </div>
   `;
 }
@@ -20726,6 +20748,7 @@ function smartChartHtml() {
             </div>
           </div>
           ${smartChartMarketBarHtml(token, heldPosition)}
+          ${smartChartProviderControlsHtml()}
           ${smartChartDexFrameHtml(token, "chart")}
           ${smartChartSplitterHtml()}
           ${smartChartTradeTapeHtml(token)}
@@ -25258,6 +25281,13 @@ document.addEventListener("click", async (event) => {
     const nextView = target.dataset.smartChartView || "chart";
     state.smartChartView = ["chart", "chartTxns", "txns", "info"].includes(nextView) ? nextView : "chart";
     render();
+    return;
+  }
+  if (target.matches("[data-smart-chart-provider]")) {
+    const nextSlimeMode = target.dataset.smartChartProvider === "slime";
+    if (state.smartChartSlimeMode === nextSlimeMode) return;
+    state.smartChartSlimeMode = nextSlimeMode;
+    render({ force: true, refreshSmartChartFrame: true });
     return;
   }
   if (target.matches("[data-chart-trade-tab]")) {

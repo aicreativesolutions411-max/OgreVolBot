@@ -37,6 +37,19 @@ test("professional chart controls expose every requested candle interval", () =>
   assert.match(pro, /requestFullscreen/);
   assert.match(css, /\.trade\.proFullscreen/);
   assert.match(css, /\.trade\.proWide/);
+  assert.match(pro, /data-pro-slime-mode/);
+  assert.match(pro, /function setChartMode/);
+  assert.match(pro, /standardChartUrl/);
+  assert.match(pro, /function resolveStandardPool/);
+  assert.match(pro, /\/api\/web\/chart\/bootstrap\?token=/);
+  assert.match(pro, /api\.dexscreener\.com\/latest\/dex\/tokens/);
+  assert.match(pro, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/tokens/);
+  assert.match(pro, /pools\/\$\{encodeURIComponent\(address\)\}/);
+  assert.match(pro, /if \(!address\) return nativeChartUrl/);
+  assert.match(pro, /liquidity\?\.usd/);
+  assert.match(pro, /Slime Mode/);
+  assert.match(css, /\.proSlimeWatermark/);
+  assert.match(server, /providerSource = "geckoterminal-token-pools"/);
 });
 
 test("compact quick panel reuses the existing guarded execution buttons", () => {

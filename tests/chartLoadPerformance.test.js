@@ -53,6 +53,11 @@ test("chart iframe uses cached bootstrap URLs and does not wait on feed refresh"
   assert.doesNotMatch(frame, /smart-chart-pair-resolving/);
   assert.match(frame, /window\.SlimeWireChartFrameLoaded/);
   assert.match(functionBody(appSource, "smartChartFrameUrl"), /bootstrap\?\.chartUrl/);
+  assert.match(functionBody(appSource, "smartChartFrameUrl"), /state\.smartChartSlimeMode/);
+  assert.match(functionBody(appSource, "smartChartProviderControlsHtml"), /Slime Mode/);
+  assert.match(functionBody(appSource, "smartChartProviderControlsHtml"), /Pro Chart/);
+  assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /smart-chart-slime-watermark/);
+  assert.match(functionBody(appSource, "dexChartEmbedUrl"), /robinhood/);
 
   const refresh = functionBody(appSource, "refreshTerminalFeed");
   const smartChartBranchStart = refresh.indexOf('tabKey === "smartChart"');

@@ -571,7 +571,7 @@
   .chartSplitMain.chartSplitAdjusted .tapeTable{max-height:none;min-height:58px;flex:1 1 auto}
   @media(max-width:820px){.chartTapeSplit{flex-basis:24px;height:24px}.chartTapeSplit:before{width:72px}.chartTapeSplit span{right:8px;font-size:8px}.chartSplitMain.chartSplitAdjusted .marketTape{padding-bottom:8px}}
 </style>
-<link rel="stylesheet" href="/terminal-pro.css?v=20260718d">
+<link rel="stylesheet" href="/terminal-pro.css?v=20260718e">
 <script defer src="/vendor/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -3144,7 +3144,7 @@
         // upgrade to the full Gecko chart. Never interrupt a deliberately selected sub-minute view.
         if(resolvedPool){
           const cw=$('[data-pane="chart"]'),tf=(cw&&cw.closest(".trade")&&cw.closest(".trade").dataset.proTf)||localStorage.getItem("ggSolChartTf")||"15m",micro=["1s","15s","30s"].includes(tf);
-          if(cw){cw.dataset.proStandardSrc=solChartUrl(mint,r);const frame=cw.querySelector("iframe");if(!micro&&frame&&!/geckoterminal\.com/i.test(frame.src))cw.innerHTML=chartIframe(mint,r);}
+          if(cw){const trade=cw.closest(".trade"),slime=trade&&trade.dataset.proChartMode==="slime";cw.dataset.poolAddress=resolvedPool;cw.dataset.proStandardSrc=solChartUrl(mint,r);const frame=cw.querySelector("iframe");if(!micro&&!slime&&frame&&!/geckoterminal\.com/i.test(frame.src))cw.innerHTML=chartIframe(mint,r);}
         }
         // Capture the LIVE price (SOL per token) so the PnL bar can mark-to-market instantly. Use the
         // SOL-quoted native price when the pair quotes in SOL; else convert USD via a live SOL/USD we
@@ -5027,7 +5027,7 @@
   });
 })();
 </script>
-<script src="/terminal-pro.js?v=20260718e"></script>
+<script src="/terminal-pro.js?v=20260718k"></script>
 <script src="/fun-indicators.js?v=20260718d"></script>
 </body>
 </html>

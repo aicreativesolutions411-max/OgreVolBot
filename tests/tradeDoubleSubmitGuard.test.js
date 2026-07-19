@@ -3567,6 +3567,10 @@ test("Airdrop and wallet maps trace Solana/.sol and Robinhood fund flows on web 
   assert.match(functionBody(serverSource, "mapTelegramDetailLines"), /Recent traded coins/);
   assert.match(functionBody(serverSource, "mapTelegramDetailLines"), /Top current bags/);
   assert.match(functionBody(serverSource, "sendMapCard"), /mapTelegramDetailLines\(map\)/);
+  assert.match(functionBody(serverSource, "sendMapCard"), /telegramMapPhotoCandidates\(png\)/);
+  assert.match(functionBody(serverSource, "sendMapCard"), /for \(const candidate of candidates\)/);
+  assert.match(functionBody(serverSource, "telegramMapPhotoCandidates"), /slimewire-holder-map\.jpg/);
+  assert.match(functionBody(serverSource, "telegramMapPhotoCandidates"), /compressionLevel: 9/);
   assert.match(functionBody(serverSource, "sendAirdropSubjectCard"), /sendMapCard\(chatId, target, "funds"\)/);
   const walletCard = functionBody(serverSource, "sendWalletScanCard");
   assert.match(walletCard, /Fund Map/);

@@ -424,8 +424,10 @@
     const result = await request(`/api/web/live-pairs?${query}`);
     return result.ok ? (result.data?.livePairs?.rows || []).map(normalizeSol) : [];
   }
-  async function fetchRhFeed(config) {
-    const result = await request(`/api/web/rh/pairs?category=${encodeURIComponent(config.rh || "trending")}`, { timeout: 5000 });
+  async function fetchRhFeed(config, force = false) {
+    const query = new URLSearchParams({ category: config.rh || "trending" });
+    if (force) query.set("force", "true");
+    const result = await request(`/api/web/rh/pairs?${query}`, { timeout: 5000 });
     return result.ok ? (result.data?.rows || []).map(normalizeRh) : [];
   }
   function sortAndDedupeFeed(rows, feed) {
@@ -458,7 +460,7 @@
       ? (a, b) => feedAge(a) - feedAge(b)
       : (a, b) => (b.marketCap || 0) - (a.marketCap || 0));
   }
-  function scheduleFeedRefresh(delay = state.chain === "solana" ? 8000 : 12000) {
+  function scheduleFeedRefresh(delay = state.feed === "new" ? 5000 : state.chain === "solana" ? 8000 : 10000) {
     clearTimeout(state.feedTimer);
     if (document.hidden || state.view !== "home") return;
     state.feedTimer = setTimeout(async () => {
@@ -476,15 +478,22 @@
     if (!options.silent && !state.rows.length) $("[data-coin-list]").innerHTML = '<div class="skeleton-list"></div>';
     $("[data-feed-note]").textContent = config.note;
     let rows = [];
-    if (selectedChain === "solana") rows = await fetchSolFeed(config, force && !options.silent);
-    else if (selectedChain === "robinhood") rows = await fetchRhFeed(config);
+    const hardRefresh = force && !options.silent;
+    if (selectedChain === "solana") rows = await fetchSolFeed(config, hardRefresh);
+    else if (selectedChain === "robinhood") rows = await fetchRhFeed(config, hardRefresh);
     else {
-      const solPromise = fetchSolFeed(config, force && !options.silent), rhPromise = fetchRhFeed(config);
+      const solPromise = fetchSolFeed(config, hardRefresh), rhPromise = fetchRhFeed(config, hardRefresh);
       const [sol, rh] = await Promise.all([solPromise, rhPromise]);
-      rows = [...sol.slice(0, 32), ...rh.slice(0, 24)];
+      const previousRows = cached?.rows?.length ? cached.rows : state.rows;
+      const stableSol = sol.length ? sol : previousRows.filter((row) => row.chain === "solana");
+      const stableRh = rh.length ? rh : previousRows.filter((row) => row.chain === "robinhood");
+      rows = [...stableSol.slice(0, 32), ...stableRh.slice(0, 24)];
     }
     if (version !== state.feedRequestVersion || selectedChain !== state.chain || selectedFeed !== state.feed) return;
-    state.rows = sortAndDedupeFeed(rows, selectedFeed);
+    const nextRows = sortAndDedupeFeed(rows, selectedFeed);
+    // A brief provider timeout must not flash an empty market. Keep the last good rows while the
+    // next refresh is already scheduled.
+    state.rows = nextRows.length ? nextRows : (cached?.rows?.length ? cached.rows : state.rows);
     state.feedCache.set(cacheKey, { at: Date.now(), rows: state.rows });
     $(`[data-feed-note]`).textContent = `${config.note} · updated now`;
     hydrateSelectedFromFeed();
