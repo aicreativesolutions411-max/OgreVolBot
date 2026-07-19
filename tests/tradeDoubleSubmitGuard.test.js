@@ -3746,6 +3746,9 @@ test("airdrop and holder maps expose real cluster summaries + liquidity fallback
   const graph = functionBody(serverSource, "mapComputeClusters");
   assert.match(graph, /summary:\s*\{/);
   assert.match(graph, /clusteredPct/);
+  assert.match(graph, /direct holder-to-holder funding/i);
+  assert.match(graph, /addRelationship\(funder, wallet, "direct"/);
+  assert.match(graph, /directLinkCount/);
   assert.match(serverSource, /pathname === "\/api\/airdrop\/graph"/);
   assert.match(serverSource, /summary: graph\.summary \|\| null/);
   const holder = functionBody(serverSource, "buildTokenHolderMap");
@@ -3766,6 +3769,8 @@ test("airdrop and holder maps expose real cluster summaries + liquidity fallback
   const mapHtml = fs.readFileSync(new URL("../web/public/map.html", import.meta.url), "utf8");
   assert.match(mapHtml, /ensureStat/);
   assert.match(mapHtml, /HOLDERS/);
+  assert.match(mapHtml, /gr\.edges/);
+  assert.match(mapHtml, /kind==='direct'/);
   assert.match(mapHtml, /wallets ·/);
   const dropHtml = fs.readFileSync(new URL("../web/public/airdrop.html", import.meta.url), "utf8");
   assert.match(dropHtml, /ensureDropStat/);
@@ -3775,6 +3780,24 @@ test("airdrop and holder maps expose real cluster summaries + liquidity fallback
   assert.match(dropHtml, /openDropCluster/);
   assert.match(dropHtml, /renderDropClusterEmpty/);
   assert.match(dropHtml, /enrichDropStats/);
+});
+
+test("holder map cards show real direct wallet links and an explicit combined cluster total", async () => {
+  const { buildMapSvg } = await import(`../src/lib/slimeMapRender.mjs?cluster-link-test=${Date.now()}`);
+  const svg = buildMapSvg({
+    subject: "$TEST",
+    nodes: [
+      { i: 0, wallet: "WalletA", pct: 4, usd: 4000, weight: 1, state: "whale" },
+      { i: 1, wallet: "WalletB", pct: 2, usd: 2000, weight: 0.5, state: "hold" },
+    ],
+    clusters: [{ id: 0, size: 2, members: [0, 1], hub: 0, pct: 6, usd: 6000, directLinkCount: 1, sharedLinkCount: 0 }],
+    clusterLinks: [{ a: 0, b: 1, source: 0, target: 1, kind: "direct", clusterId: 0 }],
+    sidePanel: true,
+    W: 1320,
+    H: 820,
+  });
+  assert.match(svg, /COMBINED 6\.0%/);
+  assert.match(svg, /1 direct link/);
 });
 
 test("volume bot uses a flat 0.05 SOL fee every 50 confirmed market transactions", () => {

@@ -98,7 +98,7 @@ function arrowSvg(x1, y1, x2, y2, color, w, targetR, dash) {
 const CLUSTER_COLORS = ["#ffcf4d", "#4dd6ff", "#ff7de3", "#8bff5b", "#ff9f4d", "#b98cff", "#4dffd0", "#ff6b6b"];
 function shortAddr(a) { a = String(a || ""); return a.length > 10 ? a.slice(0, 4) + "..." + a.slice(-4) : a; }
 
-export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stats = [], nodes = [], bgHref = null, transparent = false, centerImage = null, clusters = [], clusterEdges = [], sidePanel = false, kolsIn = 0, W = 900, H = 820 } = {}) {
+export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stats = [], nodes = [], bgHref = null, transparent = false, centerImage = null, clusters = [], clusterEdges = [], clusterLinks = [], sidePanel = false, kolsIn = 0, W = 900, H = 820 } = {}) {
   // Side panel (Bubblemaps-style, on the RIGHT): ranked clusters w/ bars + a holders/whales/KOLs stat grid +
   // a KOL roster. The map draws into the LEFT `mapW` region; the panel fills the rest.
   const PANEL = sidePanel ? 452 : 0;
@@ -169,14 +169,25 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
     clusterBlobs = cls.map((c) =>
       `<circle cx="${c._cx.toFixed(1)}" cy="${c._cy.toFixed(1)}" r="${(c._blobR || 40).toFixed(1)}" fill="${c.color}" fill-opacity="0.10" stroke="${c.color}" stroke-opacity="0.4" stroke-width="1.6"/>`
     ).join("");
-    // funder/biggest-bag → each member (in-blob flow)
-    const memberArrows = cls.map((c) => {
-      const hub = posByI.get(c._hubI); if (!hub) return "";
-      return (c.members || []).filter((mi) => mi !== c._hubI).map((mi) => {
-        const t = posByI.get(mi); if (!t) return "";
-        return arrowSvg(hub.x, hub.y, t.x, t.y, c.color, 1.6, t.size, "5 3");
+    // Render the actual relationship evidence when supplied. Direct holder→holder funding keeps its
+    // direction and arrowhead; sibling wallets sharing an outside funder get a dashed undirected tie.
+    // Older cached graph shapes fall back to the previous hub-star layout.
+    const memberArrows = (clusterLinks || []).length
+      ? (clusterLinks || []).map((edge) => {
+        const c = byId.get(edge.clusterId) || cls.find((row) => row.members.includes(edge.a) && row.members.includes(edge.b));
+        const s = posByI.get(edge.source != null ? edge.source : edge.a);
+        const t = posByI.get(edge.target != null ? edge.target : edge.b);
+        if (!c || !s || !t) return "";
+        if (edge.kind === "direct") return arrowSvg(s.x, s.y, t.x, t.y, c.color, 2.2, t.size);
+        return `<line x1="${s.x.toFixed(1)}" y1="${s.y.toFixed(1)}" x2="${t.x.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="${c.color}" stroke-width="1.8" stroke-opacity="0.82" stroke-dasharray="5 3"/>`;
+      }).join("")
+      : cls.map((c) => {
+        const hub = posByI.get(c._hubI); if (!hub) return "";
+        return (c.members || []).filter((mi) => mi !== c._hubI).map((mi) => {
+          const t = posByI.get(mi); if (!t) return "";
+          return arrowSvg(hub.x, hub.y, t.x, t.y, c.color, 1.6, t.size, "5 3");
+        }).join("");
       }).join("");
-    }).join("");
     // inter-cluster: cluster A funded by a wallet inside cluster B → A points at B (thicker, solid)
     const xArrows = (clusterEdges || []).map((e) => {
       const a = byId.get(e.from), b = byId.get(e.to);
@@ -186,9 +197,11 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
     clusterArrows = memberArrows + xArrows;
     clusterCards = cls.map((c) => {
       const outN = (clusterEdges || []).filter((e) => e.from === c.id).length;
-      const l1 = `${c.size || (c.members || []).length} wallets · ${(+c.pct).toFixed(1)}%`;
-      const l2 = `${fmtUsd(c.usd)}${outN ? ` · →${outN} cluster${outN > 1 ? "s" : ""}` : ""}`;
-      const l3 = `◆${c.letter} · from ${esc(c.funderShort || shortAddr(c.funder))}`;
+      const direct = Number(c.directLinkCount) || 0, shared = Number(c.sharedLinkCount) || 0;
+      const relationship = direct ? `${direct} direct link${direct === 1 ? "" : "s"}` : `${shared} shared-funder link${shared === 1 ? "" : "s"}`;
+      const l1 = `${c.size || (c.members || []).length} wallets · COMBINED ${(+c.pct).toFixed(1)}%`;
+      const l2 = `${fmtUsd(c.usd)} · ${relationship}${outN ? ` · →${outN} cluster${outN > 1 ? "s" : ""}` : ""}`;
+      const l3 = direct ? `◆${c.letter} · linked on-chain` : `◆${c.letter} · shared ${esc(c.funderShort || shortAddr(c.funder))}`;
       const wpx = Math.max(l1.length, l2.length, l3.length) * 6.9 + 22;
       const yTop = c._cy - (c._blobR || 40) - 30;
       return `<g>
@@ -273,7 +286,7 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
           <circle cx="${px + 7}" cy="${y + 6}" r="6" fill="${c.color}"/>
           <text x="${px + 20}" y="${y + 10}" font-family="Arial Black, Arial" font-size="13" font-weight="900" fill="#eafff0">Cluster ${c.letter}</text>
           <text x="${px + 96}" y="${y + 10}" font-family="Arial, sans-serif" font-size="11.5" font-weight="700" fill="#9fe0ab">${c.size || (c.members || []).length} wallets</text>
-          <text x="${px + pw}" y="${y + 10}" text-anchor="end" font-family="Arial Black, Arial" font-size="13" font-weight="900" fill="${c.color}">${(+c.pct).toFixed(1)}% · ${fmtUsd(c.usd)}</text>
+          <text x="${px + pw}" y="${y + 10}" text-anchor="end" font-family="Arial Black, Arial" font-size="13" font-weight="900" fill="${c.color}">COMBINED ${(+c.pct).toFixed(1)}% · ${fmtUsd(c.usd)}</text>
           <rect x="${px}" y="${y + 17}" width="${barW}" height="8" rx="4" fill="#0c2113"/>
           <rect x="${px}" y="${y + 17}" width="${fillW.toFixed(1)}" height="8" rx="4" fill="${c.color}"/>
         </g>`);
@@ -436,7 +449,7 @@ async function localFaceDataUri(file, size = 88) {
   } catch { return null; }
 }
 
-export async function renderSlimeMapPng({ subject, subtitle, stats = [], nodes = [], bgPath = null, centerImage = null, clusters = [], clusterEdges = [], sidePanel = false, kolsIn = 0, W = 900, H = 820 } = {}) {
+export async function renderSlimeMapPng({ subject, subtitle, stats = [], nodes = [], bgPath = null, centerImage = null, clusters = [], clusterEdges = [], clusterLinks = [], sidePanel = false, kolsIn = 0, W = 900, H = 820 } = {}) {
   // Resolve avatars → embedded data-URIs, in parallel. KOL X pfps come from a remote URL (fetch); anonymous
   // wallets get a LOCAL slime face (read off disk). Deduped so the same face/url is only processed once.
   // The COIN's PFP (centerImage) is fetched the same way so it embeds in the center hub of the share card.
@@ -455,7 +468,7 @@ export async function renderSlimeMapPng({ subject, subtitle, stats = [], nodes =
   }));
   const centerData = await centerImageP;        // null if the coin logo failed → hub falls back to the orb
 
-  const svg = buildMapSvg({ subject, subtitle, stats, nodes, transparent: true, centerImage: centerData, clusters, clusterEdges, sidePanel, kolsIn, W, H });
+  const svg = buildMapSvg({ subject, subtitle, stats, nodes, transparent: true, centerImage: centerData, clusters, clusterEdges, clusterLinks, sidePanel, kolsIn, W, H });
   const mapPng = await sharp(Buffer.from(svg)).png().toBuffer();
 
   // Base = branded background (cover) or a dark-green fallback gradient.

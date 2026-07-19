@@ -62,10 +62,14 @@ test("Telegram owner stats show named direct users, trade usage, referrals, and 
   assert.match(serverSource, /\/adminstats today/);
 });
 
-test("owner analytics is one-time gated, excludes passive group members, and exposes no recovery data", () => {
+test("owner analytics is short-lived and preview-safe, excludes passive group members, and exposes no recovery data", () => {
   assert.match(serverSource, /OWNER_ANALYTICS_TICKET_TTL_MS = 5 \* 60 \* 1000/);
   assert.match(serverSource, /OWNER_ANALYTICS_SESSION_TTL_MS = 30 \* 60 \* 1000/);
-  assert.match(serverSource, /ownerAnalyticsTickets\.delete\(key\)/);
+  assert.match(serverSource, /validateOwnerAnalyticsTicket\(ticket\)/);
+  const validatorStart = serverSource.indexOf("function validateOwnerAnalyticsTicket(");
+  const validatorEnd = serverSource.indexOf("function createOwnerAnalyticsSession(", validatorStart);
+  assert.ok(validatorStart > 0 && validatorEnd > validatorStart);
+  assert.doesNotMatch(serverSource.slice(validatorStart, validatorEnd), /ownerAnalyticsTickets\.delete/);
   assert.match(serverSource, /HttpOnly; Secure; SameSite=Strict/);
   assert.match(serverSource, /X-Robots-Tag/);
   assert.match(serverSource, /Content-Security-Policy/);
