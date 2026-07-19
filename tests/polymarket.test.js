@@ -156,8 +156,7 @@ test("Poly Hub and Telegram integration keep trading internal, idempotent, opt-i
   for (const view of ["trending", "new", "ending", "liquid", "crypto", "politics", "sports"]) assert.match(page, new RegExp(`data-market-view="${view}"`));
   assert.doesNotMatch(page, /href="https:\/\/polymarket\.com/);
   assert.doesNotMatch(page, /seed phrase[^<]{0,80}(enter|paste|send)/i);
-  assert.match(terminal, /href="\/polymarket">Poly<\/a>/);
-  assert.match(terminal, /class="botnav"[\s\S]{0,700}href="\/polymarket"[\s\S]{0,100}Poly/);
+  assert.doesNotMatch(terminal, /href="\/polymarket"/);
   assert.match(server, /pathname === "\/api\/web\/poly\/markets"/);
   assert.match(server, /pathname === "\/api\/web\/poly\/portfolio"/);
   assert.match(server, /pathname === "\/api\/web\/poly\/trading\/ticket"/);

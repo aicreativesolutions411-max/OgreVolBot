@@ -165,7 +165,11 @@
     const trigger = $("[data-indicators-toggle]");
     trigger?.classList.toggle("active", analysisActive);
     trigger?.setAttribute("aria-pressed", String(analysisActive));
-    if (trigger) trigger.textContent = analysisActive && count ? `⌁ Indicators · ${count}` : "⌁ Indicators";
+    if (trigger) {
+      trigger.textContent = analysisActive ? "← Main chart" : `⌁ Indicators${count ? ` · ${count}` : ""}`;
+      trigger.setAttribute("aria-label", analysisActive ? "Return to the main provider chart" : "Open technical indicators");
+      trigger.title = analysisActive ? "Exit indicator analysis" : "Open indicator analysis";
+    }
     const transactions = $('[data-chart-mode="transactions"]')?.classList.contains("active");
     $('[data-chart-mode="chart"]')?.classList.toggle("active", !analysisActive && !transactions);
   }
@@ -455,9 +459,10 @@
   }
 
   function analysisHeader(subtitle, badge = "LIVE") {
+    const count = Object.values(enabled).filter(Boolean).length;
     const fibControl = enabled.fib ? '<button type="button" data-fib-settings-open aria-label="Open Fibonacci settings">⚙ Fib</button>' : "";
     const harmonicControl = enabled.harmonics ? '<button type="button" data-harmonic-settings-open aria-label="Open harmonic pattern settings">◇ Patterns</button>' : "";
-    return `<div class="analysis-head"><div><b>SLIME ANALYSIS</b><span>${escapeHtml(subtitle)}</span></div><div class="analysis-head-actions"><em>${escapeHtml(badge)}</em>${fibControl}${harmonicControl}<button type="button" data-analysis-back aria-label="Return to regular chart">↩ Chart</button></div></div>`;
+    return `<div class="analysis-head"><div><b>SLIME ANALYSIS</b><span>${escapeHtml(subtitle)}</span></div><div class="analysis-head-actions"><button class="analysis-back" type="button" data-analysis-back aria-label="Return to the main chart">← Main chart</button><button type="button" data-analysis-indicators aria-label="Open indicator settings">⌁ Studies · ${count}</button><em>${escapeHtml(badge)}</em>${fibControl}${harmonicControl}</div></div>`;
   }
 
   function activateAnalysis({ openDrawer = true } = {}) {
@@ -613,7 +618,7 @@
     const harmonicMatches = enabled.harmonics ? findHarmonicPatterns(candles) : [];
     const activeLabels = [enabled.fib && "Fibonacci", enabled.rsi && "RSI 14", enabled.macd && "MACD", enabled.harmonics && "Harmonics"].filter(Boolean);
     const panels = [enabled.harmonics && harmonicPatternPanel(candles, harmonicMatches), enabled.rsi && rsiPanel(candles), enabled.macd && macdPanel(candles)].filter(Boolean).join("");
-    return `<div class="indicator-analysis" data-indicator-analysis>${analysisHeader(`${activeLabels.join(" + ")} · ${timeframe}`)}<div class="analysis-price" data-analysis-price aria-label="Candlestick chart with selected technical indicators"></div>${panels}<div class="analysis-source">${escapeHtml(source.replace(/[-_]/g, " "))}${stale ? " · cached fallback" : ""} · ${candles.length} candles${enabled.fib ? ` · ${Math.min(fibSettings.lookback, candles.length)}-bar Fib window` : ""}</div></div>`;
+    return `<div class="indicator-analysis" data-indicator-analysis>${analysisHeader(`${activeLabels.join(" + ")} · ${timeframe}`)}<div class="analysis-workspace"><div class="analysis-price" data-analysis-price aria-label="Candlestick chart with selected technical indicators"></div>${panels ? `<div class="analysis-study-stack" aria-label="Technical indicator panes">${panels}</div>` : ""}</div><div class="analysis-source">${escapeHtml(source.replace(/[-_]/g, " "))}${stale ? " · cached fallback" : ""} · ${candles.length} candles${enabled.fib ? ` · ${Math.min(fibSettings.lookback, candles.length)}-bar Fib window` : ""}</div></div>`;
   }
 
   function mountNativeAnalysis(candles, source, timeframe, stale) {
@@ -666,7 +671,10 @@
     if (enabled.harmonics) paintHarmonicPattern(candleSeries, priceNode, candles);
     nativeChart.timeScale().fitContent();
     nativeResizeObserver = new ResizeObserver(() => {
-      if (nativeChart && priceNode.isConnected) nativeChart.applyOptions({ width: Math.max(280, priceNode.clientWidth) });
+      if (nativeChart && priceNode.isConnected) nativeChart.applyOptions({
+        width: Math.max(280, priceNode.clientWidth),
+        height: Math.max(360, priceNode.clientHeight)
+      });
     });
     nativeResizeObserver.observe(priceNode);
     return true;
@@ -729,10 +737,11 @@
 
   document.addEventListener("click", (event) => {
     if (event.target.closest("[data-indicators-toggle]")) {
-      if (!analysisActive) activateAnalysis({ openDrawer: true });
-      else toggleDrawer();
+      if (analysisActive) deactivateAnalysis({ closeDrawer: true });
+      else activateAnalysis({ openDrawer: true });
       return;
     }
+    if (event.target.closest("[data-analysis-indicators]")) { toggleDrawer(); return; }
     if (event.target.closest("[data-fib-settings-open]")) { toggleDrawer(true, false); openFibSettings(); return; }
     if (event.target.closest("[data-harmonic-settings-open]")) { toggleDrawer(true, false); openHarmonicSettings(); return; }
     if (event.target.closest("[data-analysis-back]")) { deactivateAnalysis({ closeDrawer: true }); return; }
@@ -854,6 +863,9 @@
     scheduleRender(0);
   });
   window.addEventListener("hashchange", () => { analysisActive = false; requestVersion += 1; clearTimeout(autoRefreshTimer); toggleDrawer(false, false); syncButtons(); });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && analysisActive) deactivateAnalysis({ closeDrawer: true });
+  });
   document.addEventListener("slimewire:chart-rendered", () => { if (analysisActive && anyEnabled()) scheduleRender(0); });
   document.addEventListener("slimewire:pro-timeframe", () => { if (analysisActive && anyEnabled()) { requestVersion += 1; clearTimeout(autoRefreshTimer); scheduleRender(25); } });
   document.addEventListener("visibilitychange", () => {

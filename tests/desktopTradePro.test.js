@@ -129,7 +129,15 @@ test("desktop charts preserve the full indicator workspace", () => {
   assert.match(indicators, /syncIndicatorProvider/);
   assert.match(indicators, /Indicators saved — retrying candle history/);
   assert.match(indicators, /renderIndicators\(\{ background: true \}\)/);
+  assert.match(indicators, /trigger\.textContent = analysisActive \? "← Main chart"/);
+  assert.match(indicators, /data-analysis-back/);
+  assert.match(indicators, /data-analysis-indicators/);
+  assert.match(indicators, /analysis-study-stack/);
+  assert.match(indicators, /event\.key === "Escape" && analysisActive/);
   assert.match(css, /\.tradeMain\.indicator-analysis-open/);
+  assert.match(css, /\.analysis-price\{height:clamp\(500px,62vh,700px\)/);
+  assert.match(css, /\.analysis-study-stack>\.indicator-panel svg\{width:100%;height:170px/);
+  assert.match(css, /\.chartwrap\.proSlimeChart\{min-height:560px\}/);
 });
 
 test("Robinhood chart and transactions fall back to exact on-chain pool swaps", () => {

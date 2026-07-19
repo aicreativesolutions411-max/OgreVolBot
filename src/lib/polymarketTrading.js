@@ -73,13 +73,17 @@ export function polymarketTradingConfig(env = process.env) {
     passphrase: String(env.POLYMARKET_BUILDER_PASSPHRASE || "").trim()
   };
   const relayerConfigured = Object.values(builderCreds).every(Boolean);
+  const builderConfigured = BYTES32_RE.test(builderCode);
   return {
     host: String(env.POLYMARKET_CLOB_HOST || "https://clob.polymarket.com").trim().replace(/\/+$/, ""),
     relayerUrl: String(env.POLYMARKET_RELAYER_URL || "https://relayer-v2.polymarket.com").trim().replace(/\/+$/, ""),
     polygonRpcUrl: String(env.POLYMARKET_POLYGON_RPC_URL || env.POLYGON_RPC_URL || "https://polygon-rpc.com").trim(),
     builderCode,
     builderCreds,
-    orderConfigured: BYTES32_RE.test(builderCode),
+    // CLOB V2 builder attribution is optional. Orders remain valid without a
+    // builder code; they simply are not attributed to a Builder Profile.
+    builderConfigured,
+    orderConfigured: true,
     relayerConfigured
   };
 }
@@ -163,7 +167,7 @@ export function createPolymarketTradingService({ env = process.env } = {}) {
       signatureType: SignatureTypeV2.POLY_1271,
       funderAddress: depositAddress,
       useServerTime: true,
-      builderConfig: config.orderConfigured ? { builderCode: config.builderCode } : undefined,
+      builderConfig: config.builderConfigured ? { builderCode: config.builderCode } : undefined,
       throwOnError: true,
       retryOnError: true
     });
@@ -176,7 +180,7 @@ export function createPolymarketTradingService({ env = process.env } = {}) {
       signatureType: SignatureTypeV2.POLY_1271,
       funderAddress: depositAddress,
       useServerTime: true,
-      builderConfig: config.orderConfigured ? { builderCode: config.builderCode } : undefined,
+      builderConfig: config.builderConfigured ? { builderCode: config.builderCode } : undefined,
       throwOnError: true,
       retryOnError: true
     });
@@ -200,15 +204,21 @@ export function createPolymarketTradingService({ env = process.env } = {}) {
       pUsdBalance: pUsdNumber(balance.balance),
       serviceFeeBps: POLYMARKET_SOL_BRIDGE.serviceFeeBps,
       closedOnly: Boolean(closedOnly?.closed_only),
+      builderConfigured: config.builderConfigured,
       orderConfigured: config.orderConfigured,
       relayerConfigured: config.relayerConfigured,
-      liveReady: Boolean(deployed && config.orderConfigured && !closedOnly?.closed_only)
+      setupAvailable: config.relayerConfigured,
+      liveReady: Boolean(deployed && !closedOnly?.closed_only)
     };
   }
 
   async function setupAccount(privateKey) {
-    if (!config.orderConfigured) throw new Error("Polymarket builder code is not configured yet.");
-    if (!config.relayerConfigured) throw new Error("Polymarket gasless wallet setup is not configured yet.");
+    if (!config.relayerConfigured) {
+      throw Object.assign(new Error("Prediction trading setup is temporarily unavailable. No funds were moved."), {
+        statusCode: 503,
+        code: "POLYMARKET_RELAYER_NOT_CONFIGURED"
+      });
+    }
     const { relayer, depositAddress, client } = await contextFor(privateKey);
     let deployed = await relayer.getDeployed(depositAddress, "WALLET").catch(() => false);
     if (!deployed) {
@@ -246,7 +256,6 @@ export function createPolymarketTradingService({ env = process.env } = {}) {
   }
 
   async function placeOrder(privateKey, rawIntent) {
-    if (!config.orderConfigured) throw new Error("Polymarket live orders are not configured yet.");
     const intent = normalizePolymarketTradeIntent(rawIntent);
     const { client } = await contextFor(privateKey);
     const closedOnly = await client.getClosedOnlyMode().catch(() => ({ closed_only: false }));
@@ -260,7 +269,7 @@ export function createPolymarketTradingService({ env = process.env } = {}) {
         side: intent.side,
         orderType: OrderType.FAK,
         userUSDCBalance: pUsdNumber(collateral.balance),
-        builderCode: config.builderCode
+        ...(config.builderConfigured ? { builderCode: config.builderCode } : {})
       }, {}, OrderType.FAK);
     } else {
       const shares = intent.side === Side.BUY ? intent.amount / intent.price : intent.amount;
@@ -269,7 +278,7 @@ export function createPolymarketTradingService({ env = process.env } = {}) {
         price: intent.price,
         size: Math.floor(shares * 1e6) / 1e6,
         side: intent.side,
-        builderCode: config.builderCode
+        ...(config.builderConfigured ? { builderCode: config.builderCode } : {})
       }, {}, OrderType.GTC);
     }
     if (!response?.success) throw new Error(String(response?.errorMsg || "Polymarket rejected the order."));
@@ -385,6 +394,7 @@ export function createPolymarketTradingService({ env = process.env } = {}) {
 
   return {
     config: {
+      builderConfigured: config.builderConfigured,
       orderConfigured: config.orderConfigured,
       relayerConfigured: config.relayerConfigured,
       contracts: POLYMARKET_CONTRACTS

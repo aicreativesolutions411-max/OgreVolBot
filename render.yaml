@@ -279,6 +279,18 @@ services:
         value: https://www.slimewire.org,https://slimewire.org,https://ogrevolbot.pages.dev,https://*.ogrevolbot.pages.dev
       - key: WEB_SESSION_TTL_HOURS
         value: 720
+      # Polymarket gasless deposit-wallet setup and optional V2 attribution.
+      # Values are entered only in the Render dashboard and never committed.
+      - key: POLYMARKET_BUILDER_KEY
+        sync: false
+      - key: POLYMARKET_BUILDER_SECRET
+        sync: false
+      - key: POLYMARKET_BUILDER_PASSPHRASE
+        sync: false
+      - key: POLYMARKET_BUILDER_CODE
+        sync: false
+      - key: POLYMARKET_POLYGON_RPC_URL
+        sync: false
       - key: CASH_PUBLIC_ORIGIN
         value: https://www.slimewire.org
       - key: COINBASE_CDP_KEY_ID

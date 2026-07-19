@@ -574,7 +574,7 @@
   .chartSplitMain.chartSplitAdjusted .tapeTable{max-height:none;min-height:58px;flex:1 1 auto}
   @media(max-width:820px){.chartTapeSplit{flex-basis:24px;height:24px}.chartTapeSplit:before{width:72px}.chartTapeSplit span{right:8px;font-size:8px}.chartSplitMain.chartSplitAdjusted .marketTape{padding-bottom:8px}}
 </style>
-<link rel="stylesheet" href="/terminal-pro.css?v=20260718g">
+<link rel="stylesheet" href="/terminal-pro.css?v=20260719a">
 <script defer src="/vendor/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -590,7 +590,6 @@
       <a data-trade-entry>Trade</a>
       <a data-route="portfolio">Portfolio</a>
       <a data-route="copy">Traders</a>
-      <a href="/polymarket">Poly</a>
       <div class="navdrop">
         <button class="dropbtn">Automate ▾</button>
         <div class="dropmenu" id="toolsMenu"></div>
@@ -639,7 +638,6 @@
   <button data-route="trending"><span class="i">📈</span>Market</button>
   <button data-trade-entry><span class="i">⇄</span>Trade</button>
   <button data-route="portfolio"><span class="i">📊</span>Portfolio</button>
-  <a href="/polymarket"><span class="i">◎</span>Poly</a>
   <button data-route="copy"><span class="i">👥</span>Traders</button>
   <button data-tools><span class="i">⚙</span>Automate</button>
 </nav>
@@ -3994,6 +3992,7 @@
         // ---- Robinhood Chain fold: the active wallet's derived EVM address (receive), ETH gas, token
         // holdings, and the one-tap SOL -> Robinhood-ETH funding swap (Relay).
         '<details class="fold" id="rhFold"><summary>🪶 Robinhood Chain<span class="sub">ETH balance · coins · fund with SOL</span><span class="chev">▾</span></summary><div class="foldbody" id="rhFoldBody"><div class="loading"><span class="spin"></span></div></div></details>'+
+        seasonFoldHtml()+
         autoRoundTripFoldHtml()+
         // ---- Power tools fold ----
         '<details class="fold"><summary>🛠️ Power Tools<span class="sub">keys · sweep · multi-wallet</span><span class="chev">▾</span></summary><div class="foldbody">'+
@@ -4094,6 +4093,8 @@
     const ek=$("#expKeys");if(ek)ek.onclick=async()=>{ek.disabled=true;await exportKeys();ek.disabled=false;};
     const rhF=$("#rhFold");if(rhF)rhF.ontoggle=()=>{if(rhF.open)loadRhWalletPanel();};   // lazy: only hit the chain when opened
     const artG=$("#artGo");if(artG)artG.onclick=()=>runAutoRoundTrip();   // auto round-trip now lives in this Wallet fold
+    const seasonG=$("#seasonGo");if(seasonG)seasonG.onclick=()=>runSeason();
+    loadSeasonFoldStatus();
     const ss=$("#swSol");if(ss)ss.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}ss.disabled=true;ss.textContent="Sweeping…";await sweepSol(dest,state.wallets.map(w=>w.index));ss.disabled=false;ss.textContent="Sweep all SOL →";renderWallet();};
     const st=$("#swTok");if(st)st.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}st.disabled=true;st.textContent="Sweeping…";await sweepTokens(dest,state.wallets.map(w=>w.index));st.disabled=false;st.textContent="Sweep all tokens →";};
     const db=$("#distBtn");if(db)db.onclick=async()=>{const c=parseInt($("#dCount").value,10),a=$("#dAmt").value.trim();if(!(c>0)){toast("How many wallets?",true);return;}if(!a||Number(a)<=0){toast("SOL per wallet?",true);return;}db.disabled=true;db.textContent="Funding…";await distributeFresh(c,a,state.activeWallet||1);db.disabled=false;db.textContent="Create + fund fresh wallets";renderWallet();};
@@ -4366,6 +4367,44 @@
   }
   // Auto round-trip UI (Solana) — lives in a Wallet fold now, not the Volume page. Same #art* ids so
   // runAutoRoundTrip/pollAutoRoundTrip work unchanged.
+  let seasonRun=null,seasonPollT=null;
+  function seasonFoldHtml(){
+    const opts=(state.wallets||[]).map(w=>'<option value="'+w.index+'"'+(Number(w.index)===Number(state.activeWallet)?' selected':'')+'>'+esc(w.label||"Wallet")+' Â· â—Ž'+Number(w.sol||0).toFixed(4)+'</option>').join('');
+    return '<details class="fold" id="seasonFold"><summary>ðŸŒ± Season<span class="sub">3-5 fast low-cap round trips</span><span class="chev">â–¾</span></summary><div class="foldbody">'+
+      '<p class="wnote" style="margin:0 0 10px">Season randomly selects 3-5 active Solana coins at or below <b>$2.1K market cap</b>, buys only <b>0.005 SOL</b>, then exits each one back to SOL immediately. Existing safety checks stay on and uncertain transactions are never repeated.</p>'+
+      '<div class="field"><label>Season wallet</label><select id="seasonWallet">'+(opts||'<option value="">No managed wallet available</option>')+'</select></div>'+
+      '<button class="wbtn" id="seasonGo" style="width:100%">Season</button>'+
+      '<div id="seasonStatus" style="margin-top:12px"><p class="wnote">Each exit is targeted inside 30 seconds. Very low-cap coins can still move sharply, so losses are possible.</p></div>'+
+      '</div></details>';
+  }
+  function seasonStatusHtml(run){
+    if(!run)return '<p class="wnote">Ready Â· 3-5 coins Â· 0.005 SOL each Â· immediate exit</p>';
+    const labels={choosing:"Finding a safety-checked coin â‰¤ $2.1K MC",buy_ready:"Preparing buy",buy_submitting:"Buying",buy_outcome_unknown:"Checking buy confirmation",holding:"Exiting to SOL",sell_submitting:"Selling to SOL",sell_outcome_unknown:"Checking sell confirmation",attention:"Paused safely",done:"Complete"};
+    const cur=run.current||{};const logs=(run.log||[]).slice(-6).map(l=>esc(l.message||"")).join('<br>');
+    const trades=(run.trades||[]).slice().reverse().map(t=>'<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--border2)"><b>$'+esc(t.symbol||short(t.tokenMint||""))+'</b><span class="mut">$'+Math.round(Number(t.marketCapUsd||0)).toLocaleString()+' MC Â· '+esc(t.status||"closed")+'</span></div>').join('');
+    return '<div class="wnote" style="font-size:12px"><b>'+esc(labels[run.stage]||(run.status==="completed"?"Complete":"Season"))+'</b> Â· '+Number(run.tradesCompleted||0)+'/'+Number(run.tradesTarget||0)+(cur.symbol?' Â· $'+esc(cur.symbol)+' Â· $'+Math.round(Number(cur.marketCapUsd||0)).toLocaleString()+' MC':'')+(run.lastError?'<br><span style="color:var(--amber)">'+esc(run.lastError)+'</span>':'')+(logs?'<br><br>'+logs:'')+'</div>'+trades;
+  }
+  function scheduleSeasonPoll(){
+    if(seasonPollT){clearTimeout(seasonPollT);seasonPollT=null;}
+    if(!seasonRun||seasonRun.status!=="season"||state.route!=="wallet")return;
+    seasonPollT=setTimeout(()=>loadSeasonFoldStatus(),1500);
+  }
+  async function loadSeasonFoldStatus(){
+    if(!state.token||state.route!=="wallet")return;
+    const q=seasonRun&&seasonRun.id?'?runId='+encodeURIComponent(seasonRun.id):'';
+    const {ok,d}=await api('/api/web/season/status'+q).catch(()=>({}));
+    if(ok&&d&&d.ok){seasonRun=d.run||null;const box=$("#seasonStatus");if(box)box.innerHTML=seasonStatusHtml(seasonRun);const btn=$("#seasonGo");if(btn){btn.disabled=Boolean(seasonRun&&seasonRun.status==="season");btn.textContent=btn.disabled?'Season Running':'Season';}scheduleSeasonPoll();}
+  }
+  async function runSeason(){
+    const walletIndex=Number(($("#seasonWallet")||{}).value||state.activeWallet||1);
+    if(!(await ensureTradeReady()))return;
+    if(!confirm('Start Season with real funds? It will make 3-5 tiny 0.005 SOL low-cap buys and sell each back to SOL immediately. Losses are possible.'))return;
+    const btn=$("#seasonGo");if(btn){btn.disabled=true;btn.textContent="Startingâ€¦";}
+    const {ok,status,d}=await jpost('/api/web/season/start',{walletIndex,tradeAttemptId:attemptId()},180000);
+    if(status===401){toast("Couldn't authorize â€” open Wallet and reconnect.",true);return;}
+    if(ok&&d&&d.ok&&d.run){seasonRun=d.run;toast('Season started Â· '+seasonRun.tradesTarget+' coins');const box=$("#seasonStatus");if(box)box.innerHTML=seasonStatusHtml(seasonRun);scheduleSeasonPoll();}
+    else{if(btn){btn.disabled=false;btn.textContent="Season";}toast((d&&(d.message||d.error))||"Could not start Season",true);}
+  }
   function autoRoundTripFoldHtml(){
     return '<details class="fold"><summary>⚡ Auto round-trip<span class="sub">flip liquid coins + sweep back</span><span class="chev">▾</span></summary><div class="foldbody">'+
       '<p class="wnote" style="margin:0 0 10px">Check the wallets, hit go — it auto-buys a few of the most <b>liquid</b> Solana coins on each and sells right back (tiny random amounts, only fees lost), then sweeps the SOL to your first checked wallet. No CA to pick.</p>'+
@@ -4389,7 +4428,7 @@
   function pollAutoRoundTrip(runId){
     const box=$("#artStatus");if(!box)return;let t=null;
     const tick=async()=>{
-      if(state.route!=="volume"){if(t)clearTimeout(t);return;}
+      if(state.route!=="wallet"){if(t)clearTimeout(t);return;}
       const {ok,d}=await api("/api/web/auto-roundtrip/status?runId="+encodeURIComponent(runId)).catch(()=>({}));
       if(ok&&d&&d.ok){
         box.innerHTML='<div class="wnote" style="font-size:12px"><b>'+esc(d.status||"")+'</b> · '+(d.done||0)+'/'+(d.total||0)+' flips<br>'+((d.log||[]).slice(-8).map(l=>esc(l.m||"")).join('<br>')||'')+'</div>';
@@ -5067,7 +5106,7 @@
   });
 })();
 </script>
-<script src="/terminal-pro.js?v=20260718m"></script>
-<script src="/fun-indicators.js?v=20260718d"></script>
+<script src="/terminal-pro.js?v=20260719a"></script>
+<script src="/fun-indicators.js?v=20260719a"></script>
 </body>
 </html>

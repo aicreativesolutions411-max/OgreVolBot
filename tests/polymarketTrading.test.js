@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   POLYMARKET_CONTRACTS,
   createOrDerivePolymarketApiKey,
+  createPolymarketTradingService,
   normalizePolymarketTradeIntent,
   polymarketCountryCode,
   polymarketRegionAllowed,
@@ -32,9 +33,10 @@ test("Polymarket region helper is strict for known restricted countries", () => 
   assert.equal(polymarketRegionAllowed(""), null);
 });
 
-test("Polymarket trading remains feature-gated until builder configuration is complete", () => {
+test("Polymarket V2 keeps builder attribution optional but gates gasless setup on relayer credentials", () => {
   const off = polymarketTradingConfig({});
-  assert.equal(off.orderConfigured, false);
+  assert.equal(off.orderConfigured, true);
+  assert.equal(off.builderConfigured, false);
   assert.equal(off.relayerConfigured, false);
   const on = polymarketTradingConfig({
     POLYMARKET_BUILDER_CODE: `0x${"ab".repeat(32)}`,
@@ -43,11 +45,22 @@ test("Polymarket trading remains feature-gated until builder configuration is co
     POLYMARKET_BUILDER_PASSPHRASE: "pass"
   });
   assert.equal(on.orderConfigured, true);
+  assert.equal(on.builderConfigured, true);
   assert.equal(on.relayerConfigured, true);
   assert.match(POLYMARKET_CONTRACTS.pUsd, /^0x[0-9a-f]{40}$/i);
   assert.match(POLYMARKET_CONTRACTS.exchange, /^0x[0-9a-f]{40}$/i);
   assert.equal(POLYMARKET_CONTRACTS.collateralAdapter.toLowerCase(), "0xada100db00ca00073811820692005400218fce1f");
   assert.equal(POLYMARKET_CONTRACTS.negRiskCollateralAdapter.toLowerCase(), "0xada2005600dec949baf300f4c6120000bdb6eaab");
+});
+
+test("Polymarket setup reports the missing relayer without exposing configuration details", async () => {
+  const service = createPolymarketTradingService({ env: {} });
+  await assert.rejects(
+    () => service.setupAccount(`0x${"11".repeat(32)}`),
+    (error) => error?.statusCode === 503
+      && error?.code === "POLYMARKET_RELAYER_NOT_CONFIGURED"
+      && /temporarily unavailable.*No funds were moved/i.test(error.message)
+  );
 });
 
 test("Polymarket account restart derives an existing API key before trying to create one", async () => {

@@ -1670,7 +1670,6 @@
       ${global ? toolCard("wallet", "SlimeCash", "Send, receive, and fund", "cash") : ""}
       ${global ? toolCard("kol", "Profile", "Account and social settings", "profile") : ""}
       ${global ? toolCard("pnl", "Traders", "Calls and public proof", "traders") : ""}
-      ${global ? toolCard("pnl", "Poly Hub", "Markets, bets, and PnL", "poly") : ""}
       ${!global ? toolCard("positions", "TP / SL", "Server-side exits", "exits") : ""}
       ${!global ? toolCard("wallet", "Wallet map", "Holders and flows", "map") : ""}
       ${!global ? toolCard("warning", "Safety", "Full contract read", "safety") : ""}

@@ -22,6 +22,7 @@ const ggSource = fs.readFileSync(new URL("../web/public/gg.html", import.meta.ur
 const indexSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
 const polyTradingSource = fs.readFileSync(new URL("../src/lib/polymarketTrading.js", import.meta.url), "utf8");
+const polyHubSource = fs.readFileSync(new URL("../web/public/polymarket.html", import.meta.url), "utf8");
 
 test("main website mirrors stay identical", () => {
   assert.equal(indexSource, ggSource, "index.html and gg.html drifted; shared site fixes must ship together");
@@ -39,6 +40,12 @@ test("SOL-first prediction trades, payouts, and recovery stay durable and idempo
   assert.match(payout, /redeemablePositions/);
   assert.match(polyTradingSource, /negRiskCollateralAdapter: "0xadA2005600Dec949baf300f4C6120000bDB6eAab"/);
   assert.match(polyTradingSource, /executeDepositWalletBatch\(\[call\], depositAddress, deadline\)/);
+  assert.doesNotMatch(functionBody(polyTradingSource, "setupAccount"), /builder code is not configured/);
+  assert.doesNotMatch(functionBody(polyTradingSource, "placeOrder"), /live orders are not configured/);
+  assert.match(polyTradingSource, /config\.builderConfigured \? \{ builderCode: config\.builderCode \} : \{\}/);
+  assert.match(serverSource, /web_poly_account_setup_failed/);
+  assert.match(polyHubSource, /SETUP PENDING/);
+  assert.match(polyHubSource, /setupAvailable/);
   assert.match(serverSource, /crypto\.createHmac\("sha256", CONFIG\.appSecret\)/);
   assert.match(serverSource, /restorePolyRecoveryForUser/);
   assert.match(serverSource, /backupDataToR2\(reason\)/);
@@ -1334,6 +1341,46 @@ test("auto round-trip is gated + bounded + sweeps back (flip bot)", () => {
   for (const src of [ggSource, indexSource]) {
     assert.match(src, /\/api\/web\/auto-roundtrip\/start/);
     assert.match(src, /id="artGo"/);
+  }
+});
+
+test("Season uses durable 3-5 coin low-cap round trips with claim-before-submit recovery", () => {
+  assert.match(serverSource, /pathname === "\/api\/web\/season\/start"/);
+  assert.match(serverSource, /pathname === "\/api\/web\/season\/status"/);
+  assert.match(serverSource, /maxMarketCapUsd: 2_100/);
+  assert.match(serverSource, /minTrades: 3/);
+  assert.match(serverSource, /maxTrades: 5/);
+  assert.match(serverSource, /amountSol: 0\.005/);
+  const start = functionBody(serverSource, "webStartSeason");
+  assert.match(start, /mutateTradePlans/);
+  assert.match(start, /crypto\.randomInt\(SEASON_LIMITS\.minTrades, SEASON_LIMITS\.maxTrades \+ 1\)/);
+  assert.match(start, /requireWebAutomationPermission/);
+  assert.match(start, /activeVolumePlanForUser/);
+  const pick = functionBody(serverSource, "seasonPickCandidate");
+  assert.match(pick, /marketCapUsd > 0 && marketCapUsd <= SEASON_LIMITS\.maxMarketCapUsd/);
+  assert.match(pick, /seasonCandidateSells\(row\) > 0/);
+  assert.match(pick, /autopilotRowHasHardDanger/);
+  assert.match(pick, /filterSniperCandidatesForBuy/);
+  assert.match(pick, /randomizeRows/);
+  const run = functionBody(serverSource, "processSeasonPlan");
+  assert.ok(run.indexOf('plan.seasonStage = "buy_submitting"') < run.indexOf('runIdempotentMoneyOp("season-buy"'));
+  assert.ok(run.indexOf('plan.seasonStage = "sell_submitting"') < run.indexOf('runIdempotentMoneyOp("season-sell"'));
+  assert.match(run, /persistCheckpoint\(\{ seasonActionClaim: true \}\)/);
+  assert.match(run, /buyTokenForPlan/);
+  assert.match(run, /sellTokenFromWallet/);
+  assert.match(run, /tradeSubmissionAmbiguous/);
+  assert.match(run, /latestMarketCap > 0 && latestMarketCap <= SEASON_LIMITS\.maxMarketCapUsd/);
+  assert.match(functionBody(serverSource, "seasonReconcileUnknown"), /getReliableTokenBalanceForMint/);
+  assert.match(functionBody(serverSource, "seasonReconcileUnknown"), /No duplicate order will be sent/);
+  assert.doesNotMatch(serverSource, /const seasonRuns = new Map/);
+  assert.match(functionBody(serverSource, "processTradePlans"), /plan\.status === "season"/);
+  assert.match(appSource, /key: "season", label: "Season"/);
+  assert.match(appSource, /data-season-start/);
+  assert.match(appSource, /\/api\/web\/season\/start/);
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /function seasonFoldHtml/);
+    assert.match(src, /id="seasonGo"/);
+    assert.match(src, /\/api\/web\/season\/start/);
   }
 });
 

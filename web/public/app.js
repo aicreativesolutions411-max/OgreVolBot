@@ -409,6 +409,10 @@ const state = {
   volumeBots: [],
   volumeBotStatus: "",
   volumeBotBusy: false,
+  seasonRun: null,
+  seasonBusy: false,
+  seasonStatus: "",
+  seasonPollTimer: null,
   slimeBotMode: "smart",
   slimeBotAggr: "med",
   slimeBotStagger: "steady",
@@ -2939,6 +2943,11 @@ async function logout() {
   state.positionRefreshAction = { state: "idle", startedAt: 0, minUntil: 0, error: "" };
   state.manualSellActions = {};
   state.tradeActionLocks = {};
+  if (state.seasonPollTimer) clearTimeout(state.seasonPollTimer);
+  state.seasonPollTimer = null;
+  state.seasonRun = null;
+  state.seasonBusy = false;
+  state.seasonStatus = "";
   state.ogreAgentStatus = "";
   ogreAgentClearAutoTradeSession();
   clearStoredToken();
@@ -3005,12 +3014,13 @@ async function loadAll(options = {}) {
   try {
     const forceQuery = options.force ? "?force=true" : "";
     if (options.skipCore) {
-      const [pnl, launchWatches, presets, watchlist, tradePlans] = await Promise.all([
+      const [pnl, launchWatches, presets, watchlist, tradePlans, seasonStatus] = await Promise.all([
         api("/api/web/pnl"),
         api("/api/web/launch/watches"),
         api("/api/web/presets"),
         api("/api/web/watchlist"),
-        api("/api/web/trade/plans")
+        api("/api/web/trade/plans"),
+        api("/api/web/season/status").catch(() => ({ run: state.seasonRun || null }))
       ]);
       state.pnl = pnl.pnl || null;
       state.launchWatches = launchWatches.watches || [];
@@ -3018,10 +3028,12 @@ async function loadAll(options = {}) {
       ensureSelectedPresetsStillExist();
       state.watchlist = watchlist.watchlist || { rows: [], count: 0 };
       state.tradePlans = tradePlans.plans || [];
+      state.seasonRun = seasonStatus.run || null;
+      scheduleSeasonStatusPoll();
       ensureAutoExitWatchForActivePlans();
       return;
     }
-    const [wallets, balances, positions, pnl, launchWatches, presets, watchlist, tradePlans] = await Promise.all([
+    const [wallets, balances, positions, pnl, launchWatches, presets, watchlist, tradePlans, seasonStatus] = await Promise.all([
       api("/api/web/wallets"),
       api(`/api/web/balances${forceQuery}`),
       api(`/api/web/positions${forceQuery}`),
@@ -3029,7 +3041,8 @@ async function loadAll(options = {}) {
       api("/api/web/launch/watches"),
       api("/api/web/presets"),
       api("/api/web/watchlist"),
-      api("/api/web/trade/plans")
+      api("/api/web/trade/plans"),
+      api("/api/web/season/status").catch(() => ({ run: state.seasonRun || null }))
     ]);
     state.wallets = wallets.wallets || [];
     state.balances = balances.balances || [];
@@ -3041,6 +3054,8 @@ async function loadAll(options = {}) {
     ensureSelectedPresetsStillExist();
     state.watchlist = watchlist.watchlist || { rows: [], count: 0 };
     state.tradePlans = tradePlans.plans || [];
+    state.seasonRun = seasonStatus.run || null;
+    scheduleSeasonStatusPoll();
     ensureAutoExitWatchForActivePlans();
     if (options.force) {
       state.lastWalletRefreshAt = new Date().toISOString();
@@ -3070,6 +3085,7 @@ async function loadWalletCore(options = {}) {
   const walletsPromise = api("/api/web/wallets", { timeoutMs });
   const balancesPromise = api(`/api/web/balances${forceQuery}`, { timeoutMs });
   const tradePlansPromise = api("/api/web/trade/plans", { timeoutMs });
+  const seasonStatusPromise = api("/api/web/season/status", { timeoutMs });
   const balances = await balancesPromise;
   if (isStaleWalletRefresh()) return;
   state.balances = balances.balances || [];
@@ -3083,9 +3099,10 @@ async function loadWalletCore(options = {}) {
     details: `wallets=${state.wallets.length};connected=${Boolean(state.connectedWalletBalance)}`
   });
   if (options.progress !== false) render({ preserveSmartChartFrame: Boolean(options.preserveSmartChartFrame) });
-  const [walletsResult, tradePlansResult] = await Promise.all([
+  const [walletsResult, tradePlansResult, seasonStatusResult] = await Promise.all([
     walletsPromise.then((wallets) => ({ ok: true, wallets })).catch((error) => ({ ok: false, error })),
-    tradePlansPromise.then((tradePlans) => ({ ok: true, tradePlans })).catch((error) => ({ ok: false, error }))
+    tradePlansPromise.then((tradePlans) => ({ ok: true, tradePlans })).catch((error) => ({ ok: false, error })),
+    seasonStatusPromise.then((seasonStatus) => ({ ok: true, seasonStatus })).catch((error) => ({ ok: false, error }))
   ]);
   if (isStaleWalletRefresh()) return;
   if (walletsResult.ok) state.wallets = walletsResult.wallets.wallets || state.wallets || [];
@@ -3093,7 +3110,11 @@ async function loadWalletCore(options = {}) {
     state.tradePlans = tradePlansResult.tradePlans.plans || state.tradePlans || [];
     ensureAutoExitWatchForActivePlans();
   }
-  if (options.progress !== false && (walletsResult.ok || tradePlansResult.ok)) {
+  if (seasonStatusResult.ok) {
+    state.seasonRun = seasonStatusResult.seasonStatus.run || null;
+    scheduleSeasonStatusPoll();
+  }
+  if (options.progress !== false && (walletsResult.ok || tradePlansResult.ok || seasonStatusResult.ok)) {
     render({ preserveSmartChartFrame: Boolean(options.preserveSmartChartFrame) });
   }
   if (options.deep) {
@@ -16536,6 +16557,7 @@ function walletsHtml() {
   `;
   const sections = [
     { key: "balances", label: "Balances", hint: "Wallets & SOL", html: balancesPanel },
+    { key: "season", label: "Season", hint: "Fast low-cap flips", html: seasonWalletSectionHtml() },
     { key: "fund", label: "Fund / Sweep", hint: "Move SOL", html: `${returnFundsHtml()}${backgroundWalletsCtaHtml()}${distributeWalletsHtml()}${walletSweepToolsHtml()}` },
     { key: "create", label: "Create", hint: "New wallets", html: createWalletSection() },
     { key: "import", label: "Import", hint: "Add keys", html: importWalletSection() },
@@ -16543,7 +16565,7 @@ function walletsHtml() {
     { key: "downloads", label: "Downloads", hint: "Exports", html: downloadsHtml() }
   ];
   if (!state.wallets.length) {
-    const setupSections = sections.filter((section) => section.key !== "balances" && section.key !== "fund");
+    const setupSections = sections.filter((section) => !["balances", "season", "fund"].includes(section.key));
     return `
       ${connected}
       ${emptyState("No managed bot wallets yet", "Connect a browser wallet for portfolio view, or use Create / Import below to set up managed trading wallets.")}
@@ -16554,6 +16576,127 @@ function walletsHtml() {
     ${connected}
     ${toolPanelsHtml({ toolKey: "wallets", activeKey: activeToolSection("wallets", "balances"), sections })}
   `;
+}
+
+function seasonStageText(run = {}) {
+  const labels = {
+    choosing: "Finding an active coin at or below $2.1K market cap",
+    buy_ready: "Preparing buy",
+    buy_submitting: "Buying",
+    buy_outcome_unknown: "Checking buy confirmation",
+    holding: "Exiting to SOL",
+    sell_submitting: "Selling to SOL",
+    sell_outcome_unknown: "Checking sell confirmation",
+    attention: "Paused safely",
+    done: "Complete"
+  };
+  return labels[run.stage] || (run.status === "completed" ? "Complete" : "Ready");
+}
+
+function seasonWalletSectionHtml() {
+  const run = state.seasonRun;
+  const active = run?.status === "season";
+  const progress = run ? `${Number(run.tradesCompleted || 0)} / ${Number(run.tradesTarget || 0)}` : "0 / 3-5";
+  const history = Array.isArray(run?.trades) ? run.trades.slice().reverse() : [];
+  return `
+    <section class="account-check-card season-card">
+      <div>
+        <h3>Season</h3>
+        <p>Randomly selects 3-5 active Solana coins at or below $2.1K market cap, makes a tiny 0.005 SOL buy, then exits each one back to SOL immediately.</p>
+      </div>
+      <label>Season wallet
+        <select data-season-wallet ${active ? "disabled" : ""}>${seasonWalletOptionsHtml(run?.walletIndex || "")}</select>
+      </label>
+      <button class="primary" type="button" data-season-start ${state.seasonBusy || active ? "disabled" : ""}>${state.seasonBusy ? "Starting..." : active ? "Season Running" : "Season"}</button>
+      <small>${escapeHtml(state.seasonStatus || "Uses the existing safety checks and never repeats an uncertain transaction.")}</small>
+    </section>
+    <div class="table-list">
+      <article class="row-card">
+        <div>
+          <strong>${escapeHtml(seasonStageText(run || {}))}</strong>
+          <p>Progress ${escapeHtml(progress)}${run?.current?.symbol ? ` Â· $${escapeHtml(run.current.symbol)} Â· ${escapeHtml(formatOgreUsd(run.current.marketCapUsd, 0))} MC` : ""}</p>
+          ${run?.lastError ? `<small>${escapeHtml(run.lastError)}</small>` : `<small>Each exit is targeted inside 30 seconds. Very low-cap coins can still move sharply, so losses are possible.</small>`}
+        </div>
+      </article>
+      ${history.map((trade) => `
+        <article class="row-card">
+          <div><strong>$${escapeHtml(trade.symbol || shortAddress(trade.tokenMint || ""))}</strong><p>${escapeHtml(formatOgreUsd(trade.marketCapUsd, 0))} MC Â· ${escapeHtml(trade.status || "closed")}</p></div>
+          <button data-copy="${escapeHtml(trade.tokenMint || "")}">Copy CA</button>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function seasonWalletOptionsHtml(selectedIndex = "") {
+  const rows = displayWallets();
+  if (!rows.length) return `<option value="">No managed wallet available</option>`;
+  return rows.map((wallet) => {
+    const balance = state.balances.find((row) => Number(row.index) === Number(wallet.index));
+    const sol = balance?.sol !== null && balance?.sol !== undefined ? `${Number(balance.sol).toFixed(4)} SOL` : "balance loading";
+    return `<option value="${wallet.index}" ${String(wallet.index) === String(selectedIndex || "") ? "selected" : ""}>${wallet.index}. ${escapeHtml(wallet.label)} - ${escapeHtml(sol)}</option>`;
+  }).join("");
+}
+
+function scheduleSeasonStatusPoll() {
+  if (state.seasonPollTimer) clearTimeout(state.seasonPollTimer);
+  state.seasonPollTimer = null;
+  if (state.seasonRun?.status !== "season") return;
+  state.seasonPollTimer = setTimeout(() => {
+    state.seasonPollTimer = null;
+    void loadSeasonStatus({ render: true });
+  }, 1_500);
+}
+
+async function loadSeasonStatus(options = {}) {
+  if (!state.user || !state.token) return null;
+  const runId = state.seasonRun?.id || "";
+  try {
+    const data = await api(`/api/web/season/status${runId ? `?runId=${encodeURIComponent(runId)}` : ""}`);
+    state.seasonRun = data.run || null;
+    if (state.seasonRun?.status === "completed") state.seasonStatus = "Season finished and the wallet is back in SOL.";
+    else if (state.seasonRun?.stage === "attention") state.seasonStatus = state.seasonRun.lastError || "Season paused safely.";
+    else if (state.seasonRun?.status === "season") state.seasonStatus = seasonStageText(state.seasonRun);
+    if (options.render !== false) render({ force: true });
+    scheduleSeasonStatusPoll();
+    return state.seasonRun;
+  } catch (error) {
+    state.seasonStatus = error.message || "Could not refresh Season status.";
+    if (options.render !== false) render({ force: true });
+    scheduleSeasonStatusPoll();
+    return null;
+  }
+}
+
+async function startSeason() {
+  if (state.seasonBusy || state.seasonRun?.status === "season") return;
+  const walletIndex = String(document.querySelector("[data-season-wallet]")?.value || "");
+  if (!walletIndex || isConnectedTradeWallet(walletIndex)) {
+    setError("Choose a managed or funded Session Wallet for Season.");
+    return;
+  }
+  const confirmed = window.confirm("Start Season with real funds? It will make 3-5 tiny 0.005 SOL low-cap buys and sell each back to SOL immediately. Losses are possible.");
+  if (!confirmed) return;
+  state.seasonBusy = true;
+  state.seasonStatus = "Starting Season...";
+  render({ force: true });
+  try {
+    const data = await api("/api/web/season/start", {
+      method: "POST",
+      body: JSON.stringify({ walletIndex, tradeAttemptId: createClientAttemptId("season") }),
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS,
+      dedupe: false
+    });
+    state.seasonRun = data.run || null;
+    state.seasonStatus = seasonStageText(state.seasonRun || {});
+    scheduleSeasonStatusPoll();
+  } catch (error) {
+    state.seasonStatus = error.message || "Season could not start.";
+    setError(state.seasonStatus);
+  } finally {
+    state.seasonBusy = false;
+    render({ force: true });
+  }
 }
 
 function fundedSessionWalletForUi() {
@@ -25485,6 +25628,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-nft-campaign-claim]")) { event.preventDefault(); void claimNftRewardCampaign(target); return; }
   if (target.matches("[data-launch-kit-close]")) { state.launchShareKit = null; render(); return; }
   if (target.matches("[data-create-wallets]")) await createWalletSet();
+  if (target.matches("[data-season-start]")) { await startSeason(); return; }
   if (target.matches("[data-distribute-fresh]")) { await distributeFreshWallets(); return; }
   if (target.matches("[data-return-funds]")) { await returnFundsToConnected(); return; }
   if (target.matches("[data-sweep-background-wallets]")) { await sweepBackgroundWallets(); return; }
