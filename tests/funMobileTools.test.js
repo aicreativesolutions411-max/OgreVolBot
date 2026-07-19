@@ -77,7 +77,14 @@ test("owner analytics is one-time gated, excludes passive group members, and exp
   const snapshot = serverSource.slice(snapshotStart, snapshotEnd);
   assert.doesNotMatch(snapshot, /readGroupMentions|rememberGroupMentionMember/);
   assert.match(snapshot, /directTelegramUsers/);
-  assert.match(serverSource, /name: "Needs profile"/);
+  assert.doesNotMatch(serverSource, /name: "Needs profile"/);
+  assert.match(serverSource, /const namedResultRows = resultRows\.filter\(\(row\) => row\.hasRealName\)/);
+  assert.match(serverSource, /users: namedResultRows\.slice/);
+  assert.match(serverSource, /OWNER_ANALYTICS_ORIGIN = "https:\/\/app\.slimewire\.org"/);
+  assert.match(serverSource, /const dashboardUrl = ownerAnalyticsDashboardUrl\(ticket\)/);
+  assert.match(serverSource, /requestHost && requestHost !== new URL\(OWNER_ANALYTICS_ORIGIN\)\.hostname/);
+  assert.match(ownerAnalyticsHtml, /state\.users=\(data\.users\|\|\[\]\)\.filter\(r=>r&&r\.hasRealName&&r\.name\)/);
+  assert.match(ownerAnalyticsHtml, /Reopen this private dashboard from the latest \/adminstats message/);
   assert.doesNotMatch(ownerAnalyticsHtml, /privateKey|localStorage/i);
   assert.match(ownerAnalyticsHtml, /Direct bot users/);
   assert.match(ownerAnalyticsHtml, /Referral leaders/);
