@@ -56,6 +56,9 @@
     presets: { trade: [], bundle: [] },
     activePresetId: localStorage.getItem(ACTIVE_PRESET_KEY) || "",
     volumePoll: null,
+    seasonPoll: null,
+    seasonRun: null,
+    seasonBusy: false,
     recents: readLocal(RECENTS_KEY, []),
     feedCache: new Map(),
     feedRequestVersion: 0,
@@ -1375,7 +1378,85 @@
   }
 
   function openSheet(html) { $("[data-sheet-content]").innerHTML = html; $("[data-sheet-overlay]").hidden = false; }
-  function closeSheet() { clearTimeout(state.volumePoll); state.volumePoll = null; $("[data-sheet-overlay]").hidden = true; $("[data-sheet-content]").innerHTML = ""; }
+  function closeSheet() { clearTimeout(state.volumePoll); state.volumePoll = null; clearTimeout(state.seasonPoll); state.seasonPoll = null; $("[data-sheet-overlay]").hidden = true; $("[data-sheet-content]").innerHTML = ""; }
+
+  function funSeasonStage(run = {}) {
+    const labels = {
+      choosing: "Finding a live coin under $2.1K market cap",
+      buy_ready: "Preparing the next buy",
+      buy_submitting: "Buying",
+      buy_outcome_unknown: "Checking the buy confirmation",
+      holding: "Exiting back to SOL",
+      sell_submitting: "Selling back to SOL",
+      sell_outcome_unknown: "Checking the sell confirmation",
+      attention: "Paused safely",
+      done: "Complete"
+    };
+    return labels[run.stage] || (run.status === "completed" ? "Complete" : "Ready to start");
+  }
+
+  function funSeasonWalletOptions(selectedIndex = "") {
+    return state.wallets.map((wallet) => `<option value="${wallet.index}" ${String(wallet.index) === String(selectedIndex || state.activeWallet || "") ? "selected" : ""}>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)} · ${Math.max(0, Number(wallet.sol) || 0).toFixed(4)} SOL</option>`).join("");
+  }
+
+  function renderSeasonSheet() {
+    const run = state.seasonRun;
+    const active = run?.status === "season";
+    const progress = run ? `${Number(run.tradesCompleted || 0)} / ${Number(run.tradesTarget || 0)}` : "0 / 3-5";
+    const trades = Array.isArray(run?.trades) ? run.trades.slice().reverse() : [];
+    openSheet(`<div data-season-panel><div class="sheet-title"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><div><h2>Season</h2><p>Fast low-cap round trips from one SOL wallet</p></div></div><div class="read-card"><h3>${escapeHtml(funSeasonStage(run || {}))}</h3><p>Progress ${escapeHtml(progress)}${run?.current?.symbol ? ` · $${escapeHtml(run.current.symbol)} · $${Math.round(Number(run.current.marketCapUsd) || 0).toLocaleString()} MC` : ""}</p></div><div class="field"><label>Season wallet</label><select data-season-wallet ${active ? "disabled" : ""}>${funSeasonWalletOptions(run?.walletIndex || "")}</select></div><button class="submit-trade" type="button" data-season-start ${state.seasonBusy || active ? "disabled" : ""}>${state.seasonBusy ? "Starting…" : active ? "Season running" : "Start Season"}</button><p class="fineprint">Season randomly runs 3-5 tiny 0.005 SOL buys on active Solana coins at or below $2.1K market cap and targets each exit back to SOL within 30 seconds. Low-cap coins can move sharply and losses are possible.</p>${run?.lastError ? `<div class="read-card"><h3>Needs attention</h3><p>${escapeHtml(run.lastError)}</p></div>` : ""}${trades.length ? `<div class="wallet-manager-list">${trades.map((trade) => `<div class="wallet-manage-row"><span><b>$${escapeHtml(trade.symbol || short(trade.tokenMint || "Coin"))}</b><span>$${Math.round(Number(trade.marketCapUsd) || 0).toLocaleString()} MC</span></span><b>${escapeHtml(trade.status || "closed")}</b></div>`).join("")}</div>` : ""}</div>`);
+  }
+
+  function scheduleFunSeasonPoll() {
+    clearTimeout(state.seasonPoll);
+    state.seasonPoll = null;
+    if (state.seasonRun?.status !== "season" || !$('[data-season-panel]')) return;
+    state.seasonPoll = setTimeout(() => { state.seasonPoll = null; void refreshFunSeason(); }, 1_500);
+  }
+
+  async function refreshFunSeason() {
+    const panel = $('[data-season-panel]');
+    if (!state.token || !panel) return;
+    const runId = state.seasonRun?.id || "";
+    const result = await request(`/api/web/season/status${runId ? `?runId=${encodeURIComponent(runId)}` : ""}`);
+    if (!panel.isConnected) return;
+    if (result.ok && result.data?.ok) {
+      state.seasonRun = result.data.run || null;
+      renderSeasonSheet();
+    } else if (result.status !== 0) toast(apiMessage(result.data, "Could not refresh Season."), true);
+    scheduleFunSeasonPoll();
+  }
+
+  async function openFunSeason() {
+    if (!(await ensureAccount())) { toast("Could not open your wallet account.", true); return; }
+    await loadWallets(true);
+    if (!state.wallets.length) { await openWalletManager(); toast("Create or restore a wallet before starting Season.", true); return; }
+    state.seasonRun = null;
+    renderSeasonSheet();
+    await refreshFunSeason();
+  }
+
+  async function startFunSeason(button) {
+    if (state.seasonBusy || state.seasonRun?.status === "season") return;
+    const walletIndex = String($('[data-season-wallet]')?.value || "");
+    if (!walletIndex) { toast("Choose a Season wallet.", true); return; }
+    if (!window.confirm("Start Season with real funds? It will make 3-5 tiny low-cap buys and sell each back to SOL. Losses are possible.")) return;
+    state.seasonBusy = true;
+    button.disabled = true;
+    button.textContent = "Starting…";
+    await ensureAutomation();
+    const result = await post("/api/web/season/start", { walletIndex, tradeAttemptId: attemptId("fun-season") }, { timeout: 75_000, noRetry: true });
+    state.seasonBusy = false;
+    if (!result.ok || !result.data?.ok) {
+      toast(apiMessage(result.data, "Season could not start."), true);
+      if (button.isConnected) renderSeasonSheet();
+      return;
+    }
+    state.seasonRun = result.data.run || null;
+    toast("Season started");
+    if (button.isConnected) renderSeasonSheet();
+    scheduleFunSeasonPoll();
+  }
   const WalletFunding = window.SlimeWireFunding;
   function fundingProvider(kind) { return WalletFunding?.provider(kind) || null; }
   function fundingProviderLabel(kind) { return WalletFunding?.label(kind, fundingProvider(kind)) || "Solana wallet"; }
@@ -2460,6 +2541,8 @@
     if (event.target.closest("[data-close-sheet]")) { closeSheet(); return; }
     if (event.target.closest("[data-wallet-entry]")) { if (state.token) await loadWallets(true); openFundingSheet(); return; }
     if (event.target.closest("[data-deposit]")) { if (state.token) await loadWallets(true); openFundingSheet(); return; }
+    if (event.target.closest("[data-season-open]")) { await openFunSeason(); return; }
+    const seasonStart = event.target.closest("[data-season-start]"); if (seasonStart) { await startFunSeason(seasonStart); return; }
     const backupWallet = event.target.closest("[data-backup-wallet]"); if (backupWallet) { await exportWallets(backupWallet, { recoveryOnly: true, walletPublicKey: backupWallet.dataset.walletKey || activeWallet()?.publicKey || "", walletIndex: backupWallet.dataset.walletIndex || activeWallet()?.index || "" }); return; }
     if (event.target.closest("[data-send-sol]")) { await openSendSolSheet(); return; }
     if (event.target.closest("[data-send-sol-all]")) { selectFunSendAll(); return; }

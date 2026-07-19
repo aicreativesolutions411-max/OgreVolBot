@@ -22,6 +22,15 @@ test("Fun mobile automation tools stay embedded in the Fun shell", () => {
   assert.match(ggSource, /embed==="fun-tool"/);
 });
 
+test("Fun mobile wallet exposes the durable Season flow", () => {
+  assert.match(funHtml, /data-season-open>Season/);
+  assert.match(funSource, /async function openFunSeason\(\)/);
+  assert.match(funSource, /data-season-start/);
+  assert.match(funSource, /\/api\/web\/season\/start/);
+  assert.match(funSource, /\/api\/web\/season\/status/);
+  assert.match(funSource, /tradeAttemptId: attemptId\("fun-season"\)/);
+});
+
 test("the launcher visible inside Fun exposes linked NFT collection settings", () => {
   assert.equal(indexSource, ggSource, "classic launcher mirrors must remain identical");
   for (const id of ["lcNftEnabled", "lcNftName", "lcNftDescription", "lcNftSupplyMode", "lcNftSupplyCap", "lcNftRoyalty"]) {
