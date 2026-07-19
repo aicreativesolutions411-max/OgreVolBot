@@ -336,6 +336,7 @@ function render(map){
       mk(l3,-11,9.5,d.color,700); mk(l1,3,12,'#eafff0',800); mk(l2,17,10.5,d.color,700);
     });
     sim.alpha(.35).restart();
+    flowSummary=gr.summary||null; flowEventsData=Array.isArray(gr.flowEvents)?gr.flowEvents:[];
     renderClusterLegend(clusters,gr.clusterEdges||[]);
     const total=(gr.summary&&Number.isFinite(+gr.summary.clusteredPct))?+gr.summary.clusteredPct:Math.round(clusters.reduce((s,c)=>s+(+c.pct||0),0)*10)/10;
     const xc=document.getElementById('xrayCl'); if(xc)xc.innerHTML='<b style="color:#ffcf4d">'+clusters.length+'</b> · '+total+'%';
@@ -348,10 +349,15 @@ function render(map){
   }
 }
 // Cluster legend in the side panel — color swatch · combined % · wallet count. CLICK a row → dive-deeper modal.
-let clustersData=null,clusterEdgesData=[];
+let clustersData=null,clusterEdgesData=[],flowSummary=null,flowEventsData=[],flowOpen=false,flowShowAll=false;
 // Loading vs unloading badge: net recent token flow across a cluster's wallets. 🟢 = accumulating (buying/
 // getting ready), 🔴 = distributing (farming/selling off), 🟡 = mixed. Blank when there's no recent flow.
 function flowBadge(c){var d=c&&c.flow&&c.flow.dir;if(d==='loading')return ' <span style="color:#37d67a;font-weight:700;font-size:11px">🟢 LOADING</span>';if(d==='unloading')return ' <span style="color:#ff5a5a;font-weight:700;font-size:11px">🔴 UNLOADING</span>';if(d==='mixed')return ' <span style="color:#e0b23c;font-size:11px">🟡 mixed</span>';return '';}
+function timeAgo(ts){if(!ts)return '';var s=Math.max(0,(Date.now()-ts)/1000);if(s<60)return Math.round(s)+'s ago';if(s<3600)return Math.round(s/60)+'m ago';if(s<86400)return Math.round(s/3600)+'h ago';return Math.round(s/86400)+'d ago';}
+// Trader verdict banner — one-line read on whether the connected wallets are accumulating or distributing.
+function verdictHtml(){var v=flowSummary&&flowSummary.flowVerdict;if(!v)return '';var col=/ACCUMULAT|accumulat/.test(v)?'#37d67a':(/DISTRIBUT|distribut|caution/.test(v)?'#ff5a5a':'#e0b23c');return '<div style="margin:2px 0 8px;padding:8px 10px;border:1px solid '+col+'55;border-radius:8px;background:'+col+'14;color:'+col+';font-size:12px;font-weight:700;line-height:1.35">📊 '+v+'</div>';}
+// Collapsible flow-activity feed — a button that reveals the most recent load/unload moves (last 5, show more).
+function flowSectionHtml(){var ev=flowEventsData||[];var btn='<button onclick="flowOpen=!flowOpen;renderClusterLegend(clustersData,clusterEdgesData)" style="width:100%;margin-top:9px;padding:9px;border:1px solid var(--line2);border-radius:9px;background:#0c150d;color:var(--slime);font-weight:700;cursor:pointer;font-size:12px">📊 '+(flowOpen?'Hide':'Show')+' load / unload activity'+(ev.length?' ('+ev.length+')':'')+'</button>';if(!flowOpen)return btn;if(!ev.length)return btn+'<div style="padding:8px 2px;color:var(--dim);font-size:12px">No recent load/unload moves among tracked holders.</div>';var shown=flowShowAll?ev.slice(0,40):ev.slice(0,5);var rows=shown.map(function(e){var load=e.dir==='load';var cl=(e.clusterId!=null)?('Cluster '+String.fromCharCode(65+e.clusterId)):'a top holder';return '<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 2px;border-bottom:1px solid #10251580;font-size:12px"><span><b style="color:'+(load?'#37d67a':'#ff5a5a')+'">'+(load?'🟢 loaded':'🔴 unloaded')+'</b> '+fmt(e.amount)+'</span><span style="color:var(--dim);text-align:right;white-space:nowrap">'+cl+(e.ts?' · '+timeAgo(e.ts):'')+'</span></div>';}).join('');var more=ev.length>5?'<button onclick="flowShowAll=!flowShowAll;renderClusterLegend(clustersData,clusterEdgesData)" style="width:100%;margin-top:6px;padding:7px;border:1px dashed var(--line2);border-radius:8px;background:transparent;color:var(--slime);cursor:pointer;font-size:11px">'+(flowShowAll?'Show less':'Show more ('+(ev.length-5)+')')+'</button>':'';return btn+'<div style="margin-top:6px">'+rows+more+'</div>';}
 function renderClusterLegend(cl,edges){
   clustersData=cl; clusterEdgesData=edges||[];
   const side=document.getElementById('side'); if(!side)return;
@@ -359,11 +365,11 @@ function renderClusterLegend(cl,edges){
   const linkN=clusterEdgesData.length;
   const loadN=cl.filter(c=>c.flow&&c.flow.dir==='loading').length,unloadN=cl.filter(c=>c.flow&&c.flow.dir==='unloading').length;
   const flowHdr=(loadN||unloadN)?' · <span style="color:#37d67a">🟢'+loadN+'</span> <span style="color:#ff5a5a">🔴'+unloadN+'</span>':'';
-  el.innerHTML='<h3>🕸️ Clusters ('+cl.length+')'+(linkN?' · '+linkN+' linked':'')+flowHdr+' · tap to dive</h3>'+cl.map((c,k)=>{
+  el.innerHTML='<h3>🕸️ Clusters ('+cl.length+')'+(linkN?' · '+linkN+' linked':'')+flowHdr+' · tap to dive</h3>'+verdictHtml()+cl.map((c,k)=>{
     const outN=clusterEdgesData.filter(e=>e.from===c.id).length;
     const token=+c.tokenLinkCount||0,direct=+c.directLinkCount||0,shared=+c.sharedLinkCount||0,rel=token?(token+' token-transfer link'+(token===1?'':'s')):direct?(direct+' direct link'+(direct===1?'':'s')):(shared+' shared-funder link'+(shared===1?'':'s'));
     return '<div class="krow" data-k="'+k+'"><span style="width:14px;height:14px;border-radius:4px;flex:0 0 14px;background:'+c.color+';box-shadow:0 0 8px '+c.color+'"></span><div><div class="nm">Cluster '+c.letter+' · '+c.members.length+' wallets'+(outN?' <span style="color:'+c.color+';font-size:11px">→'+outN+'</span>':'')+flowBadge(c)+'</div><div class="sub">COMBINED '+(+c.pct).toFixed(1)+'% · $'+fmt(c.usd)+' · '+rel+' →</div></div></div>';
-  }).join('');
+  }).join('')+flowSectionHtml();
   [...el.querySelectorAll('.krow')].forEach(r=>r.onclick=()=>openCluster(clustersData[+r.dataset.k]));
 }
 function renderClusterEmpty(){
