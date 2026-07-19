@@ -1670,6 +1670,7 @@
       ${global ? toolCard("wallet", "SlimeCash", "Send, receive, and fund", "cash") : ""}
       ${global ? toolCard("kol", "Profile", "Account and social settings", "profile") : ""}
       ${global ? toolCard("pnl", "Traders", "Calls and public proof", "traders") : ""}
+      ${global ? toolCard("pnl", "Poly Hub", "Markets, bets, and PnL", "poly") : ""}
       ${!global ? toolCard("positions", "TP / SL", "Server-side exits", "exits") : ""}
       ${!global ? toolCard("wallet", "Wallet map", "Holders and flows", "map") : ""}
       ${!global ? toolCard("warning", "Safety", "Full contract read", "safety") : ""}
@@ -2304,6 +2305,7 @@
     if (action === "swap") { if (key) openTradeSheet("buy"); else { closeSheet(); openSearch(); } return; }
     if (action === "bundle") { openBundleSheet(); return; }
     if (action === "cash") { location.assign("/cash/?from=fun"); return; }
+    if (action === "poly") { location.assign("/polymarket"); return; }
     if (action === "profile") { closeSheet(); state.profileTab = "social"; $$('[data-profile]').forEach((button) => button.classList.toggle("active", button.dataset.profile === "social")); setView("wallet"); loadWalletView(); return; }
     if (action === "traders") { closeSheet(); setView("leaders"); return; }
     if (action === "portfolio") { closeSheet(); state.profileTab = "positions"; setView("wallet"); return; }
