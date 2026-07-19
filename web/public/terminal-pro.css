@@ -42,7 +42,8 @@
 .trade.proWide{grid-template-columns:minmax(0,1fr)}
 .trade.proWide>.tradeSide{display:none}
 .trade.proFullscreen,.trade:fullscreen{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:150!important;grid-template-columns:minmax(0,1fr)!important;background:#030603!important}
-.trade.proFullscreen>.tradeSide,.trade:fullscreen>.tradeSide,.trade.proFullscreen .thead,.trade:fullscreen .thead,.trade.proFullscreen .tstrip,.trade:fullscreen .tstrip,.trade.proFullscreen .chartTapeSplit,.trade:fullscreen .chartTapeSplit,.trade.proFullscreen .marketTape,.trade:fullscreen .marketTape{display:none!important}
+.trade.proFullscreen>.tradeSide,.trade:fullscreen>.tradeSide,.trade.proFullscreen .tstrip,.trade:fullscreen .tstrip,.trade.proFullscreen .chartTapeSplit,.trade:fullscreen .chartTapeSplit,.trade.proFullscreen .marketTape,.trade:fullscreen .marketTape{display:none!important}
+.trade.proFullscreen .thead,.trade:fullscreen .thead{display:flex!important;background:rgba(4,8,5,.96)}
 .trade.proFullscreen .tradeMain,.trade:fullscreen .tradeMain{border:0!important}
 .trade.proFullscreen .chartwrap,.trade:fullscreen .chartwrap{height:auto!important;flex:1 1 auto!important}
 .trade.proFullscreen .chartProBar,.trade:fullscreen .chartProBar{min-height:46px;padding:8px 12px}

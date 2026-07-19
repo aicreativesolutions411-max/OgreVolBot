@@ -36,6 +36,7 @@ test("professional chart controls expose every requested candle interval", () =>
   }
   assert.match(pro, /requestFullscreen/);
   assert.match(css, /\.trade\.proFullscreen/);
+  assert.match(css, /\.trade\.proFullscreen \.thead,\.trade:fullscreen \.thead\{display:flex!important/);
   assert.match(css, /\.trade\.proWide/);
   assert.match(pro, /data-pro-slime-mode/);
   assert.match(pro, /function setChartMode/);
@@ -74,6 +75,9 @@ test("compact quick panel reuses the existing guarded execution buttons", () => 
   assert.match(pro, /data-pro-tool="volume"/);
   assert.match(pro, /Server-side exits/);
   assert.match(pro, /\["0\.1", "0\.5", "1", "2"\]/);
+  assert.match(pro, /let values = \["0\.1", "0\.5", "1"\]/);
+  assert.match(gg, /const buys=\["0\.1","0\.5","1","2"\]/);
+  assert.match(gg, /const buyPresets=\["0\.1","0\.5","1","2"\]/);
   assert.match(pro, /function refreshTradeContext/);
 });
 
@@ -92,6 +96,7 @@ test("coin chart headers hydrate artwork and published socials on both chains", 
   assert.match(gg, /\/api\/web\/rh\/token\?address=/);
   assert.match(gg, /function rhTradeLinksHtml/);
   assert.match(gg, /soc\.innerHTML=rhTradeLinksHtml\(r,address\)/);
+  assert.match(css, /proFullscreen \.thead/);
   assert.match(server, /websiteUrl: chart\?\.websiteUrl/);
   assert.match(server, /twitterUrl: chart\?\.twitterUrl/);
   assert.match(server, /telegramUrl: chart\?\.telegramUrl/);
@@ -135,6 +140,16 @@ test("Robinhood chart and transactions fall back to exact on-chain pool swaps", 
   assert.match(server, /source = "robinhood rpc swaps"/);
   assert.match(server, /pathname === "\/api\/web\/token-trades"/);
   assert.match(gg, /token-trades\?pool=.*&ca=/);
+  assert.match(gg, /data-rh-ct="tx"/);
+  assert.match(gg, /function wireRhTradeTabs/);
+  assert.match(gg, /function loadRhTxPane/);
+  assert.match(gg, /function mergeTradeHistory/);
+  assert.match(gg, /slice\(0,250\)/);
+  assert.match(gg, /Transaction History/);
+  assert.match(gg, /Incoming trades append while this tab is open/);
+  assert.match(gg, /toolbar\.style\.display=which==="chart"\?"":"none"/);
+  assert.match(gg, /indicators\.style\.display=which==="chart"\?"":"none"/);
+  assert.match(gg, /tradeHistoryOpen/);
 });
 
 test("Telegram Slime Chart links land on the exact terminal coin route", () => {

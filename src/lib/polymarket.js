@@ -125,12 +125,31 @@ export function createPolymarketClient({ fetchImpl = fetch, cacheTtlMs = 15_000,
       const safeView = ["trending", "new", "ending", "liquid", "crypto", "politics", "sports"].includes(String(view || "").toLowerCase())
         ? String(view).toLowerCase()
         : "trending";
-      const categorySearch = { crypto: "crypto", politics: "politics", sports: "sports" }[safeView] || "";
-      const search = String(query || categorySearch).trim().slice(0, 80);
-      const order = safeView === "new" ? "start_date" : safeView === "ending" ? "end_date" : safeView === "liquid" ? "liquidity" : "volume_24hr";
-      const payload = search
-        ? await request(GAMMA_BASE, "/public-search", { q: search, limit_per_type: take })
-        : await request(GAMMA_BASE, "/events", { active: true, closed: false, limit: take, order, ascending: safeView === "ending" });
+      const categorySlug = { crypto: "crypto", politics: "politics", sports: "sports" }[safeView] || "";
+      const search = String(query || "").trim().slice(0, 80);
+      // Gamma's public API currently validates the event field names in camelCase.
+      // Keep these centralized so every site and Telegram discovery view uses the
+      // same known-good request instead of failing independently with a 422.
+      const order = safeView === "new" ? "startDate" : safeView === "ending" ? "endDate" : safeView === "liquid" ? "liquidity" : "volume24hr";
+      let payload;
+      if (search) {
+        payload = await request(GAMMA_BASE, "/public-search", { q: search, limit_per_type: take });
+      } else if (categorySlug) {
+        // Public search is relevance-first and can return only closed historical matches for broad
+        // words such as "crypto". Resolve the official tag, then request active tagged events.
+        const tag = await request(GAMMA_BASE, `/tags/slug/${categorySlug}`);
+        payload = await request(GAMMA_BASE, "/events", {
+          active: true,
+          closed: false,
+          limit: take,
+          order,
+          ascending: false,
+          tag_id: tag?.id,
+          related_tags: true
+        });
+      } else {
+        payload = await request(GAMMA_BASE, "/events", { active: true, closed: false, limit: take, order, ascending: safeView === "ending" });
+      }
       const rows = Array.isArray(payload) ? payload : (Array.isArray(payload?.events) ? payload.events : []);
       return rows
         .filter((event) => event?.active !== false && event?.closed !== true)

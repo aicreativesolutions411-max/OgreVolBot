@@ -231,7 +231,7 @@
     const context = currentContext(trade), panel = one(".proQuickPanel", trade);
     all("[data-pro-profile]", panel).forEach((button) => button.classList.toggle("on", Number(button.dataset.proProfile) === index));
     if (context.rh) {
-      let values = ["0.01", "0.025", "0.05"];
+      let values = ["0.1", "0.5", "1"];
       try { const parsed = JSON.parse(localStorage.getItem("ggRhPresets") || "null"); if (Array.isArray(parsed) && parsed.length >= 3) values = parsed; } catch (_) {}
       setSide(trade, "buy");
       const input = one("[data-pro-amount]", panel); if (input) input.value = String(values[index] || values[0]);

@@ -69,20 +69,50 @@ test("Polymarket discovery views use official active-event sorting", async () =>
   const urls = [];
   const fakeFetch = async (url) => {
     urls.push(new URL(url));
-    return { ok: true, json: async () => [] };
+    return { ok: true, json: async () => url.includes("/tags/slug/") ? { id: "21" } : [] };
   };
   const client = createPolymarketClient({ fetchImpl: fakeFetch, cacheTtlMs: 0 });
   await client.events({ view: "new" });
   await client.events({ view: "ending" });
   await client.events({ view: "liquid" });
   await client.events({ view: "crypto" });
-  assert.equal(urls[0].searchParams.get("order"), "start_date");
+  assert.equal(urls[0].searchParams.get("order"), "startDate");
   assert.equal(urls[0].searchParams.get("ascending"), "false");
-  assert.equal(urls[1].searchParams.get("order"), "end_date");
+  assert.equal(urls[1].searchParams.get("order"), "endDate");
   assert.equal(urls[1].searchParams.get("ascending"), "true");
   assert.equal(urls[2].searchParams.get("order"), "liquidity");
-  assert.equal(urls[3].pathname, "/public-search");
-  assert.equal(urls[3].searchParams.get("q"), "crypto");
+  assert.equal(urls[3].pathname, "/tags/slug/crypto");
+  assert.equal(urls[4].pathname, "/events");
+  assert.equal(urls[4].searchParams.get("tag_id"), "21");
+  assert.equal(urls[4].searchParams.get("related_tags"), "true");
+});
+
+test("Polymarket hot view uses Gamma's accepted 24-hour volume field", async () => {
+  let requested;
+  const client = createPolymarketClient({
+    cacheTtlMs: 0,
+    fetchImpl: async (url) => {
+      requested = new URL(url);
+      return { ok: true, json: async () => [] };
+    }
+  });
+  await client.events({ view: "trending" });
+  assert.equal(requested.searchParams.get("order"), "volume24hr");
+  assert.equal(requested.searchParams.get("ascending"), "false");
+});
+
+test("Polymarket text searches keep using public search", async () => {
+  let requested;
+  const client = createPolymarketClient({
+    cacheTtlMs: 0,
+    fetchImpl: async (url) => {
+      requested = new URL(url);
+      return { ok: true, json: async () => ({ events: [] }) };
+    }
+  });
+  await client.events({ query: "bitcoin" });
+  assert.equal(requested.pathname, "/public-search");
+  assert.equal(requested.searchParams.get("q"), "bitcoin");
 });
 
 test("Poly Hub and Telegram integration keep trading internal, idempotent, opt-in, and region-aware", () => {
