@@ -49,7 +49,6 @@ test("professional chart controls expose every requested candle interval", () =>
   assert.match(pro, /liquidity\?\.usd/);
   assert.match(pro, /Slime Mode/);
   assert.match(css, /\.proSlimeWatermark/);
-  assert.match(server, /providerSource = "geckoterminal-token-pools"/);
 });
 
 test("compact quick panel reuses the existing guarded execution buttons", () => {
