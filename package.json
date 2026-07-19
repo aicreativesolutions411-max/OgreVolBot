@@ -69,6 +69,9 @@
     "@metaplex-foundation/umi-web3js-adapters": "^1.5.1",
     "@meteora-ag/dynamic-bonding-curve-sdk": "^1.5.10",
     "@nktkas/hyperliquid": "^0.33.1",
+    "@polymarket/builder-relayer-client": "^0.0.10",
+    "@polymarket/builder-signing-sdk": "^0.0.8",
+    "@polymarket/clob-client-v2": "^1.1.0",
     "@solana/web3.js": "^1.98.4",
     "bs58": "^6.0.0",
     "ethers": "^6.17.0",
@@ -77,11 +80,13 @@
     "redis": "^4.7.0",
     "sharp": "^0.34.5",
     "tweetnacl": "^1.0.3",
+    "viem": "^2.55.2",
     "web-push": "^3.6.7",
-    "ws": "^8.18.0",
+    "ws": "^8.21.1",
     "x-client-transaction-id": "^0.3.1"
   },
   "overrides": {
+    "axios": "^1.18.1",
     "uuid": "^11.1.1"
   },
   "engines": {

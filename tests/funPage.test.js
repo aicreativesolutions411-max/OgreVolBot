@@ -618,7 +618,7 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(server, /while \(bytes < 320_000\)/);
   assert.match(server, /String\(row\?\.baseToken\?\.address \|\| ""\)\.toLowerCase\(\) === key/);
   assert.match(js, /const detailPromise = request\(path\)/);
-  assert.ok(js.indexOf("const searchResult = await request") < js.indexOf("const detailResult = await detailPromise"));
+  assert.ok(js.indexOf("const searchResult = await request") < js.indexOf("const [detailResult, dexMarket] = await Promise.all"));
 });
 
 test("coin details omit the redundant risk strip while safety remains available in Tools", () => {
@@ -687,7 +687,8 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, MACD, and 
   assert.match(html, /fun-indicators\.js\?v=7/);
   assert.match(funWorker, /fun-indicators\.js\?v=7/);
   assert.match(funWorker, /fun\.css\?v=35/);
-  assert.match(indicators, /\/api\/chart\?ca=/);
+  assert.match(indicators, /new URLSearchParams\(\{ ca: key, tf: timeframe \}\)/);
+  assert.match(indicators, /`\$\{API_BASE\}\/api\/chart\?\$\{query\.toString\(\)\}`/);
   assert.match(indicators, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/pools/);
   assert.match(indicators, /function fibonacciPanel/);
   assert.match(indicators, /function rsiSeries\(values, period = 14\)/);
@@ -713,7 +714,7 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, MACD, and 
   assert.doesNotMatch(indicators, /Math\.random/);
   assert.doesNotMatch(indicators, /completed candles/i);
   assert.match(indicators, /AUTO_REFRESH_MS = 25_000/);
-  assert.match(indicators, /CANDLE_TIMEOUT_MS = 6_500/);
+  assert.match(indicators, /CANDLE_TIMEOUT_MS = 9_000/);
   assert.match(indicators, /pendingCandleRequests/);
   assert.match(indicators, /new AbortController\(\)/);
   assert.match(indicators, /function resolveBrowserGeckoPool/);
@@ -741,8 +742,8 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, MACD, and 
   assert.match(indicators, /data-harmonic-pivot/);
   assert.match(indicators, /data-harmonic-tolerance/);
   assert.match(indicators, /analysisActive && enabled\[button\.dataset\.indicatorKind\]/);
-  assert.match(indicators, /Overlays are only marked active after they are painted on real candles/);
-  assert.match(indicators, /regular chart restored/i);
+  assert.match(indicators, /function activateAnalysis[\s\S]{0,160}analysisActive = true/);
+  assert.match(indicators, /function restoreProviderChart[\s\S]{0,260}providerMarkup\.get/);
   assert.match(indicators, /if \(!analysisActive\) \{ clearTimeout\(autoRefreshTimer\); return; \}/);
   assert.doesNotMatch(indicators, /if \(anyEnabled\(\)\) scheduleRender\(0\);/);
   assert.match(js, /setMode\(mode\)/);

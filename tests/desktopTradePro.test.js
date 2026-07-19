@@ -49,6 +49,19 @@ test("professional chart controls expose every requested candle interval", () =>
   assert.match(pro, /liquidity\?\.usd/);
   assert.match(pro, /Slime Mode/);
   assert.match(css, /\.proSlimeWatermark/);
+  assert.match(pro, /function activateChartHome/);
+  assert.match(pro, /TERMINAL HOME/);
+  assert.match(pro, /EXIT CHART/);
+  assert.match(pro, /Show trade panel/);
+  assert.match(pro, /Exit fullscreen/);
+  assert.match(pro, /function refreshChartFocusControls/);
+  assert.match(css, /min-height:820px/);
+  assert.match(gg, /More chart/);
+  assert.match(gg, /Show more trades/);
+  assert.match(gg, /function paintChartTapeSplitHandle/);
+  assert.match(gg, /dataset\.chartExpanded/);
+  assert.match(gg, /minTape=mobile\?132:58/);
+  assert.match(chart, /body\.embed \.glass\{[^}]*padding-bottom:0/);
 });
 
 test("compact quick panel reuses the existing guarded execution buttons", () => {
@@ -61,6 +74,7 @@ test("compact quick panel reuses the existing guarded execution buttons", () => 
   assert.match(pro, /data-pro-tool="volume"/);
   assert.match(pro, /Server-side exits/);
   assert.match(pro, /\["0\.1", "0\.5", "1", "2"\]/);
+  assert.match(pro, /function refreshTradeContext/);
 });
 
 test("Solana charts never use a token address as a DexScreener pool", () => {

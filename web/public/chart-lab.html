@@ -34,7 +34,7 @@
   .wrap{display:flex;gap:10px;align-items:stretch}
   .chartcol{flex:1 1 380px;min-width:0;position:relative}
   #chart{width:100%;height:clamp(280px,56vw,460px);border-radius:11px;overflow:hidden}
-  body.embed #chart{height:clamp(300px,64vh,520px)}
+  body.embed #chart{height:clamp(280px,calc(100vh - 195px),540px)}
   .chartload{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:#5d8a6e;background:rgba(6,15,10,.4);border-radius:11px;pointer-events:none;transition:opacity .3s}
   .chartload.hidden{opacity:0}
   .rail{flex:0 0 132px;display:flex;flex-direction:column;gap:7px}
@@ -67,7 +67,8 @@
   .foot{text-align:center;font-size:11px;color:#3f7a59;margin-top:14px;line-height:1.6}
   body.embed{padding:0;max-width:none}
   body.embed .top,body.embed .cta,body.embed .foot{display:none}
-  body.embed .glass{border-radius:0;border:none;box-shadow:none}
+  body.embed .glass{border-radius:0;border:none;box-shadow:none;padding-bottom:0}
+  body.embed .tape:not(.expanded){max-height:28px;overflow:hidden}
 </style>
 </head>
 <body>

@@ -20,8 +20,9 @@
   function currentContext(trade) {
     const raw = decodeURIComponent((location.hash.split("/").slice(1).join("/") || "").trim());
     const rh = trade && (trade.closest("#v-rhtrade") || isRobinhood(raw));
-    const symbol = (one(rh ? "#rhTvSym" : "#thead .ti b") || {}).textContent || short(raw);
-    return { token: raw, rh: Boolean(rh), symbol: symbol.trim() || short(raw) };
+    const visibleSymbol = String((one(rh ? "#rhTvSym" : "#thead .ti b") || {}).textContent || "").trim();
+    const symbol = visibleSymbol && visibleSymbol !== "?" ? visibleSymbol : short(raw);
+    return { token: raw, rh: Boolean(rh), symbol };
   }
 
   function nativeChartUrl(context, timeframe, pool) {
@@ -88,12 +89,66 @@
     }
     let mark = chart && one(".proSlimeWatermark", chart);
     if (nativeVisible && chart && !mark) {
-      mark = document.createElement("div");
+      mark = document.createElement("button");
+      mark.type = "button";
       mark.className = "proSlimeWatermark";
-      mark.setAttribute("aria-hidden", "true");
-      mark.innerHTML = '<img src="/assets/slimewire/svg/slimewire-mark.svg" alt=""><span>SLIMEWIRE</span>';
+      mark.innerHTML = '<img src="/assets/slimewire/svg/slimewire-mark.svg" alt=""><span>TERMINAL HOME</span>';
+      mark.addEventListener("click", () => activateChartHome(trade));
       chart.appendChild(mark);
     } else if (!nativeVisible && mark) mark.remove();
+    refreshChartHomeButton(trade);
+  }
+
+  function chartIsFocused(trade) {
+    return document.fullscreenElement === trade || trade.classList.contains("proFullscreen") || trade.classList.contains("proWide");
+  }
+
+  function refreshChartHomeButton(trade) {
+    const button = one(".proSlimeWatermark", trade);
+    if (!button) return;
+    const focused = chartIsFocused(trade);
+    const text = one("span", button);
+    if (text) text.textContent = focused ? "EXIT CHART" : "TERMINAL HOME";
+    button.setAttribute("aria-label", focused ? "Exit the expanded chart and return to the terminal" : "Return to the SlimeWire terminal home");
+    button.title = focused ? "Exit chart view" : "Back to terminal home";
+  }
+
+  function refreshChartFocusControls(trade) {
+    const wide = one("[data-pro-wide]", trade), full = one("[data-pro-full]", trade);
+    const wideOpen = trade.classList.contains("proWide"), fullscreenOpen = document.fullscreenElement === trade || trade.classList.contains("proFullscreen");
+    if (wide) {
+      wide.textContent = wideOpen ? "↔ Show trade panel" : "↔ Wider chart";
+      wide.setAttribute("aria-pressed", wideOpen ? "true" : "false");
+      wide.setAttribute("aria-label", wideOpen ? "Show the trade panel beside the chart" : "Hide the trade panel for a wider chart");
+      wide.title = wideOpen ? "Restore the buy and sell panel" : "Give the chart more horizontal room";
+    }
+    if (full) {
+      full.textContent = fullscreenOpen ? "⛶ Exit fullscreen" : "⛶ Fullscreen";
+      full.setAttribute("aria-pressed", fullscreenOpen ? "true" : "false");
+      full.setAttribute("aria-label", fullscreenOpen ? "Exit fullscreen chart" : "Open fullscreen chart");
+      full.title = fullscreenOpen ? "Return to the terminal" : "Fill the screen with the chart";
+    }
+    refreshChartHomeButton(trade);
+  }
+
+  function refreshTradeContext(trade) {
+    const panel = one(".proQuickPanel", trade), action = one("[data-pro-execute]", panel);
+    if (!panel || !action) return;
+    const context = currentContext(trade), side = panel.dataset.side === "sell" ? "Sell" : "Buy";
+    action.textContent = `${side} ${context.symbol}`;
+  }
+
+  async function activateChartHome(trade) {
+    if (chartIsFocused(trade)) {
+      if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+      trade.classList.remove("proFullscreen", "proWide");
+      document.body.classList.remove("proNoScroll");
+      refreshChartFocusControls(trade);
+      trade.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    if (window.GG?.go) window.GG.go("trending");
+    else location.hash = "#trending";
   }
 
   function setChartMode(trade, mode) {
@@ -321,7 +376,7 @@
     all("[data-pro-profile]", panel).forEach((button) => button.addEventListener("click", () => applyProfile(trade, Number(button.dataset.proProfile))));
     one("[data-pro-execute]", panel)?.addEventListener("click", () => executeQuick(trade));
     all("[data-pro-tool]", panel).forEach((button) => button.addEventListener("click", () => openTool(trade, button.dataset.proTool)));
-    one("[data-pro-wide]", toolbar)?.addEventListener("click", (event) => { trade.classList.toggle("proWide"); event.currentTarget.textContent = trade.classList.contains("proWide") ? "↔ Show ticket" : "↔ Wider chart"; });
+    one("[data-pro-wide]", toolbar)?.addEventListener("click", () => { trade.classList.toggle("proWide"); refreshChartFocusControls(trade); });
     one("[data-pro-full]", toolbar)?.addEventListener("click", () => toggleFullscreen(trade));
     if (side && !context.rh && !one(".proSideTools", side)) {
       const tools = document.createElement("div"); tools.className = "proSideTools";
@@ -332,13 +387,16 @@
     // Pro is the default for every 1m+ interval on both chains. Micro candles use
     // SlimeWire's native tape, and the user can explicitly keep Slime Mode on.
     setTimeout(() => setTimeframe(trade, active), 0);
+    refreshChartFocusControls(trade);
+    refreshTradeContext(trade);
     void resolveStandardPool(trade, context, active);
   }
 
   async function toggleFullscreen(trade) {
-    if (document.fullscreenElement) { await document.exitFullscreen().catch(() => {}); trade.classList.remove("proFullscreen"); document.body.classList.remove("proNoScroll"); return; }
+    if (document.fullscreenElement) { await document.exitFullscreen().catch(() => {}); trade.classList.remove("proFullscreen"); document.body.classList.remove("proNoScroll"); refreshChartFocusControls(trade); return; }
     try { await trade.requestFullscreen(); }
     catch (_) { trade.classList.toggle("proFullscreen"); document.body.classList.toggle("proNoScroll", trade.classList.contains("proFullscreen")); }
+    refreshChartFocusControls(trade);
   }
 
   function parseMarketCap(value) {
@@ -411,12 +469,12 @@
   }
 
   function scan() {
-    all("#v-trade .trade, #v-rhtrade .trade").forEach(injectTradeWorkspace);
+    all("#v-trade .trade, #v-rhtrade .trade").forEach((trade) => { injectTradeWorkspace(trade); refreshTradeContext(trade); refreshChartFocusControls(trade); });
     applyToolPrefill();
   }
 
-  document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement) { all(".trade.proFullscreen").forEach((trade) => trade.classList.remove("proFullscreen")); document.body.classList.remove("proNoScroll"); } });
-  document.addEventListener("keydown", (event) => { if (event.key === "Escape") { all(".trade.proFullscreen").forEach((trade) => trade.classList.remove("proFullscreen")); document.body.classList.remove("proNoScroll"); } });
+  document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement) { all(".trade.proFullscreen").forEach((trade) => trade.classList.remove("proFullscreen")); document.body.classList.remove("proNoScroll"); } all(".trade").forEach(refreshChartFocusControls); });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape") { all(".trade.proFullscreen").forEach((trade) => trade.classList.remove("proFullscreen")); document.body.classList.remove("proNoScroll"); all(".trade").forEach(refreshChartFocusControls); } });
   let scanQueued = false;
   function scheduleScan() { if (scanQueued) return; scanQueued = true; requestAnimationFrame(() => { scanQueued = false; scan(); }); }
   const observer = new MutationObserver(scheduleScan); observer.observe(document.documentElement, { childList: true, subtree: true });

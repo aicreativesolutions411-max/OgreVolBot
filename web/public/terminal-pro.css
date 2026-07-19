@@ -12,7 +12,7 @@
 .chainMini.rh{color:#69c9ff;background:rgba(40,170,255,.11)}
 
 @media(min-width:821px){
-  .trade{grid-template-columns:minmax(0,1fr) 360px}
+  .trade{grid-template-columns:minmax(0,1fr) 326px;height:100%;min-height:820px}
   .tradeMain{position:relative}
   .marketTape{min-height:155px;padding:10px 12px}
   .tapeGauges{margin-bottom:7px}
@@ -35,7 +35,8 @@
 .chartProBar .proSlime img{width:14px;height:14px;object-fit:contain;filter:drop-shadow(0 0 5px rgba(114,255,35,.35))}
 .chartProBar .proSlime.on{color:#baff9d;border-color:rgba(114,255,35,.5);background:linear-gradient(180deg,rgba(65,145,30,.28),rgba(18,54,13,.36));box-shadow:0 0 12px rgba(114,255,35,.08)}
 .chartwrap.proSlimeChart{position:relative}
-.proSlimeWatermark{position:absolute;right:14px;bottom:13px;z-index:8;display:flex;align-items:center;gap:6px;padding:5px 8px;border:1px solid rgba(114,255,35,.25);border-radius:999px;background:rgba(2,9,3,.68);color:rgba(194,255,169,.84);font:950 8px/1 var(--sans);letter-spacing:.12em;pointer-events:none;backdrop-filter:blur(5px)}
+.proSlimeWatermark{position:absolute;right:14px;bottom:13px;z-index:18;display:flex;align-items:center;gap:6px;padding:6px 9px;border:1px solid rgba(114,255,35,.34);border-radius:999px;background:rgba(2,9,3,.84);color:rgba(205,255,184,.92);font:950 8px/1 var(--sans);letter-spacing:.12em;pointer-events:auto;cursor:pointer;backdrop-filter:blur(5px);box-shadow:0 5px 18px rgba(0,0,0,.3);transition:.14s}
+.proSlimeWatermark:hover,.proSlimeWatermark:focus-visible{color:#eaffdf;border-color:rgba(114,255,35,.7);background:rgba(17,43,12,.94);box-shadow:0 0 16px rgba(114,255,35,.18);outline:none}
 .proSlimeWatermark img{width:16px;height:16px;object-fit:contain}
 
 .trade.proWide{grid-template-columns:minmax(0,1fr)}
