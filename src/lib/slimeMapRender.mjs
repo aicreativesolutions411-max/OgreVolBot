@@ -200,7 +200,7 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
       const outN = (clusterEdges || []).filter((e) => e.from === c.id).length;
       const token = Number(c.tokenLinkCount) || 0, direct = Number(c.directLinkCount) || 0, shared = Number(c.sharedLinkCount) || 0;
       const relationship = token ? `${token} token-transfer link${token === 1 ? "" : "s"}` : direct ? `${direct} direct link${direct === 1 ? "" : "s"}` : `${shared} shared-funder link${shared === 1 ? "" : "s"}`;
-      const l1 = `${c.size || (c.members || []).length} wallets · COMBINED ${(+c.pct).toFixed(1)}%`;
+      const l1 = `${c.size || (c.members || []).length} wallets · COMBINED ${(+c.pct).toFixed(1)}%${c.flow && c.flow.dir === "loading" ? "  ▲ LOADING" : c.flow && c.flow.dir === "unloading" ? "  ▼ UNLOADING" : ""}`;
       const l2 = `${fmtUsd(c.usd)} · ${relationship}${outN ? ` · →${outN} cluster${outN > 1 ? "s" : ""}` : ""}`;
       const l3 = token || direct ? `◆${c.letter} · linked on-chain` : `◆${c.letter} · shared ${esc(c.funderShort || shortAddr(c.funder))}`;
       const wpx = Math.max(l1.length, l2.length, l3.length) * 6.9 + 22;
@@ -286,7 +286,7 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
         rows.push(`<g>
           <circle cx="${px + 7}" cy="${y + 6}" r="6" fill="${c.color}"/>
           <text x="${px + 20}" y="${y + 10}" font-family="Arial Black, Arial" font-size="13" font-weight="900" fill="#eafff0">Cluster ${c.letter}</text>
-          <text x="${px + 96}" y="${y + 10}" font-family="Arial, sans-serif" font-size="11.5" font-weight="700" fill="#9fe0ab">${c.size || (c.members || []).length} wallets</text>
+          <text x="${px + 96}" y="${y + 10}" font-family="Arial, sans-serif" font-size="11.5" font-weight="700" fill="#9fe0ab">${c.size || (c.members || []).length} wallets</text>${c.flow && (c.flow.dir === "loading" || c.flow.dir === "unloading") ? `\n          <text x="${px + 158}" y="${y + 10}" font-family="Arial Black, Arial" font-size="12.5" font-weight="900" fill="${c.flow.dir === "loading" ? "#37d67a" : "#ff5a5a"}">${c.flow.dir === "loading" ? "▲" : "▼"}</text>` : ""}
           <text x="${px + pw}" y="${y + 10}" text-anchor="end" font-family="Arial Black, Arial" font-size="13" font-weight="900" fill="${c.color}">COMBINED ${(+c.pct).toFixed(1)}% · ${fmtUsd(c.usd)}</text>
           <rect x="${px}" y="${y + 17}" width="${barW}" height="8" rx="4" fill="#0c2113"/>
           <rect x="${px}" y="${y + 17}" width="${fillW.toFixed(1)}" height="8" rx="4" fill="${c.color}"/>
