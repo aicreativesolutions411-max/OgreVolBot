@@ -70,6 +70,10 @@ export function normalizePolymarketPosition(position = {}, closed = false) {
     cashPnl: finite(position.cashPnl),
     percentPnl: finite(position.percentPnl),
     realizedPnl: finite(position.realizedPnl),
+    redeemable: Boolean(position.redeemable),
+    mergeable: Boolean(position.mergeable),
+    negativeRisk: Boolean(position.negativeRisk),
+    outcomeIndex: Math.max(0, Math.floor(finite(position.outcomeIndex))),
     timestamp: finite(position.timestamp),
     endDate: position.endDate || null,
     closed: Boolean(closed),
@@ -172,6 +176,19 @@ export function createPolymarketClient({ fetchImpl = fetch, cacheTtlMs = 15_000,
         request(DATA_BASE, "/closed-positions", { user, limit: Math.max(1, Math.min(500, closedLimit)) })
       ]);
       return { wallet: user, ...summarizePolymarketPortfolio(Array.isArray(open) ? open : [], Array.isArray(closed) ? closed : []) };
+    },
+    async redeemablePositions(wallet, limit = 50) {
+      const user = polymarketWalletAddress(wallet);
+      if (!user) throw new Error("valid Polygon wallet required");
+      const rows = await request(DATA_BASE, "/positions", {
+        user,
+        redeemable: true,
+        sizeThreshold: 0,
+        limit: Math.max(1, Math.min(100, Number(limit) || 50))
+      });
+      return (Array.isArray(rows) ? rows : [])
+        .map((row) => normalizePolymarketPosition(row, false))
+        .filter((row) => row.redeemable && /^0x[0-9a-f]{64}$/i.test(row.conditionId));
     }
   };
 }

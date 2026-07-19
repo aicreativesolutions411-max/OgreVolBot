@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import { createPolymarketClient, normalizePolymarketEvent, polymarketWalletAddress, summarizePolymarketPortfolio } from "../src/lib/polymarket.js";
+import { createPolymarketClient, normalizePolymarketEvent, normalizePolymarketPosition, polymarketWalletAddress, summarizePolymarketPortfolio } from "../src/lib/polymarket.js";
 
 const read = (path) => fs.readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -28,6 +28,20 @@ test("Polymarket portfolio totals keep open and realized PnL separate", () => {
   );
   assert.deepEqual(result.totals, { openValue: 25, openPnl: -3, realizedPnl: 8, openCount: 1, closedCount: 1 });
   assert.equal(result.closed[0].closed, true);
+});
+
+test("redeemable positions preserve payout routing metadata", async () => {
+  const raw = { conditionId: `0x${"ab".repeat(32)}`, asset: "1", size: 8, redeemable: true, negativeRisk: true, outcomeIndex: 2 };
+  const normalized = normalizePolymarketPosition(raw);
+  assert.equal(normalized.redeemable, true);
+  assert.equal(normalized.negativeRisk, true);
+  assert.equal(normalized.outcomeIndex, 2);
+  let requested;
+  const client = createPolymarketClient({ cacheTtlMs: 0, fetchImpl: async (url) => { requested = new URL(url); return { ok: true, json: async () => [raw] }; } });
+  const rows = await client.redeemablePositions("0x1111111111111111111111111111111111111111");
+  assert.equal(rows.length, 1);
+  assert.equal(requested.pathname, "/positions");
+  assert.equal(requested.searchParams.get("redeemable"), "true");
 });
 
 test("Polymarket client uses public Gamma and Data API routes", async () => {
@@ -125,7 +139,13 @@ test("Poly Hub and Telegram integration keep trading internal, idempotent, opt-i
   assert.match(page, /\/api\/web\/poly\/trading\/ticket/);
   assert.match(page, /\/api\/web\/poly\/trading\/execute/);
   assert.match(page, /\/api\/web\/poly\/trading\/cancel/);
-  assert.match(page, /Confirm &amp; submit once|Confirm & submit once/);
+  assert.match(page, /Confirm \$\{i\.side==="BUY"\?"SOL bet":"sell"\}/);
+  assert.match(page, /Bet amount in SOL/);
+  assert.match(page, /Cash out to SOL/);
+  assert.match(page, /Matched trades include a 0\.5% service fee/);
+  assert.match(page, /\/api\/web\/poly\/sol\/cashout/);
+  assert.match(page, /amountSol:selected\.side==="BUY"\?value:undefined/);
+  assert.doesNotMatch(page, /Amount in pUSD/);
   assert.match(page, /\/polytrack 0xYourWallet/);
   assert.match(page, /\/polyshare on/);
   assert.match(page, /\/polyorders/);
@@ -142,7 +162,19 @@ test("Poly Hub and Telegram integration keep trading internal, idempotent, opt-i
   assert.match(server, /pathname === "\/api\/web\/poly\/portfolio"/);
   assert.match(server, /pathname === "\/api\/web\/poly\/trading\/ticket"/);
   assert.match(server, /pathname === "\/api\/web\/poly\/trading\/execute"/);
-  assert.match(server, /ticket\.status = "submitting"/);
+  assert.match(server, /pathname === "\/api\/web\/poly\/sol\/cashout"/);
+  assert.match(server, /runIdempotentMoneyOp\("poly-sol-cashout"/);
+  assert.match(server, /submitPolySolFunding/);
+  assert.match(server, /pollPolyBridgeJobs/);
+  assert.match(server, /pollManagedPolyPayouts/);
+  assert.match(server, /redeemablePositions/);
+  assert.match(server, /redeemPosition/);
+  assert.match(server, /restorePolyRecoveryForUser/);
+  assert.match(server, /schedulePolyRecoveryBackup/);
+  assert.match(server, /parseCommandWithArgument\(text, \["polycashout", "polywithdraw"\]\)/);
+  assert.match(server, /ticket\.status = "preparing"/);
+  assert.match(server, /current\.status = "order_submitting"/);
+  assert.match(server, /current\.status = "order_outcome_unknown"/);
   assert.match(server, /ticket\.status !== "pending"/);
   assert.match(server, /assertPolymarketOrderRegion/);
   assert.match(server, /handlePolyTradeCallback/);

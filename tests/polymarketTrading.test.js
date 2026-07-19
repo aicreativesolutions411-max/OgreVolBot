@@ -46,6 +46,8 @@ test("Polymarket trading remains feature-gated until builder configuration is co
   assert.equal(on.relayerConfigured, true);
   assert.match(POLYMARKET_CONTRACTS.pUsd, /^0x[0-9a-f]{40}$/i);
   assert.match(POLYMARKET_CONTRACTS.exchange, /^0x[0-9a-f]{40}$/i);
+  assert.equal(POLYMARKET_CONTRACTS.collateralAdapter.toLowerCase(), "0xada100db00ca00073811820692005400218fce1f");
+  assert.equal(POLYMARKET_CONTRACTS.negRiskCollateralAdapter.toLowerCase(), "0xada2005600dec949baf300f4c6120000bdb6eaab");
 });
 
 test("Polymarket account restart derives an existing API key before trying to create one", async () => {

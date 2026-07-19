@@ -21,9 +21,27 @@ const noxaSource = fs.readFileSync(new URL("../src/lib/noxaLaunchpad.js", import
 const ggSource = fs.readFileSync(new URL("../web/public/gg.html", import.meta.url), "utf8");
 const indexSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
+const polyTradingSource = fs.readFileSync(new URL("../src/lib/polymarketTrading.js", import.meta.url), "utf8");
 
 test("main website mirrors stay identical", () => {
   assert.equal(indexSource, ggSource, "index.html and gg.html drifted; shared site fixes must ship together");
+});
+
+test("SOL-first prediction trades, payouts, and recovery stay durable and idempotent", () => {
+  const funding = functionBody(serverSource, "submitPolySolFunding");
+  const cashout = functionBody(serverSource, "startPolyCashout");
+  const payout = functionBody(serverSource, "pollManagedPolyPayouts");
+  assert.ok(funding.indexOf('current.status = "funding_submitting"') < funding.indexOf("sendLegacyTransaction"));
+  assert.ok(cashout.indexOf('current.status = "submitting"') < cashout.indexOf("transferPUsdToBridge"));
+  assert.match(serverSource, /runIdempotentMoneyOp\("poly-sol-cashout"/);
+  assert.match(payout, /status: "submitting"/);
+  assert.match(payout, /claimToken/);
+  assert.match(payout, /redeemablePositions/);
+  assert.match(polyTradingSource, /negRiskCollateralAdapter: "0xadA2005600Dec949baf300f4C6120000bDB6eAab"/);
+  assert.match(polyTradingSource, /executeDepositWalletBatch\(\[call\], depositAddress, deadline\)/);
+  assert.match(serverSource, /crypto\.createHmac\("sha256", CONFIG\.appSecret\)/);
+  assert.match(serverSource, /restorePolyRecoveryForUser/);
+  assert.match(serverSource, /backupDataToR2\(reason\)/);
 });
 
 test("Trade opens the focused cross-chain search with shared recent coins", () => {

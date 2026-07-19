@@ -1,13 +1,16 @@
 import { ClobClient, AssetType, Chain, OrderType, Side, SignatureTypeV2 } from "@polymarket/clob-client-v2";
 import { RelayClient } from "@polymarket/builder-relayer-client";
 import { BuilderConfig } from "@polymarket/builder-signing-sdk";
-import { createWalletClient, encodeFunctionData, http, maxUint256 } from "viem";
+import { createWalletClient, encodeFunctionData, http, maxUint256, zeroHash } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
+import { POLYMARKET_SOL_BRIDGE, pUsdToRawExact } from "./polymarketBridge.js";
 
 export const POLYMARKET_CONTRACTS = Object.freeze({
   pUsd: "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB",
   conditionalTokens: "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
+  collateralAdapter: "0xAdA100Db00Ca00073811820692005400218FcE1f",
+  negRiskCollateralAdapter: "0xadA2005600Dec949baf300f4C6120000bDB6eAab",
   exchange: "0xE111180000d2663C0091e4f400237545B87B996B",
   negRiskExchange: "0xe2222d279d744050d28e00520010520000310F59"
 });
@@ -20,6 +23,7 @@ const TOKEN_ID_RE = /^\d{1,90}$/;
 const ORDER_ID_RE = /^0x[0-9a-f]{64}$/i;
 const PRIVATE_KEY_RE = /^0x[0-9a-f]{64}$/i;
 const BYTES32_RE = /^0x[0-9a-f]{64}$/i;
+const EVM_ADDRESS_RE = /^0x[0-9a-f]{40}$/i;
 
 export function polymarketCountryCode(value) {
   const code = String(value || "").trim().toUpperCase();
@@ -194,6 +198,7 @@ export function createPolymarketTradingService({ env = process.env } = {}) {
       depositAddress,
       deployed: Boolean(deployed),
       pUsdBalance: pUsdNumber(balance.balance),
+      serviceFeeBps: POLYMARKET_SOL_BRIDGE.serviceFeeBps,
       closedOnly: Boolean(closedOnly?.closed_only),
       orderConfigured: config.orderConfigured,
       relayerConfigured: config.relayerConfigured,
@@ -248,11 +253,13 @@ export function createPolymarketTradingService({ env = process.env } = {}) {
     if (closedOnly?.closed_only && intent.side === Side.BUY) throw new Error("This Polymarket account is currently close-only.");
     let response;
     if (intent.orderKind === "market") {
+      const collateral = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL }).catch(() => ({ balance: "0" }));
       response = await client.createAndPostMarketOrder({
         tokenID: intent.tokenId,
         amount: intent.amount,
         side: intent.side,
         orderType: OrderType.FAK,
+        userUSDCBalance: pUsdNumber(collateral.balance),
         builderCode: config.builderCode
       }, {}, OrderType.FAK);
     } else {
@@ -293,6 +300,89 @@ export function createPolymarketTradingService({ env = process.env } = {}) {
     return { orderId: id, canceled: true };
   }
 
+  async function transferPUsdToBridge(privateKey, rawBridgeAddress, rawAmountPUsd) {
+    const bridgeAddress = String(rawBridgeAddress || "").trim();
+    if (!EVM_ADDRESS_RE.test(bridgeAddress)) throw new Error("SOL cash-out address is unavailable.");
+    const amountRaw = pUsdToRawExact(rawAmountPUsd);
+    const { relayer, depositAddress, client } = await contextFor(privateKey);
+    const balance = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL }).catch(() => ({ balance: "0" }));
+    const availableRaw = /^\d+$/.test(String(balance.balance || "")) ? BigInt(balance.balance) : 0n;
+    if (amountRaw > availableRaw) throw new Error("Poly balance changed before cash-out. Refresh and retry.");
+    const call = {
+      target: POLYMARKET_CONTRACTS.pUsd,
+      value: "0",
+      data: encodeFunctionData({
+        abi: [{ type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }] }],
+        functionName: "transfer",
+        args: [bridgeAddress, amountRaw]
+      })
+    };
+    const deadline = String(Math.floor(Date.now() / 1000) + 240);
+    const response = await relayer.executeDepositWalletBatch([call], depositAddress, deadline);
+    let result;
+    try { result = await response.wait(); }
+    catch (error) { error.relayTransactionId = String(response?.transactionID || ""); throw error; }
+    if (!result) {
+      const error = new Error("SOL cash-out transfer did not confirm.");
+      error.relayTransactionId = String(response?.transactionID || "");
+      throw error;
+    }
+    await client.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL }).catch(() => {});
+    return {
+      bridgeAddress,
+      amountPUsd: Number(amountRaw) / 1e6,
+      relayTransactionId: String(response?.transactionID || result?.transactionHash || result?.hash || result?.id || "").slice(0, 120)
+    };
+  }
+
+  async function redeemPosition(privateKey, rawPosition = {}) {
+    const conditionId = String(rawPosition.conditionId || "").trim();
+    if (!BYTES32_RE.test(conditionId)) throw new Error("Valid Polymarket condition ID required for payout.");
+    const { relayer, depositAddress, client } = await contextFor(privateKey);
+    const adapter = rawPosition.negativeRisk
+      ? POLYMARKET_CONTRACTS.negRiskCollateralAdapter
+      : POLYMARKET_CONTRACTS.collateralAdapter;
+    const call = {
+      target: adapter,
+      value: "0",
+      data: encodeFunctionData({
+        abi: [{ type: "function", name: "redeemPositions", stateMutability: "nonpayable", inputs: [{ name: "collateralToken", type: "address" }, { name: "parentCollectionId", type: "bytes32" }, { name: "conditionId", type: "bytes32" }, { name: "indexSets", type: "uint256[]" }], outputs: [] }],
+        functionName: "redeemPositions",
+        args: [POLYMARKET_CONTRACTS.pUsd, zeroHash, conditionId, [1n, 2n]]
+      })
+    };
+    const deadline = String(Math.floor(Date.now() / 1000) + 240);
+    const response = await relayer.executeDepositWalletBatch([call], depositAddress, deadline);
+    let result;
+    try { result = await response.wait(); }
+    catch (error) { error.relayTransactionId = String(response?.transactionID || ""); throw error; }
+    if (!result) {
+      const error = new Error("Resolved prediction payout is still confirming.");
+      error.relayTransactionId = String(response?.transactionID || "");
+      throw error;
+    }
+    await client.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL }).catch(() => {});
+    return {
+      conditionId,
+      negativeRisk: Boolean(rawPosition.negativeRisk),
+      relayTransactionId: String(response?.transactionID || "").slice(0, 120),
+      transactionHash: String(result?.transactionHash || "").slice(0, 120)
+    };
+  }
+
+  async function relayerTransaction(privateKey, rawId) {
+    const id = String(rawId || "").trim().slice(0, 120);
+    if (!id) throw new Error("Relayer transaction ID required.");
+    const { relayer } = await contextFor(privateKey);
+    const rows = await relayer.getTransaction(id);
+    const row = (Array.isArray(rows) ? rows : [rows]).filter(Boolean)[0] || {};
+    return {
+      id,
+      state: String(row.state || "").toUpperCase(),
+      transactionHash: String(row.transactionHash || "").slice(0, 120)
+    };
+  }
+
   return {
     config: {
       orderConfigured: config.orderConfigured,
@@ -303,6 +393,9 @@ export function createPolymarketTradingService({ env = process.env } = {}) {
     setupAccount,
     placeOrder,
     openOrders,
-    cancelOrder
+    cancelOrder,
+    transferPUsdToBridge,
+    redeemPosition,
+    relayerTransaction
   };
 }
