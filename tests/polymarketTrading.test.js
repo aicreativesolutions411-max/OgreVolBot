@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   POLYMARKET_CONTRACTS,
+  createOrDerivePolymarketApiKey,
   normalizePolymarketTradeIntent,
   polymarketCountryCode,
   polymarketRegionAllowed,
   polymarketTradingConfig
 } from "../src/lib/polymarketTrading.js";
+
+const apiCreds = { key: "key", secret: "secret", passphrase: "passphrase" };
 
 test("Polymarket trade intents accept bounded market and limit orders", () => {
   const market = normalizePolymarketTradeIntent({ tokenId: "123", eventId: "7", side: "buy", orderKind: "market", amount: 25 });
@@ -43,4 +46,50 @@ test("Polymarket trading remains feature-gated until builder configuration is co
   assert.equal(on.relayerConfigured, true);
   assert.match(POLYMARKET_CONTRACTS.pUsd, /^0x[0-9a-f]{40}$/i);
   assert.match(POLYMARKET_CONTRACTS.exchange, /^0x[0-9a-f]{40}$/i);
+});
+
+test("Polymarket account restart derives an existing API key before trying to create one", async () => {
+  const calls = [];
+  const result = await createOrDerivePolymarketApiKey({
+    deriveApiKey: async () => { calls.push("derive"); return apiCreds; },
+    createApiKey: async () => { calls.push("create"); throw new Error("should not create"); }
+  });
+  assert.deepEqual(result, apiCreds);
+  assert.deepEqual(calls, ["derive"]);
+});
+
+test("Polymarket first setup creates credentials when no derived key exists", async () => {
+  const calls = [];
+  const result = await createOrDerivePolymarketApiKey({
+    deriveApiKey: async () => { calls.push("derive"); throw new Error("not found"); },
+    createApiKey: async () => { calls.push("create"); return apiCreds; }
+  });
+  assert.deepEqual(result, apiCreds);
+  assert.deepEqual(calls, ["derive", "create"]);
+});
+
+test("Polymarket concurrent setup re-derives after another request creates the key", async () => {
+  const calls = [];
+  let derives = 0;
+  const result = await createOrDerivePolymarketApiKey({
+    deriveApiKey: async () => {
+      calls.push("derive");
+      derives += 1;
+      if (derives === 1) throw new Error("not found");
+      return apiCreds;
+    },
+    createApiKey: async () => { calls.push("create"); throw new Error("Could not create api key"); }
+  });
+  assert.deepEqual(result, apiCreds);
+  assert.deepEqual(calls, ["derive", "create", "derive"]);
+});
+
+test("Polymarket credential outages return a stable account message", async () => {
+  await assert.rejects(
+    () => createOrDerivePolymarketApiKey({
+      deriveApiKey: async () => { throw new Error("provider derive detail"); },
+      createApiKey: async () => { throw new Error("Could not create api key"); }
+    }),
+    /trading account credentials are temporarily unavailable/
+  );
 });

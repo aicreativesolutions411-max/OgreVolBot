@@ -129,6 +129,9 @@ test("Poly Hub and Telegram integration keep trading internal, idempotent, opt-i
   assert.match(page, /\/polytrack 0xYourWallet/);
   assert.match(page, /\/polyshare on/);
   assert.match(page, /\/polyorders/);
+  assert.match(page, /class="back-terminal" href="\/"[^>]*>← Back to Terminal<\/a>/);
+  assert.match(page, /\.nav \.telegram-link\{display:none\}/);
+  assert.doesNotMatch(page, /\.nav a:first-child\{display:none\}/);
   for (const tab of ["markets", "portfolio", "orders", "account", "telegram"]) assert.match(page, new RegExp(`data-hub-tab="${tab}"`));
   for (const view of ["trending", "new", "ending", "liquid", "crypto", "politics", "sports"]) assert.match(page, new RegExp(`data-market-view="${view}"`));
   assert.doesNotMatch(page, /href="https:\/\/polymarket\.com/);

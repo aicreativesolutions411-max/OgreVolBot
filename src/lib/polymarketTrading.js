@@ -108,6 +108,23 @@ function publicOrder(order = {}) {
   };
 }
 
+function validApiCreds(creds) {
+  return Boolean(creds && String(creds.key || "").trim() && String(creds.secret || "").trim() && String(creds.passphrase || "").trim());
+}
+
+export async function createOrDerivePolymarketApiKey(client) {
+  // Existing wallets should derive nonce-0 credentials first. The current v2 SDK helper calls
+  // create first and does not catch the "already used" response, so every service restart can
+  // strand an account that worked before. A final derive also covers concurrent first setup.
+  for (const method of ["deriveApiKey", "createApiKey", "deriveApiKey"]) {
+    try {
+      const creds = await client[method]();
+      if (validApiCreds(creds)) return creds;
+    } catch {}
+  }
+  throw new Error("Polymarket trading account credentials are temporarily unavailable.");
+}
+
 export function createPolymarketTradingService({ env = process.env } = {}) {
   const config = polymarketTradingConfig(env);
   const contexts = new Map();
@@ -146,7 +163,7 @@ export function createPolymarketTradingService({ env = process.env } = {}) {
       throwOnError: true,
       retryOnError: true
     });
-    const creds = await l1Client.createOrDeriveApiKey();
+    const creds = await createOrDerivePolymarketApiKey(l1Client);
     const client = new ClobClient({
       host: config.host,
       chain: Chain.POLYGON,
