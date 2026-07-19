@@ -66,6 +66,9 @@ test("owner analytics is short-lived and preview-safe, excludes passive group me
   assert.match(serverSource, /OWNER_ANALYTICS_TICKET_TTL_MS = 5 \* 60 \* 1000/);
   assert.match(serverSource, /OWNER_ANALYTICS_SESSION_TTL_MS = 30 \* 60 \* 1000/);
   assert.match(serverSource, /validateOwnerAnalyticsTicket\(ticket\)/);
+  assert.match(serverSource, /function issueOwnerAnalyticsTicket[\s\S]{0,900}signVerifyToken/);
+  assert.match(serverSource, /function validateOwnerAnalyticsTicket[\s\S]{0,1200}readVerifyToken/);
+  assert.match(serverSource, /function validateOwnerAnalyticsTicket[\s\S]{0,1200}signed\.kind !== "owner-analytics"/);
   const validatorStart = serverSource.indexOf("function validateOwnerAnalyticsTicket(");
   const validatorEnd = serverSource.indexOf("function createOwnerAnalyticsSession(", validatorStart);
   assert.ok(validatorStart > 0 && validatorEnd > validatorStart);
