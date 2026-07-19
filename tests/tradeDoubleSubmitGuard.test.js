@@ -3672,10 +3672,15 @@ test("Airdrop and wallet maps trace Solana/.sol and Robinhood fund flows on web 
   assert.match(flowMap, /FUNDERS/);
   assert.match(functionBody(serverSource, "buildSubjectMap"), /buildRhWalletFundMap/);
   assert.match(functionBody(serverSource, "buildSubjectMap"), /buildSolanaWalletFundMap/);
+  assert.match(functionBody(serverSource, "buildRhTokenHolderMap"), /action=getTokenHolders/);
+  assert.match(functionBody(serverSource, "buildRhTokenHolderMap"), /item\?\.address_hash\?\.hash/);
   assert.match(serverSource, /requestUrl\.searchParams\.get\("domain"\)/);
   assert.match(serverSource, /resolveWalletDomainToAddress\(rawTarget\)/);
   assert.match(serverSource, /"fundmap", "funds", "flow"/);
   assert.match(functionBody(serverSource, "handleTelegramMapCommand"), /resolveWalletDomainToAddress/);
+  assert.match(functionBody(serverSource, "handleTelegramMapCommand"), /reply\?\.reply_markup\?\.inline_keyboard/);
+  assert.match(functionBody(serverSource, "handleTelegramMapCommand"), /0\[xX\]\[0-9a-fA-F\]\{40\}/);
+  assert.ok(functionBody(serverSource, "handleTelegramMapCommand").indexOf("...buttonHints") < functionBody(serverSource, "handleTelegramMapCommand").indexOf("reply?.text"));
   assert.match(functionBody(serverSource, "handleMapCallback"), /parts\[2\] === "funds"/);
   assert.match(functionBody(serverSource, "handleMapCallback"), /forceWallet: parts\[0\] === "mapw"/);
   assert.match(functionBody(serverSource, "mapTelegramDetailLines"), /Recent traded coins/);
