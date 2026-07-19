@@ -190,8 +190,13 @@ test("Poly Hub and Telegram integration keep trading internal, idempotent, opt-i
 test("/meme is a Solana-only daily top ten ranked by 24h volume then market cap", () => {
   const server = read("../src/index.js");
   assert.match(server, /parseCommandWithArgument\(text, \["meme", "memes"\]\)/);
-  assert.match(server, /webLivePairs\(`tg:\$\{chatId\}:daily-meme`, "dexTrending"/);
+  assert.match(server, /fetchMoralisTrendingCoins\(\{ ttlMs: 60_000 \}\)/);
+  assert.match(server, /fetchLiveCategoryCandidates\("memeMovers"/);
+  assert.match(server, /fetchSniperCandidates\(\{ ttlMs: 30_000/);
+  assert.match(server, /rowsFromCachedMarketFeeds\(\)/);
+  assert.doesNotMatch(server, /webLivePairs\(`tg:\$\{chatId\}:daily-meme`, "dexTrending"/);
   assert.match(server, /solanaPublicKeyLike\(mint\)/);
+  assert.match(server, /if \(!hasRankData\) return false;\s+seen\.add\(mint\)/);
   assert.match(server, /firstMeaningfulNumber\(b\.volumeH24, b\.volume24h\)/);
   assert.match(server, /firstMeaningfulNumber\(b\.marketCap, b\.marketCapUsd, b\.fdv\)/);
   assert.match(server, /\.slice\(0, 10\)/);

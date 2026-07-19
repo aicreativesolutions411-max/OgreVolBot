@@ -1813,7 +1813,7 @@ test("owner growth stats track web, Telegram, wallets, groups, and generated sit
   assert.match(serverSource, /async function platformGrowthSnapshot\(/);
   assert.match(serverSource, /async function handlePlatformGrowthCommand\(/);
   assert.match(functionBody(serverSource, "handleMessage"), /adminstats[\s\S]*platformstats/);
-  assert.match(functionBody(serverSource, "handleMessage"), /That command is for SlimeWire admins/);
+  assert.match(functionBody(serverSource, "handleMessage"), /That command is owner-only/);
   assert.match(functionBody(serverSource, "handleMessage"), /platform totals stay private/);
   assert.match(functionBody(serverSource, "walletRecord"), /createdAt: new Date\(\)\.toISOString\(\)/);
   const snapshot = functionBody(serverSource, "platformGrowthSnapshot");
@@ -1821,11 +1821,11 @@ test("owner growth stats track web, Telegram, wallets, groups, and generated sit
   assert.match(serverSource, /function tradeUsageStats\(/);
   assert.match(serverSource, /function countTradedWallets\(/);
   const growth = functionBody(serverSource, "handlePlatformGrowthCommand");
-  assert.match(growth, /SlimeWire Growth/);
-  assert.match(growth, /traded wallets/);
+  assert.match(growth, /SlimeWire Owner Analytics/);
+  assert.match(growth, /Direct bot users/);
   assert.match(growth, /completed buys\/sells/);
-  assert.match(growth, /Trading users/);
-  assert.match(growth, /bot groups/);
+  assert.match(growth, /Top users/);
+  assert.match(growth, /Open private dashboard/);
 });
 
 test("KOL Call Feed watches public sources, is admin-selected, deduped, and posts one combined scan", () => {
@@ -2746,8 +2746,9 @@ test("/alpharadar toggles per-group (admin) + DM opt-in", () => {
   assert.match(cmd, /roseAdminIdentity\(chatId\)/);                  // group admin gate
   assert.match(cmd, /setGroupBotFeature\(chatId, "alphaRadar", on\)/);
   assert.match(serverSource, /parseCommandWithArgument\(text, \["alpharadar", "alpha_radar", "alphascan"\]\)/);
-  // targets = opted-in groups (feature toggle) + DM subscribers
-  assert.match(functionBody(serverSource, "alphaRadarTargets"), /groupBotFeatureOn\(e, "alphaRadar"\)/);
+  // Legacy Alpha Radar remains DM-only; opted-in groups are migrated to Smart Calls.
+  assert.doesNotMatch(functionBody(serverSource, "alphaRadarTargets"), /groupBotFeatureOn/);
+  assert.match(functionBody(serverSource, "smartCallTargets"), /groupBotFeatureOn\(entry, "alphaRadar"\)/);
 });
 
 // ---- Scan Back reliability + Alpha Radar replaces the short-term plays for opted-in groups ----
@@ -2841,15 +2842,61 @@ test("skin-in-the-game callers: a call only verifies if the (opted-in) caller ac
 });
 
 // ---- Signals hub + Exit Radar: sell signals nobody gives, one clean opt-in menu ----
-test("/signals is one opt-in menu (Exit Radar + Alpha Radar toggles)", () => {
+test("/signals is one opt-in menu (personal radars + group Smart Calls)", () => {
   const menu = functionBody(serverSource, "signalsMenu");
   assert.match(menu, /callback_data: "sig:exit"/);
   assert.match(menu, /callback_data: "sig:alpha"/);
   assert.match(menu, /callback_data: "sig:galpha"/);        // group alpha toggle (admin)
+  assert.match(menu, /callback_data: "sig:roster"/);        // visible active top-30 roster
+  assert.match(menu, /Smart Calls/);
   assert.match(serverSource, /parseCommandWithArgument\(text, \["signals", "alerts", "radar"\]\)/);
   assert.match(serverSource, /startsWith\("sig:"\)/);
   // group toggle is admin-gated
   assert.match(functionBody(serverSource, "handleSignalsCallback"), /isTgChatAdmin\(chatId, userId\)/);
+});
+test("Smart Calls keeps a durable rolling top 30 and only retires weak callers after a real sample", () => {
+  assert.match(serverSource, /const SMART_CALL_ROSTER_SIZE = 30/);
+  assert.match(serverSource, /const SMART_CALL_MIN_SAMPLE = 8/);
+  assert.match(functionBody(serverSource, "smartCallsPath"), /smart-calls\.json/);
+  const roster = functionBody(serverSource, "refreshSmartCallRoster");
+  assert.match(roster, /refreshKolscanTop/);                 // live leaderboard refresh
+  assert.match(roster, /autoKolWallets/);                   // proven provider winners
+  assert.match(roster, /trackedKolWallets/);                // growing KOL database
+  assert.match(roster, /walletObs/);                        // SlimeWire's learned winners
+  assert.match(roster, /stats\.settled >= SMART_CALL_MIN_SAMPLE/);
+  assert.match(roster, /slice\(0, SMART_CALL_ROSTER_SIZE\)/);
+  assert.match(functionBody(serverSource, "smartCallRosterView"), /active top/);
+});
+test("Smart Calls detects only new wallet/post calls and no-ops when no group opted in", () => {
+  const wallet = functionBody(serverSource, "smartCallWalletTick");
+  assert.match(wallet, /if \(!targets\.any\) return/);       // no listener → no RPC/provider spend
+  assert.match(wallet, /hadBaseline/);                       // never replay history on deploy
+  assert.match(wallet, /if \(!parsed\.checked\) continue/);  // transient parse/RPC failures retry next tick
+  assert.match(wallet, /getSignaturesForAddress/);
+  assert.match(wallet, /recordSmartCall/);
+  const parsed = functionBody(serverSource, "smartCallParsedWalletBuys");
+  assert.match(parsed, /parseHeliusSwap/);                    // fast enhanced path
+  assert.match(parsed, /getParsedTransaction/);              // free RPC fallback
+  const posts = functionBody(serverSource, "smartCallPostTick");
+  assert.match(posts, /postBaselines/);                       // X history baseline
+  assert.match(posts, /handles\.map.*from:/);                 // one query covers all 30 quickly
+  assert.match(posts, /extractMintsFromText/);
+  assert.match(posts, /recordSmartCall/);
+});
+test("Smart Call messages carry website Chart/Quick Buy and verified milestone receipts", () => {
+  const record = functionBody(serverSource, "recordSmartCall");
+  assert.match(record, /if \(call\)/);                        // one first alert per mint
+  assert.match(record, /alphaRadarFetchMc/);                 // entry MC snapshot
+  const keyboard = functionBody(serverSource, "smartCallKeyboard");
+  assert.match(keyboard, /links\.site/);
+  assert.match(keyboard, /links\.siteBuy/);
+  const receipts = functionBody(serverSource, "smartCallReceiptTick");
+  assert.match(receipts, /SMART_CALL_MILESTONES/);
+  assert.match(receipts, /call\.peakMc \/ call\.entryMc/);
+  assert.match(receipts, /Verified from the original tracked entry/);
+  assert.match(serverSource, /setInterval\(\(\) => \{ void smartCallWalletTick\(\); \}, 20_000\)/);
+  assert.match(serverSource, /setInterval\(\(\) => \{ void smartCallPostTick\(\); \}, 30_000\)/);
+  assert.match(serverSource, /setInterval\(\(\) => \{ void smartCallReceiptTick\(\); \}, 5 \* 60_000\)/);
 });
 test("Exit Radar pings take-profit on your OWN open bags when a coin tops — advisory, never auto-sells", () => {
   const poll = functionBody(serverSource, "pollExitRadar");
@@ -2862,12 +2909,13 @@ test("Exit Radar pings take-profit on your OWN open bags when a coin tops — ad
   assert.match(serverSource, /setInterval\(\(\) => \{ void pollExitRadar\(\); \}, 60_000\)/);
 });
 
-// ---- Menu reorg: 🎯 Trench super-module in the Rose-style settings menu + Narrative/Graduation ----
+// ---- Menu reorg: 🎯 Trench super-module with unused Narrative/Graduation hidden ----
 test("Trench super-menu folds all trench features into the existing organized settings menu", () => {
   assert.match(functionBody(serverSource, "groupBotMenuMarkup"), /callback_data: "gb:m:trench"/);
   assert.match(functionBody(serverSource, "groupBotModuleView"), /if \(module === "trench"\) return trenchMenuView\(\)/);
   const trench = functionBody(serverSource, "trenchMenuView");
-  for (const cb of ["gb:go:snipe", "gb:go:room", "gb:go:signals", "gb:go:lb", "gb:go:narrative", "gb:go:grad"]) assert.ok(trench.includes(cb), `trench menu → ${cb}`);
+  for (const cb of ["gb:go:snipe", "gb:go:room", "gb:go:signals", "gb:go:lb"]) assert.ok(trench.includes(cb), `trench menu → ${cb}`);
+  assert.doesNotMatch(trench, /gb:go:narrative|gb:go:grad/);
   // Trench + its launchers are member-facing: routed BEFORE the settings admin-gate
   const cb = functionBody(serverSource, "handleGroupBotCallback");
   const trenchIdx = cb.indexOf('data === "gb:m:trench"');
@@ -2880,10 +2928,11 @@ test("Trench super-menu folds all trench features into the existing organized se
   assert.match(trench, /callback_data: "pe:open"/);                 // ⚡ set buy preset in chat
   assert.match(trench, /text: "⚙️ Group Settings \(admins\)", callback_data: "gb:home"/);
   assert.match(trench, /🐸 <b>SlimeWire — the room's toolkit<\/b>/);
-  // Scan card menu reaches the community tools (per-coin) via the Room Tools + Narratives entries.
+  // Scan card menu reaches community tools and Smart Calls without the unused Narrative entry.
   const sm = functionBody(serverSource, "scanMenuKeyboard");
   assert.match(sm, /callback_data: "gb:m:trench"/);
-  assert.match(sm, /callback_data: "gb:go:narrative"/);
+  assert.match(sm, /callback_data: "gb:go:signals"/);
+  assert.doesNotMatch(sm, /gb:go:narrative|gb:go:grad/);
 });
 test("Narrative Radar: metas are tappable → LIVE coins only (dedup by ticker, drop dust, top MCs)", () => {
   assert.match(functionBody(serverSource, "narrativeMetas"), /recentLaunchers\.values\(\)/);

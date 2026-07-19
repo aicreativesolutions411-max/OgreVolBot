@@ -6,6 +6,7 @@ const funSource = fs.readFileSync(new URL("../web/public/fun.js", import.meta.ur
 const funHtml = fs.readFileSync(new URL("../web/public/fun.html", import.meta.url), "utf8");
 const ggSource = fs.readFileSync(new URL("../web/public/gg.html", import.meta.url), "utf8");
 const indexSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
+const ownerAnalyticsHtml = fs.readFileSync(new URL("../web/public/owner-analytics.html", import.meta.url), "utf8");
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 
 test("Fun mobile automation tools stay embedded in the Fun shell", () => {
@@ -42,11 +43,34 @@ test("Fun NFT tab manages coins that were already launched", () => {
   assert.match(ggSource, /same SlimeWire profile that launched this coin/);
 });
 
-test("Telegram admin stats include paged per-profile trade and referral usage", () => {
-  assert.match(serverSource, /const profileRows = Object\.entries\(auth\.profiles/);
-  assert.match(serverSource, /volumeSol: referralSolString\(totals\.volume\)/);
+test("Telegram owner stats show named direct users, trade usage, referrals, and a private dashboard", () => {
+  assert.match(serverSource, /async function platformOwnerAnalyticsSnapshot\(/);
+  assert.match(serverSource, /ownerAnalyticsDisplayName\(profile, telegramUser\)/);
   assert.match(serverSource, /row\.trades} trades/);
-  assert.match(serverSource, /row\.tradedWallets} wallets/);
+  assert.match(serverSource, /row\.totalWallets} wallets/);
   assert.match(serverSource, /row\.referrals} referrals/);
-  assert.match(serverSource, /\/adminstats \$\{page === totalPages \? 1 : page \+ 1}/);
+  assert.match(serverSource, /Open private dashboard/);
+  assert.match(serverSource, /\/adminstats today/);
+});
+
+test("owner analytics is one-time gated, excludes passive group members, and exposes no recovery data", () => {
+  assert.match(serverSource, /OWNER_ANALYTICS_TICKET_TTL_MS = 5 \* 60 \* 1000/);
+  assert.match(serverSource, /OWNER_ANALYTICS_SESSION_TTL_MS = 30 \* 60 \* 1000/);
+  assert.match(serverSource, /ownerAnalyticsTickets\.delete\(key\)/);
+  assert.match(serverSource, /HttpOnly; Secure; SameSite=Strict/);
+  assert.match(serverSource, /X-Robots-Tag/);
+  assert.match(serverSource, /Content-Security-Policy/);
+  assert.match(serverSource, /requestUrl\.pathname === "\/owner-analytics"/);
+  assert.match(serverSource, /pathname === "\/api\/web\/owner-analytics"/);
+  assert.match(serverSource, /if \(isPrivateChat\(message\.chat\)\) await recordTelegramGrowthUser\(userId, message\.from\)/);
+  const snapshotStart = serverSource.indexOf("async function platformOwnerAnalyticsSnapshot(");
+  const snapshotEnd = serverSource.indexOf("async function platformGrowthSnapshot(", snapshotStart);
+  const snapshot = serverSource.slice(snapshotStart, snapshotEnd);
+  assert.doesNotMatch(snapshot, /readGroupMentions|rememberGroupMentionMember/);
+  assert.match(snapshot, /directTelegramUsers/);
+  assert.match(serverSource, /name: "Needs profile"/);
+  assert.doesNotMatch(ownerAnalyticsHtml, /privateKey|localStorage/i);
+  assert.match(ownerAnalyticsHtml, /Direct bot users/);
+  assert.match(ownerAnalyticsHtml, /Referral leaders/);
+  assert.match(ownerAnalyticsHtml, /credentials:"same-origin"/);
 });

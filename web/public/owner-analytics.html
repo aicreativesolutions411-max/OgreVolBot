@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <title>SlimeWire Owner Analytics</title>
+  <style>
+    :root{color-scheme:dark;--bg:#020703;--panel:#071109;--panel2:#0a160d;--line:#17351d;--line2:#275f31;--green:#7cff35;--green2:#b8ff87;--text:#f2f7f1;--muted:#8da38f;--warn:#ffc85a}
+    *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:radial-gradient(circle at 10% 0,#0a1c0d 0,transparent 34%),var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}button,input,select{font:inherit}
+    .shell{width:min(1500px,calc(100% - 32px));margin:auto;padding:24px 0 48px}.top{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:18px 0 24px;border-bottom:1px solid var(--line)}
+    .brand{display:flex;align-items:center;gap:13px}.mark{display:grid;place-items:center;width:44px;height:44px;border:1px solid var(--line2);border-radius:14px;background:linear-gradient(145deg,#153b1c,#071009);color:var(--green);font-size:24px;box-shadow:0 0 25px #65ff2922}.eyebrow{color:var(--green);font-size:12px;font-weight:900;letter-spacing:.16em}.brand h1{font-size:clamp(21px,3vw,32px);margin:3px 0 0;letter-spacing:-.03em}.actions{display:flex;gap:9px;flex-wrap:wrap;justify-content:flex-end}
+    .btn,.period button{border:1px solid var(--line2);background:#08130a;color:var(--green2);border-radius:11px;padding:10px 14px;font-weight:800;cursor:pointer}.btn:hover,.period button:hover{border-color:var(--green)}.btn.quiet{color:var(--muted)}
+    .toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:22px 0 14px}.period{display:flex;gap:7px;flex-wrap:wrap}.period button.active{background:var(--green);border-color:var(--green);color:#051005;box-shadow:0 0 20px #7cff3530}.status{color:var(--muted);font-size:13px;text-align:right}
+    .metrics{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:10px}.metric{min-height:112px;padding:16px;border:1px solid var(--line);border-radius:15px;background:linear-gradient(150deg,var(--panel2),var(--panel));position:relative;overflow:hidden}.metric:after{content:"";position:absolute;inset:auto -22px -35px auto;width:90px;height:90px;border-radius:50%;background:#7cff3509}.metric .label{color:var(--muted);font-size:11px;font-weight:800;letter-spacing:.09em;text-transform:uppercase}.metric .value{font:800 clamp(24px,3vw,35px)/1 ui-monospace,SFMono-Regular,Consolas,monospace;margin:13px 0 8px;color:var(--text)}.metric .note{color:#719177;font-size:12px}
+    .grid{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(290px,.8fr);gap:14px;margin-top:14px}.panel{border:1px solid var(--line);border-radius:16px;background:linear-gradient(150deg,#08130a,#050b06);overflow:hidden}.panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line)}.panel h2{font-size:16px;margin:0}.panel-copy{color:var(--muted);font-size:12px;margin-top:4px}.search{width:min(300px,46vw);border:1px solid var(--line2);border-radius:10px;background:#020703;color:var(--text);padding:10px 12px;outline:none}.search:focus{border-color:var(--green)}
+    .table-wrap{overflow:auto;max-height:670px}table{border-collapse:collapse;width:100%;min-width:900px}th,td{text-align:right;padding:13px 14px;border-bottom:1px solid #102515;white-space:nowrap}th{position:sticky;top:0;z-index:2;background:#071009;color:#79947e;font-size:10px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}th:first-child,td:first-child{text-align:left}.rank{color:#58705d;width:38px}.user{display:flex;align-items:center;gap:10px}.avatar{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:#102417;border:1px solid #25562d;color:var(--green);font-weight:900}.name{font-weight:800}.sub{font-size:11px;color:var(--muted);margin-top:2px}.needs{color:var(--warn)}.sol{color:var(--green2);font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.empty{padding:50px 20px;text-align:center;color:var(--muted)}
+    .side-list{padding:8px}.ref{display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:13px 10px;border-bottom:1px solid #102515}.ref:last-child{border-bottom:0}.ref-num{color:#648069;font:700 12px ui-monospace,monospace}.ref strong{display:block;overflow:hidden;text-overflow:ellipsis}.ref small{color:var(--muted)}.ref-stat{text-align:right}.ref-stat b{display:block;color:var(--green2)}
+    .privacy{display:flex;gap:10px;margin-top:14px;padding:14px 16px;border:1px solid var(--line);border-radius:13px;color:var(--muted);font-size:12px;line-height:1.5}.privacy b{color:var(--green2)}
+    @media(max-width:1180px){.metrics{grid-template-columns:repeat(3,1fr)}.grid{grid-template-columns:1fr}.table-wrap{max-height:none}}
+    @media(max-width:650px){.shell{width:min(100% - 20px,1500px);padding-top:8px}.top{align-items:flex-start}.brand h1{font-size:20px}.mark{width:38px;height:38px}.actions{flex-direction:column}.btn{padding:8px 10px;font-size:12px}.toolbar{align-items:flex-start;flex-direction:column}.status{text-align:left}.metrics{grid-template-columns:repeat(2,1fr)}.metric{min-height:98px;padding:13px}.metric .value{font-size:24px}.panel-head{align-items:flex-start;flex-direction:column}.search{width:100%}.grid{gap:10px}.privacy{margin-bottom:22px}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="top">
+      <div class="brand"><div class="mark">♜</div><div><div class="eyebrow">SLIMEWIRE · PRIVATE</div><h1>Owner Analytics</h1></div></div>
+      <div class="actions"><button class="btn" id="refresh">Refresh</button><button class="btn quiet" id="logout">Sign out</button></div>
+    </header>
+    <section class="toolbar">
+      <div class="period" id="periods"><button data-period="today">Today</button><button data-period="7d">7 days</button><button data-period="30d">30 days</button><button class="active" data-period="all">All time</button></div>
+      <div class="status" id="status">Loading private data…</div>
+    </section>
+    <section class="metrics" id="metrics"></section>
+    <section class="grid">
+      <article class="panel">
+        <div class="panel-head"><div><h2>Top users</h2><div class="panel-copy">Ranked by completed trade volume. Click a column to sort.</div></div><input class="search" id="search" type="search" placeholder="Search real profile or channel" autocomplete="off"></div>
+        <div class="table-wrap"><table><thead><tr><th data-sort="rank">User</th><th data-sort="channel">Channel</th><th data-sort="trades">Trades</th><th data-sort="buys">Buys</th><th data-sort="sells">Sells</th><th data-sort="volume">SOL volume</th><th data-sort="wallets">Wallets</th><th data-sort="referrals">Referrals</th><th data-sort="last">Last active</th></tr></thead><tbody id="users"></tbody></table><div class="empty" id="empty" hidden>No matching users.</div></div>
+      </article>
+      <aside class="panel">
+        <div class="panel-head"><div><h2>Referral leaders</h2><div class="panel-copy">Joined, active and earned.</div></div></div>
+        <div class="side-list" id="referrals"></div>
+      </aside>
+    </section>
+    <div class="privacy"><span>🔒</span><div><b>Private owner session.</b> Telegram users only count after they directly use the bot. Passive group members are excluded. No wallet addresses, private keys, seed phrases or restore material are sent to this page. This session expires automatically.</div></div>
+  </main>
+  <script>
+    (()=>{
+      const $=(id)=>document.getElementById(id), state={period:"all",users:[],sort:"volume",direction:-1};
+      const safeNumber=(value)=>Number.isFinite(Number(value))?Number(value):0;
+      const fmt=(value)=>new Intl.NumberFormat(undefined,{maximumFractionDigits:2}).format(safeNumber(value));
+      const date=(value)=>{const d=new Date(value);return Number.isFinite(d.getTime())?d.toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}):"—"};
+      const initials=(name)=>String(name||"?").replace(/^@/,"").split(/\s+/).map(x=>x[0]).join("").slice(0,2).toUpperCase()||"?";
+      const node=(tag,className,text)=>{const el=document.createElement(tag);if(className)el.className=className;if(text!==undefined)el.textContent=text;return el};
+      function metric(label,value,note){const card=node("div","metric"),l=node("div","label",label),v=node("div","value",value),n=node("div","note",note);card.append(l,v,n);return card}
+      function renderMetrics(s){const el=$("metrics");el.replaceChildren(
+        metric("Direct bot users",fmt(s.directTelegramUsers),"DM users only · groups excluded"),
+        metric("Web accounts",fmt(s.webAccounts),`${fmt(s.linkedAccounts)} linked to Telegram`),
+        metric("User wallets",fmt(s.wallets),`${fmt(s.telegramWallets)} TG · ${fmt(s.webWallets)} web`),
+        metric("Active traders",fmt(s.activeTraders),`${fmt(s.buys)} buys · ${fmt(s.sells)} sells`),
+        metric("SOL volume",fmt(s.volumeSol),`${fmt(s.trades)} completed trades`),
+        metric("Referrals",fmt(s.referrals),`${fmt(s.activeReferrals)} active · ${fmt(s.needsProfile)} need names`)
+      )}
+      function comparator(a,b){let av,bv;switch(state.sort){case"channel":av=a.channel;bv=b.channel;break;case"trades":av=a.trades;bv=b.trades;break;case"buys":av=a.buys;bv=b.buys;break;case"sells":av=a.sells;bv=b.sells;break;case"wallets":av=a.totalWallets;bv=b.totalWallets;break;case"referrals":av=a.referrals;bv=b.referrals;break;case"last":av=Date.parse(a.lastActiveAt)||0;bv=Date.parse(b.lastActiveAt)||0;break;case"rank":av=a.name;bv=b.name;break;default:av=safeNumber(a.volumeSol);bv=safeNumber(b.volumeSol)}if(typeof av==="string")return av.localeCompare(bv)*state.direction;return(av-bv)*state.direction}
+      function renderUsers(){const q=$("search").value.trim().toLowerCase();const list=state.users.filter(r=>!q||`${r.name} ${r.telegramUsername} ${r.channel}`.toLowerCase().includes(q)).sort(comparator);const body=$("users");body.replaceChildren();list.forEach((r,i)=>{const tr=document.createElement("tr"),who=node("td"),wrap=node("div","user"),avatar=node("div","avatar",initials(r.name)),copy=node("div"),name=node("div",`name${r.hasRealName?"":" needs"}`,r.name),sub=node("div","sub",r.telegramUsername||`${r.channel} account`);copy.append(name,sub);wrap.append(avatar,copy);who.append(wrap);tr.append(who,node("td","",r.channel),node("td","",fmt(r.trades)),node("td","",fmt(r.buys)),node("td","",fmt(r.sells)),node("td","sol",`${fmt(r.volumeSol)} SOL`),node("td","",fmt(r.totalWallets)),node("td","",fmt(r.referrals)),node("td","",date(r.lastActiveAt)));body.append(tr)});$("empty").hidden=Boolean(list.length)}
+      function renderReferrals(rows){const el=$("referrals");el.replaceChildren();if(!rows.length){el.append(node("div","empty","No attributed referrals in this period."));return}rows.slice(0,30).forEach((r,i)=>{const item=node("div","ref"),num=node("div","ref-num",`#${i+1}`),copy=node("div"),name=node("strong",r.hasRealName?"":"needs",r.name),detail=node("small","",`${fmt(r.activeReferrals)} active · ${fmt(r.referralEarnedSol)} SOL earned`),stat=node("div","ref-stat"),count=node("b","",fmt(r.referrals)),label=node("small","","joined");copy.append(name,detail);stat.append(count,label);item.append(num,copy,stat);el.append(item)})}
+      async function load(){$("status").textContent="Refreshing…";try{const res=await fetch(`/api/web/owner-analytics?period=${encodeURIComponent(state.period)}`,{credentials:"same-origin",cache:"no-store"});if(res.status===404){location.replace("/");return}const data=await res.json();if(!res.ok||!data.ok)throw new Error("Could not load analytics");state.users=data.users||[];renderMetrics(data.summary||{});renderUsers();renderReferrals(data.referrals||[]);$("status").textContent=`Updated ${date(data.generatedAt)} · ${state.users.length} matched users`}catch(error){$("status").textContent=error.message||"Could not load analytics"}}
+      $("periods").addEventListener("click",(event)=>{const button=event.target.closest("button[data-period]");if(!button)return;state.period=button.dataset.period;document.querySelectorAll("[data-period]").forEach(x=>x.classList.toggle("active",x===button));load()});
+      $("search").addEventListener("input",renderUsers);$("refresh").addEventListener("click",load);
+      document.querySelector("thead").addEventListener("click",(event)=>{const th=event.target.closest("th[data-sort]");if(!th)return;if(state.sort===th.dataset.sort)state.direction*=-1;else{state.sort=th.dataset.sort;state.direction=th.dataset.sort==="rank"||th.dataset.sort==="channel"?1:-1}renderUsers()});
+      $("logout").addEventListener("click",async()=>{await fetch("/api/web/owner-analytics?action=logout",{method:"POST",credentials:"same-origin",cache:"no-store"}).catch(()=>{});location.replace("/")});
+      load();
+    })();
+  </script>
+</body>
+</html>
