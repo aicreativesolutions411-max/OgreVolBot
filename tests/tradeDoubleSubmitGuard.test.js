@@ -3766,6 +3766,7 @@ test("airdrop and holder maps expose real cluster summaries + liquidity fallback
   const mapKeyboard = functionBody(serverSource, "mapCardKeyboard");
   assert.match(mapKeyboard, /mapDrillButtonText/);
   assert.doesNotMatch(mapKeyboard, /n\.name \|\| "wallet"/);
+  assert.match(mapKeyboard, /ethereum \|\| map\.mode === "funds" \? "funds" : "bags"/);
   assert.match(functionBody(serverSource, "mapTelegramClusterLines"), /Connected wallets/);
   assert.match(serverSource, /pathname === "\/api\/airdrop\/graph"/);
   assert.match(serverSource, /summary: graph\.summary \|\| null/);
