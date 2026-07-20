@@ -1514,8 +1514,52 @@ test("Buy bot keeps transaction price and market cap aligned on both chains", ()
   assert.deepEqual(resolve({ eventMarketCapUsd: 750_000, supply: 1_000_000_000 }), {
     priceUsd: 0.00075, marketCapUsd: 750_000, supply: 1_000_000_000, executionPriceUsd: 0
   });
+  // PumpPortal already reports the event MC. A burned-supply coin must retain that direct value instead
+  // of recomputing it from a guessed/lagging supply and cutting or multiplying the card MC.
+  assert.deepEqual(resolve({ eventPriceUsd: 0.00082, eventMarketCapUsd: 410_000, supply: 500_000_000 }), {
+    priceUsd: 0.00082, marketCapUsd: 410_000, supply: 500_000_000, executionPriceUsd: 0
+  });
+  // Raw base-unit supply is rejected when the scan has a coherent UI-supply implication.
+  assert.deepEqual(resolve({ eventPriceUsd: 0.00082, scanPriceUsd: 0.0008, scanMarketCapUsd: 400_000, supply: 500_000_000_000_000 }), {
+    priceUsd: 0.00082, marketCapUsd: 410_000, supply: 500_000_000, executionPriceUsd: 0
+  });
   assert.match(functionBody(serverSource, "postGroupBuy"), /resolveGroupBuyMarketSnapshot/);
   assert.match(functionBody(serverSource, "postGroupBuyRh"), /resolveGroupBuyMarketSnapshot/);
+});
+
+test("Buy bot derives Pump supply and websocket price without a guessed one-billion supply", () => {
+  const pumpMeta = functionBody(serverSource, "getPumpFunTokenMetadata");
+  const socketTrade = functionBody(serverSource, "onGroupBuyTrade");
+  const supply = functionBody(serverSource, "getGroupBuySupply");
+  assert.match(pumpMeta, /coin\?\.base_decimals/);
+  assert.match(pumpMeta, /totalSupplyRaw \/ \(10 \*\* baseDecimals\)/);
+  assert.match(pumpMeta, /supplyUi/);
+  assert.match(supply, /fetchTokenSupplyUi\(key\)/);
+  assert.match(supply, /pump\?\.supplyUi/);
+  assert.match(socketTrade, /\(solAmount \* solUsd\) \/ tokenAmount/);
+  assert.match(socketTrade, /mcSol \* solUsd/);
+  assert.doesNotMatch(socketTrade, /1_000_000_000/);
+});
+
+test("Robinhood buy watcher is decimal-safe, lossless, concurrent, and near-live", () => {
+  const meta = functionBody(noxaSource, "poolSwapMeta");
+  const buys = functionBody(noxaSource, "fetchPoolBuys");
+  const tick = functionBody(serverSource, "rhGroupBuyTick");
+  assert.match(meta, /fn: "decimals"/);
+  assert.match(meta, /fn: "totalSupply"/);
+  assert.match(buys, /formatUnits\(-amtToken, tokenDecimals\)/);
+  assert.match(buys, /formatUnits\(tokenOut, tokenDecimals\)/);
+  assert.match(buys, /formatUnits\([^\n]+quoteDecimals\)/);
+  assert.match(buys, /for \(let from = start \+ 1; from <= latest; from \+= span\)/);
+  assert.doesNotMatch(buys, /catch\s*\{\s*return \{ toBlock: latest, buys: \[\] \}/);
+  assert.match(noxaSource, /export async function fetchRhBlockNumber/);
+  assert.match(serverSource, /const RH_GROUP_BUY_POLL_MS = 3_000/);
+  assert.match(tick, /rhGroupBuyTickRunning/);
+  assert.match(tick, /runWithConcurrency\(\[\.\.\.tracked\], 6/);
+  assert.match(tick, /fetchRhBlockNumber\(CONFIG\.rhChainRpcUrl\)/);
+  assert.match(tick, /queueRhGroupBuyDelivery/);
+  assert.match(tick, /st\.lastBlock = res\.toBlock/);
+  assert.match(functionBody(serverSource, "postGroupBuyRh"), /supply: firstMeaningfulNumber\(supply, info\?\.supply\)/);
 });
 
 test("Buy Bot saves and renders Telegram custom emoji entities with a safe fallback", () => {
@@ -1637,7 +1681,7 @@ test("min buy zero keeps every observed Solana and Robinhood buy in an ordered T
   assert.match(delivery, /drainGroupBuyTradeDeliveryQueue/);
   assert.doesNotMatch(rhPoll, /slice\(0, 6\)/);
   assert.match(solPost, /min > 0 && solAmount < min/);
-  assert.match(rhPost, /min > 0 && ethAmount < min/);
+  assert.match(rhPost, /min > 0 && isEthQuote && paidAmount < min/);
   assert.match(solPost, /queueGroupBuyAlert/);
   assert.match(rhPost, /queueGroupBuyAlert/);
   assert.match(functionBody(serverSource, "groupBuyAlertRetryMs"), /retry after/);
@@ -1650,7 +1694,7 @@ test("Pump buy polling is fast, cursor-safe, and does not swallow a new coin's f
   const start = functionBody(serverSource, "startGroupBuyBot");
   const scan = functionBody(serverSource, "getGroupBuyScan");
   const post = functionBody(serverSource, "postGroupBuy");
-  assert.match(serverSource, /const GROUP_BUY_TRADE_POLL_MS = 3_000/);
+  assert.match(serverSource, /const GROUP_BUY_TRADE_POLL_MS = 1_500/);
   assert.match(serverSource, /const GROUP_BUY_TRADE_MAX_PAGES = 20/);
   assert.match(collect, /A successful empty first read is a real baseline/);
   assert.match(collect, /if \(firstPoll \|\| reachedSeen\) break/);
@@ -1658,7 +1702,8 @@ test("Pump buy polling is fast, cursor-safe, and does not swallow a new coin's f
   assert.match(start, /setTimeout\(\(\) => \{ void pollGroupBuyTrades\(\); \}, 1_000\)/);
   assert.match(start, /GROUP_BUY_TRADE_POLL_MS/);
   assert.match(scan, /groupBuyScanInFlight/);
-  assert.match(post, /scanFastTimeout\(getGroupBuyScan\(mint\), 5_000, null\)/);
+  assert.match(post, /scanFastTimeout\(scanRequest, 1_500, null\)/);
+  assert.match(post, /getGroupBuySupply\(mint, cachedScan\)/);
 });
 
 test("scan catches real pasted CAs in text without sentence false-positives", () => {

@@ -183,28 +183,44 @@ const POOL_SWAP_IFACE = new ethers.Interface([
 const POOL_SWAP_V2_IFACE = new ethers.Interface([
   "event Swap(address indexed sender,uint256 amount0In,uint256 amount1In,uint256 amount0Out,uint256 amount1Out,address indexed to)",
 ]);
-const poolToken0Cache = new Map();   // pool → token0 addr (immutable)
 const poolSwapMetaCache = new Map();
 const poolSwapHistoryCache = new Map();
 
 async function poolSwapMeta(provider, poolAddr) {
   const cached = poolSwapMetaCache.get(poolAddr);
-  if (cached) return cached;
+  if (cached) {
+    if (Date.now() - Number(cached.supplyAt || 0) < 60_000) return cached;
+    const [supply0Raw, supply1Raw] = await multicall(provider, [
+      { target: cached.token0, iface: ERC20, fn: "totalSupply" },
+      { target: cached.token1, iface: ERC20, fn: "totalSupply" }
+    ]);
+    if (supply0Raw != null) cached.supply0 = Number(ethers.formatUnits(supply0Raw, cached.dec0));
+    if (supply1Raw != null) cached.supply1 = Number(ethers.formatUnits(supply1Raw, cached.dec1));
+    cached.supplyAt = Date.now();
+    return cached;
+  }
   const [token0, token1] = await multicall(provider, [
     { target: poolAddr, iface: POOL, fn: "token0" },
     { target: poolAddr, iface: POOL, fn: "token1" }
   ]);
   if (!token0 || !token1) return null;
-  const [dec0, dec1, sym0, sym1] = await multicall(provider, [
+  const [dec0, dec1, sym0, sym1, supply0Raw, supply1Raw] = await multicall(provider, [
     { target: token0, iface: ERC20, fn: "decimals" },
     { target: token1, iface: ERC20, fn: "decimals" },
     { target: token0, iface: ERC20, fn: "symbol" },
-    { target: token1, iface: ERC20, fn: "symbol" }
+    { target: token1, iface: ERC20, fn: "symbol" },
+    { target: token0, iface: ERC20, fn: "totalSupply" },
+    { target: token1, iface: ERC20, fn: "totalSupply" }
   ]);
+  const decimals0 = Number(dec0 ?? 18);
+  const decimals1 = Number(dec1 ?? 18);
   const value = {
     token0: ethers.getAddress(token0), token1: ethers.getAddress(token1),
-    dec0: Number(dec0 ?? 18), dec1: Number(dec1 ?? 18),
-    sym0: String(sym0 || ""), sym1: String(sym1 || "")
+    dec0: decimals0, dec1: decimals1,
+    sym0: String(sym0 || ""), sym1: String(sym1 || ""),
+    supply0: supply0Raw != null ? Number(ethers.formatUnits(supply0Raw, decimals0)) : 0,
+    supply1: supply1Raw != null ? Number(ethers.formatUnits(supply1Raw, decimals1)) : 0,
+    supplyAt: Date.now(),
   };
   poolSwapMetaCache.set(poolAddr, value);
   return value;
@@ -312,19 +328,28 @@ export async function fetchPoolBuys(pool, tokenAddress, { fromBlock, rpcUrl, max
   const provider = noxaProvider(rpcUrl);
   const poolAddr = ethers.getAddress(pool);
   const token = ethers.getAddress(tokenAddress);
-  const latest = await provider.getBlockNumber();
-  const start = Number.isFinite(Number(fromBlock)) && Number(fromBlock) > 0 ? Math.max(Number(fromBlock), latest - maxSpan) : latest - 100;
-  if (start >= latest) return { toBlock: latest, buys: [] };
-  let t0 = poolToken0Cache.get(poolAddr);
-  if (!t0) {
-    try { [t0] = await multicall(provider, [{ target: poolAddr, iface: POOL, fn: "token0" }]); } catch { t0 = null; }
-    if (t0) poolToken0Cache.set(poolAddr, String(t0));
+  const [latest, meta] = await Promise.all([provider.getBlockNumber(), poolSwapMeta(provider, poolAddr)]);
+  if (!meta) throw new Error("Could not read Robinhood pool metadata");
+  const tokenIs0 = meta.token0.toLowerCase() === token.toLowerCase();
+  const tokenIs1 = meta.token1.toLowerCase() === token.toLowerCase();
+  if (!tokenIs0 && !tokenIs1) throw new Error("Tracked Robinhood token is not in the resolved pool");
+  const start = Number.isFinite(Number(fromBlock)) && Number(fromBlock) > 0 ? Number(fromBlock) : latest - 100;
+  const tokenDecimals = tokenIs0 ? meta.dec0 : meta.dec1;
+  const quoteDecimals = tokenIs0 ? meta.dec1 : meta.dec0;
+  const quoteAddress = tokenIs0 ? meta.token1 : meta.token0;
+  const quoteSymbol = tokenIs0 ? meta.sym1 : meta.sym0;
+  const tokenSupply = tokenIs0 ? meta.supply0 : meta.supply1;
+  const base = { toBlock: latest, buys: [], tokenDecimals, quoteDecimals, quoteAddress, quoteSymbol, tokenSupply };
+  if (start >= latest) return base;
+  // Read every block since the last successful cursor in bounded RPC windows. A failed read throws so
+  // the caller retries the same cursor instead of permanently dropping either the failed window or a
+  // backlog that is larger than one provider-safe range.
+  const logs = [];
+  const span = Math.max(100, Number(maxSpan) || 4_000);
+  for (let from = start + 1; from <= latest; from += span) {
+    const to = Math.min(latest, from + span - 1);
+    logs.push(...await provider.getLogs({ address: poolAddr, topics: [[SWAP_TOPIC_V3, SWAP_TOPIC_V2]], fromBlock: from, toBlock: to }));
   }
-  if (!t0) return { toBlock: latest, buys: [] };
-  const tokenIs0 = String(t0).toLowerCase() === token.toLowerCase();
-  let logs = [];
-  try { logs = await provider.getLogs({ address: poolAddr, topics: [[SWAP_TOPIC_V3, SWAP_TOPIC_V2]], fromBlock: start + 1, toBlock: latest }); }
-  catch { return { toBlock: latest, buys: [] }; }
   const buys = [];
   for (const l of logs) {
     try {
@@ -333,27 +358,36 @@ export async function fetchPoolBuys(pool, tokenAddress, { fromBlock, rpcUrl, max
         const amtToken = tokenIs0 ? d.args.amount0 : d.args.amount1;
         const amtOther = tokenIs0 ? d.args.amount1 : d.args.amount0;
         if (amtToken >= 0n) continue;                     // pool RECEIVED token → that's a sell, skip
+        const quoteAmount = Number(ethers.formatUnits(amtOther > 0n ? amtOther : -amtOther, quoteDecimals));
         buys.push({
           trader: ethers.getAddress(d.args.recipient),
-          tokens: Number(ethers.formatUnits(-amtToken, 18)),   // NOXA/RH memecoins are 18-dec; callers rescale if not
-          ethAmount: Number(ethers.formatUnits(amtOther > 0n ? amtOther : -amtOther, 18)),
-          tx: l.transactionHash, block: Number(l.blockNumber),
+          tokens: Number(ethers.formatUnits(-amtToken, tokenDecimals)),
+          quoteAmount,
+          ethAmount: quoteAddress.toLowerCase() === NOXA_RH.weth.toLowerCase() ? quoteAmount : 0,
+          tx: l.transactionHash, block: Number(l.blockNumber), logIndex: Number(l.index ?? l.logIndex ?? 0),
         });
       } else {
         const d = POOL_SWAP_V2_IFACE.parseLog(l);
         const tokenOut = tokenIs0 ? d.args.amount0Out : d.args.amount1Out;
         const otherIn = tokenIs0 ? d.args.amount1In : d.args.amount0In;
         if (tokenOut <= 0n) continue;                     // no token left the pool → not a buy
+        const quoteAmount = Number(ethers.formatUnits(otherIn, quoteDecimals));
         buys.push({
           trader: ethers.getAddress(d.args.to),
-          tokens: Number(ethers.formatUnits(tokenOut, 18)),
-          ethAmount: Number(ethers.formatUnits(otherIn, 18)),
-          tx: l.transactionHash, block: Number(l.blockNumber),
+          tokens: Number(ethers.formatUnits(tokenOut, tokenDecimals)),
+          quoteAmount,
+          ethAmount: quoteAddress.toLowerCase() === NOXA_RH.weth.toLowerCase() ? quoteAmount : 0,
+          tx: l.transactionHash, block: Number(l.blockNumber), logIndex: Number(l.index ?? l.logIndex ?? 0),
         });
       }
     } catch { /* undecodable swap */ }
   }
-  return { toBlock: latest, buys };
+  buys.sort((a, b) => a.block - b.block || a.logIndex - b.logIndex);
+  return { ...base, buys };
+}
+
+export async function fetchRhBlockNumber(rpcUrl) {
+  return noxaProvider(rpcUrl).getBlockNumber();
 }
 
 const scanCache = new Map();   // token → { at, v }
