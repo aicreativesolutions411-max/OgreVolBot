@@ -656,11 +656,12 @@ test("Telegram Buy is CA-first and scan/buy cards recover explicit 24h volume", 
   assert.match(functionBody(serverSource, "postGroupBuyRh"), /24h Vol/);
 });
 
-test("RH trading fees match the global platform, Cash Cow, and optional referral split", () => {
+test("RH trading fees stay fixed while the optional referral share comes from the total", () => {
   const trade = functionBody(serverSource, "webRhTradeCore");
-  assert.match(trade, /CONFIG\.baseTradeFeeBps \+ \(referralTarget \? CONFIG\.referralFeeBps : 0\)/);
-  assert.match(trade, /CONFIG\.cashCowTradeFeeBps/);
-  assert.match(trade, /feeWei - partnerWei - referralWei/);
+  assert.match(trade, /const feeBps = BigInt\(CONFIG\.baseTradeFeeBps\)/);
+  assert.doesNotMatch(trade, /CONFIG\.baseTradeFeeBps \+ \(referralTarget/);
+  assert.match(trade, /splitTradeFeeAllocation/);
+  assert.match(trade, /const ownerWei = feeSplit\.ownerAmount/);
   assert.match(trade, /amountRaw -= feeWei/);                // buys: fee off the ETH going in
   assert.match(trade, /rhTransferEth/);                      // skim to the platform RH fee account
   assert.match(trade, /rhFeeEvmWallet/);
@@ -1523,6 +1524,27 @@ test("Buy bot keeps transaction price and market cap aligned on both chains", ()
   assert.deepEqual(resolve({ eventPriceUsd: 0.00082, scanPriceUsd: 0.0008, scanMarketCapUsd: 400_000, supply: 500_000_000_000_000 }), {
     priceUsd: 0.00082, marketCapUsd: 410_000, supply: 500_000_000, executionPriceUsd: 0
   });
+  // DexScreener's headline MC uses circulating supply. Revalue that same circulating supply at the
+  // transaction price instead of multiplying by the larger ERC-20/SPL total supply (the ~$5k drift).
+  assert.deepEqual(resolve({
+    eventPriceUsd: 0.00004,
+    eventMarketCapUsd: 40_000,
+    scanPriceUsd: 0.000039,
+    scanMarketCapUsd: 35_100,
+    supply: 1_000_000_000,
+  }), {
+    priceUsd: 0.00004, marketCapUsd: 36_000, supply: 900_000_000, executionPriceUsd: 0
+  });
+  assert.deepEqual(resolve({
+    nativeAmount: 0.01,
+    nativeUsd: 2_000,
+    tokens: 500_000,
+    scanPriceUsd: 0.000039,
+    scanMarketCapUsd: 35_100,
+    supply: 1_000_000_000,
+  }), {
+    priceUsd: 0.00004, marketCapUsd: 36_000, supply: 900_000_000, executionPriceUsd: 0.00004
+  });
   assert.match(functionBody(serverSource, "postGroupBuy"), /resolveGroupBuyMarketSnapshot/);
   assert.match(functionBody(serverSource, "postGroupBuyRh"), /resolveGroupBuyMarketSnapshot/);
 });
@@ -2028,6 +2050,29 @@ test("referral contests: unique invite links + join attribution + leaderboard", 
   assert.match(serverSource, /handleReferralCommand\(message, userId\)/);
 });
 
+test("owner DMs cover group joins, every Buy Bot CA path, and proven callers", () => {
+  const targets = functionBody(serverSource, "telegramOwnerDmTargets");
+  assert.match(targets, /readXReplyState/);                     // persisted /xclaim works immediately after restart
+  assert.match(targets, /CONFIG\.adminUserIds/);               // Telegram owner works even without X configuration
+  assert.match(functionBody(serverSource, "handleBotChatMembershipUpdate"), /maybeDmOwnerGroupAdded/);
+  assert.match(functionBody(serverSource, "maybeDmOwnerGroupAdded"), /sendTelegramOwnerAlert/);
+  assert.match(functionBody(serverSource, "maybeDmOwnerFreshBuyBotCoin"), /sendTelegramOwnerAlert/);
+  assert.match(functionBody(serverSource, "maybeDmOwnerProvenCall"), /sendTelegramOwnerAlert/);
+  // A failed Telegram send must not consume the retry cooldown.
+  assert.match(functionBody(serverSource, "maybeDmOwnerFreshBuyBotCoin"), /for \(const owner of delivered\)/);
+  assert.match(functionBody(serverSource, "maybeDmOwnerProvenCall"), /for \(const owner of delivered\)/);
+  // Auto-paste, /track, and the menu's typed Track coin field all converge on the same hook.
+  assert.match(functionBody(serverSource, "setGroupBotToken"), /onGroupBotTokenChanged/);
+  assert.match(functionBody(serverSource, "applyGbInput"), /onGroupBotTokenChanged/);
+  assert.match(functionBody(serverSource, "handleGroupBotCommand"), /onGroupBotTokenChanged/);
+  assert.match(functionBody(serverSource, "connectLaunchOsTelegramGroup"), /onGroupBotTokenChanged/);
+  // Plain CA calls are learned even if the room has Scan Bot display turned off.
+  const explicitCall = functionBody(serverSource, "recordTelegramGroupAddressCall");
+  assert.match(explicitCall, /recordTelegramCall/);
+  assert.match(serverSource, /recordTelegramGroupAddressCall\(message, rhCaTok\)/);
+  assert.match(serverSource, /recordTelegramGroupAddressCall\(message, bareCa\[1\]\)/);
+});
+
 test("phase-2 menu: Referral tile + whales/web-verify toggles routed", () => {
   const cb = functionBody(serverSource, "handleGroupBotCallback");
   assert.match(cb, /gb:m:\(buy\|raid\|rose\|scan\|ref\)/);
@@ -2296,7 +2341,8 @@ test("viral + onboarding: win-flex card, first-run wallet CTA, fee transparency,
   assert.match(functionBody(serverSource, "showMenu"), /Create your free wallet/);
   // fee transparency in settings
   assert.match(functionBody(serverSource, "dmSettingsMenu"), /CONFIG\.baseTradeFeeBps/);
-  assert.match(functionBody(serverSource, "dmSettingsMenu"), /Base trade fee/);
+  assert.match(functionBody(serverSource, "dmSettingsMenu"), /Trade fee/);
+  assert.match(functionBody(serverSource, "dmSettingsMenu"), /0\.50% goes to SlimeWire and 0\.15% goes to the referrer/);
   // deposit view: QR of the (public) address + wired
   assert.match(serverSource, /async function showDepositView/);
   assert.match(functionBody(serverSource, "showDepositView"), /api\.qrserver\.com/);
@@ -3496,6 +3542,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const score = functionBody(serverSource, "tickerCandidateScore");
   const dominance = functionBody(serverSource, "tickerCandidateDominance");
   const leadership = functionBody(serverSource, "tickerMarketLeadership");
+  const credibleMarket = functionBody(serverSource, "tickerCandidateHasCredibleMarket");
+  const primaryMarket = functionBody(serverSource, "tickerCandidatePrimaryMarket");
   const truth = functionBody(serverSource, "handleTickerTruthCallback");
   const look = functionBody(serverSource, "handleTelegramLookCommand");
   const keyboard = functionBody(serverSource, "scanResearchKeyboard");
@@ -3523,6 +3571,12 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const scoreFn = new Function("candidate", score);
   const dominanceFn = new Function("candidate", "maxima", dominance);
   const leadershipFn = new Function("candidate", "maxima", leadership);
+  const credibleMarketFn = new Function("candidate", "maxima", credibleMarket);
+  const primaryMarketFn = new Function("tickerCandidateHasCredibleMarket", "tickerMarketRowStrength", "observations", primaryMarket)
+    .bind(null, credibleMarketFn, (marketCap, volume24h, liquidityUsd) => {
+      const mc = Math.max(0, Number(marketCap) || 0), vol = Math.max(0, Number(volume24h) || 0), liq = Math.max(0, Number(liquidityUsd) || 0);
+      return Math.sqrt(mc * vol) + Math.min(mc, vol) + liq * 0.25;
+    });
   const rhDominatesFn = new Function("rh", "sol", functionBody(serverSource, "tickerRhClearlyDominates"));
   const rhActiveFn = new Function("candidate", functionBody(serverSource, "tickerRhCandidateHasActiveMarket"));
   const rhActivityFn = new Function("candidates", functionBody(serverSource, "tickerRhActivityLeader"));
@@ -3537,6 +3591,20 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const balancedLeader = { marketCap: 500_000, volume24h: 500_000 };
   const balancedMaxima = { marketCap: 1_000_000, volume24h: 500_000 };
   assert.ok(leadershipFn(balancedLeader, balancedMaxima) > leadershipFn(oneMetricOnly, balancedMaxima), "a coin strong in both MC and volume must beat a one-metric spike");
+  // Live HORSECOCK regression: a wash-volume Meteora clone had only ~$62 of liquidity but millions
+  // in reported volume, and used to outrank the real liquid PumpSwap coin around $10K MC.
+  const horsecockReal = { mint: "6FNso537P3BecQunQiU34HidxhRRRbSZ1NcMWbNqpump", marketCap: 9_977, liquidityUsd: 7_377, volume24h: 100_375 };
+  const horsecockHoneypot = { mint: "EJSob1VrmUzsXgENW2xh678rDQbH6kJDNBWVy6xdxhaV", marketCap: 61_000, liquidityUsd: 62, volume24h: 2_590_000 };
+  const horsecockMaxima = { marketCap: horsecockHoneypot.marketCap, liquidityUsd: horsecockReal.liquidityUsd, volume24h: horsecockHoneypot.volume24h };
+  assert.equal(credibleMarketFn(horsecockReal, horsecockMaxima), true, "the liquid PumpSwap market must remain eligible");
+  assert.equal(credibleMarketFn(horsecockHoneypot, horsecockMaxima), false, "extreme volume on dust liquidity must never win ticker resolution");
+  assert.equal(primaryMarketFn([
+    { marketCap: 10_128, liquidityUsd: 7_436, volume24h: 100_528, source: "pumpswap" },
+    { marketCap: 31_326, liquidityUsd: 0, volume24h: 45_713, source: "pumpfun-bonding" },
+    { marketCap: 14_068, liquidityUsd: 8, volume24h: 3, source: "meteora-dust" }
+  ]).source, "pumpswap", "one coherent liquid pool must supply MC, liquidity, and volume instead of splicing stale pool maxima");
+  assert.match(functionBody(serverSource, "resolveCashtagToMint"), /tickerCandidateHasCredibleMarket/);
+  assert.match(functionBody(serverSource, "reconcileIndexedSolTickerCandidate"), /tickerCandidateHasCredibleMarket/);
   const noxaRh = { marketCap: 603_000, volume24h: 2_870_000 };
   const noxaSolClone = { marketCap: 4_200, volume24h: 165 };
   const noxaMaxima = { marketCap: noxaRh.marketCap, volume24h: noxaRh.volume24h };
@@ -3934,7 +4002,8 @@ test("volume bot uses a flat 0.05 SOL fee every 50 confirmed market transactions
   assert.match(serverSource, /sellTokenFromWallet\(record, plan\.tokenMint[\s\S]*?skipTradeFee: true/);
   assert.match(functionBody(serverSource, "buyTokenForPlan"), /options\.skipTradeFee === true/);
   assert.match(functionBody(serverSource, "sellTokenAmountFromWallet"), /options\.skipTradeFee === true/);
-  assert.match(serverSource, /const totalFeeBps = CONFIG\.baseTradeFeeBps \+ await referralTradeSurchargeBps\(userId\)/);
+  assert.match(serverSource, /const totalFeeBps = CONFIG\.baseTradeFeeBps/);
+  assert.doesNotMatch(serverSource, /referralTradeSurchargeBps/);
 });
 
 test("linked NFT manual uploads stay live while the funded studio is safely feature-gated", () => {

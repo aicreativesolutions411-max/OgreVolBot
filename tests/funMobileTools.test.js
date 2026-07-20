@@ -62,8 +62,8 @@ test("Telegram owner stats show named direct users, trade usage, referrals, and 
   assert.match(serverSource, /\/adminstats today/);
 });
 
-test("owner analytics is short-lived and preview-safe, excludes passive group members, and exposes no recovery data", () => {
-  assert.match(serverSource, /OWNER_ANALYTICS_TICKET_TTL_MS = 5 \* 60 \* 1000/);
+test("owner analytics is time-bounded and preview-safe, excludes passive group members, and exposes no recovery data", () => {
+  assert.match(serverSource, /OWNER_ANALYTICS_TICKET_TTL_MS = 30 \* 60 \* 1000/);
   assert.match(serverSource, /OWNER_ANALYTICS_SESSION_TTL_MS = 30 \* 60 \* 1000/);
   assert.match(serverSource, /validateOwnerAnalyticsTicket\(ticket\)/);
   assert.match(serverSource, /function issueOwnerAnalyticsTicket[\s\S]{0,900}signVerifyToken/);
@@ -73,7 +73,7 @@ test("owner analytics is short-lived and preview-safe, excludes passive group me
   const validatorEnd = serverSource.indexOf("function createOwnerAnalyticsSession(", validatorStart);
   assert.ok(validatorStart > 0 && validatorEnd > validatorStart);
   assert.doesNotMatch(serverSource.slice(validatorStart, validatorEnd), /ownerAnalyticsTickets\.delete/);
-  assert.match(serverSource, /HttpOnly; Secure; SameSite=Strict/);
+  assert.match(serverSource, /HttpOnly; Secure; SameSite=Lax/);
   assert.match(serverSource, /X-Robots-Tag/);
   assert.match(serverSource, /Content-Security-Policy/);
   assert.match(serverSource, /requestUrl\.pathname === "\/owner-analytics"/);
@@ -82,8 +82,12 @@ test("owner analytics is short-lived and preview-safe, excludes passive group me
   const snapshotStart = serverSource.indexOf("async function platformOwnerAnalyticsSnapshot(");
   const snapshotEnd = serverSource.indexOf("async function platformGrowthSnapshot(", snapshotStart);
   const snapshot = serverSource.slice(snapshotStart, snapshotEnd);
-  assert.doesNotMatch(snapshot, /readGroupMentions|rememberGroupMentionMember/);
+  const identityPopulationStart = snapshot.indexOf("const rows = new Map()");
+  const identityPopulationEnd = snapshot.indexOf("const resultRows = []", identityPopulationStart);
+  assert.ok(identityPopulationStart > 0 && identityPopulationEnd > identityPopulationStart);
+  assert.doesNotMatch(snapshot.slice(identityPopulationStart, identityPopulationEnd), /groupMentions|rememberGroupMentionMember/);
   assert.match(snapshot, /directTelegramUsers/);
+  assert.match(snapshot, /for \(const telegramUserId of directByTelegramId\.keys\(\)\) ensureRow\(telegramUserId\)/);
   assert.doesNotMatch(serverSource, /name: "Needs profile"/);
   assert.match(serverSource, /const namedResultRows = resultRows\.filter\(\(row\) => row\.hasRealName\)/);
   assert.match(serverSource, /users: namedResultRows\.slice/);
