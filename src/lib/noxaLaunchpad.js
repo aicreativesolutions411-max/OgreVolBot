@@ -48,6 +48,10 @@ const V3_FACTORY = new ethers.Interface(["function getPool(address,address,uint2
 const MC3 = new ethers.Interface([
   "function aggregate3((address target,bool allowFailure,bytes callData)[] calls) view returns ((bool success,bytes returnData)[])",
 ]);
+const ERC20_BURN_ADDRESSES = [
+  ethers.ZeroAddress,
+  "0x000000000000000000000000000000000000dEaD",
+];
 
 let cachedProvider = null;
 function noxaProvider(rpcUrl) {
@@ -70,13 +74,36 @@ async function multicall(provider, calls) {
   });
 }
 
+// Market-cap providers exclude provably burned balances. Keep that same supply convention when the
+// chain's ERC-20 totalSupply() never shrinks (the common 0xdead burn pattern).
+export function effectiveErc20SupplyRaw(totalSupplyRaw, burnBalanceRaws = []) {
+  let total = 0n;
+  try { total = BigInt(totalSupplyRaw ?? 0); } catch { return 0n; }
+  if (total <= 0n) return 0n;
+  let burned = 0n;
+  for (const raw of burnBalanceRaws || []) {
+    try {
+      const value = BigInt(raw ?? 0);
+      if (value > 0n) burned += value;
+    } catch { /* an unreadable balance contributes nothing */ }
+  }
+  return burned >= total ? 0n : total - burned;
+}
+
+// Exact post-swap V3 spot price, expressed as human quote tokens per one human tracked token.
+// `tokenIs0` describes the tracked token, not WETH, so this also works for stablecoin quote pools.
+export function tokenPriceInQuote(sqrtPriceX96, tokenDecimals, quoteDecimals, tokenIs0) {
+  const sp = Number(sqrtPriceX96) / 2 ** 96;
+  const rawToken1PerToken0 = sp * sp;
+  if (!Number.isFinite(rawToken1PerToken0) || rawToken1PerToken0 <= 0) return 0;
+  const decimalScale = 10 ** (Number(tokenDecimals) - Number(quoteDecimals));
+  const price = (tokenIs0 ? rawToken1PerToken0 : 1 / rawToken1PerToken0) * decimalScale;
+  return Number.isFinite(price) && price > 0 ? price : 0;
+}
+
 // Coin price in WETH from a V3 pool's sqrtPriceX96 (WETH is 18 decimals). Handles either token ordering.
 function coinPriceInWeth(sqrtPriceX96, decCoin, wethIsToken0) {
-  const sp = Number(sqrtPriceX96) / 2 ** 96;
-  const rawP = sp * sp;                     // raw token1 per token0
-  if (!isFinite(rawP) || rawP <= 0) return 0;
-  const decAdj = Math.pow(10, Number(decCoin) - 18);
-  return wethIsToken0 ? (1 / rawP) * decAdj : rawP * decAdj;   // WETH per 1 coin (human)
+  return tokenPriceInQuote(sqrtPriceX96, decCoin, 18, !wethIsToken0);
 }
 
 // Enumerate recent NOXA launches from factory logs, newest-first. Chunked so a wide range never fails.
@@ -121,6 +148,8 @@ export async function readNoxaMarkets(entries, { rpcUrl, ethUsd } = {}) {
     calls.push({ target: e.token, iface: ERC20, fn: "symbol" });
     calls.push({ target: e.token, iface: ERC20, fn: "decimals" });
     calls.push({ target: e.token, iface: ERC20, fn: "totalSupply" });
+    calls.push({ target: e.token, iface: ERC20, fn: "balanceOf", args: [ERC20_BURN_ADDRESSES[0]] });
+    calls.push({ target: e.token, iface: ERC20, fn: "balanceOf", args: [ERC20_BURN_ADDRESSES[1]] });
     calls.push({ target: e.pool, iface: POOL, fn: "slot0" });
     calls.push({ target: e.pool, iface: POOL, fn: "token0" });
     calls.push({ target: weth, iface: ERC20, fn: "balanceOf", args: [e.pool] });
@@ -130,14 +159,19 @@ export async function readNoxaMarkets(entries, { rpcUrl, ethUsd } = {}) {
   try { r = await multicall(provider, calls); } catch { return []; }
   const out = [];
   for (let i = 0; i < entries.length; i++) {
-    const b = i * 8;
-    const name = r[b], symbol = r[b + 1], decRaw = r[b + 2], supplyRaw = r[b + 3], slot0 = r[b + 4], token0 = r[b + 5], wethBalRaw = r[b + 6], tokenBalRaw = r[b + 7];
+    const b = i * 10;
+    const name = r[b], symbol = r[b + 1], decRaw = r[b + 2], supplyRaw = r[b + 3];
+    const zeroBurnRaw = r[b + 4], deadBurnRaw = r[b + 5], slot0 = r[b + 6], token0 = r[b + 7];
+    const wethBalRaw = r[b + 8], tokenBalRaw = r[b + 9];
     if (slot0 == null || supplyRaw == null) continue;   // pool/token unreadable → skip
     const dec = Number(decRaw ?? 18);
     const wethIsToken0 = token0 && String(token0).toLowerCase() === weth.toLowerCase();
     const sqrt = Array.isArray(slot0) ? slot0[0] : slot0;
     const priceWeth = coinPriceInWeth(sqrt, dec, wethIsToken0);
-    const supply = Number(ethers.formatUnits(supplyRaw, dec));
+    const effectiveSupplyRaw = effectiveErc20SupplyRaw(supplyRaw, [zeroBurnRaw, deadBurnRaw]);
+    const supply = Number(ethers.formatUnits(effectiveSupplyRaw, dec));
+    const totalSupply = Number(ethers.formatUnits(supplyRaw, dec));
+    const burnedSupply = Math.max(0, totalSupply - supply);
     const wethReserve = wethBalRaw != null ? Number(ethers.formatUnits(wethBalRaw, 18)) : 0;
     const tokenReserve = tokenBalRaw != null ? Number(ethers.formatUnits(tokenBalRaw, dec)) : 0;
     const priceUsd = priceWeth * eth;
@@ -150,7 +184,7 @@ export async function readNoxaMarkets(entries, { rpcUrl, ethUsd } = {}) {
       positionId: entries[i].positionId != null ? String(entries[i].positionId) : "",   // ethers BigInt → string (JSON.stringify throws on BigInt)
       chain: "robinhood", source: "noxa",
       name: String(name || ""), symbol: String(symbol || "").replace(/^\$+/, "").slice(0, 16), decimals: dec,
-      supply, priceUsd, priceWeth,
+      supply, totalSupply, burnedSupply, priceUsd, priceWeth,
       mc: priceUsd > 0 ? priceUsd * supply : 0,
       liq: liquidityUsd,
       wethReserve, tokenReserve, isWethPair: !!wethIsToken0 || (entries[i].pairToken || "").toLowerCase() === weth.toLowerCase(),
@@ -177,11 +211,15 @@ export async function fetchNoxaFeed({ rpcUrl, lookbackBlocks = 60000, max = 60 }
 // pairs (e.g. HOOD's DexScreener pair) are Uniswap-V2 (Swap topic 0xd78ad95f… + Sync). Watch both.
 const SWAP_TOPIC_V3 = ethers.id("Swap(address,address,int256,int256,uint160,uint128,int24)");
 const SWAP_TOPIC_V2 = ethers.id("Swap(address,uint256,uint256,uint256,uint256,address)");
+const SYNC_TOPIC_V2 = ethers.id("Sync(uint112,uint112)");
 const POOL_SWAP_IFACE = new ethers.Interface([
   "event Swap(address indexed sender,address indexed recipient,int256 amount0,int256 amount1,uint160 sqrtPriceX96,uint128 liquidity,int24 tick)",
 ]);
 const POOL_SWAP_V2_IFACE = new ethers.Interface([
   "event Swap(address indexed sender,uint256 amount0In,uint256 amount1In,uint256 amount0Out,uint256 amount1Out,address indexed to)",
+]);
+const POOL_SYNC_V2_IFACE = new ethers.Interface([
+  "event Sync(uint112 reserve0,uint112 reserve1)",
 ]);
 const poolSwapMetaCache = new Map();
 const poolSwapHistoryCache = new Map();
@@ -190,12 +228,24 @@ async function poolSwapMeta(provider, poolAddr) {
   const cached = poolSwapMetaCache.get(poolAddr);
   if (cached) {
     if (Date.now() - Number(cached.supplyAt || 0) < 60_000) return cached;
-    const [supply0Raw, supply1Raw] = await multicall(provider, [
+    const [supply0Raw, zeroBurn0Raw, deadBurn0Raw, supply1Raw, zeroBurn1Raw, deadBurn1Raw] = await multicall(provider, [
       { target: cached.token0, iface: ERC20, fn: "totalSupply" },
-      { target: cached.token1, iface: ERC20, fn: "totalSupply" }
+      { target: cached.token0, iface: ERC20, fn: "balanceOf", args: [ERC20_BURN_ADDRESSES[0]] },
+      { target: cached.token0, iface: ERC20, fn: "balanceOf", args: [ERC20_BURN_ADDRESSES[1]] },
+      { target: cached.token1, iface: ERC20, fn: "totalSupply" },
+      { target: cached.token1, iface: ERC20, fn: "balanceOf", args: [ERC20_BURN_ADDRESSES[0]] },
+      { target: cached.token1, iface: ERC20, fn: "balanceOf", args: [ERC20_BURN_ADDRESSES[1]] }
     ]);
-    if (supply0Raw != null) cached.supply0 = Number(ethers.formatUnits(supply0Raw, cached.dec0));
-    if (supply1Raw != null) cached.supply1 = Number(ethers.formatUnits(supply1Raw, cached.dec1));
+    if (supply0Raw != null) {
+      cached.totalSupply0 = Number(ethers.formatUnits(supply0Raw, cached.dec0));
+      cached.supply0 = Number(ethers.formatUnits(effectiveErc20SupplyRaw(supply0Raw, [zeroBurn0Raw, deadBurn0Raw]), cached.dec0));
+      cached.burnedSupply0 = Math.max(0, cached.totalSupply0 - cached.supply0);
+    }
+    if (supply1Raw != null) {
+      cached.totalSupply1 = Number(ethers.formatUnits(supply1Raw, cached.dec1));
+      cached.supply1 = Number(ethers.formatUnits(effectiveErc20SupplyRaw(supply1Raw, [zeroBurn1Raw, deadBurn1Raw]), cached.dec1));
+      cached.burnedSupply1 = Math.max(0, cached.totalSupply1 - cached.supply1);
+    }
     cached.supplyAt = Date.now();
     return cached;
   }
@@ -204,22 +254,33 @@ async function poolSwapMeta(provider, poolAddr) {
     { target: poolAddr, iface: POOL, fn: "token1" }
   ]);
   if (!token0 || !token1) return null;
-  const [dec0, dec1, sym0, sym1, supply0Raw, supply1Raw] = await multicall(provider, [
+  const [dec0, dec1, sym0, sym1, supply0Raw, zeroBurn0Raw, deadBurn0Raw, supply1Raw, zeroBurn1Raw, deadBurn1Raw] = await multicall(provider, [
     { target: token0, iface: ERC20, fn: "decimals" },
     { target: token1, iface: ERC20, fn: "decimals" },
     { target: token0, iface: ERC20, fn: "symbol" },
     { target: token1, iface: ERC20, fn: "symbol" },
     { target: token0, iface: ERC20, fn: "totalSupply" },
-    { target: token1, iface: ERC20, fn: "totalSupply" }
+    { target: token0, iface: ERC20, fn: "balanceOf", args: [ERC20_BURN_ADDRESSES[0]] },
+    { target: token0, iface: ERC20, fn: "balanceOf", args: [ERC20_BURN_ADDRESSES[1]] },
+    { target: token1, iface: ERC20, fn: "totalSupply" },
+    { target: token1, iface: ERC20, fn: "balanceOf", args: [ERC20_BURN_ADDRESSES[0]] },
+    { target: token1, iface: ERC20, fn: "balanceOf", args: [ERC20_BURN_ADDRESSES[1]] }
   ]);
   const decimals0 = Number(dec0 ?? 18);
   const decimals1 = Number(dec1 ?? 18);
+  const effectiveSupply0Raw = effectiveErc20SupplyRaw(supply0Raw, [zeroBurn0Raw, deadBurn0Raw]);
+  const effectiveSupply1Raw = effectiveErc20SupplyRaw(supply1Raw, [zeroBurn1Raw, deadBurn1Raw]);
+  const totalSupply0 = supply0Raw != null ? Number(ethers.formatUnits(supply0Raw, decimals0)) : 0;
+  const totalSupply1 = supply1Raw != null ? Number(ethers.formatUnits(supply1Raw, decimals1)) : 0;
+  const supply0 = supply0Raw != null ? Number(ethers.formatUnits(effectiveSupply0Raw, decimals0)) : 0;
+  const supply1 = supply1Raw != null ? Number(ethers.formatUnits(effectiveSupply1Raw, decimals1)) : 0;
   const value = {
     token0: ethers.getAddress(token0), token1: ethers.getAddress(token1),
     dec0: decimals0, dec1: decimals1,
     sym0: String(sym0 || ""), sym1: String(sym1 || ""),
-    supply0: supply0Raw != null ? Number(ethers.formatUnits(supply0Raw, decimals0)) : 0,
-    supply1: supply1Raw != null ? Number(ethers.formatUnits(supply1Raw, decimals1)) : 0,
+    supply0, supply1, totalSupply0, totalSupply1,
+    burnedSupply0: Math.max(0, totalSupply0 - supply0),
+    burnedSupply1: Math.max(0, totalSupply1 - supply1),
     supplyAt: Date.now(),
   };
   poolSwapMetaCache.set(poolAddr, value);
@@ -348,7 +409,25 @@ export async function fetchPoolBuys(pool, tokenAddress, { fromBlock, rpcUrl, max
   const span = Math.max(100, Number(maxSpan) || 4_000);
   for (let from = start + 1; from <= latest; from += span) {
     const to = Math.min(latest, from + span - 1);
-    logs.push(...await provider.getLogs({ address: poolAddr, topics: [[SWAP_TOPIC_V3, SWAP_TOPIC_V2]], fromBlock: from, toBlock: to }));
+    logs.push(...await provider.getLogs({ address: poolAddr, topics: [[SWAP_TOPIC_V3, SWAP_TOPIC_V2, SYNC_TOPIC_V2]], fromBlock: from, toBlock: to }));
+  }
+  // A V2 Swap event contains the average fill, while its same-transaction Sync event contains the
+  // post-swap reserves. Match the nearest Sync so the card uses the chart's exact post-buy spot price.
+  const v2SpotByTx = new Map();
+  for (const l of logs) {
+    if (l.topics[0] !== SYNC_TOPIC_V2) continue;
+    try {
+      const d = POOL_SYNC_V2_IFACE.parseLog(l);
+      const tokenReserveRaw = tokenIs0 ? d.args.reserve0 : d.args.reserve1;
+      const quoteReserveRaw = tokenIs0 ? d.args.reserve1 : d.args.reserve0;
+      const tokenReserve = Number(ethers.formatUnits(tokenReserveRaw, tokenDecimals));
+      const quoteReserve = Number(ethers.formatUnits(quoteReserveRaw, quoteDecimals));
+      if (!(tokenReserve > 0) || !(quoteReserve > 0)) continue;
+      const key = String(l.transactionHash || "").toLowerCase();
+      const rows = v2SpotByTx.get(key) || [];
+      rows.push({ logIndex: Number(l.index ?? l.logIndex ?? 0), priceQuote: quoteReserve / tokenReserve });
+      v2SpotByTx.set(key, rows);
+    } catch { /* incompatible Sync log */ }
   }
   const buys = [];
   for (const l of logs) {
@@ -363,21 +442,28 @@ export async function fetchPoolBuys(pool, tokenAddress, { fromBlock, rpcUrl, max
           trader: ethers.getAddress(d.args.recipient),
           tokens: Number(ethers.formatUnits(-amtToken, tokenDecimals)),
           quoteAmount,
+          spotPriceQuote: tokenPriceInQuote(d.args.sqrtPriceX96, tokenDecimals, quoteDecimals, tokenIs0),
           ethAmount: quoteAddress.toLowerCase() === NOXA_RH.weth.toLowerCase() ? quoteAmount : 0,
           tx: l.transactionHash, block: Number(l.blockNumber), logIndex: Number(l.index ?? l.logIndex ?? 0),
         });
-      } else {
+      } else if (l.topics[0] === SWAP_TOPIC_V2) {
         const d = POOL_SWAP_V2_IFACE.parseLog(l);
         const tokenOut = tokenIs0 ? d.args.amount0Out : d.args.amount1Out;
         const otherIn = tokenIs0 ? d.args.amount1In : d.args.amount0In;
         if (tokenOut <= 0n) continue;                     // no token left the pool → not a buy
         const quoteAmount = Number(ethers.formatUnits(otherIn, quoteDecimals));
+        const logIndex = Number(l.index ?? l.logIndex ?? 0);
+        const syncRows = v2SpotByTx.get(String(l.transactionHash || "").toLowerCase()) || [];
+        const nearestSync = syncRows.reduce((best, row) => (
+          !best || Math.abs(row.logIndex - logIndex) < Math.abs(best.logIndex - logIndex) ? row : best
+        ), null);
         buys.push({
           trader: ethers.getAddress(d.args.to),
           tokens: Number(ethers.formatUnits(tokenOut, tokenDecimals)),
           quoteAmount,
+          spotPriceQuote: Number(nearestSync?.priceQuote) || 0,
           ethAmount: quoteAddress.toLowerCase() === NOXA_RH.weth.toLowerCase() ? quoteAmount : 0,
-          tx: l.transactionHash, block: Number(l.blockNumber), logIndex: Number(l.index ?? l.logIndex ?? 0),
+          tx: l.transactionHash, block: Number(l.blockNumber), logIndex,
         });
       }
     } catch { /* undecodable swap */ }

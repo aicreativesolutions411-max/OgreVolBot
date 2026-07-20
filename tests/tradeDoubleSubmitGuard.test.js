@@ -14,6 +14,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { effectiveErc20SupplyRaw, tokenPriceInQuote } from "../src/lib/noxaLaunchpad.js";
 
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const vanityMintSource = fs.readFileSync(new URL("../src/lib/vanityMint.js", import.meta.url), "utf8");
@@ -1515,6 +1516,10 @@ test("Buy bot keeps transaction price and market cap aligned on both chains", ()
   assert.deepEqual(resolve({ eventMarketCapUsd: 750_000, supply: 1_000_000_000 }), {
     priceUsd: 0.00075, marketCapUsd: 750_000, supply: 1_000_000_000, executionPriceUsd: 0
   });
+  // PumpPortal's MC is the post-swap spot while native/tokens is the average fill. The spot wins.
+  assert.deepEqual(resolve({ eventPriceUsd: 0.00009, eventMarketCapUsd: 100_000, supply: 1_000_000_000 }), {
+    priceUsd: 0.0001, marketCapUsd: 100_000, supply: 1_000_000_000, executionPriceUsd: 0
+  });
   // PumpPortal already reports the event MC. A burned-supply coin must retain that direct value instead
   // of recomputing it from a guessed/lagging supply and cutting or multiplying the card MC.
   assert.deepEqual(resolve({ eventPriceUsd: 0.00082, eventMarketCapUsd: 410_000, supply: 500_000_000 }), {
@@ -1545,8 +1550,34 @@ test("Buy bot keeps transaction price and market cap aligned on both chains", ()
   }), {
     priceUsd: 0.00004, marketCapUsd: 36_000, supply: 900_000_000, executionPriceUsd: 0.00004
   });
+  // Real RH regression: Cash Cow burns ~93.47M of its 1B tokens. A gross-supply provider reports
+  // ~$33.8k, but the buy card must use the chain-proven effective 906.53M supply (~$30.6k here).
+  const cashCow = resolve({
+    eventPriceUsd: 0.00003377,
+    scanPriceUsd: 0.00003377,
+    scanMarketCapUsd: 33_770,
+    supply: 906_529_349.9222183,
+  });
+  assert.equal(cashCow.supply, 906_529_349.9222183);
+  assert.ok(cashCow.marketCapUsd > 30_000 && cashCow.marketCapUsd < 31_000);
+  assert.equal(cashCow.marketCapUsd, cashCow.priceUsd * cashCow.supply);
   assert.match(functionBody(serverSource, "postGroupBuy"), /resolveGroupBuyMarketSnapshot/);
   assert.match(functionBody(serverSource, "postGroupBuyRh"), /resolveGroupBuyMarketSnapshot/);
+  assert.match(functionBody(serverSource, "postGroupBuy"), /groupBuyCoherentMarketReference/);
+});
+
+test("Robinhood market cap excludes provable burns and uses post-swap spot price", () => {
+  const total = 1_000_000_000_000_000_000_000_000_000n;
+  const cashCowDead = 93_470_650_077_781_690_383_666_646n;
+  assert.equal(
+    effectiveErc20SupplyRaw(total, [0n, cashCowDead]),
+    906_529_349_922_218_309_616_333_354n
+  );
+  assert.equal(effectiveErc20SupplyRaw(100n, [40n, 60n]), 0n);
+  const oneToOneSqrtPrice = 2n ** 96n;
+  assert.equal(tokenPriceInQuote(oneToOneSqrtPrice, 18, 18, true), 1);
+  assert.equal(tokenPriceInQuote(oneToOneSqrtPrice, 18, 18, false), 1);
+  assert.equal(tokenPriceInQuote(oneToOneSqrtPrice, 6, 18, true), 1e-12);
 });
 
 test("Buy bot derives Pump supply and websocket price without a guessed one-billion supply", () => {
@@ -1569,9 +1600,14 @@ test("Robinhood buy watcher is decimal-safe, lossless, concurrent, and near-live
   const tick = functionBody(serverSource, "rhGroupBuyTick");
   assert.match(meta, /fn: "decimals"/);
   assert.match(meta, /fn: "totalSupply"/);
+  assert.match(meta, /ERC20_BURN_ADDRESSES/);
+  assert.match(meta, /effectiveErc20SupplyRaw/);
   assert.match(buys, /formatUnits\(-amtToken, tokenDecimals\)/);
   assert.match(buys, /formatUnits\(tokenOut, tokenDecimals\)/);
   assert.match(buys, /formatUnits\([^\n]+quoteDecimals\)/);
+  assert.match(buys, /SYNC_TOPIC_V2/);
+  assert.match(buys, /sqrtPriceX96/);
+  assert.match(buys, /spotPriceQuote/);
   assert.match(buys, /for \(let from = start \+ 1; from <= latest; from \+= span\)/);
   assert.doesNotMatch(buys, /catch\s*\{\s*return \{ toBlock: latest, buys: \[\] \}/);
   assert.match(noxaSource, /export async function fetchRhBlockNumber/);
@@ -1580,8 +1616,13 @@ test("Robinhood buy watcher is decimal-safe, lossless, concurrent, and near-live
   assert.match(tick, /runWithConcurrency\(\[\.\.\.tracked\], 6/);
   assert.match(tick, /fetchRhBlockNumber\(CONFIG\.rhChainRpcUrl\)/);
   assert.match(tick, /queueRhGroupBuyDelivery/);
+  assert.match(tick, /spotPriceQuote: buy\.spotPriceQuote/);
   assert.match(tick, /st\.lastBlock = res\.toBlock/);
-  assert.match(functionBody(serverSource, "postGroupBuyRh"), /supply: firstMeaningfulNumber\(supply, info\?\.supply\)/);
+  const post = functionBody(serverSource, "postGroupBuyRh");
+  assert.match(post, /supply: firstMeaningfulNumber\(supply, info\?\.supply\)/);
+  assert.match(post, /eventPriceUsd/);
+  assert.match(post, /infoQuoteMatches/);
+  assert.match(post, /info\?\.quotePriceUsd/);
 });
 
 test("Buy Bot saves and renders Telegram custom emoji entities with a safe fallback", () => {
@@ -1666,7 +1707,9 @@ test("buy cards use the compact TG/Web/More keyboard", () => {
   assert.match(compact, /TG Quick Buy/);
   assert.match(compact, /Web Quick Buy/);
   assert.match(compact, /Slime Chart/);
-  assert.match(compact, /url: links\.site/);
+  assert.match(compact, /telegramWebLoginButton/);
+  assert.match(compact, /links\.telegramSiteLogin/);
+  assert.match(compact, /links\.telegramQuickLogin/);
   assert.match(compact, /if \(src === "b"\)/);
   assert.match(compact, /📊 Dex Chart/);
   assert.match(compact, /dexscreener\.com\/robinhood/);
@@ -1708,7 +1751,7 @@ test("min buy zero keeps every observed Solana and Robinhood buy in an ordered T
   assert.match(rhPost, /queueGroupBuyAlert/);
   assert.match(functionBody(serverSource, "groupBuyAlertRetryMs"), /retry after/);
   assert.match(queue, /sleep\(1_100\)/);
-  assert.match(rhPost, /const funUrl = slimewireTokenLinks\(address\)\.site/);
+  assert.match(rhPost, /tap Slime Chart below to open signed in/);
 });
 
 test("Pump buy polling is fast, cursor-safe, and does not swallow a new coin's first buy", () => {
@@ -2516,6 +2559,7 @@ test("Sol/RH scan and buy-bot cards share TG Buy, Web Buy, and categorized More"
   const compact = functionBody(serverSource, "compactTradeCardKeyboard");
   assert.match(compact, /TG Quick Buy/);
   assert.match(compact, /Web Quick Buy/);
+  assert.match(compact, /telegramWebLoginButton/);
   assert.match(compact, /📂 More/);
   const more = functionBody(serverSource, "compactCardMoreKeyboard");
   for (const label of ["Charts & Market", "Research", "Security", "Trade Tools"]) assert.match(more, new RegExp(label));
@@ -2528,11 +2572,11 @@ test("Sol/RH scan and buy-bot cards share TG Buy, Web Buy, and categorized More"
   assert.match(functionBody(serverSource, "funnelNoWallet"), /callback_data: "create_wallets"/);
   assert.match(functionBody(serverSource, "handleQuickBuyCallback"), /noWalletAckText\(await funnelNoWallet\(userId\)\)/);
   assert.match(functionBody(serverSource, "handleQuickBuyPresetCallback"), /noWalletAckText\(await funnelNoWallet\(userId\)\)/);
-  assert.match(functionBody(serverSource, "postGroupBuy"), /slimewire\.org · chart, trade &amp; tools/);
+  assert.match(functionBody(serverSource, "postGroupBuy"), /tap Slime Chart below to open signed in/);
   const rhBuy = functionBody(serverSource, "postGroupBuyRh");
   assert.match(rhBuy, /compactTradeCardKeyboard\(address, "b"\)/);
   assert.match(functionBody(serverSource, "sendRhScanCard"), /compactTradeCardKeyboard\(address, "s"\)/);
-  assert.match(rhBuy, /slimewire\.org · chart, trade &amp; tools/);
+  assert.match(rhBuy, /tap Slime Chart below to open signed in/);
 });
 
 test("Telegram /buy prioritizes the card coin and posts a compact TG/Web chooser", () => {
@@ -2567,6 +2611,8 @@ test("Telegram /buy prioritizes the card coin and posts a compact TG/Web chooser
   assert.match(serverSource, /const quickBuyCommand = \/\^\\\/buy/);
   assert.match(serverSource, /sendTelegramQuickBuyPanel\(chatId, userId, message, quickBuyCommand\[1\]/);
   assert.match(functionBody(serverSource, "slimewireTokenLinks"), /\/fun\?quick=1&ca=/);
+  assert.match(functionBody(serverSource, "slimewireTokenLinks"), /telegramSiteLogin/);
+  assert.match(functionBody(serverSource, "slimewireTokenLinks"), /telegramQuickLogin/);
 });
 
 for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource]]) {

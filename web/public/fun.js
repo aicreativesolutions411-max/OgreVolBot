@@ -246,6 +246,30 @@
   function setToken(token) { state.token = token || ""; if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY); }
   async function loadMe() { if (!state.token) return null; const result = await request("/api/web/me", { noRetry: true }); if (result.ok) state.user = result.data?.user || null; return state.user; }
 
+  function clearTelegramLoginTicketFromUrl() {
+    const clean = new URL(location.href);
+    clean.searchParams.delete("tg_login");
+    history.replaceState(history.state, "", `${clean.pathname}${clean.search}${clean.hash}`);
+  }
+
+  async function consumeTelegramLoginTicket() {
+    const ticket = String(ROUTE_PARAMS.get("tg_login") || "").trim();
+    if (!ticket) return false;
+    try {
+      const result = await post("/api/web/telegram-login/exchange", { ticket }, { noRetry: true, timeout: 10_000 });
+      if (!result.ok || !result.data?.token) throw new Error(apiMessage(result.data, "Telegram sign-in expired. Tap the card again."));
+      setToken(result.data.token);
+      state.user = result.data.user || null;
+      toast("Signed in from Telegram");
+      return true;
+    } catch (error) {
+      toast(error.message || "Telegram sign-in expired. Tap the card again.", true);
+      return false;
+    } finally {
+      clearTelegramLoginTicketFromUrl();
+    }
+  }
+
   async function ensureAccount() {
     if (state.token && state.user) return true;
     if (state.token) {
@@ -2733,6 +2757,7 @@
 
   async function init() {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/fun-sw.js", { scope: "/fun/", updateViaCache: "none" }).catch(() => {});
+    await consumeTelegramLoginTicket();
     paintWalletPill();
     renderCashHandoff();
     renderHomeReadiness();
