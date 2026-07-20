@@ -200,7 +200,7 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
       const outN = (clusterEdges || []).filter((e) => e.from === c.id).length;
       const token = Number(c.tokenLinkCount) || 0, direct = Number(c.directLinkCount) || 0, shared = Number(c.sharedLinkCount) || 0;
       const relationship = token ? `${token} token-transfer link${token === 1 ? "" : "s"}` : direct ? `${direct} direct link${direct === 1 ? "" : "s"}` : `${shared} shared-funder link${shared === 1 ? "" : "s"}`;
-      const l1 = `${c.size || (c.members || []).length} wallets · COMBINED ${(+c.pct).toFixed(1)}%${c.flow && c.flow.dir === "loading" ? "  ▲ LOADING" : c.flow && c.flow.dir === "unloading" ? "  ▼ UNLOADING" : ""}`;
+      const l1 = `${c.size || (c.members || []).length} wallets · COMBINED ${(+c.pct).toFixed(1)}%${c.flow && c.flow.dir === "loading" ? "  ▲ ACCUMULATING" : c.flow && c.flow.dir === "unloading" ? "  ▼ OFFLOADING" : ""}`;
       const l2 = `${fmtUsd(c.usd)} · ${relationship}${outN ? ` · →${outN} cluster${outN > 1 ? "s" : ""}` : ""}`;
       const l3 = token || direct ? `◆${c.letter} · linked on-chain` : `◆${c.letter} · shared ${esc(c.funderShort || shortAddr(c.funder))}`;
       const wpx = Math.max(l1.length, l2.length, l3.length) * 6.9 + 22;
