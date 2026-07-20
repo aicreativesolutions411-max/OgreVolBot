@@ -1617,14 +1617,24 @@ test("buy bot posts only real per-buy cards — no 'Buys rolling in' aggregate",
 
 test("min buy zero keeps every observed Solana and Robinhood buy in an ordered Telegram queue", () => {
   const solPoll = functionBody(serverSource, "pollGroupBuyTrades");
+  const collect = functionBody(serverSource, "collectGroupBuyTrades");
+  const page = functionBody(serverSource, "fetchGroupBuyTradePage");
+  const delivery = functionBody(serverSource, "queueGroupBuyTradeDelivery");
   const rhPoll = functionBody(serverSource, "rhGroupBuyTick");
   const solPost = functionBody(serverSource, "postGroupBuy");
   const rhPost = functionBody(serverSource, "postGroupBuyRh");
   const queue = functionBody(serverSource, "drainGroupBuyAlertQueue");
-  assert.match(solPoll, /trades\?limit=100/);
-  assert.match(solPoll, /fresh\.reverse\(\)/);
+  assert.match(page, /GROUP_BUY_TRADE_PAGE_LIMIT/);
+  assert.match(page, /searchParams\.set\("cursor", cursor\)/);
+  assert.match(page, /AbortSignal\.timeout\(5_000\)/);
+  assert.match(collect, /pagination\?\.nextCursor/);
+  assert.match(collect, /while \(pageCount < GROUP_BUY_TRADE_MAX_PAGES\)/);
+  assert.match(collect, /groupBuySeenTx\.set\(mint/); // persists even a successful empty baseline
+  assert.match(solPoll, /buys\.reverse\(\)/);
   assert.doesNotMatch(solPoll, /posted >= 6|slice\(0, 6\)|mints\.slice\(0, 30\)/);
-  assert.match(solPoll, /mints\.slice\(i, i \+ 30\)/);
+  assert.match(solPoll, /runWithConcurrency\(mints, 8/);
+  assert.match(solPoll, /groupBuyTradePollRunning/);
+  assert.match(delivery, /drainGroupBuyTradeDeliveryQueue/);
   assert.doesNotMatch(rhPoll, /slice\(0, 6\)/);
   assert.match(solPost, /min > 0 && solAmount < min/);
   assert.match(rhPost, /min > 0 && ethAmount < min/);
@@ -1633,6 +1643,22 @@ test("min buy zero keeps every observed Solana and Robinhood buy in an ordered T
   assert.match(functionBody(serverSource, "groupBuyAlertRetryMs"), /retry after/);
   assert.match(queue, /sleep\(1_100\)/);
   assert.match(rhPost, /const funUrl = slimewireTokenLinks\(address\)\.site/);
+});
+
+test("Pump buy polling is fast, cursor-safe, and does not swallow a new coin's first buy", () => {
+  const collect = functionBody(serverSource, "collectGroupBuyTrades");
+  const start = functionBody(serverSource, "startGroupBuyBot");
+  const scan = functionBody(serverSource, "getGroupBuyScan");
+  const post = functionBody(serverSource, "postGroupBuy");
+  assert.match(serverSource, /const GROUP_BUY_TRADE_POLL_MS = 3_000/);
+  assert.match(serverSource, /const GROUP_BUY_TRADE_MAX_PAGES = 20/);
+  assert.match(collect, /A successful empty first read is a real baseline/);
+  assert.match(collect, /if \(firstPoll \|\| reachedSeen\) break/);
+  assert.match(collect, /new Set\(\[\.\.\.freshIds, \.\.\.seen\]/);
+  assert.match(start, /setTimeout\(\(\) => \{ void pollGroupBuyTrades\(\); \}, 1_000\)/);
+  assert.match(start, /GROUP_BUY_TRADE_POLL_MS/);
+  assert.match(scan, /groupBuyScanInFlight/);
+  assert.match(post, /scanFastTimeout\(getGroupBuyScan\(mint\), 5_000, null\)/);
 });
 
 test("scan catches real pasted CAs in text without sentence false-positives", () => {
