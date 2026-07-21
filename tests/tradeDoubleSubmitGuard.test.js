@@ -3092,6 +3092,68 @@ test("Smart Call signature cursor baselines once and paginates until the prior s
   assert.equal(catchup.reachedSeen, true);
   assert.equal(catchup.nextCursor, "");
 });
+test("Smart Calls reject stale catch-up buys and dead markets before a public alert", () => {
+  const freshnessStart = serverSource.indexOf("function smartCallBuyIsFresh(");
+  const freshnessEnd = serverSource.indexOf("function smartCallMarketIsActive(", freshnessStart);
+  assert.ok(freshnessStart >= 0 && freshnessEnd > freshnessStart);
+  const isFresh = new Function(`${serverSource.slice(freshnessStart, freshnessEnd)}; return smartCallBuyIsFresh;`)();
+  const now = Date.now();
+  assert.equal(isFresh({ observedAtMs: now - 30_000 }, now), true, "a just-observed wallet swap remains eligible");
+  assert.equal(isFresh({ observedAtMs: now - 2 * 86_400_000 }, now), false, "a two-day-old catch-up signature must never look like a new call");
+  assert.equal(isFresh({}, now), false, "an un-timestamped transaction fails closed");
+
+  const marketStart = serverSource.indexOf("function smartCallMarketIsActive(");
+  const marketEnd = serverSource.indexOf("async function smartCallCandidateSafety(", marketStart);
+  assert.ok(marketStart >= 0 && marketEnd > marketStart);
+  const marketIsActive = new Function(`${serverSource.slice(marketStart, marketEnd)}; return smartCallMarketIsActive;`)();
+  const leHammer = {
+    mc: 2_518,
+    liq: 0,
+    volume5m: 0,
+    volume1h: 0,
+    volume24h: 9.18,
+    buys5m: 0,
+    sells5m: 0,
+    buys1h: 0,
+    sells1h: 0,
+    pairCreatedAt: now - 2 * 86_400_000,
+    dexId: "pumpfun"
+  };
+  assert.equal(marketIsActive(leHammer, now), false, "the exact dead LeHammer market must be suppressed");
+  assert.equal(marketIsActive({
+    mc: 3_200,
+    liq: 0,
+    volume5m: 850,
+    volume1h: 4_200,
+    volume24h: 4_200,
+    buys5m: 7,
+    sells5m: 3,
+    buys1h: 18,
+    sells1h: 9,
+    pairCreatedAt: now - 8 * 60_000,
+    dexId: "pumpfun"
+  }, now), true, "an active fresh bonding-curve coin can still alert below $8K");
+  assert.equal(marketIsActive({
+    mc: 45_000,
+    liq: 12_000,
+    volume5m: 120,
+    volume1h: 2_400,
+    volume24h: 38_000,
+    buys5m: 2,
+    sells5m: 1,
+    buys1h: 14,
+    sells1h: 8,
+    pairCreatedAt: now - 2 * 86_400_000,
+    dexId: "raydium"
+  }, now), true, "an older coin with real current flow remains eligible");
+
+  const parser = functionBody(serverSource, "smartCallParsedWalletBuys");
+  assert.match(parser, /observedAtMs/);
+  assert.match(parser, /smartCallBuyIsFresh/);
+  const record = functionBody(serverSource, "recordSmartCall");
+  assert.match(record, /smartCallCandidateSafety/);
+  assert.ok(record.indexOf("smartCallCandidateSafety") < record.lastIndexOf("broadcastSmartCall"), "market proof must happen before any public alert");
+});
 test("Smart Calls detects only new wallet/post calls and no-ops when no group opted in", () => {
   const wallet = functionBody(serverSource, "smartCallWalletTick");
   assert.match(wallet, /if \(!targets\.any\) return/);       // no listener → no RPC/provider spend
@@ -3121,8 +3183,9 @@ test("Smart Calls detects only new wallet/post calls and no-ops when no group op
 test("Smart Call messages carry website Chart/Quick Buy and verified milestone receipts", () => {
   const record = functionBody(serverSource, "recordSmartCall");
   assert.match(record, /if \(call\)/);                        // one first alert per mint
-  assert.ok(record.indexOf("call = state.calls[mint]") < record.indexOf("scanFastTimeout(alphaRadarFetchMc")); // reserve mint before provider await
-  assert.match(record, /scanFastTimeout\(alphaRadarFetchMc\(mint\), 2_000/); // bounded entry snapshot
+  assert.ok(record.indexOf("call = state.calls[mint]") < record.lastIndexOf("scanFastTimeout(smartCallCandidateSafety")); // reserve mint before provider await
+  assert.match(record, /scanFastTimeout\(smartCallCandidateSafety\(mint\), 5_500/); // bounded safety + live-market snapshot
+  assert.match(record, /call\.alertEligible/);                // inactive/dead markets stay tracked but never broadcast
   const keyboard = functionBody(serverSource, "smartCallKeyboard");
   assert.match(keyboard, /links\.site/);
   assert.match(keyboard, /links\.siteBuy/);
@@ -3888,8 +3951,11 @@ test("X growth engine: broadcast-gated proactive posts + receipts + KOL responde
   assert.match(walletTick, /XBOT_SMARTWALLET_DAILY \|\| 24/);                                        // hourly cadence remains possible all day
   assert.match(walletTick, /smartWalletPosts\.length >= dailyCap/);
   const smartSafety = functionBody(serverSource, "xSmartWalletCandidateSafety");
-  assert.match(smartSafety, /assertTokenBuyBaseSafety/);                                               // fail closed on authorities/honeypot proof
+  assert.match(smartSafety, /smartCallCandidateSafety/);                                              // X and Telegram share the same proof
   assert.match(smartSafety, /XBOT_SMARTWALLET_MIN_MC/);
+  const sharedSmartSafety = functionBody(serverSource, "smartCallCandidateSafety");
+  assert.match(sharedSmartSafety, /assertTokenBuyBaseSafety/);                                        // fail closed on authorities/honeypot proof
+  assert.match(sharedSmartSafety, /smartCallMarketIsActive/);                                         // dead/inactive markets never become public calls
   assert.match(functionBody(serverSource, "xPostKolConvergence"), /proven wallet just bought/);         // individual proven-wallet call
   assert.match(functionBody(serverSource, "xPostKolConvergence"), /proven callers are loading/);       // multi-wallet convergence call
   assert.match(serverSource, /setInterval\(\(\) => \{ void xKolTradeTick\(\); \}, 10_000\)/);          // scheduled near-live
