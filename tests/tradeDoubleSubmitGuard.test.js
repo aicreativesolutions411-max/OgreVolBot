@@ -3064,7 +3064,7 @@ test("Smart Call RPC proof rejects transfers and accepts only a swap with real s
   const transfer = { swap: false, lamportDelta: 0, meta: { err: null, preTokenBalances: [], postTokenBalances: [{ owner: wallet, mint, amount: 100 }] } };
   assert.equal(classify(transfer, wallet), null, "an incoming transfer/airdrop must never become a first-buy call");
   const buy = { ...transfer, swap: true, lamportDelta: -100_000_000 };
-  assert.deepEqual(classify(buy, wallet), { side: "buy", mint, solAmount: 0 });
+  assert.deepEqual(classify(buy, wallet), { side: "buy", mint, solAmount: 0.1 });
 });
 test("Smart Call signature cursor baselines once and paginates until the prior seen boundary", async () => {
   const start = serverSource.indexOf("async function smartCallWalletSignatureDelta(");
@@ -3153,6 +3153,63 @@ test("Smart Calls reject stale catch-up buys and dead markets before a public al
   const record = functionBody(serverSource, "recordSmartCall");
   assert.match(record, /smartCallCandidateSafety/);
   assert.ok(record.indexOf("smartCallCandidateSafety") < record.lastIndexOf("broadcastSmartCall"), "market proof must happen before any public alert");
+});
+test("Smart Calls reject dumping rugs and require independently proven caller conviction", () => {
+  const marketStart = serverSource.indexOf("function smartCallMarketIsActive(");
+  const marketEnd = serverSource.indexOf("async function smartCallCandidateSafety(", marketStart);
+  assert.ok(marketStart >= 0 && marketEnd > marketStart);
+  const marketIsActive = new Function(`${serverSource.slice(marketStart, marketEnd)}; return smartCallMarketIsActive;`)();
+  const now = Date.now();
+  const active = {
+    mc: 42_000,
+    liq: 14_000,
+    volume5m: 4_200,
+    volume1h: 28_000,
+    volume24h: 110_000,
+    buys5m: 18,
+    sells5m: 9,
+    buys1h: 72,
+    sells1h: 43,
+    priceChange5m: 8,
+    priceChange1h: 26,
+    pairCreatedAt: now - 40 * 60_000,
+    dexId: "raydium"
+  };
+  assert.equal(marketIsActive(active, now), true, "a healthy buy-led live market remains eligible");
+  assert.equal(marketIsActive({ ...active, priceChange5m: -38, buys5m: 4, sells5m: 23 }, now), false, "a live but actively dumping market is not a copy signal");
+  assert.equal(marketIsActive({ ...active, priceChange1h: -58, buys1h: 20, sells1h: 91 }, now), false, "one-hour collapse and sell pressure fail closed");
+  assert.equal(marketIsActive({ ...active, devSold: true }, now), false, "known dev-sold launches never become recommendations");
+  assert.equal(marketIsActive({ ...active, top10Pct: 84 }, now), false, "extreme holder concentration is blocked when known");
+
+  const readyStart = serverSource.indexOf("function smartCallSignalIsReady(");
+  const readyEnd = serverSource.indexOf("function smartCallContextHtml(", readyStart);
+  assert.ok(readyStart >= 0 && readyEnd > readyStart, "shared caller qualification must exist before message rendering");
+  const signalIsReady = new Function(`${serverSource.slice(readyStart, readyEnd)}; return smartCallSignalIsReady;`)();
+  assert.equal(signalIsReady({ trigger: "wallet", sourceProfiles: [{ wallet: "wallet-a", cluster: "cluster-a", strong: false, buySol: 0.4 }] }), false, "one merely-ranked wallet is a watch candidate, not a public signal");
+  assert.equal(signalIsReady({ trigger: "wallet", sourceProfiles: [
+    { wallet: "wallet-a", cluster: "cluster-a", strong: false, buySol: 0.4 },
+    { wallet: "wallet-b", cluster: "cluster-b", strong: false, buySol: 0.3 }
+  ] }), true, "two independent watched buyers provide real convergence");
+  assert.equal(signalIsReady({ trigger: "wallet", sourceProfiles: [
+    { wallet: "wallet-a", cluster: "shared-cluster", strong: false, buySol: 0.4 },
+    { wallet: "wallet-b", cluster: "shared-cluster", strong: false, buySol: 0.3 }
+  ] }), false, "a funded wallet farm cannot fake convergence");
+  assert.equal(signalIsReady({ trigger: "wallet", sourceProfiles: [{ wallet: "wallet-a", cluster: "cluster-a", strong: true, buySol: 0.2 }] }), true, "one locally proven high-conviction buyer can alert immediately");
+  assert.equal(signalIsReady({ trigger: "wallet", sourceProfiles: [{ wallet: "wallet-a", cluster: "cluster-a", strong: true, buySol: 0.002 }] }), false, "a dust test buy from a strong wallet still waits for confirmation");
+  assert.equal(signalIsReady({ trigger: "wallet", sourceProfiles: [
+    { wallet: "wallet-a", cluster: "cluster-a", strong: false, buySol: 0.4, at: now - 3 * 60 * 60_000 },
+    { wallet: "wallet-b", cluster: "cluster-b", strong: false, buySol: 0.3, at: now }
+  ] }), false, "old buys outside the convergence window cannot combine with a new buy");
+
+  const sourceProfile = functionBody(serverSource, "smartCallSourceProfile");
+  assert.match(sourceProfile, /winRate >= 60 && trades >= 50/); // provider rank alone is no longer enough
+  assert.match(sourceProfile, /copyTier === "A" \|\| copyTier === "B"/); // SlimeWire replay/backtest proof can qualify
+  assert.match(sourceProfile, /locallyRugging/); // a newly observed rug removes single-wallet trust quickly
+
+  const record = functionBody(serverSource, "recordSmartCall");
+  assert.match(record, /smartCallSignalIsReady/);
+  assert.ok(record.indexOf("smartCallSignalIsReady") < record.lastIndexOf("broadcastSmartCall"), "caller proof must happen before public delivery");
+  assert.match(functionBody(serverSource, "smartCallWalletTick"), /solAmount: buy\.solAmount/);
 });
 test("Smart Calls detects only new wallet/post calls and no-ops when no group opted in", () => {
   const wallet = functionBody(serverSource, "smartCallWalletTick");
@@ -3944,8 +4001,9 @@ test("X growth engine: broadcast-gated proactive posts + receipts + KOL responde
   const walletTick = functionBody(serverSource, "xKolTradeTick");
   assert.match(walletTick, /SMART_CALL_WATCH_SIZE/);                                                    // Top 30 plus retained winners
   assert.match(walletTick, /runWithConcurrency\(batch, 5/);
-  assert.match(walletTick, /profile\.proven/);
-  assert.match(walletTick, /rec\.provenWallets\.size >= 1 \|\| rec\.wallets\.size >= need/);           // one proven winner OR real convergence
+  assert.match(walletTick, /solAmount: b\.solAmount/);
+  assert.match(walletTick, /rec\.sourceEligible = tracked\?\.call\?\.sourceEligible === true/);         // Telegram and X use the same measured/convergence proof
+  assert.match(walletTick, /rec\.sourceEligible === true/);
   assert.match(walletTick, /!s\.coins\[mint\]/);                                                       // dedup vs everything already surfaced
   assert.match(walletTick, /XBOT_SMARTWALLET_GAP_MIN \|\| 60/);                                       // at most one quality smart-wallet call/hour
   assert.match(walletTick, /XBOT_SMARTWALLET_DAILY \|\| 24/);                                        // hourly cadence remains possible all day
@@ -3955,9 +4013,13 @@ test("X growth engine: broadcast-gated proactive posts + receipts + KOL responde
   assert.match(smartSafety, /XBOT_SMARTWALLET_MIN_MC/);
   const sharedSmartSafety = functionBody(serverSource, "smartCallCandidateSafety");
   assert.match(sharedSmartSafety, /assertTokenBuyBaseSafety/);                                        // fail closed on authorities/honeypot proof
+  assert.match(sharedSmartSafety, /fetchRugcheckFull/);                                               // supply/dev structure is checked before a public call
   assert.match(sharedSmartSafety, /smartCallMarketIsActive/);                                         // dead/inactive markets never become public calls
-  assert.match(functionBody(serverSource, "xPostKolConvergence"), /proven wallet just bought/);         // individual proven-wallet call
-  assert.match(functionBody(serverSource, "xPostKolConvergence"), /proven callers are loading/);       // multi-wallet convergence call
+  const socialCalls = functionBody(serverSource, "xKolWatchTick");
+  assert.match(socialCalls, /recordSmartCall/);                                                        // social KOL posts share the same caller + rug proof
+  assert.match(socialCalls, /sourceEligible/);
+  assert.match(functionBody(serverSource, "xPostKolConvergence"), /SlimeWire-proven wallet just bought/); // individual measured/backtested wallet
+  assert.match(functionBody(serverSource, "xPostKolConvergence"), /independent tracked callers are loading/); // multi-wallet convergence call
   assert.match(serverSource, /setInterval\(\(\) => \{ void xKolTradeTick\(\); \}, 10_000\)/);          // scheduled near-live
   // global anti-spam gate on PROACTIVE posts (replies to tags stay ungated)
   assert.match(serverSource, /function xBroadcastGateOk\(\)/);
