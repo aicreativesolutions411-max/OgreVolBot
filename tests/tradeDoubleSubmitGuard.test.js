@@ -3017,8 +3017,9 @@ test("/signals is one opt-in menu (personal radars + group Smart Calls)", () => 
   // group toggle is admin-gated
   assert.match(functionBody(serverSource, "handleSignalsCallback"), /isTgChatAdmin\(chatId, userId\)/);
 });
-test("Smart Calls keeps a durable rolling top 30 and only retires weak callers after a real sample", () => {
+test("Smart Calls keeps today's top 30 plus retained proven winners and only retires weak callers after a real sample", () => {
   assert.match(serverSource, /const SMART_CALL_ROSTER_SIZE = 30/);
+  assert.match(serverSource, /const SMART_CALL_PROVEN_SIZE = 45/);
   assert.match(serverSource, /const SMART_CALL_MIN_SAMPLE = 8/);
   assert.match(functionBody(serverSource, "smartCallsPath"), /smart-calls\.json/);
   const roster = functionBody(serverSource, "refreshSmartCallRoster");
@@ -3026,20 +3027,91 @@ test("Smart Calls keeps a durable rolling top 30 and only retires weak callers a
   assert.match(roster, /autoKolWallets/);                   // proven provider winners
   assert.match(roster, /trackedKolWallets/);                // growing KOL database
   assert.match(roster, /walletObs/);                        // SlimeWire's learned winners
+  assert.match(roster, /isWinnerWallet/);                   // Solana Tracker seeded + organically proven winners
   assert.match(roster, /stats\.settled >= SMART_CALL_MIN_SAMPLE/);
-  assert.match(roster, /slice\(0, SMART_CALL_ROSTER_SIZE\)/);
-  assert.match(functionBody(serverSource, "smartCallRosterView"), /active top/);
+  assert.match(roster, /liveTopWallets/);                    // today's ranked 30 always stay in the watch set
+  assert.match(roster, /row\.proven && !row\.failing/);     // winners beyond rank 30 remain while their proof holds
+  assert.match(roster, /SMART_CALL_PROVEN_SIZE/);
+  assert.match(functionBody(serverSource, "smartCallRosterView"), /retained proven wallet/);
+});
+test("Kolscan's structured payload keeps each wallet paired with its own X handle", () => {
+  const start = serverSource.indexOf("function parseKolscanTopHtml(");
+  const end = serverSource.indexOf("async function fetchKolscanTop(", start);
+  assert.ok(start >= 0 && end > start);
+  const declaration = serverSource.slice(start, end);
+  const parse = new Function("solanaPublicKeyLike", `${declaration}; return parseKolscanTopHtml;`)(
+    (wallet) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(wallet || ""))
+  );
+  const walletA = "BtMBMPkoNbnLF9Xn552guQq528KKXcsNBNNBre3oaQtr";
+  const walletB = "8nqtxpFpuXwfXG4pBLsDkkuMMPK9FjSkBMCn542HiM3v";
+  const weekly = "6HJetMbdHBuk3mLUainxAPpBpWzDgYbHGTS2TqDAUSX2";
+  const html = `x{\"wallet_address\":\"${walletA}\",\"name\":\"No social\",\"twitter\":null,\"timeframe\":1}x{\"wallet_address\":\"${walletB}\",\"name\":\"Theo\",\"twitter\":\"https://x.com/theonomix\",\"timeframe\":1}x{\"wallet_address\":\"${weekly}\",\"twitter\":\"https://x.com/wrongframe\",\"timeframe\":7}`;
+  assert.deepEqual(parse(html, 30), { wallets: [walletA, walletB], handles: ["", "theonomix"] });
+  const refresh = functionBody(serverSource, "refreshKolscanTop");
+  assert.match(refresh, /handles\.length === wallets\.length/); // update both arrays atomically or retain last-good
+});
+test("Smart Call RPC proof rejects transfers and accepts only a swap with real spend", () => {
+  const start = serverSource.indexOf("function smartCallRpcBuyFromTransaction(");
+  const end = serverSource.indexOf("async function smartCallParsedWalletBuys(", start);
+  assert.ok(start >= 0 && end > start);
+  const declaration = serverSource.slice(start, end);
+  const wallet = "BtMBMPkoNbnLF9Xn552guQq528KKXcsNBNNBre3oaQtr";
+  const mint = "6HJetMbdHBuk3mLUainxAPpBpWzDgYbHGTS2TqDAUSX2";
+  const mapBalances = (rows, owner) => new Map(rows.filter((row) => row.owner === owner).map((row) => [row.mint, row.amount]));
+  const classify = new Function("detectSwapActivity", "tokenBalanceMapForWallet", "TOP_WALLET_STABLES", "XBOT_TRADE_SKIP_MINTS", "parsedWalletLamportDelta", `${declaration}; return smartCallRpcBuyFromTransaction;`)(
+    (tx) => ({ detected: tx.swap === true }), mapBalances, new Set(["SOL"]), new Set(), (tx) => tx.lamportDelta || 0
+  );
+  const transfer = { swap: false, lamportDelta: 0, meta: { err: null, preTokenBalances: [], postTokenBalances: [{ owner: wallet, mint, amount: 100 }] } };
+  assert.equal(classify(transfer, wallet), null, "an incoming transfer/airdrop must never become a first-buy call");
+  const buy = { ...transfer, swap: true, lamportDelta: -100_000_000 };
+  assert.deepEqual(classify(buy, wallet), { side: "buy", mint, solAmount: 0 });
+});
+test("Smart Call signature cursor baselines once and paginates until the prior seen boundary", async () => {
+  const start = serverSource.indexOf("async function smartCallWalletSignatureDelta(");
+  const end = serverSource.indexOf("function smartCallHeliusBuyForWallet(", start);
+  assert.ok(start >= 0 && end > start);
+  const declaration = serverSource.slice(start, end);
+  const wallet = "BtMBMPkoNbnLF9Xn552guQq528KKXcsNBNNBre3oaQtr";
+  const PublicKey = class { constructor(value) { this.value = value; } };
+  const makeCollector = (pages, calls) => new Function("rpcRead", "PublicKey", "SMART_CALL_SIGNATURE_MAX_PAGES", "SMART_CALL_SIGNATURE_PAGE_SIZE", `${declaration}; return smartCallWalletSignatureDelta;`)(
+    async (_label, work) => work({ getSignaturesForAddress: async (_key, options) => { calls.push({ ...options }); return pages(options); } }),
+    PublicKey, 3, 20
+  );
+  const latest = Array.from({ length: 20 }, (_, index) => ({ signature: `new-${index}` }));
+  const baselineCalls = [];
+  const baseline = await makeCollector(() => latest, baselineCalls)({ seenSignatures: {}, signatureCursors: {} }, wallet);
+  assert.equal(baseline.hadBaseline, false);
+  assert.equal(baselineCalls.length, 1, "first poll must baseline only the latest page, not replay history");
+  const catchupCalls = [];
+  const catchup = await makeCollector((options) => options.before ? [{ signature: "old-seen" }] : latest, catchupCalls)(
+    { seenSignatures: { [wallet]: ["old-seen"] }, signatureCursors: {} }, wallet
+  );
+  assert.equal(catchupCalls.length, 2);
+  assert.equal(catchupCalls[1].before, "new-19");
+  assert.equal(catchup.freshSignatures.length, 20);
+  assert.equal(catchup.reachedSeen, true);
+  assert.equal(catchup.nextCursor, "");
 });
 test("Smart Calls detects only new wallet/post calls and no-ops when no group opted in", () => {
   const wallet = functionBody(serverSource, "smartCallWalletTick");
   assert.match(wallet, /if \(!targets\.any\) return/);       // no listener → no RPC/provider spend
   assert.match(wallet, /hadBaseline/);                       // never replay history on deploy
-  assert.match(wallet, /if \(!parsed\.checked\) continue/);  // transient parse/RPC failures retry next tick
-  assert.match(wallet, /getSignaturesForAddress/);
+  assert.match(wallet, /runWithConcurrency\(batch, 5/);       // all polling is bounded-concurrent
+  assert.match(wallet, /!allHandled/);                       // transient/partial parser failures retry without cursor holes
   assert.match(wallet, /recordSmartCall/);
+  const delta = functionBody(serverSource, "smartCallWalletSignatureDelta");
+  assert.match(delta, /getSignaturesForAddress/);
+  assert.match(delta, /options\.before = before/);            // busy wallets continue across paginated passes
+  assert.match(delta, /SMART_CALL_SIGNATURE_MAX_PAGES/);
   const parsed = functionBody(serverSource, "smartCallParsedWalletBuys");
-  assert.match(parsed, /parseHeliusSwap/);                    // fast enhanced path
+  assert.match(parsed, /smartCallHeliusBuyForWallet/);        // fast enhanced path, explicitly attributed to watched wallet
   assert.match(parsed, /getParsedTransaction/);              // free RPC fallback
+  assert.match(parsed, /checkedSignatures/);                  // only fully checked signatures advance the cursor
+  assert.match(functionBody(serverSource, "smartCallHeliusBuyForWallet"), /parseHeliusSwap/);
+  const rpcProof = functionBody(serverSource, "smartCallRpcBuyFromTransaction");
+  assert.match(rpcProof, /detectSwapActivity\(tx\)\.detected/);
+  assert.match(rpcProof, /parsedWalletLamportDelta/);
+  assert.match(rpcProof, /incoming transfer\/airdrop is not a buy/);
   const posts = functionBody(serverSource, "smartCallPostTick");
   assert.match(posts, /postBaselines/);                       // X history baseline
   assert.match(posts, /handles\.map.*from:/);                 // one query covers all 30 quickly
@@ -3049,7 +3121,8 @@ test("Smart Calls detects only new wallet/post calls and no-ops when no group op
 test("Smart Call messages carry website Chart/Quick Buy and verified milestone receipts", () => {
   const record = functionBody(serverSource, "recordSmartCall");
   assert.match(record, /if \(call\)/);                        // one first alert per mint
-  assert.match(record, /alphaRadarFetchMc/);                 // entry MC snapshot
+  assert.ok(record.indexOf("call = state.calls[mint]") < record.indexOf("scanFastTimeout(alphaRadarFetchMc")); // reserve mint before provider await
+  assert.match(record, /scanFastTimeout\(alphaRadarFetchMc\(mint\), 2_000/); // bounded entry snapshot
   const keyboard = functionBody(serverSource, "smartCallKeyboard");
   assert.match(keyboard, /links\.site/);
   assert.match(keyboard, /links\.siteBuy/);
@@ -3064,7 +3137,8 @@ test("Smart Call messages carry website Chart/Quick Buy and verified milestone r
   assert.match(receipts, /SMART_CALL_MILESTONES/);
   assert.match(receipts, /call\.peakMc \/ call\.entryMc/);
   assert.match(receipts, /Verified from the original tracked entry/);
-  assert.match(serverSource, /setInterval\(\(\) => \{ void smartCallWalletTick\(\); \}, 20_000\)/);
+  assert.match(serverSource, /setTimeout\(\(\) => \{ void smartCallWalletTick\(\); \}, 3_000\)/);
+  assert.match(serverSource, /setInterval\(\(\) => \{ void smartCallWalletTick\(\); \}, 10_000\)/);
   assert.match(serverSource, /setInterval\(\(\) => \{ void smartCallPostTick\(\); \}, 30_000\)/);
   assert.match(serverSource, /setInterval\(\(\) => \{ void smartCallReceiptTick\(\); \}, 5 \* 60_000\)/);
 });
@@ -3300,7 +3374,8 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(xcard, /changeTitle = "1H"/);
   assert.match(xcard, /String\(changeTitle \|\| "1H"\)/);
   assert.match(serverSource, /function scanImageUrlFromScan/);
-  assert.match(functionBody(serverSource, "handleTelegramLookCommand"), /scanImageUrlFromScan\(scan\)/);
+  assert.match(functionBody(serverSource, "xCoinLogoLive"), /scanImageUrlFromScan\(scan\)/);
+  assert.match(functionBody(serverSource, "deliverTelegramSolScan"), /renderSolScanCardPng/);
   assert.match(serverSource, /async function resolveRhTickerToAddress/);
   assert.match(serverSource, /async function resolveTickerToScanTarget/);
   assert.match(functionBody(serverSource, "resolveScanTargetFromText"), /resolveTickerToScanTarget/);
@@ -3370,6 +3445,17 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(scan, /SCAN_STALE_TTL_MS/);                    // transient provider blanks keep last-good data
   assert.match(scan, /slimeScanHasMarketEvidence/);           // identity-only/all-n-a reads never poison the fresh cache
   assert.match(scan, /const marketReady =/);
+  assert.match(scan, /hedgeMs: 250/);                          // Dex routes hedge instead of timing out serially
+  assert.match(scan, /rugFillPromise/);                        // on-chain security fills while market providers load
+  assert.match(scan, /mergeSlimeScanResults/);                 // refreshes can only add to the last-good card
+  assert.match(scan, /slimeScanCardComplete/);                 // market-only cache entries keep enriching
+  assert.match(functionBody(serverSource, "mergeSlimeScanShield"), /slimeShieldHasHardDanger/); // a retry cannot erase a hard-risk verdict
+  const mergeRecord = new Function("primary", "fallback", functionBody(serverSource, "mergeSlimeScanRecord"));
+  assert.deepEqual(
+    mergeRecord({ symbol: "NEW", imageUrl: "", socials: [] }, { symbol: "OLD", imageUrl: "https://cdn.example/pfp.png", socials: ["x"] }),
+    { symbol: "NEW", imageUrl: "https://cdn.example/pfp.png", socials: ["x"] },
+    "a partial retry must preserve an earlier PFP and non-empty provider arrays"
+  );
 
   const resolvePair = functionBody(serverSource, "resolveDexPairToMint");
   assert.match(resolvePair, /cached\.mint \? 5 \* 60_000 : 10_000/); // a temporary miss is never sticky for 5 minutes
@@ -3391,11 +3477,17 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(cashtag, /maxima\.marketCap >= 50_000/);
   assert.match(cashtag, /maxima\.marketCap \* 0\.05/);
   assert.match(cashtag, /maxima\.liquidityUsd \* 0\.10/);
-  assert.match(cashtag, /webSlimeShield/);                           // every returned ticker contract is safety-screened
-  assert.match(cashtag, /scanRecommendationBlocked/);
+  assert.match(cashtag, /screenTickerCandidateSafety/);             // every returned ticker contract is safety-screened
   assert.match(cashtag, /const safe = screened/);
   assert.match(cashtag, /const mint = safe\[0\]\?\.mint \|\| null/); // fail closed if every candidate is dangerous/unchecked
   assert.match(cashtag, /tickerResolutionMetaCache\.set/);
+  const tickerSafety = functionBody(serverSource, "screenTickerCandidateSafety");
+  assert.match(tickerSafety, /webSlimeShield/);
+  assert.match(tickerSafety, /getMintSafetyInfo/);                    // on-chain authorities do not rely on index text
+  assert.match(tickerSafety, /mintAuthority \|\| mintSafety\?\.freezeAuthority/);
+  assert.match(tickerSafety, /!mintSafety \|\| !shield/);           // a timed-out safety proof fails closed
+  assert.match(tickerSafety, /TOKEN_2022_PROGRAM_ID/);
+  assert.match(tickerSafety, /scanRecommendationBlocked/);
 
   const ticker = functionBody(serverSource, "resolveTickerToScanTarget");
   assert.match(ticker, /const solPromise = resolveCashtagToMint/);  // deep Sol work starts concurrently
@@ -3449,7 +3541,16 @@ test("Telegram scan throttling is per token and partial reads still render", () 
   assert.match(look, /tgCommandOnCooldown\(chatId, `look:\$\{mint\.toLowerCase\(\)\}`/);
   assert.doesNotMatch(look, /tgCommandOnCooldown\(chatId, "look"/); // a different CA in the same group is not silently dropped
   assert.match(look, /sendChatAction/);                              // visible progress while a cold scan is resolving
-  assert.match(look, /scan\.rug \|\| scan\.onchain/);              // valid on-chain-only reads still get a card
+  const deliver = functionBody(serverSource, "deliverTelegramSolScan");
+  assert.match(deliver, /scan\.rug \|\| scan\.onchain/);           // valid on-chain-only reads still get a card
+  assert.match(look, /settleTelegramSolScanCard/);                   // one fast card keeps filling without another post
+  assert.match(look, /quickKeyboard = slimeScanPendingKeyboard/);    // no Quick Buy appears before safety proof finishes
+  assert.match(functionBody(serverSource, "settleTelegramSolScanCard"), /\[2_500, 6_000, 12_000\]/);
+  assert.match(functionBody(serverSource, "settleTelegramSolScanCard"), /mergeSlimeScanResults/);
+  const hardRiskKeyboard = functionBody(serverSource, "slimeScanKeyboardForResult");
+  assert.match(hardRiskKeyboard, /slimeScanHardTradeRisk/);
+  assert.match(hardRiskKeyboard, /slimeScanSafetyProofReady/);
+  assert.match(hardRiskKeyboard, /Hard risk · Buy disabled/);        // exact-CA scans warn, but cannot funnel a flagged coin into TG buy
 
   const messageRouter = functionBody(serverSource, "handleMessage");
   assert.doesNotMatch(messageRouter, /tgCommandOnCooldown\(chatId, "cashtag"/); // handler owns the per-token cooldown
@@ -3567,13 +3668,20 @@ test("X DM terminal: link from Telegram, scan/settings/buy/sell over official DM
 
 test("Telegram trending picks fail closed on honeypots and PvP menus can be dismissed", () => {
   const alphaRows = functionBody(serverSource, "telegramAlphaRows");
-  const safety = functionBody(serverSource, "telegramRecommendationBlocked");
+  const safety = functionBody(serverSource, "screenTickerCandidateSafety");
+  const trendingSafety = functionBody(serverSource, "telegramSafetyScreenTrendingRows");
+  const ape = functionBody(serverSource, "handleTelegramApeCommand");
   const sharedSafety = functionBody(serverSource, "scanRecommendationBlocked");
   const pvpView = functionBody(serverSource, "pvpArenaView");
   const pvpCallback = functionBody(serverSource, "handlePvpCallback");
   assert.match(alphaRows, /"dexTrending"/);
   assert.match(alphaRows, /telegramSafetyScreenTrendingRows/);
   assert.match(safety, /scanRecommendationBlocked/);
+  assert.match(safety, /!mintSafety \|\| !shield/);                 // provider timeouts never become an unchecked recommendation
+  assert.match(safety, /untrustedToken2022/);
+  assert.match(trendingSafety, /screenTickerCandidateSafety/);       // /alpha checks raw mint safety too
+  assert.match(ape, /Promise\.all/);                                 // top fresh candidates screen concurrently, not serially
+  assert.match(ape, /screenTickerCandidateSafety/);
   assert.match(sharedSafety, /hasHardBlockedLivePairRisk/);
   assert.match(sharedSafety, /slimeShieldHasHardDanger/);
   assert.match(sharedSafety, /honeypot\|honey\\s\*pot/);
@@ -3738,7 +3846,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const solLook = functionBody(serverSource, "handleTelegramLookCommand");
   assert.match(solLook, /TG_SCAN_FIRST_RESPONSE_MS/);
   assert.match(solLook, /deliverTelegramSolScan/);
-  assert.match(solLook, /scanMarketStatsFromSources/);                // caller MC matches the card's selected market
+  assert.match(functionBody(serverSource, "deliverTelegramSolScan"), /scanMarketStatsFromSources/); // caller MC matches card facts
+  assert.match(functionBody(serverSource, "formatSlimeScanCard"), /Shield\s+<b>/); // explicit safety verdict remains on the full card
   assert.match(functionBody(serverSource, "renderSolScanCardPng"), /xFallbackLogoBuffer/); // every Sol card gets a circular PFP shell
 });
 
@@ -3763,14 +3872,27 @@ test("X growth engine: broadcast-gated proactive posts + receipts + KOL responde
   assert.match(serverSource, /const KOLSCAN_SEED_HANDLES = \[/);                                        // hardcoded seed survives an IP-block
   assert.match(functionBody(serverSource, "fetchKolscanTop"), /kolscan\.io\/leaderboard/);              // scrape handles+wallets from the leaderboard
   assert.match(functionBody(serverSource, "xKolWatchHandles"), /_kolscanTopHandles/);                   // watched set = manual ∪ kolscan top-30
-  // 🐋 on-chain wallet-follow: convergence of kolscan top-30 WALLETS → X post (reuses the TG buy-detector)
+  // 🐋 on-chain wallet-follow: today's Top 30 + retained proven winners share the verified TG detector.
   assert.match(serverSource, /const KOLSCAN_SEED_WALLETS = \[/);                                        // top-30 wallets seeded
-  assert.match(functionBody(serverSource, "xDetectKolBuys"), /parseHeliusSwap/);                        // same swap parser as the wallet tracker
-  assert.match(functionBody(serverSource, "xDetectKolBuys"), /firstPoll/);                              // baseline first poll — never post pre-existing history
-  assert.match(functionBody(serverSource, "xKolTradeTick"), /rec\.wallets\.size >= need/);              // fire only on CONVERGENCE (≥N KOLs same coin)
-  assert.match(functionBody(serverSource, "xKolTradeTick"), /!s\.coins\[mint\]/);                       // dedup vs everything already surfaced
-  assert.match(functionBody(serverSource, "xPostKolConvergence"), /top kolscan KOLs are loading/);      // the smart-money post
-  assert.match(serverSource, /setInterval\(\(\) => \{ void xKolTradeTick\(\); \}/);                     // scheduled
+  const detectBuys = functionBody(serverSource, "xDetectKolBuys");
+  assert.match(detectBuys, /smartCallWalletSignatureDelta/);                                           // same gap-safe cursor as Telegram
+  assert.match(detectBuys, /smartCallParsedWalletBuys/);                                               // Helius + verified parsed-RPC fallback
+  assert.match(detectBuys, /first poll is a baseline/);                                                // never post pre-existing history
+  const walletTick = functionBody(serverSource, "xKolTradeTick");
+  assert.match(walletTick, /SMART_CALL_WATCH_SIZE/);                                                    // Top 30 plus retained winners
+  assert.match(walletTick, /runWithConcurrency\(batch, 5/);
+  assert.match(walletTick, /profile\.proven/);
+  assert.match(walletTick, /rec\.provenWallets\.size >= 1 \|\| rec\.wallets\.size >= need/);           // one proven winner OR real convergence
+  assert.match(walletTick, /!s\.coins\[mint\]/);                                                       // dedup vs everything already surfaced
+  assert.match(walletTick, /XBOT_SMARTWALLET_GAP_MIN \|\| 60/);                                       // at most one quality smart-wallet call/hour
+  assert.match(walletTick, /XBOT_SMARTWALLET_DAILY \|\| 24/);                                        // hourly cadence remains possible all day
+  assert.match(walletTick, /smartWalletPosts\.length >= dailyCap/);
+  const smartSafety = functionBody(serverSource, "xSmartWalletCandidateSafety");
+  assert.match(smartSafety, /assertTokenBuyBaseSafety/);                                               // fail closed on authorities/honeypot proof
+  assert.match(smartSafety, /XBOT_SMARTWALLET_MIN_MC/);
+  assert.match(functionBody(serverSource, "xPostKolConvergence"), /proven wallet just bought/);         // individual proven-wallet call
+  assert.match(functionBody(serverSource, "xPostKolConvergence"), /proven callers are loading/);       // multi-wallet convergence call
+  assert.match(serverSource, /setInterval\(\(\) => \{ void xKolTradeTick\(\); \}, 10_000\)/);          // scheduled near-live
   // global anti-spam gate on PROACTIVE posts (replies to tags stay ungated)
   assert.match(serverSource, /function xBroadcastGateOk\(\)/);
   assert.match(functionBody(serverSource, "xAutoCallTick"), /if \(!xBroadcastGateOk\(\)\) return/);
