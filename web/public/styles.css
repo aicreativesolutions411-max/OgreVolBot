@@ -2547,6 +2547,164 @@ code {
   font-size: 12px;
 }
 
+.fund-additional-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.fund-additional-card > * {
+  grid-column: 1 / -1;
+}
+
+.fund-wallet-heading,
+.fund-wallet-simple-grid,
+.fund-wallet-toolbar,
+.fund-wallet-review,
+.fund-wallet-review > div,
+.fund-wallet-review li {
+  min-width: 0;
+}
+
+.fund-wallet-simple-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.fund-wallet-presets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.fund-wallet-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fund-wallet-toolbar [data-wallet-fund-count] {
+  margin-right: auto;
+  color: var(--green-2);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.fund-wallet-toolbar button {
+  min-height: 32px;
+  padding: 0 12px;
+}
+
+.fund-wallet-list {
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  max-height: 310px;
+  overflow: auto;
+  padding-right: 3px;
+}
+
+.fund-wallet-row {
+  cursor: pointer;
+  padding: 11px;
+}
+
+.fund-wallet-row span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fund-wallet-row span small {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+}
+
+.fund-wallet-row:has(input:checked) {
+  border-color: rgba(114, 255, 35, 0.58);
+  background: rgba(114, 255, 35, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(114, 255, 35, 0.1);
+}
+
+.fund-wallet-row[data-source="true"] {
+  cursor: default;
+  opacity: 0.68;
+  border-style: dashed;
+}
+
+.fund-wallet-total {
+  border: 1px solid rgba(114, 255, 35, 0.18);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #dfffd2;
+  background: rgba(114, 255, 35, 0.045);
+  font-weight: 750;
+}
+
+.fund-wallet-review {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(114, 255, 35, 0.42);
+  border-radius: 12px;
+  padding: 14px;
+  background: linear-gradient(145deg, rgba(114, 255, 35, 0.1), rgba(4, 10, 5, 0.88));
+}
+
+.fund-wallet-review[hidden] {
+  display: none;
+}
+
+.fund-wallet-review > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.fund-wallet-review > div:first-child span,
+.fund-wallet-review small {
+  color: var(--muted);
+}
+
+.fund-wallet-review ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fund-wallet-review li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 6px 0;
+}
+
+.fund-wallet-advanced {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.fund-wallet-advanced summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.fund-wallet-advanced[open] summary {
+  margin-bottom: 10px;
+  color: var(--green-2);
+}
+
+@media (max-width: 700px) {
+  .fund-wallet-simple-grid,
+  .fund-wallet-presets,
+  .fund-wallet-list {
+    grid-template-columns: 1fr;
+  }
+}
+
 .mini-results span {
   display: grid;
   gap: 6px;

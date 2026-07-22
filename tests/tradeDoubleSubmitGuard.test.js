@@ -29,6 +29,63 @@ test("main website mirrors stay identical", () => {
   assert.equal(indexSource, ggSource, "index.html and gg.html drifted; shared site fixes must ship together");
 });
 
+test("desktop bundle plans can leave selected wallets completely manual", () => {
+  const bundleUi = functionBody(appSource, "walletExitTargetsHtml");
+  const bundleForm = functionBody(appSource, "readBundlePlanForm");
+  const planBuilder = functionBody(serverSource, "webCreateManagedBuyPlanCore");
+  const guardGate = functionBody(serverSource, "shouldArmWebExitGuardForWallet");
+
+  assert.match(bundleUi, /Hold \/ Manual Only/);
+  assert.match(bundleUi, /will not arm TP, SL, ladders, trailing stops, timers, or automatic sells/);
+  assert.match(bundleUi, /data-\$\{prefix\}-manual-wallet/);
+  assert.match(bundleForm, /manualExitWalletIndexes: checkedWalletIndexes\("bundle-plan-manual"\)/);
+  assert.match(serverSource, /function parseWebManualExitWalletIndexes\(/);
+  assert.match(planBuilder, /manualExitWalletSet\.has/);
+  assert.match(planBuilder, /status: manualExit \? "manual_hold" : "watching"/);
+  assert.match(planBuilder, /sellAfterAt: manualExit \? null : sellAfterAt/);
+  assert.match(functionBody(serverSource, "planHasPriceExit"), /autoExitDisabled.*manualExit/);
+  assert.match(functionBody(serverSource, "walletTakeProfitPct"), /autoExitDisabled.*manualExit.*return 0/);
+  assert.match(functionBody(serverSource, "walletStopLossPct"), /autoExitDisabled.*manualExit.*return 0/);
+  assert.match(functionBody(serverSource, "nextTakeProfitLadderLevel"), /autoExitDisabled.*manualExit.*return null/);
+  assert.match(guardGate, /autoExitDisabled.*manualExit.*return false/);
+});
+
+test("desktop funding matches mobile with visible wallet selection and one reviewed transaction", () => {
+  const fundingUi = functionBody(appSource, "walletSweepToolsHtml");
+  const payload = functionBody(appSource, "additionalWalletFundingPayload");
+  const review = functionBody(appSource, "reviewAdditionalWalletFunding");
+  const sender = functionBody(serverSource, "webSendSolManyCore");
+
+  assert.match(fundingUi, /Fund Additional Wallets/);
+  assert.match(fundingUi, /data-wallet-fund-target/);
+  assert.match(fundingUi, /data-wallet-fund-equal/);
+  assert.match(fundingUi, /\["0\.05", "0\.1", "0\.15", "0\.25"\]/);
+  assert.match(fundingUi, /Review Funding/);
+  assert.match(fundingUi, /Advanced: paste outside wallets/);
+  assert.match(payload, /sourcePublicKey: source\.publicKey/);
+  assert.match(payload, /allocations/);
+  assert.match(payload, /createClientAttemptId\("fund-additional-wallets"\)/);
+  assert.match(review, /Confirm &amp; Fund Wallets/);
+  assert.match(sender, /The funding wallet changed after review/);
+  assert.match(sender, /requestedAllocations/);
+  assert.match(sender, /new Transaction\(\)/);
+
+  for (const liveTerminal of [ggSource, indexSource]) {
+    const liveUi = functionBody(liveTerminal, "additionalWalletFundingHtml");
+    const liveReview = functionBody(liveTerminal, "reviewAdditionalWalletFunding");
+    const liveSubmit = functionBody(liveTerminal, "confirmAdditionalWalletFunding");
+    assert.match(liveUi, /Fund Additional Wallets/);
+    assert.match(liveUi, /class="fwTarget"/);
+    assert.match(liveUi, /\["0\.05","0\.1","0\.15","0\.25"\]/);
+    assert.match(liveReview, /sourcePublicKey:source\.publicKey/);
+    assert.match(liveReview, /allocations/);
+    assert.match(liveReview, /tradeAttemptId:attemptId\(\)/);
+    assert.match(liveSubmit, /\/api\/web\/wallets\/send-sol/);
+    assert.match(liveTerminal, /additionalWalletFundingHtml\(\)/);
+    assert.match(liveTerminal, /wireAdditionalWalletFunding\(\)/);
+  }
+});
+
 test("SOL-first prediction trades, payouts, and recovery stay durable and idempotent", () => {
   const funding = functionBody(serverSource, "submitPolySolFunding");
   const cashout = functionBody(serverSource, "startPolyCashout");

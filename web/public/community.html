@@ -62,6 +62,7 @@
         <div class="hero-actions">
           <button class="join" type="button" data-join hidden>Join community</button>
           <a class="trade" data-terminal href="/">Chart &amp; Trade</a>
+          <button class="icon-button" type="button" data-watch>☆ Watch</button>
           <button class="icon-button" type="button" data-share aria-label="Share community">Share</button>
           <button class="icon-button" type="button" data-edit hidden>Edit page</button>
         </div>
@@ -76,6 +77,7 @@
 
       <nav class="tabs" aria-label="Community sections">
         <button class="active" type="button" data-tab="feed">Community</button>
+        <button type="button" data-tab="memes">Memes</button>
         <button type="button" data-tab="chart">Chart</button>
         <button type="button" data-tab="about">About</button>
       </nav>
@@ -95,12 +97,17 @@
             </div>
             <div class="composer" data-composer>
               <div class="user-avatar" data-viewer-avatar>SW</div>
-              <div><div class="prompt-chips"><span>POST</span><button type="button" data-prompt="Update: ">Update</button><button type="button" data-prompt="Chart read: ">Chart read</button><button type="button" data-prompt="Question: ">Question</button><button type="button" data-prompt="Raid: ">X raid</button></div><textarea data-post-text maxlength="700" placeholder="Share an update, chart read, question or community news…"></textarea><label class="x-attach"><b>𝕏</b><input data-x-post inputmode="url" placeholder="Optional: attach an X post link"></label><div class="composer-actions"><span data-character-count>0 / 700</span><a data-share-x target="_blank" rel="noopener">Draft on X</a><button type="button" data-post>Post</button></div></div>
+              <div><div class="prompt-chips"><span>POST</span><button type="button" data-prompt="Update: ">Update</button><button type="button" data-prompt="Chart read: ">Chart read</button><button type="button" data-prompt="Question: ">Question</button><button type="button" data-prompt="Raid: ">X raid</button></div><textarea data-post-text maxlength="700" placeholder="Share an update, meme, chart read or question…"></textarea><div class="meme-preview" data-meme-preview hidden><img data-meme-image alt="Meme preview"><button type="button" data-remove-meme aria-label="Remove meme">Remove</button></div><div class="composer-tools"><label class="media-picker">+ Meme / image<input data-post-media type="file" accept="image/png,image/jpeg,image/webp,image/gif"></label><label class="x-crosspost"><input type="checkbox" data-crosspost-x checked><span>Post here + open X draft</span></label></div><label class="x-attach"><b>𝕏</b><input data-x-post inputmode="url" placeholder="Optional: attach an existing X post link"></label><div class="composer-actions"><span data-character-count>0 / 700</span><a data-share-x target="_blank" rel="noopener">Preview X draft</a><button type="button" data-post>Post</button></div></div>
+              <div class="poll-maker" data-poll-maker><button type="button" data-toggle-poll>+ Poll</button><div data-poll-fields hidden><input data-poll-question maxlength="140" placeholder="Ask the community…"><div class="poll-option-inputs"><input data-poll-option maxlength="48" placeholder="Choice 1"><input data-poll-option maxlength="48" placeholder="Choice 2"><input data-poll-option maxlength="48" placeholder="Choice 3 (optional)"><input data-poll-option maxlength="48" placeholder="Choice 4 (optional)"></div><button type="button" data-cancel-poll>Remove poll</button></div></div>
             </div>
+            <p class="x-draft-note">X opens with your text and community link. Add your meme in X before sending.</p>
             <div class="thread-head"><div><h2>Live community board</h2><p>X-linked profiles, attached posts and market conversation in one feed.</p></div><button type="button" data-refresh>Refresh</button></div>
+            <div class="feed-tools"><div><button class="active" type="button" data-feed-filter="latest">Latest</button><button type="button" data-feed-filter="top">Top</button><button type="button" data-feed-filter="creator">Creator</button></div><label>⌕<input data-feed-search placeholder="Search posts"></label></div>
             <div class="thread" data-thread></div>
           </div>
         </section>
+
+        <section class="panel meme-panel" data-panel="memes" hidden><div class="meme-panel-head"><div><span class="eyebrow">COMMUNITY MEMES</span><h2>Meme wall</h2><p>The coin's image posts, ranked by Slimes.</p></div><button type="button" data-meme-compose>Post a meme</button></div><div class="meme-wall" data-meme-wall></div></section>
 
         <section class="panel chart-panel" data-panel="chart" hidden>
           <div class="chart-glow"></div>
@@ -121,8 +128,10 @@
         </section>
 
         <aside class="sidebar">
+          <section class="side-card milestone-card"><div class="side-title"><h3>Next milestone</h3><span data-milestone-label>live MC</span></div><b data-milestone-target>Loading…</b><div><i data-milestone-progress></i></div><p data-milestone-copy>Tracking the next market-cap level.</p><a data-milestone-share target="_blank" rel="noopener">Share the chase on X</a></section>
           <section class="side-card"><div class="side-title"><h3>Community</h3><span data-member-count>0 members</span></div><div class="owner-row"><div class="user-avatar" data-owner-avatar>SW</div><div><span>CREATED BY</span><b data-owner-name>SlimeWire member</b><a data-owner-x target="_blank" rel="noopener" hidden></a></div></div></section>
           <section class="side-card"><div class="side-title"><h3>Official links</h3><span>community-set</span></div><div class="official-links" data-official-links><span>No links added yet.</span></div></section>
+          <section class="side-card x-bridge"><div class="side-title"><h3>Bring X here</h3><span>two-way</span></div><p>Share a post back to this live coin room, or attach an X post so both conversations stay connected.</p><a data-x-invite target="_blank" rel="noopener">Create an X invite</a><a data-official-x target="_blank" rel="noopener" hidden>Open the coin on X</a></section>
           <section class="side-card return-card"><div class="side-title"><h3>Why people return</h3><span>always live</span></div><ul><li>Coin updates beside live market data</li><li>X posts ready to open and share</li><li>Community reactions and active-member pulse</li><li>One tap back to the chart and trade panel</li></ul></section>
           <section class="side-card status-card"><i></i><div><b>Market data refreshes automatically</b><span data-updated>Connecting to live sources…</span></div></section>
         </aside>
@@ -133,7 +142,7 @@
   <dialog data-editor>
     <form class="dialog-card" data-editor-form>
       <div class="dialog-head"><div><span class="eyebrow">COMMUNITY SETUP</span><h2 data-editor-title>Create coin community</h2></div><button type="button" data-close-dialog aria-label="Close">×</button></div>
-      <label>Banner image<input type="file" data-banner accept="image/png,image/jpeg,image/webp"><small>Wide images work best. SlimeWire crops and optimizes the upload.</small></label>
+      <label>Banner image<input type="file" data-banner accept="image/png,image/jpeg,image/webp"><small>Any shape works. SlimeWire auto-fits the full image over a matching blurred background.</small></label>
       <div class="form-row"><label>Community name<input data-field="title" maxlength="60" placeholder="Cash Cow Community"></label><label>Ticker<input data-field="ticker" maxlength="16" placeholder="CASHCOW"></label></div>
       <label>Description<textarea data-field="description" maxlength="700" placeholder="What this coin and community are building"></textarea></label>
       <div class="form-row"><label>X community or profile<input data-field="xUrl" placeholder="@handle or x.com/i/communities/…"></label><label>Telegram<input data-field="telegramUrl" placeholder="@group or t.me/group"></label></div>
@@ -158,6 +167,6 @@
   </dialog>
 
   <div class="toast" data-toast role="status"></div>
-  <script src="https://app.slimewire.org/community.js?v=20260722d" defer></script>
+  <script src="https://app.slimewire.org/community.js?v=20260722f" defer></script>
 </body>
 </html>

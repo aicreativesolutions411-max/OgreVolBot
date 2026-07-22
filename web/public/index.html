@@ -275,6 +275,14 @@
   .wsel .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
   .wsel .dot.off{background:var(--muted2);box-shadow:none}
   .wsel b{font-family:var(--mono);font-size:12px}.wsel .ar{margin-left:auto;color:var(--muted)}
+  .tradeWalletSwitch{display:grid;grid-template-columns:32px minmax(0,1fr) 32px auto;gap:6px;padding:6px;cursor:default}
+  .tradeWalletSwitch label{display:flex;align-items:center;gap:7px;min-width:0;padding:0 3px}
+  .tradeWalletSwitch label .dot{flex:0 0 auto}
+  .tradeWalletSwitch select{width:100%;min-width:0;border:0;background:transparent;color:var(--text);font:700 11px var(--mono);outline:0;cursor:pointer}
+  .tradeWalletSwitch select option{background:#081009;color:var(--text)}
+  .tradeWalletSwitch button{height:32px;border:1px solid var(--border);border-radius:8px;background:rgba(12,25,14,.9);color:var(--green2);font-weight:900;cursor:pointer}
+  .tradeWalletSwitch button:hover{border-color:var(--green);background:var(--green-dim)}
+  .tradeWalletSwitch .twManage{padding:0 9px;font:700 10px var(--mono);color:var(--muted)}
   .psel{display:flex;align-items:center;gap:8px;margin-bottom:12px}
   .psel label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
   .psel select{flex:1;background:rgba(6,10,7,.7);border:1px solid var(--border);border-radius:9px;color:var(--text);padding:8px 10px;font-size:12px;font-family:var(--sans);outline:none}
@@ -395,6 +403,11 @@
   .walletrow .rename button{flex:0 0 auto;padding:8px 11px;border-radius:9px;font-size:11px}
   .walletrow .bal{text-align:right}.walletrow .bal b{font-size:15px;font-family:var(--mono)}.walletrow .bal span{font-size:10px;color:var(--muted);display:block}
   .walletrow.sel{border-color:rgba(114,255,35,.4);box-shadow:0 0 0 1px rgba(114,255,35,.18) inset}
+  .fundWalletHead{display:grid;grid-template-columns:minmax(0,1fr) minmax(190px,250px);gap:10px;align-items:end}.fundWalletHead .field{margin:0}
+  .fundWalletPresets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin:10px 0}.fundWalletPresets button{padding:9px 5px;font-size:11px}
+  .fundWalletTools{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:11px 0 8px}.fundWalletTools b{font-size:12px}.fundWalletTools span{margin-right:auto;color:var(--green2);font-size:11px;font-weight:800}.fundWalletTools button{padding:7px 10px;font-size:10px}
+  .fundWalletList{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-height:290px;overflow:auto;padding-right:2px}.fundWalletRow{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:9px;padding:11px;border:1px solid var(--border2);border-radius:11px;background:var(--row);cursor:pointer}.fundWalletRow input{width:18px;height:18px}.fundWalletRow .copy{display:grid;gap:2px;min-width:0}.fundWalletRow .copy b{font-size:12px}.fundWalletRow .copy small{overflow:hidden;color:var(--muted);font-family:var(--mono);font-size:9px;text-overflow:ellipsis}.fundWalletRow .amt{color:var(--muted);font-family:var(--mono);font-size:10px}.fundWalletRow:has(input:checked){border-color:rgba(114,255,35,.52);background:rgba(114,255,35,.07);box-shadow:inset 0 0 0 1px rgba(114,255,35,.1)}.fundWalletRow.source{cursor:default;opacity:.65;border-style:dashed}
+  .fundWalletTotal{margin:10px 0;padding:10px 12px;border:1px solid rgba(114,255,35,.2);border-radius:10px;background:rgba(114,255,35,.045);color:#dfffd4;font-size:12px;font-weight:750}.fundWalletReview{display:none;margin-top:11px;padding:13px;border:1px solid rgba(114,255,35,.42);border-radius:11px;background:linear-gradient(145deg,rgba(114,255,35,.1),rgba(3,9,4,.9))}.fundWalletReview.on{display:block}.fundWalletReview .line{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--border2);font-size:11px}.fundWalletReview .line:last-of-type{border-bottom:0}.fundWalletReview .actions{display:flex;gap:8px;margin-top:10px}.fundWalletReview .actions button{flex:1}
   .wbtn{padding:11px 16px;border-radius:11px;font-weight:800;font-size:13px;color:#06140a;background:linear-gradient(180deg,var(--green2),var(--green));box-shadow:0 2px 12px rgba(114,255,35,.22)}
   .wbtn.ghost{background:none;color:var(--green);border:1px solid var(--border)}
   .wbtn:disabled{opacity:.6}
@@ -524,6 +537,7 @@
     .statusbar .right span:last-child{display:none}
     .orientation{margin:6px 8px 2px;padding:7px 8px;gap:8px}.orientation .ocopy{display:block}.orientation .ocopy b,.orientation .ocopy span{display:block}.orientation .ocopy span{margin-top:2px}.orientation .oa button{min-height:30px;padding:0 9px}.orientation #orientationConnect{display:none}
     .wgrid{padding:12px}
+    .fundWalletHead,.fundWalletList{grid-template-columns:1fr}.fundWalletPresets{grid-template-columns:repeat(2,minmax(0,1fr))}
   }
   @media(max-width:520px){
     .launch-card{padding:15px;border-radius:16px}.launch-head{margin-bottom:14px}.launch-head h3{font-size:20px}.launch-head .wbtn{padding:7px 9px;font-size:11px}
@@ -794,6 +808,29 @@
     }
   }
   function activeWalletObj(){return state.wallets.find(w=>w.index===state.activeWallet)||state.wallets[0]||null;}
+  function tradeWalletOptionsHtml(){
+    return (state.wallets||[]).map(w=>'<option value="'+w.index+'"'+(Number(w.index)===Number(state.activeWallet)?' selected':'')+'>'+esc(w.label||('Wallet '+w.index))+' · ◎'+Number(w.sol||0).toFixed(3)+'</option>').join('');
+  }
+  function tradeWalletSwitcherHtml(id){
+    if(!(state.wallets||[]).length)return '<div class="wsel" id="'+id+'" onclick="GG.go(\'wallet\')"><span class="dot off"></span><b>No wallet — tap to set up</b><span class="ar">⇄</span></div>';
+    return '<div class="wsel tradeWalletSwitch" id="'+id+'"><button type="button" data-wallet-step="-1" title="Previous wallet" aria-label="Previous trade wallet">‹</button><label><span class="dot"></span><select data-trade-wallet-switch aria-label="Active trade wallet">'+tradeWalletOptionsHtml()+'</select></label><button type="button" data-wallet-step="1" title="Next wallet" aria-label="Next trade wallet">›</button><button type="button" class="twManage" data-wallet-manage>Manage</button></div>';
+  }
+  function syncTradeWalletSwitchers(){
+    document.querySelectorAll('[data-trade-wallet-switch]').forEach(select=>{select.innerHTML=tradeWalletOptionsHtml();select.value=String(state.activeWallet||'');});
+  }
+  function setActiveTradeWallet(index){
+    const next=Number(index),wallet=(state.wallets||[]).find(w=>Number(w.index)===next);if(!wallet)return;
+    state.activeWallet=next;localStorage.setItem(ACTIVE_WALLET_KEY,String(next));updateWalletPill();syncTradeWalletSwitchers();
+    if(state.route==='trade'&&state.mint)loadTradePnl(state.mint);
+    if(state.route==='rhtrade'&&state.rhMint)rhTmRefreshBal(state.rhMint);
+    toast('Trading with '+(wallet.label||('Wallet '+wallet.index)));
+  }
+  function wireTradeWalletSwitcher(id){
+    const root=$('#'+id);if(!root||!root.classList.contains('tradeWalletSwitch'))return;
+    const select=root.querySelector('[data-trade-wallet-switch]');if(select)select.onchange=()=>setActiveTradeWallet(select.value);
+    root.querySelectorAll('[data-wallet-step]').forEach(button=>button.onclick=()=>{const wallets=state.wallets||[];if(!wallets.length)return;let at=wallets.findIndex(w=>Number(w.index)===Number(state.activeWallet));if(at<0)at=0;const step=Number(button.dataset.walletStep)||1;setActiveTradeWallet(wallets[(at+step+wallets.length)%wallets.length].index);});
+    const manage=root.querySelector('[data-wallet-manage]');if(manage)manage.onclick=()=>go('wallet');
+  }
   function updateWalletPill(){
     const pill=$("#walletPill"),bal=$("#solBal"),dot=pill&&pill.querySelector(".dot");
     if(!pill)return;
@@ -801,6 +838,7 @@
     if(w){bal.textContent="◎ "+Number(w.sol||0).toFixed(3);if(dot)dot.className="dot";}
     else if(state.token){bal.textContent="+ Wallet";if(dot)dot.className="dot off";}
     else{bal.textContent="Connect";if(dot)dot.className="dot off";}
+    syncTradeWalletSwitchers();
   }
   function shortAscii(v){v=String(v||"");return v?v.slice(0,4)+"..."+v.slice(-4):"";}
   function shareOrTweet(text,url){
@@ -1109,6 +1147,35 @@
     const {ok,d}=await jpost("/api/web/wallets/send-sol",{walletIndex:idx,destination:dest,amountSol:String(amt),tradeAttemptId:attemptId()});
     if(ok&&d&&d.ok){toast((d.sweep&&(d.sweep.summary||d.sweep.message))||("Sent ◎"+Number(amt).toFixed(3)));await refreshWallets();return true;}
     toast((d&&(d.message||d.error))||"Send failed",true);return false;
+  }
+  function additionalWalletFundingHtml(){
+    if((state.wallets||[]).length<2)return "";
+    const sourceIdx=Number(state.activeWallet||state.wallets[0].index);
+    const opts=state.wallets.map(w=>'<option value="'+w.index+'"'+(Number(w.index)===sourceIdx?' selected':'')+'>'+esc((w.label||("Wallet "+w.index))+" · ◎"+Number(w.sol||0).toFixed(3))+'</option>').join("");
+    const rows=state.wallets.map(w=>{const src=Number(w.index)===sourceIdx;return '<label class="fundWalletRow'+(src?' source':'')+'" data-fw-row="'+w.index+'" data-fw-balance="'+esc(Number(w.sol||0).toFixed(4))+'"><input type="checkbox" class="fwTarget" value="'+w.index+'"'+(src?' disabled':' checked')+'><span class="copy"><b>'+esc(w.label||("Wallet "+w.index))+(w.index===state.wallets[0]?.index?' · Main':'')+'</b><small>'+esc(short(w.publicKey))+'</small></span><span class="amt">'+(src?'Funding wallet':'◎'+esc(Number(w.sol||0).toFixed(3)))+'</span></label>';}).join("");
+    return '<div class="wbox" id="fundAdditionalWallets"><h3>Fund Additional Wallets</h3><p class="sub">Choose the wallets below and send the same SOL amount to each in one reviewed transaction.</p><div class="fundWalletHead"><div class="field"><label>Fund from</label><select id="fwSource">'+opts+'</select></div><div class="field"><label>SOL per wallet</label><input id="fwAmount" inputmode="decimal" value="0.1" placeholder="0.15"></div></div><div class="fundWalletPresets">'+["0.05","0.1","0.15","0.25"].map(a=>'<button class="wbtn ghost fwPreset" type="button" data-amount="'+a+'">'+a+' SOL each</button>').join("")+'</div><div class="fundWalletTools"><b>Choose wallets</b><span id="fwCount">'+Math.max(0,state.wallets.length-1)+' selected</span><button class="wbtn ghost" type="button" id="fwAll">Select all</button><button class="wbtn ghost" type="button" id="fwNone">Clear</button></div><div class="fundWalletList">'+rows+'</div><div class="fundWalletTotal" id="fwTotal">Review the selected wallets before sending.</div><button class="wbtn" type="button" id="fwReviewBtn" style="width:100%">Review Funding</button><div class="fundWalletReview" id="fwReview"></div><p class="wnote" id="fwStatus" style="margin:9px 0 0">The funding wallet cannot send to itself. Network fees stay covered in the source wallet.</p></div>';
+  }
+  function selectedAdditionalWalletIndexes(){return [...document.querySelectorAll(".fwTarget:checked")].map(x=>Number(x.value)).filter(Number.isInteger);}
+  function clearAdditionalWalletReview(){state._walletFundReview=null;const box=$("#fwReview");if(box){box.classList.remove("on");box.innerHTML="";}}
+  function syncAdditionalWalletFunding(){
+    const src=Number((($("#fwSource")||{}).value)||state.activeWallet||1);
+    document.querySelectorAll("[data-fw-row]").forEach(row=>{const idx=Number(row.dataset.fwRow),isSrc=idx===src,input=row.querySelector(".fwTarget"),amt=row.querySelector(".amt");row.classList.toggle("source",isSrc);if(input){input.disabled=isSrc;if(isSrc)input.checked=false;}if(amt)amt.textContent=isSrc?"Funding wallet":"◎"+(row.dataset.fwBalance||"0.000");});
+    const count=selectedAdditionalWalletIndexes().length,amount=Number((($("#fwAmount")||{}).value)||0),total=count*amount;
+    const c=$("#fwCount"),t=$("#fwTotal");if(c)c.textContent=count+" selected";if(t)t.textContent=count&&amount>0?count+" wallet"+(count===1?"":"s")+" × "+amount+" SOL = "+String(Number(total.toFixed(6)))+" SOL total":"Choose at least one wallet and enter the SOL amount for each.";clearAdditionalWalletReview();
+  }
+  function reviewAdditionalWalletFunding(){
+    const src=Number((($("#fwSource")||{}).value)||state.activeWallet||1),source=state.wallets.find(w=>Number(w.index)===src),amount=Number((($("#fwAmount")||{}).value)||0),targets=selectedAdditionalWalletIndexes().filter(i=>i!==src),box=$("#fwReview"),status=$("#fwStatus");
+    const fail=m=>{if(status)status.textContent=m;toast(m,true);clearAdditionalWalletReview();};
+    if(!source)return fail("Choose the wallet that will fund the others.");if(!targets.length)return fail("Check at least one additional wallet to fund.");if(targets.length>20)return fail("Fund up to 20 wallets at a time.");if(!(amount>0))return fail("Enter a SOL amount greater than zero for each wallet.");
+    const total=targets.length*amount;if(Number(source.sol||0)<=total)return fail("The funding wallet needs enough SOL for the total plus network fees.");
+    const allocations=targets.map(i=>{const w=state.wallets.find(x=>Number(x.index)===i);return {walletIndex:i,label:(w&&w.label)||("Wallet "+i),destination:(w&&w.publicKey)||"",amountSol:String(amount)};});if(allocations.some(a=>!a.destination))return fail("A selected wallet is unavailable. Refresh wallets and try again.");
+    state._walletFundReview={fromWalletIndex:String(src),sourcePublicKey:source.publicKey,allocations,splitAll:false,tradeAttemptId:attemptId()};if(status)status.textContent="Review the wallet list and total, then confirm once.";if(box){box.classList.add("on");box.innerHTML='<b>Ready to fund '+allocations.length+' wallet'+(allocations.length===1?'':'s')+'</b><p class="wnote" style="margin:4px 0 8px">'+esc(source.label||("Wallet "+src))+' sends '+esc(String(Number(total.toFixed(6))))+' SOL total</p>'+allocations.map(a=>'<div class="line"><span>'+esc(a.label)+'</span><b>'+esc(a.amountSol)+' SOL</b></div>').join("")+'<div class="actions"><button class="wbtn" id="fwConfirm" type="button">Confirm &amp; Fund Wallets</button><button class="wbtn ghost" id="fwEdit" type="button">Edit Selection</button></div><p class="wnote" style="margin:8px 0 0">One on-chain transaction contains all transfers. Transfers cannot be reversed.</p>';const confirmBtn=$("#fwConfirm"),edit=$("#fwEdit");if(confirmBtn)confirmBtn.onclick=()=>confirmAdditionalWalletFunding(confirmBtn);if(edit)edit.onclick=()=>{clearAdditionalWalletReview();$("#fwAmount")?.focus();};box.scrollIntoView({behavior:"smooth",block:"nearest"});}
+  }
+  async function confirmAdditionalWalletFunding(btn){
+    const body=state._walletFundReview;if(!body)return reviewAdditionalWalletFunding();if(btn.disabled)return;btn.disabled=true;btn.textContent="Funding wallets…";const status=$("#fwStatus");if(status)status.textContent="Submitting one funding transaction…";const {ok,d}=await jpost("/api/web/wallets/send-sol",body);if(ok&&d&&d.ok){toast((d.sweep&&(d.sweep.summary||d.sweep.message))||"Additional wallets funded");state._walletFundReview=null;await refreshWallets();renderWallet();return;}const msg=apiMessage(d,"Funding did not land. No duplicate transfer will be sent if you retry.");if(status)status.textContent=msg;toast(msg,true);if(btn.isConnected){btn.disabled=false;btn.textContent="Confirm & Fund Wallets";}
+  }
+  function wireAdditionalWalletFunding(){
+    const source=$("#fwSource"),amount=$("#fwAmount"),review=$("#fwReviewBtn"),all=$("#fwAll"),none=$("#fwNone");if(source)source.onchange=syncAdditionalWalletFunding;if(amount)amount.oninput=syncAdditionalWalletFunding;document.querySelectorAll(".fwTarget").forEach(x=>x.onchange=syncAdditionalWalletFunding);document.querySelectorAll(".fwPreset").forEach(b=>b.onclick=()=>{if(amount)amount.value=b.dataset.amount||"0.1";syncAdditionalWalletFunding();});if(all)all.onclick=()=>{document.querySelectorAll(".fwTarget").forEach(x=>{if(!x.disabled)x.checked=true;});syncAdditionalWalletFunding();};if(none)none.onclick=()=>{document.querySelectorAll(".fwTarget").forEach(x=>x.checked=false);syncAdditionalWalletFunding();};if(review)review.onclick=reviewAdditionalWalletFunding;syncAdditionalWalletFunding();
   }
   async function returnToConnected(){
     const {ok,d}=await jpost("/api/web/wallets/return-to-connected",{});
@@ -2059,9 +2126,9 @@
     $("#v-rhtrade").innerHTML='<div class="trade rhTradeUnified" data-focus="chart"><div class="tradeMain chartSplitMain"><div class="thead"><div id="rhTvAvatar">'+rhAvatar(r,46,"12px")+'</div><div class="ti"><b id="rhTvSym">'+esc(r.symbol||"?")+'</b><div id="rhTvName" class="sub">'+esc((r.name||"")+' · Robinhood Chain'+(r.createdAt?' · '+age(r.createdAt):''))+'</div><span class="ic chartsoc">'+links+'</span></div><div class="st" id="rhTvStats">'+statsHtml()+'</div></div>'+
       '<div class="tstrip" id="rhCtab"><button class="on" type="button" data-rh-ct="chart">Chart</button><button type="button" data-rh-ct="tx">Transactions</button><button type="button" data-rh-ct="position">Position &amp; Trade</button></div>'+
       '<div id="rhTvChart" class="chartwrap">'+rhNativeChartFrame(address,r)+'</div>'+chartTapeSplitHtml()+'<section class="marketTape" id="rhTradeTape" aria-label="Live Robinhood trade tape"></section><div class="txpane" data-rh-pane="tx" style="display:none"></div></div>'+
-      '<div class="tradeSide"><div class="pnlbar"><div><span>ETH</span><b id="rhEthBal">—</b></div><div><span>Holdings</span><b id="rhTokenBal">—</b></div><div><span>PNL</span><b class="mut" id="rhPnlVal">—</b></div><button class="posref" title="Refresh balance" onclick="GG.rhRefresh()">↻</button></div><div class="sidepad"><div class="wsel" onclick="GG.go(\'wallet\')"><span class="dot"></span><b>Wallet '+esc(String(state.activeWallet||1))+' · pays with SOL</b><span class="ar">⇄</span></div><div class="psel"><label>Preset</label><button class="chip" type="button" onclick="GG.rhPresetModal()">Edit RH presets ＋</button></div><div class="bsrow"><button class="buy" id="rhSideBuy">Buy</button><button class="sell" id="rhSideSell">Sell</button></div><div class="amtin"><input id="rhTmAmt" inputmode="decimal" value="0.1"><span id="rhAmtUnit">SOL</span></div><div class="chips" id="rhChips"></div><button class="bigbuy" id="rhTmBuy">Buy</button><div class="secbox" style="margin-top:10px"><h4>🎯 Take profit after buy</h4><div class="chips" id="rhQuickTpChips"><button data-tp="0">Hold</button><button data-tp="25">+25%</button><button data-tp="50">+50%</button><button data-tp="100">+100%</button></div><div style="display:flex;gap:6px;margin-top:8px"><button class="wbtn ghost" style="flex:1" onclick="GG.rhGuardModal(\''+esc(address)+'\')">Custom TP / SL</button><button class="wbtn ghost" style="flex:1" onclick="GG.rhLimitModal(\''+esc(address)+'\')">⏰ Limit order</button></div></div><div id="rhTmBal" class="mut" style="font-size:11px;margin:8px 0">Checking your wallet…</div><div class="perf"><div><span>5M</span><b class="'+(Number(r.m5)>=0?'up':'down')+'">'+(isFinite(Number(r.m5))?((Number(r.m5)>=0?'+':'')+Number(r.m5).toFixed(1)+'%'):'—')+'</b></div><div><span>PAY</span><b>◎ SOL</b></div><div><span>CHAIN</span><b>RH</b></div><div><span>SWAP</span><b>AUTO</b></div></div><div class="secbox"><h4>🛡 Token Data &amp; Security</h4><div id="rhSafety" class="mut" style="font-size:11px">Scanning coin for honeypot / sell traps…</div></div><div class="rhSideTools"><button class="wbtn ghost" onclick="GG.rhGuardModal(\''+esc(address)+'\')">🎯 TP / SL</button><button class="wbtn ghost" onclick="GG.rhBundleModal(\''+esc(address)+'\')">📦 Bundle</button><button class="wbtn ghost" onclick="GG.rhVolumeModal(\''+esc(address)+'\')">🔁 Volume</button></div><p class="wnote">One SOL wallet trades both chains. Robinhood conversion is automatic.</p></div></div></div>';
+      '<div class="tradeSide"><div class="pnlbar"><div><span>ETH</span><b id="rhEthBal">—</b></div><div><span>Holdings</span><b id="rhTokenBal">—</b></div><div><span>PNL</span><b class="mut" id="rhPnlVal">—</b></div><button class="posref" title="Refresh balance" onclick="GG.rhRefresh()">↻</button></div><div class="sidepad">'+tradeWalletSwitcherHtml('rhTradeWalletSwitch')+'<div class="psel"><label>Preset</label><button class="chip" type="button" onclick="GG.rhPresetModal()">Edit RH presets ＋</button></div><div class="bsrow"><button class="buy" id="rhSideBuy">Buy</button><button class="sell" id="rhSideSell">Sell</button></div><div class="amtin"><input id="rhTmAmt" inputmode="decimal" value="0.1"><span id="rhAmtUnit">SOL</span></div><div class="chips" id="rhChips"></div><button class="bigbuy" id="rhTmBuy">Buy</button><div class="secbox" style="margin-top:10px"><h4>🎯 Take profit after buy</h4><div class="chips" id="rhQuickTpChips"><button data-tp="0">Hold</button><button data-tp="25">+25%</button><button data-tp="50">+50%</button><button data-tp="100">+100%</button></div><div style="display:flex;gap:6px;margin-top:8px"><button class="wbtn ghost" style="flex:1" onclick="GG.rhGuardModal(\''+esc(address)+'\')">Custom TP / SL</button><button class="wbtn ghost" style="flex:1" onclick="GG.rhLimitModal(\''+esc(address)+'\')">⏰ Limit order</button></div></div><div id="rhTmBal" class="mut" style="font-size:11px;margin:8px 0">Checking your wallet…</div><div class="perf"><div><span>5M</span><b class="'+(Number(r.m5)>=0?'up':'down')+'">'+(isFinite(Number(r.m5))?((Number(r.m5)>=0?'+':'')+Number(r.m5).toFixed(1)+'%'):'—')+'</b></div><div><span>PAY</span><b>◎ SOL</b></div><div><span>CHAIN</span><b>RH</b></div><div><span>SWAP</span><b>AUTO</b></div></div><div class="secbox"><h4>🛡 Token Data &amp; Security</h4><div id="rhSafety" class="mut" style="font-size:11px">Scanning coin for honeypot / sell traps…</div></div><div class="rhSideTools"><button class="wbtn ghost" onclick="GG.rhGuardModal(\''+esc(address)+'\')">🎯 TP / SL</button><button class="wbtn ghost" onclick="GG.rhBundleModal(\''+esc(address)+'\')">📦 Bundle</button><button class="wbtn ghost" onclick="GG.rhVolumeModal(\''+esc(address)+'\')">🔁 Volume</button></div><p class="wnote">The selected wallet pays with SOL on both chains. Robinhood conversion is automatic.</p></div></div></div>';
     function paint(){const sell=state.rhTradeSide==="sell",amt=$("#rhTmAmt"),unit=$("#rhAmtUnit"),big=$("#rhTmBuy"),chips=$("#rhChips");$("#rhSideBuy").classList.toggle("on",!sell);$("#rhSideSell").classList.toggle("on",sell);big.classList.toggle("sell",sell);unit.textContent=sell?"%":"SOL";big.textContent=(sell?"Sell ":"Buy ")+(r.symbol||"");const vals=sell?["25%","50%","75%","100%"]:buys;chips.innerHTML=vals.map(v=>'<button data-v="'+v+'">'+v+'</button>').join("");chips.querySelectorAll("button").forEach(b=>b.onclick=()=>{amt.value=b.dataset.v.replace("%","");});amt.value=sell?"100":"0.1";}
-    $("#rhSideBuy").onclick=()=>{state.rhTradeSide="buy";paint();};$("#rhSideSell").onclick=()=>{state.rhTradeSide="sell";paint();};$("#rhTmBuy").onclick=()=>{const a=($("#rhTmAmt")||{}).value;if(!(Number(a)>0)){toast("Enter a valid amount.",true);return;}state.rhTradeSide==="sell"?rhTrade(address,"sell",{percent:Number(a)}):rhBuyAmount(address,String(a),true);};paint();document.querySelectorAll("#rhQuickTpChips button[data-tp]").forEach(button=>{button.classList.toggle("on",Number(button.dataset.tp)===rhQuickTp());button.onclick=()=>rhSetQuickTp(button.dataset.tp);});wireChartTapeSplit($("#v-rhtrade .chartSplitMain"));wireRhTradeTabs(address,r);loadInlineTape(address,r,"robinhood","rhTradeTape");
+    $("#rhSideBuy").onclick=()=>{state.rhTradeSide="buy";paint();};$("#rhSideSell").onclick=()=>{state.rhTradeSide="sell";paint();};$("#rhTmBuy").onclick=()=>{const a=($("#rhTmAmt")||{}).value;if(!(Number(a)>0)){toast("Enter a valid amount.",true);return;}state.rhTradeSide==="sell"?rhTrade(address,"sell",{percent:Number(a)}):rhBuyAmount(address,String(a),true);};paint();wireTradeWalletSwitcher("rhTradeWalletSwitch");document.querySelectorAll("#rhQuickTpChips button[data-tp]").forEach(button=>{button.classList.toggle("on",Number(button.dataset.tp)===rhQuickTp());button.onclick=()=>rhSetQuickTp(button.dataset.tp);});wireChartTapeSplit($("#v-rhtrade .chartSplitMain"));wireRhTradeTabs(address,r);loadInlineTape(address,r,"robinhood","rhTradeTape");
     Promise.all([rhEnrichRows([r]),rhHydrateChartRow(r)]).then(results=>{const changed=results.some(Boolean);if(state.route!=="rhtrade")return;if(changed){const s=$("#rhTvStats");if(s)s.innerHTML=statsHtml();const av=$("#rhTvAvatar");if(av)av.innerHTML=rhAvatar(r,46,"12px");const sy=$("#rhTvSym");if(sy&&r.symbol)sy.textContent=r.symbol;const nm=$("#rhTvName");if(nm)nm.textContent=(r.name||"")+' · Robinhood Chain';const soc=$("#v-rhtrade .chartsoc");if(soc)soc.innerHTML=rhTradeLinksHtml(r,address);if(r.symbol)h.textContent=r.symbol;loadInlineTape(address,r,"robinhood","rhTradeTape");}if(!(r.priceUsd>0))loadNoxaFallback(r,address,statsHtml,h);});
     rhTmRefreshBal(address);loadRhSafety(address);
   }
@@ -3090,7 +3157,7 @@
       '</div><div class="tradeSide">'+
         '<div class="pnlbar" id="pnlbar"><div><span>Invested</span><b id="pnlInv">—</b></div><div><span>Remaining</span><b id="pnlRem">—</b></div><div><span>PNL</span><b class="mut" id="pnlVal">—</b></div><button class="posref" title="Refresh balance &amp; position" onclick="GG.refreshPos()">↻</button></div>'+
         '<div class="sidepad">'+
-          '<div class="wsel" id="wsel" onclick="GG.go(\'wallet\')"><span class="dot off"></span><b id="wselTxt">No wallet — tap to set up</b><span class="ar">⇄</span></div>'+
+          tradeWalletSwitcherHtml('wsel')+
           '<div class="psel" id="psel"></div>'+
           '<div class="bsrow"><button class="buy on" id="sideBuy">Buy</button><button class="sell" id="sideSell">Sell</button></div>'+
           '<div class="amtin"><input id="amt" value="'+tradeAmt+'" inputmode="decimal"><span id="amtUnit">SOL</span></div>'+
@@ -3101,7 +3168,7 @@
         '</div></div>'+
         '<button class="tradefab" id="tradeFab" onclick="GG.flipTrade()" aria-label="Flip between bigger chart and bigger buy panel">'+(buyFirst?'📈 Chart':'💰 Buy')+'</button>'+
       '</div>';
-    wireTradePanel(mint,r);updateWselLine();paintPresetSel();wireCtab();wireChartTapeSplit(view.querySelector(".chartSplitMain"));loadTradePnl(mint);loadTradeStats(mint);loadInlineTape(mint,r||{},"solana","tradeTape");
+    wireTradePanel(mint,r);wireTradeWalletSwitcher("wsel");updateWselLine();paintPresetSel();wireCtab();wireChartTapeSplit(view.querySelector(".chartSplitMain"));loadTradePnl(mint);loadTradeStats(mint);loadInlineTape(mint,r||{},"solana","tradeTape");
     const mb=$("#ctMoreBtn");if(mb)mb.onclick=(e)=>{e.stopPropagation();mb.parentNode.classList.toggle("open");};
     if(state.token&&!(state.presets.trade||[]).length){loadPresets().then(()=>{if(state.route==="trade")paintPresetSel();});}
     if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){state.tradeRow=r;rememberTradeRecent(r);subbarTrade(r);$("#thead").innerHTML=theadHtml(r);fillPerf(r);}}
@@ -3207,10 +3274,7 @@
   }
   function fillPerf(r){const p=$("#perf");if(!p)return;p.innerHTML=[["5M",r.m5],["1H",r.h1],["6H",r.h6],["24H",r.h24]].map(([lab,v])=>{const n=pctNum(v);const cls=n==null?"mut":(n>=0?"up":"down");const t=n==null?"—":(n>=0?"+":"")+n.toFixed(1)+"%";return'<div><span>'+lab+'</span><b class="'+cls+'">'+t+'</b></div>';}).join("");}
   function updateWselLine(){
-    const line=$("#wselTxt"),dot=$("#wsel")&&$("#wsel").querySelector(".dot");if(!line)return;
-    const w=activeWalletObj();
-    if(w){line.textContent=(w.label||"Wallet")+" · ◎ "+Number(w.sol||0).toFixed(3);if(dot)dot.className="dot";}
-    else{line.textContent=state.token?"Create a wallet to trade":"Set up a wallet to trade";if(dot)dot.className="dot off";}
+    syncTradeWalletSwitchers();
   }
   function paintPresetSel(){
     const ps=$("#psel");if(!ps)return;
@@ -3970,6 +4034,7 @@
           '<div class="walletrow"><div class="ico">⬇</div><div class="info"><b>'+esc(w.label||"Wallet")+'</b><div class="addr">'+esc(w.publicKey)+'</div></div></div>'+
           '<div style="display:flex;gap:9px;margin-top:6px"><button class="wbtn" id="copyDep">Copy deposit address</button></div>'+
           '<p class="wnote" style="margin-top:12px">Tip: keep a little SOL for fees. Once funds land, hit Refresh and your balance updates here and on every Buy button.</p></div>':'')+
+        additionalWalletFundingHtml()+
         // ---- Presets fold ----
         '<details class="fold"><summary>🎚️ Presets<span class="sub">Quick Buy &amp; Bundle · auto TP/SL</span><span class="chev">▾</span></summary><div class="foldbody">'+
           '<p class="wnote" style="margin:0 0 12px">Tap <b>Use</b> to make a Quick Buy preset active (it arms TP/SL on every buy — the active one shows ✓). <b>✎</b> edit · <b>✕</b> remove. You can also switch presets from the dropdown on any coin\'s trade screen.</p>'+
@@ -4096,6 +4161,7 @@
     const ss=$("#swSol");if(ss)ss.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}ss.disabled=true;ss.textContent="Sweeping…";await sweepSol(dest,state.wallets.map(w=>w.index));ss.disabled=false;ss.textContent="Sweep all SOL →";renderWallet();};
     const st=$("#swTok");if(st)st.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}st.disabled=true;st.textContent="Sweeping…";await sweepTokens(dest,state.wallets.map(w=>w.index));st.disabled=false;st.textContent="Sweep all tokens →";};
     const db=$("#distBtn");if(db)db.onclick=async()=>{const c=parseInt($("#dCount").value,10),a=$("#dAmt").value.trim();if(!(c>0)){toast("How many wallets?",true);return;}if(!a||Number(a)<=0){toast("SOL per wallet?",true);return;}db.disabled=true;db.textContent="Funding…";await distributeFresh(c,a,state.activeWallet||1);db.disabled=false;db.textContent="Create + fund fresh wallets";renderWallet();};
+    wireAdditionalWalletFunding();
     // ---- fund recovery ----
     // 2-tap confirm on the bulk "sell everything" actions (no modal): first tap arms, second executes.
     const confirmTap=(btn,label,fn)=>{if(!btn)return;let armed=false,t=null;btn.onclick=async()=>{if(!armed){armed=true;const o=btn.textContent;btn.textContent="Tap again to confirm";btn.style.borderColor="var(--red)";t=setTimeout(()=>{armed=false;btn.textContent=o;btn.style.borderColor="";},3500);return;}clearTimeout(t);armed=false;btn.style.borderColor="";btn.disabled=true;btn.textContent=label+"…";await fn();btn.disabled=false;renderWallet();};};

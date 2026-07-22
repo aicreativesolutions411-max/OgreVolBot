@@ -81,6 +81,21 @@ test("compact quick panel reuses the existing guarded execution buttons", () => 
   assert.match(pro, /function refreshTradeContext/);
 });
 
+test("trade panels switch active wallets in place without leaving the coin", () => {
+  assert.match(gg, /function tradeWalletSwitcherHtml/);
+  assert.match(gg, /data-trade-wallet-switch/);
+  assert.match(gg, /data-wallet-step="-1"/);
+  assert.match(gg, /data-wallet-step="1"/);
+  assert.match(gg, /data-wallet-manage>Manage/);
+  assert.match(gg, /function setActiveTradeWallet[\s\S]{0,500}state\.activeWallet=next/);
+  assert.match(gg, /function setActiveTradeWallet[\s\S]{0,700}loadTradePnl\(state\.mint\)/);
+  assert.match(gg, /function setActiveTradeWallet[\s\S]{0,800}rhTmRefreshBal\(state\.rhMint\)/);
+  assert.match(gg, /tradeWalletSwitcherHtml\('wsel'\)/);
+  assert.match(gg, /wireTradeWalletSwitcher\("wsel"\)/);
+  assert.match(gg, /tradeWalletSwitcherHtml\('rhTradeWalletSwitch'\)/);
+  assert.match(gg, /wireTradeWalletSwitcher\("rhTradeWalletSwitch"\)/);
+});
+
 test("Solana charts never use a token address as a DexScreener pool", () => {
   assert.match(gg, /function solChartUrl/);
   assert.match(gg, /\/chart-lab\?ca=/);
