@@ -8,10 +8,10 @@ const page = fs.readFileSync(new URL("../web/public/balls.html", import.meta.url
 const redirects = fs.readFileSync(new URL("../web/public/_redirects", import.meta.url), "utf8");
 const hero = new URL("../web/public/assets/balls/balls-arena-hero.webp", import.meta.url);
 
-test("BALLS has a dedicated no-store route and static-host fallback", () => {
+test("BALLS has a dedicated no-store route without a pretty-URL redirect loop", () => {
   assert.match(server, /\["\/balls", "\/balls\/"\][\s\S]{0,180}serveStaticHtmlPage\(response, "balls\.html", "no-store, max-age=0"\)/);
-  assert.match(redirects, /^\/balls\s+\/balls\.html\s+200$/m);
-  assert.match(redirects, /^\/balls\/\*\s+\/balls\.html\s+200$/m);
+  assert.doesNotMatch(redirects, /^\/balls(?:\/\*)?\s+/m);
+  assert.match(page, /<title>BALLS/);
 });
 
 test("BALLS launch configuration is safe before the final contract exists", () => {
