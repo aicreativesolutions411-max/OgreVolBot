@@ -29,6 +29,8 @@ test("BALLS launch configuration is safe before the final contract exists", () =
 test("BALLS supports either final chain and keeps holder addresses off visible rows", () => {
   assert.match(page, /#\$\{isRh\?"rhtrade":"trade"\}/);
   assert.match(page, /class="navButton terminal" href="https:\/\/www\.slimewire\.org\/"/);
+  assert.match(page, /aria-label="Open SlimeWire Terminal">TERMINAL<\/a>/);
+  assert.doesNotMatch(page, /navButton terminal[^>]*>[\s\S]{0,40}(?:⌂|âŒ‚|home)/i);
   assert.match(page, /class="navButton chart disabled" data-chart/);
   assert.match(page, /\$\$\('\[data-chart\]'\)/);
   assert.match(page, /\/api\/map\?ca=/);
@@ -38,7 +40,7 @@ test("BALLS supports either final chain and keeps holder addresses off visible r
   assert.doesNotMatch(page, /Use Convert ETH|Robinhood sells settle to ETH/);
 });
 
-test("BALLS matches the supplied black-and-chrome project identity", () => {
+test("BALLS matches the supplied black-and-slime-green project identity", () => {
   assert.ok(fs.statSync(tokenArt).size > 100_000);
   assert.ok(fs.statSync(pinballArt).size > 500_000);
   for (const asset of collectibleArt) {
@@ -51,6 +53,8 @@ test("BALLS matches the supplied black-and-chrome project identity", () => {
   assert.match(page, /The most important metric in crypto/);
   assert.match(page, /BALLS HIGH SCORES/);
   assert.match(page, /BALLS COLLECTION/);
+  assert.match(page, /--lime:#86ff2d/);
+  assert.match(page, /\.navButton\.terminal\{background:linear-gradient\(180deg,#b8ff50,#68e51b\)/);
   assert.doesNotMatch(page, /balls-arena-hero/);
   assert.doesNotMatch(page, /🐸|🚀|🌕|💀|🗑|frog|soccer/i);
 });

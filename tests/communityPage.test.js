@@ -18,7 +18,8 @@ test("coin community has a pretty public route and responsive shell", () => {
   assert.match(html, /data-panel="chart"/);
   assert.match(html, /data-panel="about"/);
   assert.match(html, /Back to Terminal/);
-  assert.ok(html.indexOf('/config.js') < html.indexOf('/community.js'), "runtime API config must load before the community client");
+  assert.ok(html.indexOf('/config.js') < html.indexOf('/community.js?v='), "runtime API config must load before the versioned community client");
+  assert.match(server, /fileName === "community\.js"/);
   assert.match(html, /data-directory/);
   assert.match(css, /@media\(max-width:600px\)/);
   assert.match(engagementCss, /\.community-directory/);
