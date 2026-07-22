@@ -32,21 +32,21 @@
     return new URLSearchParams(location.search).get("ca") || "";
   }
   function terminalUrl() { return `/#${state.chain === "robinhood" ? "rhtrade" : "trade"}/${encodeURIComponent(state.address)}`; }
-  function communityUrl() { return `${location.origin}/c/${encodeURIComponent(state.address)}`; }
+  function communityUrl() { return `${location.origin}/community?ca=${encodeURIComponent(state.address)}`; }
   function setAvatar(node, url, fallback = "SW") { if (!node) return; node.style.backgroundImage = url ? `url(${JSON.stringify(url)})` : ""; node.textContent = url ? "" : String(fallback || "SW").slice(0, 2).toUpperCase(); }
   function socialLink(label, url) { return url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>` : ""; }
 
   function showFinder() {
     clearTimeout(state.refreshTimer); state.address = ""; state.payload = null;
     $("[data-finder]").hidden = false; $("[data-community-shell]").hidden = true;
-    history.pushState(null, "", "/c/"); setTimeout(() => $("[data-ca-input]")?.focus(), 30);
+    history.pushState(null, "", "/community"); setTimeout(() => $("[data-ca-input]")?.focus(), 30);
   }
 
   async function openAddress(rawAddress) {
     if (!validAddress(rawAddress)) { toast("Paste a valid Solana or 0x contract address."); return; }
     state.address = normalizedAddress(rawAddress); state.chain = state.address.startsWith("0x") ? "robinhood" : "solana";
     $("[data-finder]").hidden = true; $("[data-community-shell]").hidden = false;
-    history.pushState(null, "", `/c/${encodeURIComponent(state.address)}`);
+    history.pushState(null, "", `/community?ca=${encodeURIComponent(state.address)}`);
     $("[data-chain]").textContent = state.chain === "robinhood" ? "ROBINHOOD CHAIN" : "SOLANA";
     $$('[data-terminal]').forEach((link) => { link.href = terminalUrl(); });
     $$('[data-copy-ca]').forEach((button) => { button.title = state.address; });

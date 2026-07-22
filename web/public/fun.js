@@ -730,7 +730,7 @@
     const coin = state.selected || {}, key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
     $("[data-coin-mini]").innerHTML = `<div class="coin-identity"><img ${coinImageAttrs(coin)} style="background-image:url('${coinBadge(coin)}')" alt="" decoding="async" referrerpolicy="no-referrer"><div><b>${escapeHtml(coin.symbol || short(key))}</b><button class="coin-ca-button" type="button" data-copy-coin title="Copy ${escapeHtml(key)}"><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span><i>▣</i></button></div></div><div class="coin-head-quote"><b>${formatUsd(coin.marketCap || coin.mc)}</b><span class="${Number(coin.change) >= 0 ? "up" : "down"}">${formatPct(coin.change)} · 1H</span></div>`;
     $("[data-coin-stats]").innerHTML = `<div><span>Market cap</span><b>${formatUsd(coin.marketCap || coin.mc)}</b></div><div><span>Liquidity</span><b>${formatUsd(coin.liquidity || coin.liq || coin.liquidityUsd)}</b></div><div><span>Holders</span><b>${Number(coin.holders || coin.holderCount) > 0 ? Number(coin.holders || coin.holderCount).toLocaleString() : "checking"}</b></div><div><span>Volume</span><b>${coin.volume > 0 ? formatUsd(coin.volume) : escapeHtml(coin.volumeLabel || "checking")}</b></div>`;
-    $(`[data-coin-mini] .coin-head-quote`)?.insertAdjacentHTML("beforebegin", `<a class="coin-community-link" href="/c/${encodeURIComponent(key)}">Community</a>`);
+    $(`[data-coin-mini] .coin-head-quote`)?.insertAdjacentHTML("beforebegin", `<a class="coin-community-link" href="/community?ca=${encodeURIComponent(key)}">Community</a>`);
     renderChart();
     renderQuickTrade();
     renderPositionCard();

@@ -1765,7 +1765,7 @@
   // sniper feed so every row can be vetted + copied in one tap.
   function socialIconsHtml(r){
     let s="";
-    s+='<a href="/c/'+encodeURIComponent(r.tokenMint||r.address||'')+'" onclick="event.stopPropagation()" title="Coin community">Community</a>';
+    s+='<a href="/community?ca='+encodeURIComponent(r.tokenMint||r.address||'')+'" onclick="event.stopPropagation()" title="Coin community">Community</a>';
     if(r.twitterUrl)s+='<a href="'+esc(r.twitterUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">𝕏</a>';
     if(r.telegramUrl)s+='<a href="'+esc(r.telegramUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">✈</a>';
     if(r.websiteUrl)s+='<a href="'+esc(r.websiteUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">🌐</a>';
@@ -3125,7 +3125,7 @@
   }
   function theadHtml(r){
     const soc=[];
-    soc.push('<a href="/c/'+encodeURIComponent(r.tokenMint||'')+'" title="Coin community">Community</a>');
+    soc.push('<a href="/community?ca='+encodeURIComponent(r.tokenMint||'')+'" title="Coin community">Community</a>');
     if(r.twitterUrl)soc.push('<a href="'+esc(r.twitterUrl)+'" target="_blank" rel="noopener noreferrer" title="X / Twitter">𝕏</a>');
     if(r.telegramUrl)soc.push('<a href="'+esc(r.telegramUrl)+'" target="_blank" rel="noopener noreferrer" title="Telegram">✈</a>');
     if(r.websiteUrl)soc.push('<a href="'+esc(r.websiteUrl)+'" target="_blank" rel="noopener noreferrer" title="Website">🌐</a>');

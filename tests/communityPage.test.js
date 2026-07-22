@@ -59,6 +59,7 @@ test("community setup supports optimized banners, X identity, memberships and po
 test("coin views expose the community route on desktop and mobile", () => {
   const desktop = fs.readFileSync(new URL("../web/public/gg.html", import.meta.url), "utf8");
   const fun = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "utf8");
-  assert.match(desktop, /title="Coin community">Community<\/a>/);
-  assert.match(fun, /class="coin-community-link" href="\/c\//);
+  assert.match(desktop, /href="\/community\?ca='\+encodeURIComponent/);
+  assert.match(fun, /class="coin-community-link" href="\/community\?ca=/);
+  assert.ok(js.includes("`${location.origin}/community?ca=${encodeURIComponent(state.address)}`"));
 });
