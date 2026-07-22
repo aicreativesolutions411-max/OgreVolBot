@@ -1,9 +1,10 @@
 (() => {
   "use strict";
   const TOKEN_KEY = "ogreWebToken";
+  const API_BASE = String(window.OGRE_PORTAL_CONFIG?.apiBase || "https://app.slimewire.org").replace(/\/+$/, "");
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const state = { address: "", chain: "solana", token: localStorage.getItem(TOKEN_KEY) || "", payload: null, market: {}, bannerDataUrl: "", refreshTimer: null, pendingAction: null };
+  const state = { address: "", chain: "solana", token: localStorage.getItem(TOKEN_KEY) || "", payload: null, market: {}, bannerDataUrl: "", refreshTimer: null, pendingAction: null, directoryLoaded: false };
 
   function escapeHtml(value) { return String(value ?? "").replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char])); }
   function validAddress(value) { const text = String(value || "").trim(); return /^0x[0-9a-fA-F]{40}$/.test(text) || /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text); }
@@ -18,13 +19,14 @@
   async function api(path, options = {}) {
     const headers = { Accept: "application/json", ...(options.body ? { "Content-Type": "application/json" } : {}), ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}) };
     try {
-      const response = await fetch(path, { ...options, headers: { ...headers, ...(options.headers || {}) } });
+      const response = await fetch(`${API_BASE}${path}`, { ...options, headers: { ...headers, ...(options.headers || {}) }, cache: "no-store" });
       const type = response.headers.get("content-type") || "", data = type.includes("json") ? await response.json() : { error: `Request failed (${response.status})` };
       return { ok: response.ok && data?.ok !== false, status: response.status, data };
     } catch (error) { return { ok: false, status: 0, data: { error: error?.message || "Connection failed" } }; }
   }
   function post(path, body) { return api(path, { method: "POST", body: JSON.stringify(body) }); }
   function apiError(result, fallback = "That did not work. Try again.") { return result?.data?.message || result?.data?.error || fallback; }
+  function apiAssetUrl(value) { const url = String(value || ""); return url.startsWith("/") ? `${API_BASE}${url}` : url; }
 
   function addressFromLocation() {
     const match = location.pathname.match(/^\/c\/([^/?#]+)/i);
@@ -36,16 +38,30 @@
   function setAvatar(node, url, fallback = "SW") { if (!node) return; node.style.backgroundImage = url ? `url(${JSON.stringify(url)})` : ""; node.textContent = url ? "" : String(fallback || "SW").slice(0, 2).toUpperCase(); }
   function socialLink(label, url) { return url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>` : ""; }
 
+  async function loadDirectory(force = false) {
+    if (state.directoryLoaded && !force) return;
+    const node = $("[data-directory]"); node.innerHTML = '<div class="directory-empty">Loading active communities…</div>';
+    const result = await api("/api/web/communities?limit=12");
+    if (!result.ok) { node.innerHTML = '<div class="directory-empty">Active communities are refreshing. Try again in a moment.</div>'; return; }
+    const rows = result.data?.communities || []; state.directoryLoaded = true;
+    if (!rows.length) { node.innerHTML = '<div class="directory-empty"><b>Be the first community on the board.</b><span>Paste a coin above, claim its page and start the conversation.</span></div>'; return; }
+    node.innerHTML = rows.map((row) => {
+      const banner = apiAssetUrl(row.bannerUrl), owner = row.owner || {}, chain = row.chain === "robinhood" ? "RH" : "SOL";
+      return `<a class="directory-card" href="/community?ca=${encodeURIComponent(row.address)}"><div class="directory-cover"${banner ? ` style="background-image:url(${escapeHtml(JSON.stringify(banner))})"` : ""}></div><div class="directory-card-copy"><div><span>${escapeHtml(chain)}</span><b>${escapeHtml(row.title || row.ticker || "Coin community")}</b><small>${row.ticker ? `$${escapeHtml(row.ticker)}` : escapeHtml(short(row.address))}</small></div><p>${escapeHtml(row.description || "Live coin discussion, links and market pulse.")}</p><footer><span>${Number(row.memberCount || 0).toLocaleString()} members</span><span>${Number(row.activity24h || 0).toLocaleString()} today</span>${owner.xHandle ? `<span>@${escapeHtml(owner.xHandle)}</span>` : ""}</footer></div></a>`;
+    }).join("");
+  }
+
   function showFinder() {
     clearTimeout(state.refreshTimer); state.address = ""; state.payload = null;
     $("[data-finder]").hidden = false; $("[data-community-shell]").hidden = true;
+    $("[data-directory-section]").hidden = false; loadDirectory();
     history.pushState(null, "", "/community"); setTimeout(() => $("[data-ca-input]")?.focus(), 30);
   }
 
   async function openAddress(rawAddress) {
     if (!validAddress(rawAddress)) { toast("Paste a valid Solana or 0x contract address."); return; }
     state.address = normalizedAddress(rawAddress); state.chain = state.address.startsWith("0x") ? "robinhood" : "solana";
-    $("[data-finder]").hidden = true; $("[data-community-shell]").hidden = false;
+    $("[data-finder]").hidden = true; $("[data-directory-section]").hidden = true; $("[data-community-shell]").hidden = false;
     history.pushState(null, "", `/community?ca=${encodeURIComponent(state.address)}`);
     $("[data-chain]").textContent = state.chain === "robinhood" ? "ROBINHOOD CHAIN" : "SOLANA";
     $$('[data-terminal]').forEach((link) => { link.href = terminalUrl(); });
@@ -75,7 +91,7 @@
     $("[data-ticker]").textContent = ticker ? `$${ticker.replace(/^\$+/, "")}` : "";
     $("[data-description]").textContent = community.description || "This community has not added a description yet.";
     $("[data-rules]").textContent = community.rules || "Keep it useful. No impersonation, wallet requests or misleading links.";
-    const hero = $("[data-hero]"); hero.style.backgroundImage = community.bannerUrl ? `url(${JSON.stringify(community.bannerUrl)})` : "";
+    const hero = $("[data-hero]"), bannerUrl = apiAssetUrl(community.bannerUrl); hero.style.backgroundImage = bannerUrl ? `url(${JSON.stringify(bannerUrl)})` : "";
     setAvatar($("[data-coin-avatar]"), state.market.imageUrl, ticker || title);
     const xUrl = community.xUrl || state.market.xUrl || "", telegramUrl = community.telegramUrl || state.market.telegramUrl || "", websiteUrl = community.websiteUrl || state.market.websiteUrl || "";
     $("[data-socials]").innerHTML = socialLink("X", xUrl) + socialLink("Telegram", telegramUrl) + socialLink("Website", websiteUrl) + socialLink("DexScreener", state.market.dexUrl);
@@ -87,6 +103,10 @@
     const edit = $("[data-edit]"); edit.hidden = !viewer?.isOwner;
     const join = $("[data-join]"); join.hidden = !exists || viewer?.isOwner; join.classList.toggle("joined", Boolean(viewer?.isMember)); join.textContent = viewer?.isMember ? "Joined" : "Join community";
     setAvatar($("[data-viewer-avatar]"), viewer?.avatar, viewer?.name || "SW");
+    $("[data-pulse-members]").textContent = Number(community.memberCount || 0).toLocaleString();
+    $("[data-pulse-posts]").textContent = Number(community.postCount || 0).toLocaleString();
+    $("[data-pulse-active]").textContent = Number(community.activity24h || 0).toLocaleString();
+    $("[data-pulse-x]").textContent = Number(community.xLinkedCount || 0).toLocaleString();
     renderThread(payload.posts || []);
     updateXShareLink();
   }
@@ -96,7 +116,8 @@
     if (!posts.length) { thread.innerHTML = '<div class="thread-empty">No posts yet. Start the conversation.</div>'; return; }
     thread.innerHTML = posts.map((post) => {
       const author = post.author || {}, avatarStyle = author.avatar ? ` style="background-image:url(${escapeHtml(JSON.stringify(author.avatar))})"` : "";
-      return `<article class="post"><div class="user-avatar"${avatarStyle}>${author.avatar ? "" : escapeHtml((author.name || "SW").slice(0, 2).toUpperCase())}</div><div><div class="post-head"><b>${escapeHtml(author.name || "SlimeWire member")}</b>${post.ownerPost ? '<span class="owner-badge">CREATOR</span>' : ""}${author.xUrl ? `<a href="${escapeHtml(author.xUrl)}" target="_blank" rel="noopener">@${escapeHtml(author.xHandle)}</a>` : ""}<time datetime="${escapeHtml(post.createdAt)}">${escapeHtml(relativeTime(post.createdAt))}</time></div><p>${escapeHtml(post.text)}</p></div></article>`;
+      const shareUrl = `https://x.com/intent/post?text=${encodeURIComponent(`${post.text}\n\n${communityUrl()}#post-${post.id}`)}`;
+      return `<article class="post" id="post-${escapeHtml(post.id)}"><div class="user-avatar"${avatarStyle}>${author.avatar ? "" : escapeHtml((author.name || "SW").slice(0, 2).toUpperCase())}</div><div><div class="post-head"><b>${escapeHtml(author.name || "SlimeWire member")}</b>${post.ownerPost ? '<span class="owner-badge">CREATOR</span>' : ""}${author.xUrl ? `<a href="${escapeHtml(author.xUrl)}" target="_blank" rel="noopener">@${escapeHtml(author.xHandle)}</a>` : ""}<time datetime="${escapeHtml(post.createdAt)}">${escapeHtml(relativeTime(post.createdAt))}</time></div><p>${escapeHtml(post.text)}</p>${post.xPostUrl ? `<a class="attached-x" href="${escapeHtml(post.xPostUrl)}" target="_blank" rel="noopener"><b>𝕏 Attached post</b><span>Open the original post on X ↗</span></a>` : ""}<div class="post-actions"><button class="${post.viewerReacted ? "reacted" : ""}" type="button" data-react-post="${escapeHtml(post.id)}" data-reacted="${post.viewerReacted ? "1" : "0"}">● Slime ${Number(post.reactionCount || 0).toLocaleString()}</button><a href="${escapeHtml(shareUrl)}" target="_blank" rel="noopener">Share on X</a><button type="button" data-copy-post="${escapeHtml(post.id)}">Copy link</button></div></div></article>`;
     }).join("");
   }
 
@@ -168,7 +189,7 @@
     for (const field of ["title", "ticker", "description", "xUrl", "telegramUrl", "websiteUrl", "rules"]) body[field] = $(`[data-field="${field}"]`).value.trim();
     const result = await post("/api/web/community/save", body); submit.disabled = false; submit.textContent = "Save community";
     if (!result.ok) { errorNode.textContent = apiError(result); return; }
-    state.payload = result.data; $("[data-editor]").close(); renderCommunity(); toast(state.payload.exists ? "Community saved." : "Community created.");
+    state.payload = result.data; state.directoryLoaded = false; $("[data-editor]").close(); renderCommunity(); toast(state.payload.exists ? "Community saved." : "Community created.");
   }
 
   async function compressBanner(file) {
@@ -186,12 +207,21 @@
   async function handleJoin() {
     if (!requireAuth("join")) return; const button = $("[data-join]"), join = !state.payload?.viewer?.isMember; button.disabled = true;
     const result = await post("/api/web/community/join", { address: state.address, join }); button.disabled = false;
-    if (!result.ok) { toast(apiError(result)); return; } state.payload = result.data; renderCommunity(); toast(join ? "Joined community." : "Left community.");
+    if (!result.ok) { toast(apiError(result)); return; } state.payload = result.data; state.directoryLoaded = false; renderCommunity(); toast(join ? "Joined community." : "Left community.");
   }
   async function handlePost() {
     if (!requireAuth("post")) return; const input = $("[data-post-text]"), text = input.value.trim(); if (!text) { input.focus(); return; }
-    const button = $("[data-post]"); button.disabled = true; button.textContent = "Posting…"; const result = await post("/api/web/community/post", { address: state.address, text }); button.disabled = false; button.textContent = "Post";
-    if (!result.ok) { toast(apiError(result)); return; } state.payload = result.data; input.value = ""; $("[data-character-count]").textContent = "0 / 700"; renderCommunity(); toast("Posted.");
+    const xInput = $("[data-x-post]"), xPostUrl = xInput.value.trim(), button = $("[data-post]"); button.disabled = true; button.textContent = "Posting…";
+    const result = await post("/api/web/community/post", { address: state.address, text, xPostUrl }); button.disabled = false; button.textContent = "Post";
+    if (!result.ok) { toast(apiError(result)); return; } state.payload = result.data; input.value = ""; xInput.value = ""; state.directoryLoaded = false; $("[data-character-count]").textContent = "0 / 700"; renderCommunity(); toast("Posted to the live community board.");
+  }
+
+  async function handleReaction(button) {
+    if (!requireAuth("react")) return;
+    const active = button.dataset.reacted !== "1"; button.disabled = true;
+    const result = await post("/api/web/community/react", { address: state.address, postId: button.dataset.reactPost, active }); button.disabled = false;
+    if (!result.ok) { toast(apiError(result)); return; }
+    state.payload = result.data; state.directoryLoaded = false; renderCommunity();
   }
 
   async function auth(mode) {
@@ -200,7 +230,7 @@
     const result = await post(mode === "create" ? "/api/web/signup" : "/api/web/password-login", { username, password, ref: localStorage.getItem("ggRef") || "" });
     buttons.forEach((button) => { button.disabled = false; });
     if (!result.ok || !result.data?.token) { errorNode.textContent = apiError(result, "Could not sign in."); return; }
-    setToken(result.data.token); $("[data-auth-dialog]").close(); await loadCommunity(); const action = state.pendingAction; state.pendingAction = null; if (action === "edit") openEditor(); else if (action === "join") handleJoin(); else if (action === "post") handlePost();
+    setToken(result.data.token); $("[data-auth-dialog]").close(); await loadCommunity(); const action = state.pendingAction; state.pendingAction = null; if (action === "edit") openEditor(); else if (action === "join") handleJoin(); else if (action === "post") handlePost(); else if (action === "react") toast("Signed in. Tap Slime again to react.");
   }
 
   async function shareCommunity() {
@@ -208,18 +238,31 @@
     if (navigator.share) { try { await navigator.share({ title, text, url: communityUrl() }); return; } catch {} }
     await navigator.clipboard.writeText(communityUrl()); toast("Community link copied.");
   }
-  function updateXShareLink() { const title = state.payload?.community?.title || state.market.name || "this coin"; $("[data-share-x]").href = `https://x.com/intent/post?text=${encodeURIComponent(`Join the ${title} community on SlimeWire\n\n${communityUrl()}`)}`; }
+  function updateXShareLink() {
+    const title = state.payload?.community?.title || state.market.name || "this coin", ticker = state.payload?.community?.ticker || state.market.symbol || "";
+    const draft = $("[data-post-text]")?.value.trim(), lead = draft || `Join the ${title} community on SlimeWire${ticker ? ` · $${ticker.replace(/^\$+/, "")}` : ""}`;
+    const href = `https://x.com/intent/post?text=${encodeURIComponent(`${lead}\n\n${communityUrl()}`)}`;
+    $("[data-share-x]").href = href; $("[data-community-x-share]").href = href;
+  }
   async function copyAddress() { try { await navigator.clipboard.writeText(state.address); toast("Contract copied."); } catch { toast(short(state.address)); } }
 
   $("[data-ca-form]").addEventListener("submit", (event) => { event.preventDefault(); openAddress($("[data-ca-input]").value); });
   $("[data-change-coin]").addEventListener("click", showFinder);
+  $("[data-directory-refresh]").addEventListener("click", () => loadDirectory(true));
   $$('[data-copy-ca]').forEach((button) => button.addEventListener("click", copyAddress));
   $("[data-share]").addEventListener("click", shareCommunity); $("[data-start-community]").addEventListener("click", openEditor); $("[data-edit]").addEventListener("click", openEditor); $("[data-join]").addEventListener("click", handleJoin); $("[data-post]").addEventListener("click", handlePost); $("[data-refresh]").addEventListener("click", async () => { await Promise.allSettled([loadCommunity(), refreshMarket()]); toast("Community refreshed."); });
-  $("[data-post-text]").addEventListener("input", (event) => { $("[data-character-count]").textContent = `${event.target.value.length} / 700`; });
+  $("[data-post-text]").addEventListener("input", (event) => { $("[data-character-count]").textContent = `${event.target.value.length} / 700`; updateXShareLink(); });
+  $$('[data-prompt]').forEach((button) => button.addEventListener("click", () => { const input = $("[data-post-text]"); if (!input.value.trim()) input.value = button.dataset.prompt || ""; input.focus(); $("[data-character-count]").textContent = `${input.value.length} / 700`; updateXShareLink(); }));
+  $("[data-thread]").addEventListener("click", async (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const react = target?.closest("[data-react-post]"); if (react) { await handleReaction(react); return; }
+    const copy = target?.closest("[data-copy-post]"); if (copy) { try { await navigator.clipboard.writeText(`${communityUrl()}#post-${copy.dataset.copyPost}`); toast("Post link copied."); } catch { toast("Could not copy that link."); } }
+  });
   $$('[data-tab]').forEach((button) => button.addEventListener("click", () => { $$('[data-tab]').forEach((item) => item.classList.toggle("active", item === button)); $$('[data-panel]').forEach((panel) => { panel.hidden = panel.dataset.panel !== button.dataset.tab; }); }));
   $$('[data-close-dialog]').forEach((button) => button.addEventListener("click", () => $("[data-editor]").close())); $$('[data-close-auth]').forEach((button) => button.addEventListener("click", () => $("[data-auth-dialog]").close()));
   $("[data-editor-form]").addEventListener("submit", saveEditor); $("[data-banner]").addEventListener("change", async (event) => { try { state.bannerDataUrl = await compressBanner(event.target.files?.[0]); toast("Banner ready to save."); } catch (error) { $("[data-form-error]").textContent = error.message; } });
-  $$('[data-auth-mode]').forEach((button) => button.addEventListener("click", () => auth(button.dataset.authMode)));
+  $("[data-auth-form]").addEventListener("submit", (event) => { event.preventDefault(); auth("login"); });
+  $('[data-auth-mode="create"]').addEventListener("click", () => auth("create"));
   window.addEventListener("popstate", () => { const address = addressFromLocation(); if (validAddress(address)) openAddress(address); else showFinder(); });
   document.addEventListener("visibilitychange", () => { if (!document.hidden && state.address) { refreshMarket(); scheduleRefresh(); } });
 

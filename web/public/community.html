@@ -8,6 +8,8 @@
   <meta name="description" content="Live coin communities with market data, charts, X-linked profiles and community threads.">
   <link rel="icon" href="/assets/slimewire/png/slimewire-mark.png">
   <link rel="stylesheet" href="/community.css">
+  <link rel="stylesheet" href="/community-engagement.css">
+  <script src="/config.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -26,7 +28,7 @@
       <div class="finder-copy">
         <span class="eyebrow">COMMUNITY LAYER FOR EVERY COIN</span>
         <h1>Give your coin a home that stays live.</h1>
-        <p>Paste a Solana or Robinhood Chain contract. SlimeWire builds the market page, chart route and a clean community thread around it.</p>
+        <p>Paste a Solana or Robinhood Chain contract. SlimeWire builds one live home for market pulse, X posts, community updates, charting and trading.</p>
         <form class="ca-form" data-ca-form>
           <label for="community-ca">Coin contract address</label>
           <div><input id="community-ca" data-ca-input autocomplete="off" spellcheck="false" placeholder="Paste a Solana or 0x CA"><button type="submit">Open community</button></div>
@@ -38,6 +40,11 @@
         <img src="/assets/slimewire/png/slimewire-mark.png" alt="">
         <span class="signal s1">LIVE MC</span><span class="signal s2">X PROFILES</span><span class="signal s3">CHART + TRADE</span>
       </div>
+    </section>
+
+    <section class="directory" data-directory-section>
+      <div class="directory-head"><div><span class="eyebrow">DISCOVER THE CONVERSATION</span><h2>Active coin communities</h2><p>Follow live updates, X posts and market discussion without losing the chart.</p></div><button type="button" data-directory-refresh>Refresh</button></div>
+      <div class="community-directory" data-directory><div class="directory-empty">Loading active communities…</div></div>
     </section>
 
     <section class="community-shell" data-community-shell hidden>
@@ -77,16 +84,20 @@
         <section class="panel feed-panel" data-panel="feed">
           <div class="community-empty" data-not-created hidden>
             <span class="eyebrow">THIS SPACE IS OPEN</span>
-            <h2>Start the official community page.</h2>
+            <h2>Start this coin's community page.</h2>
             <p>Set the banner, links and description. The contract and live market data stay locked to this coin.</p>
             <button type="button" data-start-community>Create this community</button>
           </div>
           <div data-created-content hidden>
+            <div class="community-pulse">
+              <div><span>MEMBERS</span><b data-pulse-members>0</b></div><div><span>POSTS</span><b data-pulse-posts>0</b></div><div><span>ACTIVE TODAY</span><b data-pulse-active>0</b></div><div><span>X-LINKED</span><b data-pulse-x>0</b></div>
+              <a data-community-x-share target="_blank" rel="noopener">Share community on X</a>
+            </div>
             <div class="composer" data-composer>
               <div class="user-avatar" data-viewer-avatar>SW</div>
-              <div><textarea data-post-text maxlength="700" placeholder="Share an update, idea, chart read or community news…"></textarea><div class="composer-actions"><span data-character-count>0 / 700</span><a data-share-x target="_blank" rel="noopener">Continue on X</a><button type="button" data-post>Post</button></div></div>
+              <div><div class="prompt-chips"><span>POST</span><button type="button" data-prompt="Update: ">Update</button><button type="button" data-prompt="Chart read: ">Chart read</button><button type="button" data-prompt="Question: ">Question</button><button type="button" data-prompt="Raid: ">X raid</button></div><textarea data-post-text maxlength="700" placeholder="Share an update, chart read, question or community news…"></textarea><label class="x-attach"><b>𝕏</b><input data-x-post inputmode="url" placeholder="Optional: attach an X post link"></label><div class="composer-actions"><span data-character-count>0 / 700</span><a data-share-x target="_blank" rel="noopener">Draft on X</a><button type="button" data-post>Post</button></div></div>
             </div>
-            <div class="thread-head"><div><h2>Community thread</h2><p>Profiles can carry their SlimeWire name, X handle and PFP.</p></div><button type="button" data-refresh>Refresh</button></div>
+            <div class="thread-head"><div><h2>Live community board</h2><p>X-linked profiles, attached posts and market conversation in one feed.</p></div><button type="button" data-refresh>Refresh</button></div>
             <div class="thread" data-thread></div>
           </div>
         </section>
@@ -112,6 +123,7 @@
         <aside class="sidebar">
           <section class="side-card"><div class="side-title"><h3>Community</h3><span data-member-count>0 members</span></div><div class="owner-row"><div class="user-avatar" data-owner-avatar>SW</div><div><span>CREATED BY</span><b data-owner-name>SlimeWire member</b><a data-owner-x target="_blank" rel="noopener" hidden></a></div></div></section>
           <section class="side-card"><div class="side-title"><h3>Official links</h3><span>community-set</span></div><div class="official-links" data-official-links><span>No links added yet.</span></div></section>
+          <section class="side-card return-card"><div class="side-title"><h3>Why people return</h3><span>always live</span></div><ul><li>Coin updates beside live market data</li><li>X posts ready to open and share</li><li>Community reactions and active-member pulse</li><li>One tap back to the chart and trade panel</li></ul></section>
           <section class="side-card status-card"><i></i><div><b>Market data refreshes automatically</b><span data-updated>Connecting to live sources…</span></div></section>
         </aside>
       </div>
@@ -140,7 +152,7 @@
       <label>Username<input data-auth-user autocomplete="username" minlength="3" maxlength="24"></label>
       <label>Password<input data-auth-password type="password" autocomplete="current-password" minlength="8"></label>
       <p class="form-error" data-auth-error></p>
-      <div class="auth-actions"><button type="button" data-auth-mode="login">Sign in</button><button class="primary" type="button" data-auth-mode="create">Create account</button></div>
+      <div class="auth-actions"><button type="submit" data-auth-mode="login">Sign in</button><button class="primary" type="button" data-auth-mode="create">Create account</button></div>
       <small>Already use the Telegram bot? You can also use its <code>/web</code> login on the main terminal.</small>
     </form>
   </dialog>
