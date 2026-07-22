@@ -3,161 +3,78 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#050706">
-  <title>BALLS — the community arena</title>
-  <meta name="description" content="BALLS is a live community arena with holder ranks, launch missions and one-tap trading through SlimeWire.">
-  <meta property="og:title" content="BALLS — enter the arena">
-  <meta property="og:description" content="Climb the live holder ranks. Complete the launch run. Hold the line.">
-  <meta property="og:image" content="https://www.slimewire.org/assets/balls/balls-arena-hero.webp">
+  <meta name="theme-color" content="#050606">
+  <title>BALLS — the holder arcade</title>
+  <meta name="description" content="$balls is a live holder arcade. Check your rank, chase milestones, and trade through SlimeWire.">
+  <meta property="og:title" content="$balls — do you have the balls?">
+  <meta property="og:description" content="The most important metric in crypto. Get on the high score board.">
+  <meta property="og:image" content="https://www.slimewire.org/assets/balls/balls-pinball-hero.png">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="preconnect" href="https://app.slimewire.org">
   <style>
-    :root{--bg:#050706;--ink:#f4f8f2;--muted:#9aa69b;--acid:#91ff35;--acid2:#55d718;--line:rgba(145,255,53,.2);--panel:rgba(11,16,12,.86);--warm:#f4b84b;--danger:#ff6b67;--shadow:0 24px 70px rgba(0,0,0,.46)}
-    *{box-sizing:border-box}
-    html{scroll-behavior:smooth;background:var(--bg)}
-    body{margin:0;color:var(--ink);background:radial-gradient(90% 55% at 85% 1%,rgba(84,211,25,.13),transparent 66%),var(--bg);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;overflow-x:hidden}
-    button,a,input{font:inherit}
-    button,a{-webkit-tap-highlight-color:transparent}
-    a{color:inherit;text-decoration:none}
-    button{color:inherit}
-    .shell{width:min(1180px,calc(100% - 34px));margin:auto}
-    .nav{position:sticky;top:0;z-index:30;border-bottom:1px solid var(--line);background:rgba(5,7,6,.82);backdrop-filter:blur(18px) saturate(1.2)}
-    .navin{min-height:72px;display:flex;align-items:center;gap:22px}
-    .brand{display:flex;align-items:center;gap:11px;font-weight:1000;letter-spacing:.12em}
-    .mark{width:44px;height:30px;filter:drop-shadow(0 0 12px rgba(145,255,53,.32));flex:0 0 auto}
-    .mark.small{width:34px;height:24px}
-    .brand em{font-style:normal;color:var(--acid)}
-    .links{display:flex;align-items:center;gap:22px;margin-left:auto;color:var(--muted);font-size:13px;font-weight:750}
-    .links a:hover{color:var(--ink)}
-    .navsocial{display:flex;gap:8px}
-    .iconbtn,.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--line);border-radius:12px;background:rgba(10,15,11,.8);font-weight:850;cursor:pointer;transition:.18s ease}
-    .iconbtn{width:42px;height:42px}
-    .iconbtn:hover,.btn.secondary:hover{border-color:var(--acid);transform:translateY(-1px)}
-    .btn{min-height:48px;padding:0 19px}
-    .btn.primary{border-color:transparent;color:#081004;background:linear-gradient(135deg,#b1ff67,var(--acid) 52%,#5ee51f);box-shadow:0 12px 34px rgba(112,237,35,.22)}
-    .btn.primary:hover{transform:translateY(-2px);box-shadow:0 16px 40px rgba(112,237,35,.34)}
-    .btn.disabled{pointer-events:none;color:#7f8b80;background:#111612;border-color:#252e26;box-shadow:none}
-    .hero{position:relative;min-height:720px;display:grid;align-items:center;isolation:isolate;border-bottom:1px solid var(--line);overflow:hidden}
-    .hero::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,#050706 0%,rgba(5,7,6,.96) 25%,rgba(5,7,6,.62) 53%,rgba(5,7,6,.04) 85%),linear-gradient(0deg,#050706 0%,transparent 28%);z-index:-1}
-    .hero::after{content:"";position:absolute;inset:0;background:url('/assets/balls/balls-arena-hero.webp') center/cover no-repeat;z-index:-2;opacity:.95}
-    .heroGrid{display:grid;grid-template-columns:minmax(0,600px) 1fr;gap:24px;align-items:center;padding:104px 0 94px}
-    .eyebrow{display:inline-flex;align-items:center;gap:9px;color:var(--acid);font-size:12px;letter-spacing:.18em;font-weight:950;text-transform:uppercase}
-    .pulse{width:8px;height:8px;border-radius:50%;background:var(--acid);box-shadow:0 0 0 0 rgba(145,255,53,.5);animation:pulse 2s infinite}
-    @keyframes pulse{70%{box-shadow:0 0 0 9px rgba(145,255,53,0)}100%{box-shadow:0 0 0 0 rgba(145,255,53,0)}}
-    h1{margin:19px 0 12px;font-size:clamp(74px,11vw,148px);line-height:.78;letter-spacing:-.075em;font-weight:1000}
-    h1 span{display:block;font-size:.18em;line-height:1.2;letter-spacing:.34em;color:var(--acid);margin:18px 0 0 7px}
-    .lead{max-width:570px;margin:28px 0;color:#c8d2c9;font-size:clamp(17px,2vw,21px);line-height:1.55}
-    .heroActions{display:flex;flex-wrap:wrap;gap:11px;margin-top:29px}
-    .contract{display:none;align-items:center;gap:11px;width:max-content;max-width:100%;margin-top:18px;padding:10px 13px;border:1px solid var(--line);border-radius:12px;background:rgba(7,11,8,.76);color:var(--muted);font:700 12px ui-monospace,SFMono-Regular,Consolas,monospace;cursor:pointer}
-    .contract.show{display:flex}.contract b{color:var(--acid);letter-spacing:.08em}.contract span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:330px}
-    .launchbar{position:relative;margin-top:-55px;z-index:4}
-    .launchgrid{display:grid;grid-template-columns:1.25fr repeat(4,1fr);border:1px solid var(--line);border-radius:18px;background:rgba(7,11,8,.92);backdrop-filter:blur(20px);box-shadow:var(--shadow);overflow:hidden}
-    .statuscard,.statcard{min-height:108px;padding:22px;border-right:1px solid var(--line);display:flex;flex-direction:column;justify-content:center}
-    .launchgrid>:last-child{border-right:0}
-    .statuscard small,.statcard small{color:var(--muted);font-size:10px;font-weight:850;letter-spacing:.13em;text-transform:uppercase}
-    .statuscard strong{font-size:19px;margin-top:7px}.statuscard strong i{color:var(--acid);font-style:normal}
-    .statcard strong{font:950 clamp(18px,2.2vw,28px) ui-monospace,SFMono-Regular,Consolas,monospace;margin-top:7px}
-    section{padding:104px 0}
-    .sectionHead{display:flex;align-items:end;justify-content:space-between;gap:24px;margin-bottom:34px}
-    .sectionHead h2{font-size:clamp(38px,5.7vw,72px);letter-spacing:-.055em;line-height:.92;margin:8px 0 0}
-    .sectionHead p{max-width:460px;color:var(--muted);line-height:1.6;margin:0}
-    .arena{background:linear-gradient(180deg,transparent,rgba(82,219,22,.035) 40%,transparent)}
-    .boardGrid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,.72fr);gap:18px}
-    .panel{border:1px solid var(--line);border-radius:20px;background:linear-gradient(155deg,rgba(13,20,14,.94),rgba(7,10,8,.96));box-shadow:var(--shadow);overflow:hidden}
-    .panelTop{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:20px 22px;border-bottom:1px solid var(--line)}
-    .panelTop h3{margin:0;font-size:18px}.panelTop small{color:var(--muted)}
-    .live{display:flex;align-items:center;gap:7px;color:var(--acid);font-size:11px;font-weight:900;letter-spacing:.1em}
-    .leaderHead,.leaderRow{display:grid;grid-template-columns:54px minmax(130px,1.2fr) .72fr .72fr;align-items:center;gap:10px;padding:13px 22px}
-    .leaderHead{color:var(--muted);font-size:10px;font-weight:900;letter-spacing:.12em;border-bottom:1px solid rgba(145,255,53,.1)}
-    .leaderRows{min-height:470px}
-    .leaderRow{min-height:61px;border-bottom:1px solid rgba(145,255,53,.075);transition:.15s}
-    .leaderRow:hover{background:rgba(145,255,53,.045)}
-    .leaderRow .rank{color:var(--acid);font:900 14px ui-monospace,SFMono-Regular,Consolas,monospace}
-    .leaderRow .who{display:flex;align-items:center;gap:10px;min-width:0}.avatar{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:#10180d;background:linear-gradient(145deg,#d9ddd9,#778078);font-weight:1000;border:1px solid rgba(255,255,255,.35)}
-    .leaderRow .who b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.badge{font-size:10px;color:var(--warm);font-weight:850}.num{text-align:right;font:800 13px ui-monospace,SFMono-Regular,Consolas,monospace}
-    .empty{display:grid;place-items:center;text-align:center;min-height:410px;padding:30px;color:var(--muted);line-height:1.6}.empty b{display:block;color:var(--ink);font-size:20px;margin-bottom:6px}
-    .rankbox{padding:22px}.rankbox h3{font-size:25px;margin:0 0 8px}.rankbox>p{color:var(--muted);line-height:1.55;margin:0 0 22px}
-    .field{display:flex;gap:8px}.field input{min-width:0;flex:1;border:1px solid var(--line);border-radius:12px;background:#070b08;color:var(--ink);padding:14px;outline:0}.field input:focus{border-color:var(--acid);box-shadow:0 0 0 3px rgba(145,255,53,.1)}
-    .field button{border:0;border-radius:12px;padding:0 15px;color:#071004;background:var(--acid);font-weight:950;cursor:pointer}
-    .rankResult{min-height:116px;margin-top:14px;padding:18px;border:1px solid rgba(145,255,53,.12);border-radius:15px;background:rgba(0,0,0,.2);display:flex;flex-direction:column;justify-content:center;color:var(--muted)}
-    .rankResult strong{color:var(--acid);font-size:34px;line-height:1}.rankResult b{color:var(--ink);margin-top:7px}.privacy{font-size:11px!important;margin:14px 0 0!important}
-    .missions{padding:22px;border-top:1px solid var(--line)}.missions h4{margin:0 0 14px}.mission{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid rgba(145,255,53,.08)}.mission:first-of-type{border-top:0}.check{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;background:rgba(145,255,53,.11);color:var(--acid);font-weight:950}.mission div:nth-child(2){flex:1}.mission b{display:block;font-size:13px}.mission small{color:var(--muted)}.xp{color:var(--acid);font:850 11px ui-monospace,SFMono-Regular,Consolas,monospace}
-    .story{position:relative;overflow:hidden}.story::before{content:"";position:absolute;left:-220px;top:10%;width:470px;height:470px;border-radius:50%;background:rgba(145,255,53,.07);filter:blur(80px)}
-    .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;position:relative}.step{min-height:245px;padding:26px;border:1px solid var(--line);border-radius:19px;background:rgba(9,14,10,.78)}.step i{display:grid;place-items:center;width:42px;height:42px;border:1px solid var(--line);border-radius:12px;color:var(--acid);font:900 16px ui-monospace,SFMono-Regular,Consolas,monospace;font-style:normal}.step h3{font-size:22px;margin:27px 0 10px}.step p{color:var(--muted);line-height:1.6;margin:0}.step a{display:inline-flex;margin-top:19px;color:var(--acid);font-weight:850;font-size:13px}
-    .club{padding-top:28px}.clubcard{display:grid;grid-template-columns:1.2fr .8fr;min-height:340px;border:1px solid var(--line);border-radius:24px;overflow:hidden;background:linear-gradient(120deg,#0d160f,#060806);box-shadow:var(--shadow)}
-    .clubcopy{padding:clamp(30px,6vw,68px)}.clubcopy h2{font-size:clamp(43px,6vw,78px);line-height:.88;letter-spacing:-.06em;margin:12px 0 22px}.clubcopy p{color:var(--muted);line-height:1.65;max-width:560px}.clubactions{display:flex;gap:10px;flex-wrap:wrap;margin-top:25px}
-    .clubart{position:relative;min-height:300px;background:url('/assets/balls/balls-arena-hero.webp') 72% center/cover no-repeat}.clubart::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,#0b120d,transparent 55%)}
-    footer{padding:58px 0 78px;color:var(--muted);border-top:1px solid var(--line)}.footin{display:flex;align-items:center;justify-content:space-between;gap:20px}.footbrand{display:flex;align-items:center;gap:10px;color:var(--ink);font-weight:950}.fine{max-width:650px;font-size:11px;line-height:1.55;text-align:right}
-    .toast{position:fixed;left:50%;bottom:26px;z-index:80;transform:translate(-50%,18px);padding:12px 17px;border:1px solid var(--line);border-radius:12px;background:#0e160f;color:var(--ink);box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:translate(-50%,0)}
-    @media(max-width:900px){.links{display:none}.hero{min-height:660px}.heroGrid{grid-template-columns:1fr;padding-top:90px}.launchgrid{grid-template-columns:1.2fr repeat(2,1fr)}.launchgrid>:nth-child(3){border-right:0}.launchgrid>:nth-child(n+4){border-top:1px solid var(--line)}.boardGrid,.clubcard{grid-template-columns:1fr}.clubart{order:-1}.steps{grid-template-columns:1fr}.step{min-height:0}.sectionHead{align-items:start;flex-direction:column}.fine{text-align:left}.footin{align-items:start;flex-direction:column}}
-    @media(max-width:600px){.shell{width:min(100% - 22px,1180px)}.navin{min-height:62px}.brand{font-size:14px}.mark{width:37px}.navsocial .iconbtn:first-child{display:none}.hero{min-height:680px}.hero::before{background:linear-gradient(0deg,#050706 0%,rgba(5,7,6,.78) 60%,rgba(5,7,6,.35)),linear-gradient(90deg,#050706 0%,transparent 70%)}.hero::after{background-position:66% center;opacity:.72}.heroGrid{padding:96px 0 106px;align-items:end}.lead{font-size:16px}.heroActions{display:grid;grid-template-columns:1fr 1fr}.heroActions .btn{padding:0 10px}.contract{width:100%}.contract span{max-width:calc(100vw - 120px)}.launchbar{margin-top:-72px}.launchgrid{grid-template-columns:1fr 1fr}.statuscard{grid-column:1/-1;border-right:0}.launchgrid>:nth-child(2){border-top:1px solid var(--line)}.launchgrid>:nth-child(3){border-top:1px solid var(--line)}.launchgrid>:nth-child(even){border-right:1px solid var(--line)}.statuscard,.statcard{min-height:88px;padding:16px}.statcard strong{font-size:19px}section{padding:76px 0}.leaderHead,.leaderRow{grid-template-columns:40px minmax(115px,1fr) .7fr;padding-left:14px;padding-right:14px}.leaderHead>:last-child,.leaderRow>:last-child{display:none}.leaderRows{min-height:390px}.field{flex-direction:column}.field button{min-height:44px}.clubcopy{padding:30px 22px}.clubart{min-height:235px}.footin{font-size:12px}}
-    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.pulse{animation:none}.btn,.iconbtn,.toast{transition:none}}
+    :root{--bg:#020303;--panel:#07100d;--panel2:#050807;--ink:#f4f7f4;--muted:#7f8d84;--line:#294737;--lime:#99ff25;--pink:#ff2d9a;--cyan:#22dfff;--gold:#ffe15b;--silver:#dce4e1;--danger:#ff436d;--glow:0 0 28px rgba(153,255,37,.18)}
+    *{box-sizing:border-box}html{background:var(--bg);scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 42% 8%,#102016 0,#020303 32%),var(--bg);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;overflow-x:hidden}button,input,a{font:inherit}a{color:inherit;text-decoration:none}button{color:inherit}.wrap{width:min(1480px,calc(100% - 22px));margin:auto}
+    .chrome{border:1px solid #395348;border-radius:18px;background:linear-gradient(145deg,rgba(11,21,17,.96),rgba(3,7,5,.98));box-shadow:inset 0 0 0 1px rgba(255,255,255,.025),0 16px 50px rgba(0,0,0,.35);position:relative;overflow:hidden}.chrome::after{content:"";position:absolute;inset:0;pointer-events:none;border-radius:inherit;box-shadow:inset 0 0 30px rgba(71,255,145,.025)}
+    .topbar{position:sticky;top:0;z-index:30;background:rgba(2,4,3,.94);border-bottom:1px solid #21372c;backdrop-filter:blur(18px)}.topin{min-height:66px;display:flex;align-items:center;gap:18px}.brand{display:flex;align-items:center;gap:10px;font-size:27px;font-weight:950;letter-spacing:-.055em;white-space:nowrap}.mark{width:39px;height:39px;object-fit:cover;border-radius:10px;filter:drop-shadow(0 0 8px rgba(220,255,230,.3))}.navlinks{display:flex;align-items:center;gap:5px}.navlinks a{padding:9px 11px;border-radius:10px;color:#b9c0bb;font-size:11px;font-weight:900;letter-spacing:.05em}.navlinks a:hover{background:#0d1712;color:#fff}.navlinks i{font-style:normal;margin-right:6px;color:var(--lime)}.navca{display:none;align-items:center;gap:7px;max-width:210px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;color:#9faa9f;background:#07100c;font:750 10px ui-monospace,monospace;cursor:pointer}.navca.show{display:flex}.navca b{color:var(--lime)}.navca span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.navActions{display:flex;gap:8px;margin-left:auto}.navButton{height:41px;padding:0 17px;border:1px solid #395646;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;gap:8px;font-size:11px;font-weight:950;letter-spacing:.04em;background:#08100d;color:#dbe3de;box-shadow:inset 0 0 18px rgba(255,255,255,.025)}.navButton.buy{background:linear-gradient(#bdff40,#68df12);border-color:#caff68;color:#061003;box-shadow:0 0 20px rgba(153,255,37,.27)}.navButton.chart{background:linear-gradient(#ff43a5,#c30b67);border-color:#ff71ba;box-shadow:0 0 18px rgba(255,45,154,.23)}.navButton.tg{background:linear-gradient(#32e1ff,#0879a3);border-color:#78ecff;box-shadow:0 0 18px rgba(34,223,255,.2)}.disabled{pointer-events:none!important;filter:saturate(.2);opacity:.46!important}
+    .arcade{padding:12px 0 22px}.dashboard{display:grid;grid-template-columns:minmax(0,.83fr) minmax(520px,1.17fr);gap:10px;align-items:stretch}.hero{min-height:590px;background:#040605 url('/assets/balls/balls-pinball-hero.png') center/cover no-repeat;display:flex;align-items:flex-end}.hero::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,.84) 0%,rgba(0,0,0,.25) 54%,rgba(0,0,0,.02) 100%),linear-gradient(0deg,rgba(0,0,0,.82),transparent 58%);pointer-events:none}.heroCopy{position:relative;z-index:2;width:min(490px,84%);padding:34px}.eyebrow{display:inline-flex;align-items:center;gap:8px;color:var(--pink);font:900 12px ui-monospace,monospace;letter-spacing:.12em;text-shadow:0 0 12px rgba(255,45,154,.55)}.eyebrow .miniMark{width:25px;height:25px;object-fit:cover;border-radius:7px}.hero h1{margin:11px 0 8px;font-size:clamp(54px,5.5vw,86px);line-height:.82;letter-spacing:-.075em;text-transform:uppercase;text-shadow:0 0 32px rgba(0,0,0,.95)}.hero h1 span{display:block;color:var(--lime);text-shadow:0 0 22px rgba(153,255,37,.38)}.hero p{max-width:430px;margin:0 0 20px;color:#d0d8d2;font-size:14px;line-height:1.5}.heroActions{display:flex;gap:9px;flex-wrap:wrap}.arcadeButton{min-height:49px;padding:0 22px;border:1px solid #ff79c2;border-radius:9px;background:linear-gradient(180deg,rgba(255,45,154,.22),rgba(92,3,50,.72));color:#fff;display:inline-flex;align-items:center;justify-content:center;gap:9px;font-size:13px;font-weight:950;letter-spacing:.04em;text-transform:uppercase;box-shadow:0 0 18px rgba(255,45,154,.16);cursor:pointer}.arcadeButton.alt{border-color:#b9ff48;background:linear-gradient(180deg,rgba(153,255,37,.2),rgba(26,66,5,.72));box-shadow:0 0 18px rgba(153,255,37,.13)}
+    .scoreboard{min-height:590px;padding:18px}.scoreHeader{height:55px;display:flex;align-items:center;justify-content:center;gap:15px;border-bottom:1px solid var(--line);color:var(--lime);font:950 clamp(19px,2.1vw,31px) ui-monospace,monospace;letter-spacing:.12em;text-align:center;text-shadow:0 0 15px rgba(153,255,37,.33)}.scoreHeader b{color:var(--pink)}.scoreMeta{display:flex;align-items:center;justify-content:space-between;padding:12px 9px 8px;color:#6f8277;font:800 9px ui-monospace,monospace;letter-spacing:.16em}.live{display:inline-flex;align-items:center;gap:6px;color:var(--lime)}.liveDot{width:7px;height:7px;border-radius:50%;background:var(--lime);box-shadow:0 0 11px var(--lime);animation:pulse 1.8s infinite}@keyframes pulse{50%{opacity:.45}}
+    .table{border:1px solid #253f32;border-radius:12px;overflow:hidden;background:#030705}.thead,.row{display:grid;grid-template-columns:42px minmax(135px,1fr) .82fr 1fr;gap:10px;align-items:center;padding:0 13px}.thead{height:38px;background:#07100c;color:#64746a;font:800 8px ui-monospace,monospace;letter-spacing:.14em}.row{min-height:67px;border-top:1px solid #15271d}.row:hover{background:#0a1610}.rank{font:950 20px ui-monospace,monospace;color:#bdc5bf}.rank.first{color:var(--gold);text-shadow:0 0 12px rgba(255,225,91,.25)}.player{display:flex;align-items:center;gap:9px;min-width:0}.orb{width:35px;height:35px;flex:none;border:1px solid #719682;border-radius:50%;background:radial-gradient(circle at 35% 25%,#e7f1ec 0,#74817a 26%,#18231d 65%,#050706 66%);display:grid;place-items:center;color:#071009;font-weight:1000;box-shadow:0 0 12px rgba(153,255,37,.14)}.player b{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.amount,.level{text-align:right;font:800 10px ui-monospace,monospace}.amount{color:var(--lime)}.level{color:#b5c2ba}.empty{height:350px;display:grid;place-items:center;text-align:center;padding:28px;color:#708077;line-height:1.6}.emptyArt{width:90px;height:90px;object-fit:cover;border-radius:25px;opacity:.55;filter:drop-shadow(0 0 20px rgba(153,255,37,.18))}.empty b{display:block;color:#d9e0dc;font-size:20px;margin:13px 0 4px}.rankCheck{margin-top:11px;padding:13px;border:1px solid #233b2f;border-radius:12px;background:#040806}.rankField{display:grid;grid-template-columns:1fr 120px;gap:8px}.rankField input{height:46px;min-width:0;border:1px solid #294737;border-radius:9px;background:#020403;color:#edf4ef;padding:0 13px;outline:0;font:650 11px ui-monospace,monospace}.rankField input:focus{border-color:var(--lime);box-shadow:0 0 0 2px rgba(153,255,37,.08)}.rankField button{border:1px solid #ff71ba;border-radius:9px;background:#731042;color:#fff;font-weight:950;cursor:pointer}.rankResult{min-height:17px;margin-top:8px;color:#78877e;font-size:10px}.rankResult strong{color:var(--lime);font-size:15px;margin-right:5px}
+    .gameGrid{display:grid;grid-template-columns:.75fr 1.18fr .74fr .74fr .78fr;gap:10px;margin-top:10px}.gameCard{min-height:205px;padding:17px}.cardTitle{display:flex;align-items:center;gap:8px;color:var(--lime);font:900 10px ui-monospace,monospace;letter-spacing:.12em}.cardTitle.pink{color:var(--pink)}.cardTitle.cyan{color:var(--cyan)}.bigScore{margin:24px 0 3px;color:var(--lime);font:950 34px ui-monospace,monospace;text-shadow:0 0 16px rgba(153,255,37,.24)}.smallLabel{color:#6d7b72;font-size:9px;text-transform:uppercase;letter-spacing:.12em}.timer{margin-top:26px;color:#829087;font:800 10px ui-monospace,monospace}.timer b{color:var(--lime)}.quests{display:grid;gap:9px;margin-top:16px}.quest{display:grid;grid-template-columns:25px 1fr auto;gap:8px;align-items:center}.qIcon{width:25px;height:25px;border:1px solid #4a6b58;border-radius:7px;display:grid;place-items:center;background:#0b1711;overflow:hidden}.qIcon img{width:22px;height:22px;object-fit:cover}.qText b{display:block;color:#dce5df;font-size:10px}.qText span{display:block;color:#69776e;font-size:8px;margin-top:2px}.bar{height:4px;margin-top:4px;border-radius:9px;background:#142019;overflow:hidden}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--lime),#dcff6b);box-shadow:0 0 8px var(--lime)}.reward{color:var(--pink);font:900 9px ui-monospace,monospace}.streak{text-align:center}.streakNum{margin:19px 0 0;color:var(--cyan);font:950 58px ui-monospace,monospace;line-height:1;text-shadow:0 0 20px rgba(34,223,255,.24)}.streak small{color:#738279;font-size:9px}.mult{margin-top:14px;color:var(--cyan);font:900 22px ui-monospace,monospace}.days{display:flex;justify-content:center;gap:5px;margin-top:16px}.day{width:19px;height:19px;border:1px solid #3d6d58;border-radius:50%;display:grid;place-items:center;color:var(--lime);font-size:8px}.day.off{color:#34463b}.collect{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:28px}.badge{aspect-ratio:1;border:1px solid #a83479;border-radius:9px;background:linear-gradient(145deg,#301027,#080507);display:grid;place-items:center;box-shadow:0 0 12px rgba(255,45,154,.1);position:relative}.badge img{width:72%;height:72%;object-fit:cover;border-radius:6px}.badge:nth-child(2n){border-color:#6ebf28;background:linear-gradient(145deg,#17320c,#050805)}.badge:nth-child(3n){border-color:#218daf;background:linear-gradient(145deg,#0b2630,#040708)}.badge::after{content:attr(data-badge);position:absolute;right:3px;bottom:2px;color:#fff;font:900 6px ui-monospace,monospace}.badge.locked{filter:grayscale(1);opacity:.3}.milestone .progress{height:12px;border:1px solid #557643;border-radius:999px;margin-top:27px;background:#0a120d;overflow:hidden}.milestone .progress i{display:block;width:42%;height:100%;background:linear-gradient(90deg,#70df12,#d1ff4a);box-shadow:0 0 15px rgba(153,255,37,.45)}.milestone strong{display:block;margin-top:13px;color:var(--lime);font:900 18px ui-monospace,monospace}.rewardBall{display:flex;align-items:center;gap:10px;margin-top:19px;color:var(--gold);font-weight:900}.rewardBall img{width:48px;height:48px;object-fit:cover;border-radius:12px}
+    .ticker{height:52px;margin-top:10px;display:flex;align-items:center;gap:18px;padding:0 17px}.tickerTitle{color:var(--lime);font:900 10px ui-monospace,monospace;letter-spacing:.11em;white-space:nowrap}.tickerItems{display:flex;gap:8px;overflow:hidden;flex:1}.tickerItem{min-width:165px;display:flex;align-items:center;gap:8px;padding-right:12px;border-right:1px solid #254031;color:#9aa99f;font-size:10px}.tickerItem img{width:27px;height:27px;border-radius:8px;object-fit:cover}.tickerItem b{display:block;color:#e3e9e5}.tickerItem span{color:var(--lime);font:800 9px ui-monospace,monospace}
+    .route{display:grid;grid-template-columns:.82fr 1.18fr;gap:10px;margin-top:10px}.routeArt{min-height:325px;background:#030504 url('/assets/balls/balls-pinball-hero.png') center/cover no-repeat}.routeArt::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,.16),rgba(0,0,0,.78))}.routeCopy{padding:32px}.routeCopy small{color:var(--cyan);font:900 10px ui-monospace,monospace;letter-spacing:.16em}.routeCopy h2{margin:10px 0 8px;font-size:34px;letter-spacing:-.045em}.routeCopy p{margin:0;color:#87968c;font-size:12px;line-height:1.65}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:20px}.step{padding:13px;border:1px solid #264332;border-radius:10px;background:#050a07}.step i{font-style:normal;color:var(--pink);font:900 10px ui-monospace,monospace}.step b{display:block;margin:6px 0 3px;font-size:11px}.step span{color:#75837a;font-size:9px;line-height:1.4;display:block}
+    footer{padding:18px 0 32px;color:#68776d}.foot{min-height:55px;display:flex;align-items:center;justify-content:space-between;gap:20px;border-top:1px solid #263d31}.foot .brand{font-size:16px}.foot .mark{width:29px;height:29px}.fine{max-width:760px;text-align:right;font-size:9px;line-height:1.6}.toast{position:fixed;left:50%;bottom:24px;z-index:50;transform:translate(-50%,15px);opacity:0;padding:11px 15px;border:1px solid #365442;border-radius:999px;background:#07100c;color:#ecf5ef;font-size:12px;transition:.2s;pointer-events:none}.toast.show{opacity:1;transform:translate(-50%,0)}
+    @media(max-width:1080px){.navlinks{display:none}.dashboard{grid-template-columns:1fr}.hero{min-height:530px}.scoreboard{min-height:auto}.gameGrid{grid-template-columns:repeat(2,1fr)}.gameCard:nth-child(2){grid-column:span 2}.route{grid-template-columns:1fr}.routeArt{min-height:280px}.navca{margin-left:auto}.navActions{margin-left:0}}
+    @media(max-width:640px){.wrap{width:min(100% - 14px,1480px)}.topin{min-height:60px;gap:8px}.brand{font-size:20px}.mark{width:32px;height:32px}.navca,.navButton.chart{display:none!important}.navButton{width:39px;padding:0;font-size:0}.navButton span{font-size:15px}.dashboard{gap:7px}.arcade{padding-top:7px}.hero{min-height:510px;background-position:61% center}.hero::before{background:linear-gradient(0deg,rgba(0,0,0,.92) 0%,rgba(0,0,0,.2) 82%)}.heroCopy{padding:23px;width:100%}.hero h1{font-size:51px;max-width:330px}.hero p{font-size:12px}.arcadeButton{min-height:45px;padding:0 15px;font-size:10px}.scoreboard{padding:9px}.scoreHeader{font-size:17px;letter-spacing:.06em}.thead,.row{grid-template-columns:36px minmax(105px,1fr) .7fr;padding:0 8px;gap:6px}.thead>*:last-child,.row>*:last-child{display:none}.empty{height:245px}.rankField{grid-template-columns:1fr}.rankField button{height:43px}.gameGrid{grid-template-columns:1fr;gap:7px}.gameCard,.gameCard:nth-child(2){grid-column:auto;min-height:175px}.ticker{margin-top:7px}.tickerItems{min-width:0}.tickerItem{min-width:140px}.route{margin-top:7px}.routeArt{min-height:210px}.routeCopy{padding:23px}.routeCopy h2{font-size:28px}.steps{grid-template-columns:1fr}.foot{align-items:flex-start;flex-direction:column;padding-top:20px}.fine{text-align:left}.collect{margin-top:19px}}
+    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.liveDot{animation:none}.toast{transition:none}}
   </style>
 </head>
 <body>
   <script>
-    // One-place launch configuration. Add the CA here after launch; chain and trade URL resolve automatically.
+    // Add the verified final CA here after launch. Until then, every trade control stays disabled.
     window.BALLS_CONFIG=Object.freeze({
       contractAddress:"",
       chain:"auto",
+      totalSupply:1000000000,
       xUrl:"https://x.com/balls_rh",
       telegramUrl:"https://t.me/balls_rh"
     });
   </script>
-  <nav class="nav"><div class="shell navin">
-    <a class="brand" href="#top" aria-label="BALLS home">
-      <svg class="mark" viewBox="0 0 120 78" aria-hidden="true"><defs><linearGradient id="chrome" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#fff"/><stop offset=".18" stop-color="#67706a"/><stop offset=".43" stop-color="#f7faf8"/><stop offset=".72" stop-color="#303632"/><stop offset="1" stop-color="#cfd5d1"/></linearGradient></defs><path fill="url(#chrome)" stroke="#91ff35" stroke-width="3" d="M60 20C48 4 20 4 8 25c-13 23 4 49 28 49 12 0 20-6 24-14 4 8 12 14 24 14 24 0 41-26 28-49C100 4 72 4 60 20Z"/></svg>
-      <span><em>BALLS</em> / ARENA</span>
-    </a>
-    <div class="links"><a href="#leaderboard">Leaderboard</a><a href="#how">How to buy</a><a href="#community">Community</a></div>
-    <div class="navsocial"><a class="iconbtn" data-x target="_blank" rel="noopener" aria-label="BALLS on X">𝕏</a><a class="iconbtn" data-telegram target="_blank" rel="noopener" aria-label="BALLS on Telegram">TG</a></div>
+
+  <nav class="topbar"><div class="wrap topin">
+    <a class="brand" href="#top"><img class="mark" src="/assets/balls/balls-token.png" alt="$balls">BALLS</a>
+    <div class="navlinks"><a href="#arcade"><i>♙</i>BALLS ARCADE</a><a href="#leaderboard"><i>🎮</i>PLAY</a><a href="#leaderboard"><i>🏆</i>LEADERBOARD</a><a href="#quests"><i>🎯</i>QUESTS</a><a href="#about"><i>ⓘ</i>ABOUT</a></div>
+    <button class="navca" data-contract type="button"><b>CA</b><span></span> ⧉</button>
+    <div class="navActions"><a class="navButton buy disabled" data-trade><span>🪙</span> Launch incoming</a><a class="navButton chart disabled" data-trade><span>📈</span> LIVE CHART</a><a class="navButton tg" data-telegram target="_blank" rel="noopener"><span>✈</span> JOIN TELEGRAM</a></div>
   </div></nav>
 
-  <main id="top">
-    <header class="hero"><div class="shell heroGrid"><div>
-      <div class="eyebrow"><span class="pulse"></span><span data-launch-label>Community launch incoming</span></div>
-      <h1>BALLS<span>ENTER THE ARENA</span></h1>
-      <p class="lead">One live holder board. Daily missions. A community built to climb together—and a direct lane to trade without leaving SlimeWire.</p>
-      <div class="heroActions"><a class="btn primary disabled" data-trade>Launch incoming</a><a class="btn secondary" href="#leaderboard">View the ranks</a></div>
-      <button class="contract" data-contract type="button"><span></span><b>COPY CA</b></button>
-    </div></div></header>
+  <main id="top" class="arcade"><div class="wrap" id="arcade">
+    <section class="dashboard">
+      <article class="hero chrome">
+        <div class="heroCopy"><div class="eyebrow"><img class="miniMark" src="/assets/balls/balls-token.png" alt="">$BALLS PINBALL ARCADE</div><h1>Get on the <span>high score board</span></h1><p>The most important metric in crypto. Stack BALLS, climb the live holder board, and prove you did not come here with raisin energy.</p><div class="heroActions"><button class="arcadeButton" data-scroll-rank type="button">🎯 Check my rank</button><a class="arcadeButton alt disabled" data-trade>🪙 Buy $balls</a></div></div>
+      </article>
 
-    <div class="launchbar"><div class="shell launchgrid">
-      <div class="statuscard"><small>Launch status</small><strong data-status><i>PRELAUNCH</i> · CA drops here</strong></div>
-      <div class="statcard"><small>Market cap</small><strong data-stat="MARKET CAP">—</strong></div>
-      <div class="statcard"><small>Liquidity</small><strong data-stat="LIQUIDITY">—</strong></div>
-      <div class="statcard"><small>Holders</small><strong data-stat="HOLDERS">—</strong></div>
-      <div class="statcard"><small>Top 10</small><strong data-stat="TOP 10">—</strong></div>
-    </div></div>
+      <article class="scoreboard chrome" id="leaderboard">
+        <div class="scoreHeader"><b>★</b> BALLS HIGH SCORES <b>★</b></div>
+        <div class="scoreMeta"><span>LIVE HOLDER RANKINGS</span><span class="live"><i class="liveDot"></i><span data-board-caption>PRELAUNCH</span></span></div>
+        <div class="table"><div class="thead"><span>#</span><span>PLAYER</span><span style="text-align:right">BALLS HOLDINGS</span><span style="text-align:right">BADGE</span></div><div data-leaderboard><div class="empty"><div><img class="emptyArt" src="/assets/balls/balls-token.png" alt=""><b>The board awakens at launch.</b>Real holders and real balances appear after the verified CA is added.</div></div></div></div>
+        <div class="rankCheck" data-rank-box><div class="rankField"><input data-wallet autocomplete="off" spellcheck="false" aria-label="Public wallet" placeholder="Paste your public wallet to check rank..."><button data-check type="button">CHECK EM</button></div><div class="rankResult" data-rank-result>Leaderboard opens when the verified contract is added.</div></div>
+      </article>
+    </section>
 
-    <section class="arena" id="leaderboard"><div class="shell">
-      <div class="sectionHead"><div><div class="eyebrow">Live on-chain standings</div><h2>Holder arena.</h2></div><p>Ranks come from public holder data. Wallet addresses stay off the visible board; each unlinked holder gets a stable arena name.</p></div>
-      <div class="boardGrid">
-        <div class="panel">
-          <div class="panelTop"><div><h3>Top BALLS</h3><small data-board-caption>Board opens when the contract goes live.</small></div><div class="live"><span class="pulse"></span>LIVE</div></div>
-          <div class="leaderHead"><span>RANK</span><span>PLAYER</span><span style="text-align:right">SUPPLY</span><span style="text-align:right">VALUE</span></div>
-          <div class="leaderRows" data-leaderboard><div class="empty"><div><b>The gates are closed—for now.</b>At launch, the live holder ranks populate here automatically.</div></div></div>
-        </div>
-        <aside class="panel">
-          <div class="rankbox"><h3>Find your rank</h3><p>Paste your public wallet after launch. It is checked in your browser against the loaded holder board.</p><div class="field"><input data-wallet autocomplete="off" spellcheck="false" placeholder="Public wallet address"><button data-check type="button">Check</button></div><div class="rankResult" data-rank-result>Waiting for the contract.</div><p class="privacy">No seed phrase. No private key. Never paste restore material here.</p></div>
-          <div class="missions"><h4>Launch run</h4><a class="mission" data-x target="_blank" rel="noopener"><span class="check">01</span><div><b>Follow the signal</b><small>Join BALLS on X</small></div><span class="xp">+50 XP</span></a><a class="mission" data-telegram target="_blank" rel="noopener"><span class="check">02</span><div><b>Enter the room</b><small>Join the Telegram</small></div><span class="xp">+50 XP</span></a><a class="mission" href="#leaderboard"><span class="check">03</span><div><b>Claim your place</b><small>Check your live rank</small></div><span class="xp">+100 XP</span></a></div>
-        </aside>
-      </div>
-    </div></section>
+    <section class="gameGrid" id="quests">
+      <article class="gameCard chrome"><div class="cardTitle">🏆 SEASON SCORE</div><div class="bigScore" data-season-score>0</div><div class="smallLabel">Holder points</div><div class="timer">Season begins at <b>launch</b></div></article>
+      <article class="gameCard chrome"><div class="cardTitle pink">🎯 DAILY BALLS QUESTS</div><div class="quests"><div class="quest"><span class="qIcon"><img src="/assets/balls/balls-token.png" alt=""></span><span class="qText"><b>Hold your BALLS</b><span>Stay on the board for 24 hours</span><span class="bar"><i style="width:0%"></i></span></span><span class="reward">+500</span></div><div class="quest"><span class="qIcon"><img src="/assets/balls/balls-token.png" alt=""></span><span class="qText"><b>Grow a bigger pair</b><span>Move up one holder tier</span><span class="bar"><i style="width:0%"></i></span></span><span class="reward">+300</span></div><div class="quest"><span class="qIcon"><img src="/assets/balls/balls-token.png" alt=""></span><span class="qText"><b>Bring more BALLS</b><span>Share the official community</span><span class="bar"><i style="width:0%"></i></span></span><span class="reward">+700</span></div></div></article>
+      <article class="gameCard chrome streak"><div class="cardTitle cyan">⚡ COMBO STREAK</div><div class="streakNum">0</div><small>DAYS HOLDING</small><div class="mult">1.0x</div><div class="days"><span class="day off">M</span><span class="day off">T</span><span class="day off">W</span><span class="day off">T</span><span class="day off">F</span><span class="day off">S</span><span class="day off">S</span></div></article>
+      <article class="gameCard chrome"><div class="cardTitle pink">★ BALLS CABINET</div><div class="collect"><span class="badge" data-badge="OG"><img src="/assets/balls/balls-token.png" alt="Original BALLS badge"></span><span class="badge" data-badge="2X"><img src="/assets/balls/balls-token.png" alt="Double BALLS badge"></span><span class="badge locked" data-badge="BIG"><img src="/assets/balls/balls-token.png" alt="Big BALLS badge"></span><span class="badge locked" data-badge="STEEL"><img src="/assets/balls/balls-token.png" alt="Steel BALLS badge"></span><span class="badge locked" data-badge="HOLD"><img src="/assets/balls/balls-token.png" alt="Holder BALLS badge"></span><span class="badge locked" data-badge="TOP 10"><img src="/assets/balls/balls-token.png" alt="Top BALLS badge"></span><span class="badge locked" data-badge="WHALE"><img src="/assets/balls/balls-token.png" alt="Whale BALLS badge"></span><span class="badge locked" data-badge="MAX"><img src="/assets/balls/balls-token.png" alt="Maximum BALLS badge"></span></div></article>
+      <article class="gameCard chrome milestone"><div class="cardTitle">⚑ MILESTONE</div><div class="progress"><i data-milestone-bar></i></div><strong data-milestone>Launch → first holder</strong><div class="rewardBall"><img src="/assets/balls/balls-token.png" alt=""><span>UNLOCK<br>BIG BALL ENERGY</span></div></article>
+    </section>
 
-    <section class="story" id="how"><div class="shell">
-      <div class="sectionHead"><div><div class="eyebrow">The clean route</div><h2>From SOL to BALLS.</h2></div><p>The SlimeWire terminal keeps the process in one place. The exact rail switches automatically when the final contract is added.</p></div>
-      <div class="steps">
-        <article class="step"><i>01</i><h3>Open SlimeWire</h3><p>Create or restore your managed trading wallet once. Your Solana wallet also controls its paired Robinhood Chain address.</p><a href="https://www.slimewire.org/#wallet">Open wallet →</a></article>
-        <article class="step"><i>02</i><h3>Buy with SOL</h3><p>If BALLS launches on Robinhood Chain, SlimeWire handles the SOL-to-Robinhood funding route before the buy. No separate wallet setup is needed.</p><a data-trade class="disabled">Available at launch →</a></article>
-        <article class="step"><i>03</i><h3>Sell and cash out</h3><p>Robinhood sells settle to ETH on that chain. Use the wallet’s “Convert ETH → SOL” action to return proceeds to the same managed Solana wallet.</p><a href="https://www.slimewire.org/#wallet">Open cash-out →</a></article>
-      </div>
-    </div></section>
+    <section class="ticker chrome"><div class="tickerTitle">↗ BALLS ENERGY</div><div class="tickerItems"><div class="tickerItem"><img src="/assets/balls/balls-token.png" alt=""><span><b>Biggest Balls</b><span>TOP HOLDER</span></span></div><div class="tickerItem"><img src="/assets/balls/balls-token.png" alt=""><span><b>Steel pair loaded</b><span>BALLS READY</span></span></div><div class="tickerItem"><img src="/assets/balls/balls-token.png" alt=""><span><b>Grip maintained</b><span>HOLD MODE</span></span></div><div class="tickerItem"><img src="/assets/balls/balls-token.png" alt=""><span><b>Double-ball jackpot</b><span>LAUNCH SOON</span></span></div><div class="tickerItem"><img src="/assets/balls/balls-token.png" alt=""><span><b>No raisin energy</b><span>STAY BALLSY</span></span></div></div></section>
 
-    <section class="club" id="community"><div class="shell clubcard"><div class="clubcopy"><div class="eyebrow">The holder club</div><h2>Don’t just watch.<br>Take a rank.</h2><p>Follow launch updates, verify the contract from the official channel, and use the live board to see where you stand. No copied contract, no mystery link, no fake leaderboard.</p><div class="clubactions"><a class="btn primary" data-telegram target="_blank" rel="noopener">Join Telegram</a><a class="btn secondary" data-x target="_blank" rel="noopener">Follow on X</a></div></div><div class="clubart" role="img" aria-label="Chrome BALLS emblem above a neon green community arena"></div></div></section>
-  </main>
+    <section class="route" id="about"><div class="routeArt chrome" aria-label="BALLS pinball world"></div><article class="routeCopy chrome"><small>POWERED BY SLIMEWIRE</small><h2>One wallet. SOL in. SOL out.</h2><p>The arcade is fun; execution stays serious. Your managed SlimeWire wallet handles the supported route while holder rank stays public and transparent.</p><div class="steps"><div class="step"><i>01</i><b>Fund with SOL</b><span>Use the SlimeWire wallet you already know.</span></div><div class="step"><i>02</i><b>Buy $balls</b><span>The supported market route executes automatically.</span></div><div class="step"><i>03</i><b>Return to SOL</b><span>Robinhood sells settle to ETH. Use Convert ETH → SOL to return proceeds.</span></div></div></article></section>
+  </div></main>
 
-  <footer><div class="shell footin"><div class="footbrand"><svg class="mark small" viewBox="0 0 120 78" aria-hidden="true"><path fill="#cfd5d1" stroke="#91ff35" stroke-width="3" d="M60 20C48 4 20 4 8 25c-13 23 4 49 28 49 12 0 20-6 24-14 4 8 12 14 24 14 24 0 41-26 28-49C100 4 72 4 60 20Z"/></svg>BALLS × SLIMEWIRE</div><div class="fine">Memecoins are volatile. Verify the contract through official BALLS channels before trading. Public leaderboard data can be delayed by chain indexers and is not financial advice.</div></div></footer>
+  <footer><div class="wrap foot"><a class="brand" href="#top"><img class="mark" src="/assets/balls/balls-token.png" alt="">BALLS ARCADE</a><div class="fine">Built for the community. Verify the contract through the official $balls channels before trading. Memecoins are volatile; holder data may be delayed by public chain indexers.</div></div></footer>
   <div class="toast" data-toast></div>
 
   <script src="/config.js"></script>
@@ -170,47 +87,45 @@
       const live=isRh||isSol;
       const api=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||"https://app.slimewire.org";
       const tradeUrl=live?`https://www.slimewire.org/#${isRh?"rhtrade":"trade"}/${encodeURIComponent(ca)}`:"";
-      const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+      const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)];
       let holders=[];
       const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
       const toast=msg=>{const el=$("[data-toast]");el.textContent=msg;el.classList.add("show");clearTimeout(toast.t);toast.t=setTimeout(()=>el.classList.remove("show"),1800)};
-      const fmt=n=>{n=Number(n)||0;if(n>=1e9)return"$"+(n/1e9).toFixed(2).replace(/\.00$/,"")+"B";if(n>=1e6)return"$"+(n/1e6).toFixed(2).replace(/\.00$/,"")+"M";if(n>=1e3)return"$"+(n/1e3).toFixed(1).replace(/\.0$/,"")+"K";return n?"$"+n.toFixed(n<1?2:0):"—"};
+      const compact=n=>{n=Number(n)||0;if(n>=1e9)return(n/1e9).toFixed(2).replace(/\.00$/,'')+'B';if(n>=1e6)return(n/1e6).toFixed(2).replace(/\.00$/,'')+'M';if(n>=1e3)return(n/1e3).toFixed(1).replace(/\.0$/,'')+'K';return n.toLocaleString(undefined,{maximumFractionDigits:2})};
       const hash=s=>{let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0};
       const alias=w=>"Baller #"+String((hash(ca+String(w).toLowerCase())%9000)+1000);
-      const badge=(rank,pct)=>rank===1?"CROWN":rank<=3?"PODIUM":pct>=1?"WHALE":"HOLDER";
-      $$('[data-x]').forEach(a=>a.href=cfg.xUrl||"https://x.com/balls_rh");
+      const tier=(rank,pct,total)=>rank===1?"🏆 BIGGEST BALLS":rank/Math.max(1,total)<=.01?"💎 LEGEND":rank/Math.max(1,total)<=.05?"🔥 MASTER":rank/Math.max(1,total)<=.1?"💪 ACE":pct>=.1?"😬 RAISIN MODE":rank===total?"☠ LAST PLACE":"🪨 PEBBLE MODE";
       $$('[data-telegram]').forEach(a=>a.href=cfg.telegramUrl||"https://t.me/balls_rh");
-      $$('[data-trade]').forEach(a=>{if(live){a.href=tradeUrl;a.classList.remove("disabled");if(a.textContent.includes("Launch")||a.textContent.includes("Available"))a.textContent=isRh?"Buy with SOL":"Trade BALLS"}});
-      if(live){
-        $("[data-launch-label]").textContent=isRh?"Live on Robinhood Chain":"Live on Solana";
-        $("[data-status]").innerHTML=`<i>LIVE</i> · ${isRh?"ROBINHOOD":"SOLANA"}`;
-        const cb=$("[data-contract]");cb.classList.add("show");$("span",cb).textContent=ca;cb.onclick=async()=>{try{await navigator.clipboard.writeText(ca);toast("Contract copied") }catch{toast("Copy failed—press and hold the CA")}};
-        loadBoard();setInterval(loadBoard,30000);
-      }
+      $$('[data-trade]').forEach(a=>{if(live){a.href=tradeUrl;a.classList.remove('disabled');if(a.textContent.includes('Launch'))a.textContent='BUY $BALLS'}});
+      $$('[data-contract]').forEach(button=>{if(!live)return;button.classList.add('show');const text=$('span',button);if(text)text.textContent=ca;button.onclick=async()=>{try{await navigator.clipboard.writeText(ca);toast('Contract copied')}catch{toast('Press and hold the contract to copy')}}});
+      $('[data-scroll-rank]').onclick=()=>{$('[data-rank-box]').scrollIntoView({behavior:'smooth',block:'center'});setTimeout(()=>$('[data-wallet]').focus(),450)};
+      if(live){loadBoard();setInterval(loadBoard,30000)}
+
       async function loadBoard(){
         try{
           const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),18000);
           const res=await fetch(`${api}/api/map?ca=${encodeURIComponent(ca)}`,{signal:ctl.signal});clearTimeout(timer);
-          const data=await res.json();if(!data||!data.ok||!data.map)throw new Error((data&&data.error)||"Holder board is refreshing");
+          const data=await res.json();if(!data||!data.ok||!data.map)throw new Error((data&&data.error)||'Holder board is refreshing');
           renderBoard(data.map);
-        }catch(error){$("[data-board-caption]").textContent="Holder feed is refreshing; retrying automatically.";if(!holders.length)$("[data-leaderboard]").innerHTML='<div class="empty"><div><b>Board is refreshing.</b>The launch page will retry automatically.</div></div>'}
+        }catch{$('[data-board-caption]').textContent='REFRESHING';if(!holders.length)$('[data-leaderboard]').innerHTML='<div class="empty"><div><img class="emptyArt" src="/assets/balls/balls-token.png" alt=""><b>Holder feed is refreshing.</b>The board retries automatically.</div></div>'}
       }
       function renderBoard(map){
-        const stats=Array.isArray(map.stats)?map.stats:[];
-        for(const name of ["MARKET CAP","LIQUIDITY","HOLDERS","TOP 10"]){const hit=stats.find(s=>String(s.label||"").toUpperCase()===name);if(hit)$(`[data-stat="${name}"]`).textContent=hit.value||"—"}
         const nodes=Array.isArray(map.nodes)?map.nodes:[];
-        holders=nodes.filter(n=>n&&n.wallet).sort((a,b)=>(Number(b.pct)||0)-(Number(a.pct)||0));
-        $("[data-board-caption]").textContent=`${holders.length} largest public holders shown · refreshed ${new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}`;
-        if(!holders.length){$("[data-leaderboard]").innerHTML='<div class="empty"><div><b>Holder data is indexing.</b>The board will fill without a page reload.</div></div>';return}
-        $("[data-leaderboard]").innerHTML=holders.slice(0,30).map((n,i)=>{const rank=i+1,pct=Number(n.pct)||0,value=Number(n.usd)||0,name=n.isKol&&n.name?n.name:alias(n.wallet);return `<div class="leaderRow"><span class="rank">#${String(rank).padStart(2,"0")}</span><span class="who"><span class="avatar">${rank<=3?["Ⅰ","Ⅱ","Ⅲ"][rank-1]:"B"}</span><span><b>${esc(name)}</b><span class="badge">${badge(rank,pct)}</span></span></span><span class="num">${pct.toFixed(pct<1?2:1)}%</span><span class="num">${fmt(value)}</span></div>`}).join("");
+        holders=nodes.filter(n=>n&&n.wallet&&!n.isPool&&!n.isBurn).sort((a,b)=>(Number(b.pct)||0)-(Number(a.pct)||0));
+        $('[data-board-caption]').textContent=`${holders.length} HOLDERS · LIVE`;
+        $('[data-season-score]').textContent=compact(holders.reduce((sum,n)=>sum+(Number(n.amount||n.balance||n.tokenAmount)||0),0));
+        $('[data-milestone]').textContent=holders.length?`${holders.length} holders in the arcade`:'Launch → first holder';
+        $('[data-milestone-bar]').style.width=`${Math.min(100,holders.length)}%`;
+        if(!holders.length){$('[data-leaderboard]').innerHTML='<div class="empty"><div><img class="emptyArt" src="/assets/balls/balls-token.png" alt=""><b>Holder data is indexing.</b>The board fills without a page reload.</div></div>';return}
+        $('[data-leaderboard]').innerHTML=holders.slice(0,5).map((n,i)=>{const rank=i+1,pct=Number(n.pct)||0,name=n.isKol&&n.name?n.name:alias(n.wallet),amount=Number(n.amount||n.balance||n.tokenAmount||0)||((Number(cfg.totalSupply)||1000000000)*pct/100);return `<div class="row"><span class="rank ${rank===1?'first':''}">${rank}</span><span class="player"><span class="orb">${rank===1?'B':'•'}</span><b>${esc(name)}</b></span><span class="amount">${compact(amount)}</span><span class="level">${tier(rank,pct,holders.length)}</span></div>`}).join('');
       }
-      $("[data-check]").onclick=()=>{
-        const wallet=$("[data-wallet]").value.trim(),result=$("[data-rank-result]");
-        if(!live){result.textContent="Waiting for the contract.";return}
-        if(!wallet){result.textContent="Paste a public wallet address first.";return}
-        const i=holders.findIndex(n=>String(n.wallet||"").toLowerCase()===wallet.toLowerCase());
-        if(i<0){result.innerHTML=`<b>${esc(alias(wallet))}</b><span>Not in the top ${holders.length||"loaded"} holders yet.</span>`;return}
-        const n=holders[i],pct=Number(n.pct)||0;result.innerHTML=`<strong>#${i+1}</strong><b>${esc(n.isKol&&n.name?n.name:alias(n.wallet))}</b><span>${pct.toFixed(pct<1?2:1)}% of supply · ${badge(i+1,pct)}</span>`;
+      $('[data-check]').onclick=()=>{
+        const wallet=$('[data-wallet]').value.trim(),result=$('[data-rank-result]');
+        if(!live){result.textContent='Leaderboard opens when the verified contract is added.';return}
+        if(!wallet){result.textContent='Paste your public wallet address first.';return}
+        const i=holders.findIndex(n=>String(n.wallet||'').toLowerCase()===wallet.toLowerCase());
+        if(i<0){result.innerHTML=`<b>${esc(alias(wallet))}</b> is not in the top ${holders.length||'loaded'} holders yet.`;return}
+        const n=holders[i],pct=Number(n.pct)||0;result.innerHTML=`<strong>#${i+1}</strong><b>${esc(n.isKol&&n.name?n.name:alias(n.wallet))}</b> · ${pct.toFixed(pct<1?2:1)}% · ${tier(i+1,pct,holders.length)}`;
       };
     })();
   </script>

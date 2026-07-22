@@ -6,7 +6,8 @@ import vm from "node:vm";
 const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const page = fs.readFileSync(new URL("../web/public/balls.html", import.meta.url), "utf8");
 const redirects = fs.readFileSync(new URL("../web/public/_redirects", import.meta.url), "utf8");
-const hero = new URL("../web/public/assets/balls/balls-arena-hero.webp", import.meta.url);
+const tokenArt = new URL("../web/public/assets/balls/balls-token.png", import.meta.url);
+const pinballArt = new URL("../web/public/assets/balls/balls-pinball-hero.png", import.meta.url);
 
 test("BALLS has a dedicated no-store route without a pretty-URL redirect loop", () => {
   assert.match(server, /\["\/balls", "\/balls\/"\][\s\S]{0,180}serveStaticHtmlPage\(response, "balls\.html", "no-store, max-age=0"\)/);
@@ -32,11 +33,17 @@ test("BALLS supports either final chain and keeps holder addresses off visible r
   assert.match(page, /Convert ETH → SOL/);
 });
 
-test("BALLS ships project-local arena art", () => {
-  assert.ok(fs.statSync(hero).size > 100_000);
-  assert.match(page, /\/assets\/balls\/balls-arena-hero\.webp/);
-  assert.match(page, /<svg class="mark"/);
-  assert.doesNotMatch(page, /⚽|🏀|soccer/i);
+test("BALLS matches the supplied black-and-chrome project identity", () => {
+  assert.ok(fs.statSync(tokenArt).size > 100_000);
+  assert.ok(fs.statSync(pinballArt).size > 500_000);
+  assert.match(page, /\/assets\/balls\/balls-token\.png/);
+  assert.match(page, /\/assets\/balls\/balls-pinball-hero\.png/);
+  assert.match(page, /<img class="mark"/);
+  assert.match(page, /The most important metric in crypto/);
+  assert.match(page, /BALLS HIGH SCORES/);
+  assert.match(page, /BALLS CABINET/);
+  assert.doesNotMatch(page, /balls-arena-hero/);
+  assert.doesNotMatch(page, /🐸|🚀|🌕|💀|🗑|frog|soccer/i);
 });
 
 test("BALLS inline scripts parse", () => {

@@ -1552,6 +1552,17 @@ test("Buy bot keeps transaction price and market cap aligned on both chains", ()
   }), {
     priceUsd: 0.000008, marketCapUsd: 8_000, supply: 1_000_000_000, executionPriceUsd: 0
   });
+  // Sharp-dump regression: a stale Pump page can still say $35K after the transaction feed has
+  // reached $14K. The event price must revalue the known supply instead of repeating the stale page.
+  assert.deepEqual(resolve({
+    eventPriceUsd: 0.000014,
+    scanPriceUsd: 0.000035,
+    scanMarketCapUsd: 35_000,
+    supply: 1_000_000_000,
+    preferReportedSupply: true,
+  }), {
+    priceUsd: 0.000014, marketCapUsd: 14_000, supply: 1_000_000_000, executionPriceUsd: 0
+  });
   assert.deepEqual(resolve({
     nativeAmount: 0.01,
     nativeUsd: 2_000,
@@ -1573,9 +1584,14 @@ test("Buy bot keeps transaction price and market cap aligned on both chains", ()
   assert.equal(cashCow.supply, 906_529_349.9222183);
   assert.ok(cashCow.marketCapUsd > 30_000 && cashCow.marketCapUsd < 31_000);
   assert.equal(cashCow.marketCapUsd, cashCow.priceUsd * cashCow.supply);
-  assert.match(functionBody(serverSource, "postGroupBuy"), /resolveGroupBuyMarketSnapshot/);
+  const post = functionBody(serverSource, "postGroupBuy");
+  assert.match(post, /resolveGroupBuyMarketSnapshot/);
+  assert.match(post, /eventPriceUsd: priceUsd \|\| livePumpPrice/);
+  assert.match(post, /eventMarketCapUsd: mcUsd/);
+  assert.match(post, /scanMarketCapUsd: livePumpMc \|\| scanMc/);
+  assert.doesNotMatch(post, /eventMarketCapUsd: livePumpMc \|\| mcUsd/);
   assert.match(functionBody(serverSource, "postGroupBuyRh"), /resolveGroupBuyMarketSnapshot/);
-  assert.match(functionBody(serverSource, "postGroupBuy"), /groupBuyCoherentMarketReference/);
+  assert.match(post, /groupBuyCoherentMarketReference/);
 });
 
 test("Robinhood market cap excludes provable burns and uses post-swap spot price", () => {
@@ -3001,18 +3017,39 @@ test("groups on Alpha Radar get network-backed runners INSTEAD of the short-term
 test("community snipe fires each member's OWN wallet — never a shared pool", () => {
   const fire = functionBody(serverSource, "fireCommunitySnipe");
   assert.match(fire, /walletsForOwner\(walletStore, userId\)/);   // each member's own wallet
-  assert.match(fire, /buyTokenForPlan\(wallet, mint, amountLamports/);
+  assert.match(fire, /buyTokenForPlan\(wallet, token, amountLamports/);
   assert.match(fire, /runIdempotentMoneyOp\("community-snipe"/);   // idempotent per member+mint (no double-buy)
   assert.doesNotMatch(fire, /pool|sharedWallet|combined/i);        // NO pooling
   // fire-once: mark fired + disarm BEFORE executing
-  assert.match(fire, /snipe\.fired = \{ mint, at: Date\.now\(\) \}; snipe\.armed = false;/);
+  assert.match(fire, /snipe\.fired = \{ mint: token, chain, at: Date\.now\(\) \}; snipe\.armed = false;/);
 });
 test("community snipe is keyed on the creator wallet (unspoofable), armed index drops on fire", () => {
   const m = functionBody(serverSource, "maybeCommunitySnipe");
   assert.match(m, /entry\.event\.traderPublicKey/);                // the dev's launch wallet — follows the wallet
-  assert.match(m, /communitySnipeArmed\.get\(String\(creator\)\)/);
-  assert.match(m, /communitySnipeArmed\.delete\(String\(creator\)\)/); // fire once
+  assert.match(m, /communitySnipeTargetKey\("solana", creator\)/);
+  assert.match(m, /communitySnipeArmed\.get\(key\)/);
+  assert.match(m, /communitySnipeArmed\.delete\(key\)/); // fire once
   assert.match(serverSource, /try \{ maybeCommunitySnipe\(entry\); \} catch \{\}/); // wired into onCreation
+});
+test("Robinhood Community Snipe mirrors Solana with SOL-funded own-wallet entries", () => {
+  const parse = functionBody(serverSource, "parseCommunitySnipeAddress");
+  assert.match(parse, /\^0x\/i/);
+  assert.match(parse, /normalizeWalletLaunchAddress\(raw, chain\)/);
+  const detect = functionBody(serverSource, "maybeRhCommunitySnipe");
+  assert.match(detect, /communitySnipeTargetKey\("robinhood", deployer\)/);
+  assert.match(detect, /matchBlock > armedBlock/);                  // never fires an old feed row
+  assert.match(detect, /options\.source === "slimewire-launch"/); // exact launch receipt is immediate
+  const rhFire = functionBody(serverSource, "fireRhCommunitySnipe");
+  assert.match(rhFire, /walletsForOwner\(walletStore, userId\)/);  // each member's own managed wallet
+  assert.match(rhFire, /runIdempotentMoneyOp\("community-snipe-rh"/);
+  assert.match(rhFire, /webRhTradeCore\(userId/);
+  assert.match(rhFire, /payCurrency: "SOL"/);                      // bridge/conversion stays automatic
+  assert.match(rhFire, /source: "community-snipe"/);
+  assert.match(rhFire, /webRhArmGuard\(userId/);                   // durable RH TP/SL
+  assert.match(serverSource, /maybeRhCommunitySnipe\(\{[\s\S]*?source: "slimewire-launch"/);
+  assert.match(serverSource, /scheduleRhCommunitySnipePoll\(8_000\)/); // external NOXA deployer watch
+  assert.match(serverSource, /void readCommunitySnipe\(\)/);      // armed rooms restore after restart
+  assert.match(serverSource, /COMMUNITY_SNIPE_RH_MAX_SOL = 5/);
 });
 test("community snipe: admin-gated setup, everyone auto-buys, presets optional", () => {
   const cmd = functionBody(serverSource, "handleCommunitySnipeCommand");
@@ -3437,7 +3474,7 @@ test("Tweet-to-Snipe: admin drops the CA → instant community-snipe fire (X has
   assert.match(serverSource, /data === "cs:fire"\) \{ csInputPending\.set/);
   const inp = functionBody(serverSource, "applyCsInput");
   assert.match(inp, /pend\.kind === "fire"/);
-  assert.match(inp, /void fireCommunitySnipe\(chatId, mint, "", ""\)/);   // fires on the pasted CA
+  assert.match(inp, /void fireCommunitySnipe\(chatId, token, "", "", communitySnipeChain\(s\)\)/);   // fires either chain's pasted CA
   assert.match(serverSource, /if \(sub === "fire"\)/);                     // /snipe fire <CA>
   // admin-gated
   assert.match(serverSource, /sub === "fire" \|\| sub === "throne"/);
