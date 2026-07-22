@@ -520,7 +520,8 @@ test("/fun reuses authenticated money APIs with idempotency and lazy user action
   assert.match(js, /async function submitTrade/);
   assert.match(js, /\/api\/web\/positions\/arm-exits/);
   assert.match(js, /\/api\/web\/rh\/guards/);
-  assert.match(js, /\/api\/web\/rh\/bridge-to-sol/);
+  assert.match(js, /Sale proceeds return to this SOL wallet automatically/);
+  assert.doesNotMatch(js, /data-rh-cashout/);
   assert.match(js, /if \(state\.token\) Promise\.all\(\[loadMe\(\), loadWallets\(\), loadPositions\(\), loadPresets\(\), loadCreatedCoinsSilently\(\)\]\)/);
   assert.doesNotMatch(js, /const accountReady = await ensureAccount\(\)/);
 });
@@ -654,7 +655,7 @@ test("coin setup exposes fast buys, ladder exits, one-wallet RH trades, and the 
   assert.match(js, /data-trade-strategy="ladder"/);
   assert.match(js, /data-ladder-preset="smart"/);
   assert.match(js, /payCurrency = "SOL"/);
-  assert.match(js, /Convert received ETH back to SOL automatically/);
+  assert.match(js, /Sale proceeds return to this SOL wallet automatically/);
   assert.match(js, /amounts = \["0\.1", "0\.5", "1"\]/);
   assert.match(js, /async function executeFunQuickBuy/);
   assert.match(js, /data-quick-custom-amount/);

@@ -552,7 +552,7 @@ test("Robinhood Chain: coin feed + wallet holdings + SOL->ETH funding (Relay)", 
   }
 });
 
-test("Robinhood Chain: cash ETH back out to SOL (reverse Relay bridge, idempotent, gas-reserved)", () => {
+test("Robinhood Chain: every user sell automatically returns to SOL through the gas-reserved reverse bridge", () => {
   // Server: auth-gated, idempotent cash-out endpoint that delivers to the wallet's OWN Solana address.
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/bridge-to-sol"/);
   assert.match(functionBody(serverSource, "webRhBridgeToSol"), /runIdempotentMoneyOp\("web-rh-bridge-sol"/);
@@ -566,11 +566,16 @@ test("Robinhood Chain: cash ETH back out to SOL (reverse Relay bridge, idempoten
   assert.match(bridge, /destinationChainId: RELAY_SOLANA_CHAIN_ID/);
   assert.match(bridge, /gasReserveEth/);                        // never drains the wallet's gas
   assert.match(bridge, /rhExecuteEvmSteps/);
-  // Client: cash-out button + handler in both mirrors.
+  const trade = functionBody(serverSource, "webRhTradeCore");
+  assert.match(trade, /side === "sell"[\s\S]*webRhBridgeToSolCore/);
+  assert.match(trade, /toLowerCase\(\) !== "rh_volume"/);
+  assert.match(trade, /solCashoutError/);
+  // Client: chain conversion is not exposed as a second user action.
   for (const src of [ggSource, indexSource]) {
-    assert.match(src, /function rhBridgeToSol/);
-    assert.match(src, /\/api\/web\/rh\/bridge-to-sol/);
-    assert.match(src, /Cash out ETH → SOL/);
+    assert.match(src, /SOL in for buys · SOL back on sells/);
+    assert.match(src, /settle back to SOL without another button/);
+    assert.doesNotMatch(src, /id="rhOutBtn"/);
+    assert.doesNotMatch(src, /id="rhFundBtn"/);
   }
 });
 
@@ -874,17 +879,19 @@ test("unified tools: paste either chain's CA + auto round-trip moved to Wallet f
   }
 });
 
-test("RH wallet: plain ETH balance panel + activity trail (where did the money go)", () => {
+test("RH wallet: SOL-first routing panel + automatic settlement activity trail", () => {
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/activity"/);
   const act = functionBody(serverSource, "webRhActivity");
   assert.match(act, /web_rh_trade/);
   assert.match(act, /web_rh_guard_fired/);              // auto-sells surface here
+  assert.match(act, /web_rh_bridge_sol/);               // automatic SOL settlement surfaces here
   assert.match(act, /blockscout\.com\/tx\//);            // each row links its on-chain tx
   for (const src of [ggSource, indexSource]) {
-    assert.match(src, /Your Robinhood ETH \(spendable balance\)/);
-    assert.match(src, /lands right back here/);           // explains where auto-sell proceeds go
+    assert.match(src, /Automatic SOL routing/);
+    assert.match(src, /SOL in for buys · SOL back on sells/);
     assert.match(src, /function loadRhActivity/);
     assert.match(src, /Auto-sold /);
+    assert.match(src, /Returned to SOL/);
     assert.match(src, /\/api\/web\/rh\/activity/);
   }
 });

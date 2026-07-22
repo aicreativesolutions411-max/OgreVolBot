@@ -1033,24 +1033,18 @@
     const eth=Number(d.eth||0);
     const toks=(d.tokens||[]);
     body.innerHTML='<div class="field"><label>Wallet</label>'+walletSelectHtml("rhWalSel")+'</div>'+
-      // Big, plain "this is your money" header — ETH is your balance/buying power here, not a fee.
+      // Robinhood routing stays behind the SOL-first experience. ETH is shown only
+      // as the small gas reserve the automatic bridge preserves.
       '<div style="background:var(--card2,#0f150f);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px">'+
-        '<div class="mut" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px">Your Robinhood ETH (spendable balance)</div>'+
-        '<div style="font-size:22px;font-weight:800;margin:2px 0">'+eth.toFixed(6)+' <span style="font-size:13px;color:var(--muted)">ETH</span> <span id="rhEthUsd" class="mut" style="font-size:12px"></span></div>'+
-        '<div class="mut" style="font-size:10px">This is real ETH in your wallet — what buys, sells &amp; launches spend. When a coin sells (or auto-sells), the ETH lands right back here.</div>'+
+        '<div class="mut" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px">Automatic SOL routing</div>'+
+        '<div style="font-size:15px;font-weight:800;margin:4px 0">SOL in for buys · SOL back on sells</div>'+
+        '<div class="mut" style="font-size:10px">SlimeWire handles Robinhood conversion in the background. Routing gas reserve: '+eth.toFixed(6)+' ETH.</div>'+
       '</div>'+
       '<div class="field"><label>Your Robinhood address — receive here</label><div style="display:flex;gap:8px;align-items:center"><input readonly value="'+esc(d.address)+'" style="flex:1;min-width:0;font-size:11px" onclick="this.select()"><button class="wbtn ghost" type="button" style="padding:6px 10px" onclick="GG.copy(\''+esc(d.address)+'\')">⧉</button> <a class="wbtn ghost" style="padding:6px 10px" href="'+esc(d.explorer)+'" target="_blank" rel="noopener noreferrer">↗</a></div></div>'+
-      (toks.length?'<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Coins you hold here</div><div id="rhHoldings">'+toks.map(t=>'<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:5px" data-addr="'+esc(t.address)+'">'+(t.iconUrl?'<img src="'+esc(t.iconUrl)+'" style="width:18px;height:18px;border-radius:50%">':'🪙')+'<b>'+esc(t.symbol||"?")+'</b><span class="mut">'+esc(Number(t.uiAmount||0).toLocaleString())+'</span><span class="mut rhHoldVal" style="margin-left:auto">—</span></div>').join("")+'</div>':'<p class="mut" style="font-size:11px;margin:0 0 8px">No coins held here right now. If one just auto-sold, that\'s expected — the ETH from it is in your balance above, and the sale shows in the activity list below.</p>')+
-      '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:12px 0 6px">Fund with SOL (swap → Robinhood ETH)</div>'+
-      '<div style="display:flex;gap:8px"><input id="rhFundAmt" inputmode="decimal" placeholder="0.05" style="width:90px;flex:0 0 auto"><button class="wbtn" id="rhFundBtn" style="flex:1">⚡ Swap SOL → Robinhood ETH</button></div>'+
-      // Reverse: cash the Robinhood ETH back out to this wallet's own Solana address. Blank amount = cash out all (keeps a little ETH for gas).
-      '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:12px 0 6px">Cash out ETH → SOL (back to this wallet)</div>'+
-      '<div style="display:flex;gap:8px"><input id="rhOutAmt" inputmode="decimal" placeholder="all" style="width:90px;flex:0 0 auto"><button class="wbtn ghost" id="rhOutBtn" style="flex:1">💸 Convert ETH → SOL</button></div>'+
-      '<div class="mut" style="font-size:10px;margin:4px 0 0">Sends the ETH cross-chain and lands as SOL in this same wallet (leaves ~0.0003 ETH for gas). Blank = cash out all.</div>'+
+      (toks.length?'<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Coins you hold here</div><div id="rhHoldings">'+toks.map(t=>'<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:5px" data-addr="'+esc(t.address)+'">'+(t.iconUrl?'<img src="'+esc(t.iconUrl)+'" style="width:18px;height:18px;border-radius:50%">':'🪙')+'<b>'+esc(t.symbol||"?")+'</b><span class="mut">'+esc(Number(t.uiAmount||0).toLocaleString())+'</span><span class="mut rhHoldVal" style="margin-left:auto">—</span></div>').join("")+'</div>':'<p class="mut" style="font-size:11px;margin:0 0 8px">No coins held here right now. Completed Robinhood sells return to this wallet as SOL automatically.</p>')+
+      '<div class="mut" style="font-size:10px;margin:10px 0 0">Buy normally with SOL. Sells and automated exits settle back to SOL without another button.</div>'+
       '<div id="rhDrainAlert"></div>'+
       '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px">Recent Robinhood activity</div><div id="rhActivity"><div class="loading"><span class="spin"></span></div></div>';
-    const fb=$("#rhFundBtn");if(fb)fb.onclick=()=>rhFundWithSol(idx);
-    const ob=$("#rhOutBtn");if(ob)ob.onclick=()=>rhBridgeToSol(idx);
     const ws=$("#rhWalSel");if(ws){ws.value=idx;ws.onchange=()=>{state._rhWalIdx=ws.value;loadRhWalletPanel();};}
     // Live USD on the ETH balance + each holding (DexScreener over the user's IP; best-effort).
     if(toks.length)dexTokensBatch(toks.map(t=>t.address)).then(by=>{const byLc={};Object.keys(by||{}).forEach(k=>byLc[k.toLowerCase()]=by[k]);document.querySelectorAll("#rhHoldings [data-addr]").forEach(row=>{const o=byLc[String(row.dataset.addr).toLowerCase()];const t=toks.find(x=>String(x.address).toLowerCase()===String(row.dataset.addr).toLowerCase());const v=o&&o.price>0&&t?o.price*Number(t.uiAmount||0):0;const el=row.querySelector(".rhHoldVal");if(el&&v>0)el.textContent=fmtUsd(v);});});
@@ -1073,8 +1067,8 @@
     const rows=(ok&&d&&d.activity)||[];
     if(!rows.length){el.innerHTML='<p class="mut" style="font-size:11px">No Robinhood trades yet. Buys, sells and auto-sells (TP/SL) will show here with the exact ETH that moved + a link to the on-chain tx.</p>';return;}
     const ago=(iso)=>{const s=(Date.now()-Date.parse(iso||0))/1000;return !isFinite(s)?"":s<90?Math.round(s)+"s":s<5400?Math.round(s/60)+"m":s<129600?Math.round(s/3600)+"h":Math.round(s/86400)+"d";};
-    const label=(r)=>r.kind==="buy"?'🟢 Bought '+esc(r.symbol||"coin"):r.kind==="sell"?'🔴 Sold '+esc(r.symbol||"coin"):r.kind==="auto-sell"?'🎯 Auto-sold '+esc(r.symbol||"coin")+' <span class="mut">('+esc(r.trigger||"exit")+(r.movePct?' '+esc(r.movePct)+'%':'')+')</span>':r.kind==="fund"?'⚡ Funded with SOL':r.kind==="launch"?'🚀 Launched':esc(r.kind);
-    const detail=(r)=>r.kind==="fund"?(r.amountSol?r.amountSol+' SOL → ~'+(r.quotedEth||"?")+' ETH':''):(r.out?'→ '+Number(r.out).toLocaleString(undefined,{maximumFractionDigits:6})+(r.kind==="buy"?' tokens':' ETH'):'');
+    const label=(r)=>r.kind==="buy"?'🟢 Bought '+esc(r.symbol||"coin"):r.kind==="sell"?'🔴 Sold '+esc(r.symbol||"coin"):r.kind==="auto-sell"?'🎯 Auto-sold '+esc(r.symbol||"coin")+' <span class="mut">('+esc(r.trigger||"exit")+(r.movePct?' '+esc(r.movePct)+'%':'')+')</span>':r.kind==="cashout"?'🔁 Returned to SOL':r.kind==="fund"?'⚡ Funded with SOL':r.kind==="launch"?'🚀 Launched':esc(r.kind);
+    const detail=(r)=>r.kind==="cashout"?(r.outSol?'→ '+Number(r.outSol).toLocaleString(undefined,{maximumFractionDigits:9})+' SOL':''):(r.kind==="fund"?(r.amountSol?r.amountSol+' SOL → routed':''):(r.out?'→ '+Number(r.out).toLocaleString(undefined,{maximumFractionDigits:6})+(r.kind==="buy"?' tokens':' sold'):''));
     el.innerHTML=rows.map(r=>'<div style="display:flex;align-items:center;gap:8px;font-size:11px;border-bottom:1px solid var(--border);padding:6px 2px"><span style="flex:1;min-width:0">'+label(r)+' <span class="mut">'+detail(r)+'</span></span><span class="mut">'+ago(r.at)+'</span>'+(r.url?' <a href="'+esc(r.url)+'" target="_blank" rel="noopener noreferrer">tx↗</a>':'')+'</div>').join("");
   }
   async function rhFundWithSol(idx){

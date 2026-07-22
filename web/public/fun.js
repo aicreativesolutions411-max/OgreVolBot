@@ -1832,7 +1832,7 @@
     const buyFields = `<div class="field"><label>${rh ? "Spend SOL · auto-converts for Robinhood" : "Buy amount · SOL"}</label><input data-trade-amount inputmode="decimal" value="${escapeHtml(amount)}" aria-label="Trade amount"><div class="amount-chips">${(rh ? ["0.01", "0.025", "0.05", "0.1"] : ["0.05", "0.1", "0.25", "0.5"]).map((value) => `<button type="button" data-amount-chip="${value}">${value}</button>`).join("")}</div></div>
       <div class="field-row"><div class="field"><label>Take profit %</label><input data-trade-tp inputmode="decimal" value="${escapeHtml(tp)}" placeholder="off"></div><div class="field"><label>Stop loss %</label><input data-trade-sl inputmode="decimal" value="${escapeHtml(sl)}" placeholder="off"></div></div>
       ${!rh ? `<details ${preset.ladder || preset.trail ? "open" : ""}><summary style="color:var(--muted);font-size:11px">Ladder, trailing stop & break-even</summary><input type="hidden" data-trade-ladder value="${escapeHtml(preset.ladder || "")}"><div class="ladder-presets"><button type="button" data-ladder-preset="" class="${preset.ladder ? "" : "active"}">Single TP</button><button type="button" data-ladder-preset="smart" class="${preset.ladder === "smart" ? "active" : ""}">25% ladder</button><button type="button" data-ladder-preset="fast" class="${preset.ladder === "fast" ? "active" : ""}">Fast ladder</button></div><div class="field-row"><div class="field"><label>Trailing stop %</label><input data-trade-trail inputmode="decimal" value="${escapeHtml(preset.trail || "")}" placeholder="off"></div><div class="field"><label>Arm after +%</label><input data-trade-trail-arm inputmode="decimal" value="${escapeHtml(preset.trailArm || "")}" placeholder="auto"></div></div><label class="check-row"><input type="checkbox" data-trade-be ${preset.be ? "checked" : ""}> Move stop to break-even after TP1</label></details>` : '<p class="fineprint">Your SOL wallet funds this trade automatically. No separate Robinhood wallet setup or manual ETH conversion is required.</p>'}`;
-    const sellFields = `<div class="field"><label>Sell percent</label><input data-trade-percent inputmode="numeric" value="100"><div class="amount-chips">${[25, 50, 75, 100].map((value) => `<button type="button" data-percent-chip="${value}">${value}%</button>`).join("")}</div></div>${rh ? '<label class="check-row"><input type="checkbox" data-rh-cashout checked> Convert received ETH back to SOL automatically</label>' : ""}`;
+    const sellFields = `<div class="field"><label>Sell percent</label><input data-trade-percent inputmode="numeric" value="100"><div class="amount-chips">${[25, 50, 75, 100].map((value) => `<button type="button" data-percent-chip="${value}">${value}%</button>`).join("")}</div></div>${rh ? '<p class="fineprint">Sale proceeds return to this SOL wallet automatically.</p>' : ""}`;
     openSheet(`<div class="sheet-title"><img src="${escapeHtml(coinImage(coin))}" alt=""><div><h2>${escapeHtml(coin.symbol || short(key))}</h2><p>${rh ? "Robinhood · one SOL wallet" : "Solana"} · ${escapeHtml(short(key))}</p></div></div>
       <div class="trade-toggle"><button class="${side === "buy" ? "active buy" : ""}" type="button" data-sheet-side="buy">Buy</button><button class="${side === "sell" ? "active sell" : ""}" type="button" data-sheet-side="sell">Sell</button></div>
       <div class="field"><label>Wallet</label><select data-trade-wallet>${wallets}</select></div>${side === "buy" ? buyFields : sellFields}
@@ -2202,7 +2202,7 @@
     const side = button.dataset.side, coin = state.selected || {}, key = coinKey(coin), walletIndex = Number($("[data-trade-wallet]")?.value || state.activeWallet), rh = coin.chain === "robinhood";
     if (state.tradeBusy) return;
     state.tradeBusy = true; button.disabled = true; button.textContent = "Submitting…";
-    let result, cashoutWarning = false;
+    let result;
     try {
       if (!(await ensureTradeReady())) return;
       if (rh) {
@@ -2211,10 +2211,6 @@
         else body.percent = $("[data-trade-percent]").value;
         result = await post("/api/web/rh/trade", body);
         if (result.ok && result.data?.ok && side === "buy" && (Number($("[data-trade-tp]")?.value) > 0 || Number($("[data-trade-sl]")?.value) > 0)) await post("/api/web/rh/guards", { walletIndex, tokenAddress: key, symbol: coin.symbol || "", takeProfitPct: $("[data-trade-tp]").value, stopLossPct: $("[data-trade-sl]").value, sellPercent: "100", entryPriceUsd: coin.priceUsd || 0 });
-        if (result.ok && result.data?.ok && side === "sell" && $("[data-rh-cashout]")?.checked) {
-          const cashout = await post("/api/web/rh/bridge-to-sol", { walletIndex, amountEth: "all", tradeAttemptId: attemptId("fun-rh-cashout") });
-          if (!cashout.ok || !cashout.data?.ok) cashoutWarning = true;
-        }
       } else {
         const body = { tokenMint: key, walletIndex, tradeAttemptId: attemptId("fun-sol"), slippageBps: side === "sell" ? "1200" : "500" };
         if (side === "buy") {
@@ -2225,7 +2221,7 @@
         } else body.percent = $("[data-trade-percent]").value;
         result = await post(`/api/web/trade/${side}`, body);
       }
-      if (result.ok && result.data?.ok) { toast(cashoutWarning ? "Sold; ETH cash-out remains available in Wallet." : `${side === "buy" ? "Buy" : "Sell"} submitted`, cashoutWarning); closeSheet(); setTimeout(async () => { await Promise.all([loadWallets(true), loadPositions({ force: true })]); renderCoinShell(); }, 2200); }
+      if (result.ok && result.data?.ok) { toast(side === "sell" && rh && result.data?.solCashout?.outSol ? `Sold · ${result.data.solCashout.outSol} SOL returned` : `${side === "buy" ? "Buy" : "Sell"} submitted`); closeSheet(); setTimeout(async () => { await Promise.all([loadWallets(true), loadPositions({ force: true })]); renderCoinShell(); }, 2200); }
       else toast(result.data?.message || result.data?.error || `${side} failed`, true);
     } finally { state.tradeBusy = false; button.disabled = false; button.textContent = `${side === "buy" ? "Buy" : "Sell"} ${coin.symbol || "coin"}`; }
   }
