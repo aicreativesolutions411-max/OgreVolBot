@@ -4354,7 +4354,9 @@
     setActiveView("v-volume");subbarTool("📈 Volume Bot");clearVolPoll();if(state.token)await refreshWallets();if(state.route!=="volume")return;
     $("#v-volume").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>📈 Volume Bot</h3><p class="sub">Runs in the <b>background</b> on a rolling pool of fresh <b>ghost wallets</b> — buys on one wallet, sells a <b>partial random amount</b> from a <b>different older</b> wallet, sells the rest a few trades later, then sweeps SOL back and discards it. Varied sizes, organic tape, nothing to clean up, no wallet cap.</p>'+
       '<div class="field"><label>Token contract (CA)</label><input id="vlCa" placeholder="Paste a Solana or Robinhood (0x…) CA"><span class="swhint" style="margin-top:5px;display:block">Solana or Robinhood — a 0x… address opens the Robinhood volume bot automatically.</span></div>'+
-      '<div class="field"><label>Fund from wallet</label>'+walletSelectHtml("vlSrc")+'<span class="swhint" style="margin-top:5px;display:block">It spawns unlimited ghost wallets in the background and runs until this wallet\'s SOL is spent (or you Stop). Fund it with however much you want it to push.</span></div>'+
+      '<div class="field"><label>Fund from wallet</label>'+walletSelectHtml("vlSrc")+'<span class="swhint" style="margin-top:5px;display:block">Choose SOL like before, or seed the run from a token this wallet already holds.</span></div>'+
+      '<div class="field row2"><div><label>Start with</label><select id="vlFunding"><option value="sol" selected>SOL balance</option><option value="token">Held target token</option></select></div><div id="vlTokenSeedWrap" style="display:none"><label>Token slice to seed</label><select id="vlTokenSeed"><option value="10">10%</option><option value="25" selected>25%</option><option value="50">50%</option></select></div></div>'+
+      '<span class="swhint" id="vlFundingNote" style="margin:-6px 0 10px;display:block">SOL mode runs until this wallet\'s available SOL is low.</span>'+
       '<div class="field row2"><div><label>Min buy (SOL)</label><input id="vlBuyMin" inputmode="decimal" value="0.012"></div><div><label>Max buy (SOL)</label><input id="vlBuyMax" inputmode="decimal" value="0.03"></div></div>'+
       '<div class="field row2"><div><label>Speed</label><select id="vlSpeed"><option value="low">Low — calm</option><option value="med" selected>Medium</option><option value="high">High — fast</option></select></div><div><label>Chart shape</label><select id="vlShape"><option value="steady">Steady</option><option value="waves">Waves</option><option value="organic" selected>Organic</option><option value="uptrend">Uptrend</option></select></div></div>'+
       '<div class="field"><label>Slippage (bps)</label><input id="vlSlip" inputmode="numeric" value="600"></div>'+
@@ -4363,6 +4365,13 @@
       '<div id="vlStatus" style="margin-top:14px"></div></div></div>';
     $("#vlGo").onclick=()=>startVolumeBot();
     $("#vlStop").onclick=()=>stopVolumeBot();
+    $("#vlFunding").onchange=()=>{
+      const tokenFunding=$("#vlFunding").value==="token";
+      $("#vlTokenSeedWrap").style.display=tokenFunding?"":"none";
+      $("#vlFundingNote").textContent=tokenFunding
+        ?"The selected slice sells once to seed protected rolling capital. A small SOL gas balance is required; recovered value returns as SOL."
+        :"SOL mode runs until this wallet's available SOL is low.";
+    };
     pollVolumeBot();
   }
   // Auto round-trip UI (Solana) — lives in a Wallet fold now, not the Volume page. Same #art* ids so
@@ -4447,9 +4456,13 @@
     const staggerPattern=shape==="uptrend"?"ladder":shape;
     const buyBias=shape==="uptrend"?75:55;
     const src=Number(($("#vlSrc")||{}).value||state.activeWallet);
+    const sourceWallet=(state.wallets||[]).find(w=>Number(w.index)===src);
+    const fundingAsset=(($("#vlFunding")||{}).value)==="token"?"token":"sol";
+    const tokenSeedPercent=fundingAsset==="token"?Number((($("#vlTokenSeed")||{}).value)||"25"):0;
     const bMin=Number($("#vlBuyMin").value.trim()||"0.012"),bMax=Number($("#vlBuyMax").value.trim()||"0.03");
+    if(fundingAsset==="token"&&!confirm("Sell "+tokenSeedPercent+"% of this wallet's current target-token balance once to seed the volume bot? Existing SOL stays protected and recovered value returns as SOL."))return;
     const goBtn=$("#vlGo");goBtn.disabled=true;goBtn.textContent="Starting…";
-    const {ok,status,d}=await jpost("/api/web/volume-bot/start",{tokenMint:ca,sourceWalletIndex:src,buyAmountSol:String(((bMin+bMax)/2)||0.02),minBuyAmountSol:String(bMin),maxBuyAmountSol:String(bMax),poolSize:"3",sellPercent:"100",buyBias:String(buyBias),delaySecs:String(delaySecs),slippageBps:Number($("#vlSlip").value.trim()||"600"),rollingWallets:true,offsetSell:true,keepDust:true,sweepBack:true,staggerPattern:staggerPattern,maxRounds:"250",tradeAttemptId:attemptId()});
+    const {ok,status,d}=await jpost("/api/web/volume-bot/start",{tokenMint:ca,sourceWalletIndex:src,sourceWalletPublicKey:(sourceWallet&&sourceWallet.publicKey)||"",fundingAsset:fundingAsset,tokenSeedPercent:tokenSeedPercent,buyAmountSol:String(((bMin+bMax)/2)||0.02),minBuyAmountSol:String(bMin),maxBuyAmountSol:String(bMax),poolSize:"3",sellPercent:"100",buyBias:String(buyBias),delaySecs:String(delaySecs),slippageBps:Number($("#vlSlip").value.trim()||"600"),rollingWallets:true,offsetSell:true,keepDust:true,sweepBack:true,staggerPattern:staggerPattern,maxRounds:"250",tradeAttemptId:attemptId()});
     goBtn.disabled=false;goBtn.textContent="▶ Start volume bot";
     // Don't wipe the token on a transient 401 (orphan-on-restore) — route to Wallet. (`go` here was the
     // BUTTON var, so the old `go("wallet")` even threw instead of navigating.)
@@ -4478,7 +4491,7 @@
       const logs=(b.log||[]).slice(-14).reverse().map(l=>'<div style="padding:2px 0;color:var(--muted)">'+esc(typeof l==="string"?l:(l.message||l.text||JSON.stringify(l)))+'</div>').join("");
       const action=running?(String(b.stage||"").toLowerCase()==="sweeping"?(b.canRelease===false?'<button class="wbtn ghost" style="width:100%;margin-top:8px" disabled>Settling last action…</button>':'<button class="wbtn ghost" style="width:100%;margin-top:8px" data-vl-release="'+esc(b.id)+'">Halt &amp; Release</button>'):'<button class="wbtn ghost" style="width:100%;margin-top:8px" data-vl-stop="'+esc(b.id)+'">Stop &amp; sweep</button>'):'';
       return '<div class="wbox" style="margin:0 0 10px"><div style="display:flex;align-items:center;gap:9px"><b>'+esc(b.shortMint||short(b.tokenMint))+'</b><span class="chip '+(running?"g":"")+'">'+esc(running?(b.stage||"running"):"done")+'</span><span class="mut" style="font-size:11px;margin-left:auto">round '+esc(b.currentCycle||0)+'/'+esc(b.cycles||0)+'</span></div>'+
-        '<div class="mut" style="font-size:11px;margin-top:5px">buys '+esc(st.buys||0)+' · sells '+esc(st.sells||0)+' · vol ◎'+esc(Number(st.volumeSol||0).toFixed(3))+(st.sweptSol?' · swept ◎'+esc(Number(st.sweptSol).toFixed(3)):'')+'</div>'+
+        '<div class="mut" style="font-size:11px;margin-top:5px">'+(b.fundingAsset==="token"?esc(Number(b.tokenSeedPercent||0))+'% held token':'SOL')+' · buys '+esc(st.buys||0)+' · sells '+esc(st.sells||0)+' · vol ◎'+esc(Number(st.volumeSol||0).toFixed(3))+(st.sweptSol?' · swept ◎'+esc(Number(st.sweptSol).toFixed(3)):'')+'</div>'+
         (logs?'<div style="margin-top:8px;max-height:160px;overflow:auto;font-size:11px;font-family:var(--mono)">'+logs+'</div>':'')+action+'</div>';
     }).join("");
   }

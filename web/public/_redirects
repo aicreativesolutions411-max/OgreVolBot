@@ -17,6 +17,8 @@
 /ca/*           /coin-site.html        200
 /coin/*         /coin-site.html        200
 /rewards/*      /partner-rewards.html  200
+/balls          /balls.html            200
+/balls/*        /balls.html            200
 /launch-coin    /#launch               302
 /quick          /fun.html              200
 /quick/*        /fun.html              200

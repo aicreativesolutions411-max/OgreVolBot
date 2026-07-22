@@ -1501,7 +1501,8 @@ test("Buy bot keeps transaction price and market cap aligned on both chains", ()
   const first = (...values) => values.map(Number).find((value) => Number.isFinite(value) && value > 0) || null;
   const resolve = Function("firstMeaningfulNumber", `return ({
     eventPriceUsd = 0, eventMarketCapUsd = 0, nativeAmount = 0, tokens = 0,
-    nativeUsd = 0, scanPriceUsd = 0, scanMarketCapUsd = 0, supply = 0
+    nativeUsd = 0, scanPriceUsd = 0, scanMarketCapUsd = 0, supply = 0,
+    preferReportedSupply = false
   } = {}) => {${body}}`)(first);
 
   // A direct trade-feed price moves the scan's implied stable supply to the new price.
@@ -1539,6 +1540,17 @@ test("Buy bot keeps transaction price and market cap aligned on both chains", ()
     supply: 1_000_000_000,
   }), {
     priceUsd: 0.00004, marketCapUsd: 36_000, supply: 900_000_000, executionPriceUsd: 0
+  });
+  // Pump's live page uses the full bonding-curve supply. A smaller implied supply from a stale/indexed
+  // source must not turn its authoritative $8K post-trade MC into a ~$6K card.
+  assert.deepEqual(resolve({
+    eventMarketCapUsd: 8_000,
+    scanPriceUsd: 0.000008,
+    scanMarketCapUsd: 6_000,
+    supply: 1_000_000_000,
+    preferReportedSupply: true,
+  }), {
+    priceUsd: 0.000008, marketCapUsd: 8_000, supply: 1_000_000_000, executionPriceUsd: 0
   });
   assert.deepEqual(resolve({
     nativeAmount: 0.01,
@@ -1592,6 +1604,9 @@ test("Buy bot derives Pump supply and websocket price without a guessed one-bill
   assert.match(socketTrade, /\(solAmount \* solUsd\) \/ tokenAmount/);
   assert.match(socketTrade, /mcSol \* solUsd/);
   assert.doesNotMatch(socketTrade, /1_000_000_000/);
+  const post = functionBody(serverSource, "postGroupBuy");
+  assert.match(post, /getPumpFunTokenMetadata\(mint, \{ force: true, cacheTtlMs: 0/);
+  assert.match(post, /preferReportedSupply: onCurve/);
 });
 
 test("Robinhood buy watcher is decimal-safe, lossless, concurrent, and near-live", () => {
@@ -1645,6 +1660,19 @@ test("Buy Bot saves and renders Telegram custom emoji entities with a safe fallb
   assert.match(functionBody(serverSource, "postGroupBuy"), /groupBuyEmojiMarkup\(e, count\)/);
   assert.match(functionBody(serverSource, "postGroupBuyRh"), /groupBuyEmojiMarkup\(e, count\)/);
   assert.match(functionBody(serverSource, "sendGroupAlertMedia"), /stripTelegramCustomEmojiHtml\(caption\)/);
+});
+
+test("Buy Bot custom media is atomic, sticky, and retried on temporary Telegram failures", () => {
+  const command = functionBody(serverSource, "handleGroupBotCommand");
+  const setter = functionBody(serverSource, "setGroupBotMedia");
+  const sender = functionBody(serverSource, "sendGroupAlertMedia");
+  assert.match(command, /setGroupBotMedia\(chatId, "customMedia", media\)/);
+  assert.match(command, /setGroupBotMedia\(chatId, "raidMedia", media\)/);
+  assert.match(setter, /mutateGroupBot\(\(store\) =>/);
+  assert.match(setter, /e\[`\$\{field\}UpdatedAt`\] = Date\.now\(\)/);
+  assert.match(functionBody(serverSource, "groupAlertMediaFor"), /entry\.customMedia/);
+  assert.match(sender, /mediaError && groupBuyAlertRetryMs\(mediaError\)/);
+  assert.match(sender, /return \{ result: null, hasMedia: false, error: mediaError \}/);
 });
 
 test("Robinhood buy cards keep complete market rows during intermittent scan gaps", () => {
@@ -1890,6 +1918,8 @@ test("settings menu is multi-level: home -> per-bot sub-menus, clickable toggles
   assert.match(serverSource, /function groupBotModuleView\(/);
   assert.match(serverSource, /async function groupBotRenderModule\(/);
   const command = functionBody(serverSource, "handleGroupBotCommand");
+  assert.match(command, /\(s\|settings\|buybot\|raid\|rose\|scan\)/); // /s opens group settings too
+  assert.match(command, /m\[1\]\.toLowerCase\(\) === "s" \? "settings"/);
   assert.match(command, /group-settings-command:\$\{message\.message_id\}/); // one menu per Telegram update
   const cb = functionBody(serverSource, "handleGroupBotCallback");
   assert.match(cb, /gb:m:\(buy\|raid\|rose\|scan/);   // open a module sub-menu
@@ -1898,6 +1928,45 @@ test("settings menu is multi-level: home -> per-bot sub-menus, clickable toggles
   assert.match(cb, /gb:media:\(buy\|raid\)/);           // media hint
   assert.match(serverSource, /async function applyGbInput\(/);
   assert.match(serverSource, /if \(await applyGbInput\(message, userId\)/); // wired into the router
+});
+
+test("group Buy Bot settings load once and recover without destructive empty-store fallback", () => {
+  const read = functionBody(serverSource, "readGroupBot");
+  const load = functionBody(serverSource, "loadGroupBotStore");
+  const write = functionBody(serverSource, "writeGroupBot");
+  const merge = functionBody(serverSource, "mergeGroupBotStore");
+  const commands = functionBody(serverSource, "registerTelegramBotCommands");
+
+  assert.match(serverSource, /GROUP_BOT_BACKUP_FILE/);
+  assert.match(read, /groupBotLoadPromise/);
+  assert.match(load, /recovered persistent group settings from backup/);
+  assert.match(load, /primaryError\?\.code === "ENOENT" && backupError\?\.code === "ENOENT"/);
+  assert.doesNotMatch(read, /catch\s*\{\s*groupBotCache\s*=\s*\{\s*groups:\s*\{\}/);
+  assert.match(write, /readJson\(GROUP_BOT_FILE\)/);
+  assert.match(write, /mergeGroupBotStore\(persisted, snapshot\)/);
+  assert.match(write, /writeJsonFile\(GROUP_BOT_BACKUP_FILE, next\)/);
+  assert.match(merge, /features: \{ \.\.\.\(prior\.features \|\| \{\}\), \.\.\.\(next\.features \|\| \{\}\) \}/);
+  assert.match(merge, /\["customMedia", "raidMedia"\]/);
+  assert.match(merge, /priorUpdatedAt > nextUpdatedAt/);
+  assert.match(merge, /keepLegacyCustom/);
+  const mergeStores = Function("validGroupBotStore", `return (persisted, incoming) => {${merge}}`)(
+    (value) => Boolean(value && typeof value === "object" && value.groups && typeof value.groups === "object" && !Array.isArray(value.groups))
+  );
+  const custom = { type: "photo", value: "telegram-custom-file-id" };
+  const kept = mergeStores(
+    { groups: { "-100": { customMedia: custom, customMediaUpdatedAt: 200 } } },
+    { groups: { "-100": { customMedia: null, customMediaUpdatedAt: 100 } } }
+  );
+  assert.deepEqual(kept.groups["-100"].customMedia, custom);
+  const legacyKept = mergeStores(
+    { groups: { "-200": { customMedia: custom } } },
+    { groups: { "-200": { customMedia: null } } }
+  );
+  assert.deepEqual(legacyKept.groups["-200"].customMedia, custom);
+  const cleared = mergeStores(kept, { groups: { "-100": { customMedia: null, customMediaUpdatedAt: 300 } } });
+  assert.equal(cleared.groups["-100"].customMedia, null);
+  assert.match(commands, /command: "s", description: "Group bot settings \(admins\)"/);
+  assert.match(commands, /groupCommands\.filter\(\(item\) => item\.command !== "s"\)/);
 });
 
 test("group admins can call admins or recently seen members without flooding", () => {
@@ -2040,7 +2109,7 @@ test("Shield folds into Rose: scam/ghost/impersonator/auto-whitelist (all off by
 
 test("raid has its OWN media, separate from buy art", () => {
   assert.match(serverSource, /\/setraidmedia/);
-  assert.match(serverSource, /e\.raidMedia = media/);
+  assert.match(functionBody(serverSource, "handleGroupBotCommand"), /setGroupBotMedia\(chatId, "raidMedia", media\)/);
   // startRaidFromDraft prefers raidMedia, falls back to customMedia.
   assert.match(functionBody(serverSource, "startRaidFromDraft"), /ge\.raidMedia[\s\S]*ge\.customMedia/);
 });
@@ -4436,9 +4505,11 @@ test("Buy Bot posts one persisted active-coin statistics recap every eight hours
   assert.match(text, /Biggest buy observed 24H/);
   assert.match(text, /Smart-wallet buys observed 24H/);
   assert.match(tick, /groupBotFeatureOn\(entry, "buybot"\)/);
-  assert.match(tick, /entry\.buyStats = \{ token, lastAt: now \}/);
+  assert.match(tick, /statsPatches\.set\(String\(chatId\), \{ token, lastAt: now \}\)/);
   assert.match(tick, /now - Number\(entry\.buyStats\.lastAt\) >= GROUP_BUY_STATS_INTERVAL_MS/);
   assert.match(tick, /if \(!delivered\) return/);
+  assert.match(tick, /mutateGroupBot\(\(latest\) =>/);
+  assert.match(tick, /entry\.buyStats = buyStats/);
   assert.match(queue, /return delivered/);
   assert.match(start, /setInterval\(\(\) => \{ void pollGroupBuyStats\(\); \}, 5 \* 60_000\)/);
 });

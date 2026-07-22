@@ -382,7 +382,10 @@ export async function rhCollectSushiPositionFees({
 // Uniswap V3 is the DEX on Robinhood Chain. To make a freshly-launched coin BUYABLE we create a
 // TOKEN/WETH pool (1% fee) and seed it with the creator's ETH + tokens. Addresses read off-chain.
 export const RH_UNIV3 = {
+  factory: "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA",
   positionManager: "0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3",
+  swapRouter: "0xCaf681a66D020601342297493863E78C959E5cb2",
+  quoterV2: "0x33e885eD0Ec9bF04EcfB19341582aADCb4c8A9E7",
   weth: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
   fee: 10000, tickSpacing: 200,
 };
@@ -442,7 +445,7 @@ export async function rhCreatePoolAndSeed({ solanaSecretKey, tokenAddress, ethAm
   // Resolve the pool address from the factory.
   let pool = "";
   try {
-    const fac = new ethers.Contract("0x1f7d7550b1b028f7571e69a784071f0205fd2efa", ["function getPool(address,address,uint24) view returns (address)"], wallet.provider);
+    const fac = new ethers.Contract(RH_UNIV3.factory, ["function getPool(address,address,uint24) view returns (address)"], wallet.provider);
     pool = await fac.getPool(token0, token1, FEE);
   } catch { /* best effort */ }
   return {
@@ -826,14 +829,15 @@ export async function rhImpliedPriceUsd(tokenAddress, probeAddress) {
       fromCurrency: "0x0000000000000000000000000000000000000000",
       toCurrency: tokenAddress,
       amountRaw: (ethers.parseEther(String(probeEth))).toString()
-    }).catch(async (error) => {
-      if (!/no trading route|no routes found/i.test(String(error?.message))) return null;
-      return sushiQuoteRhSwap({
+    }).catch(async () => {
+      const input = {
         address: probeAddress,
         fromCurrency: "0x0000000000000000000000000000000000000000",
         toCurrency: tokenAddress,
         amountRaw: ethers.parseEther(String(probeEth)).toString()
-      }).catch(() => ({ noPool: true }));
+      };
+      try { return await uniswapQuoteRhSwap(input); }
+      catch { return sushiQuoteRhSwap(input).catch(() => ({ noPool: true })); }
     })
   ]);
   if (!quote || quote.noPool) return quote && quote.noPool ? { noPool: true } : null;
@@ -883,26 +887,80 @@ export async function rhAddressTokens(address) {
 export const RELAY_SOLANA_CHAIN_ID = 792703809;
 const RELAY_API = "https://api.relay.link";
 
-export async function relayQuoteSolToRhEth({ solanaAddress, evmRecipient, lamports }) {
-  const response = await fetch(`${RELAY_API}/quote`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user: solanaAddress,
-      recipient: evmRecipient,
-      originChainId: RELAY_SOLANA_CHAIN_ID,
-      destinationChainId: RH_CHAIN_ID,
-      originCurrency: "11111111111111111111111111111111",
-      destinationCurrency: "0x0000000000000000000000000000000000000000",
-      amount: String(lamports),
-      tradeType: "EXACT_INPUT"
-    }),
-    signal: AbortSignal.timeout ? AbortSignal.timeout(20_000) : undefined
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.message) {
-    throw new Error(`Relay quote failed: ${String(data.message || `HTTP ${response.status}`).slice(0, 240)}`);
+async function relayPostQuote(body, label = "Relay quote") {
+  const endpoints = ["/quote/v2", "/quote"];
+  for (let index = 0; index < endpoints.length; index += 1) {
+    const endpoint = endpoints[index];
+    const response = await fetch(`${RELAY_API}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout ? AbortSignal.timeout(20_000) : undefined
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok && !data.message) return data;
+    // Keep the legacy endpoint only as an availability fallback. A real v2
+    // route/liquidity rejection must not trigger a duplicate quote request.
+    if (index === 0 && [404, 405, 501].includes(response.status)) continue;
+    const code = String(data.errorCode || data.code || "").trim();
+    const detail = String(data.message || data.error || `HTTP ${response.status}`).slice(0, 220);
+    const error = new Error(`${label} failed${code ? ` (${code})` : ""}: ${detail}`);
+    error.statusCode = response.status >= 400 && response.status < 500 ? 400 : 502;
+    error.relayErrorCode = code;
+    throw error;
   }
+  throw new Error(`${label} failed: Relay quote service is unavailable.`);
+}
+
+export function rhBuySpendPlanFromWei({
+  availableWei,
+  quotedWei,
+  maxFeePerGasWei = 0n,
+  userReserveWei = 0n,
+  gasUnits = 800_000n
+}) {
+  const available = BigInt(availableWei || 0);
+  const quoted = BigInt(quotedWei || 0);
+  const maxFee = BigInt(maxFeePerGasWei || 0);
+  const requestedReserve = BigInt(userReserveWei || 0);
+  const gasBudget = BigInt(gasUnits || 0);
+  const floorReserve = ethers.parseEther("0.00004");
+  const liveReserve = maxFee > 0n && gasBudget > 0n ? maxFee * gasBudget : 0n;
+  const reserveWei = [floorReserve, liveReserve, requestedReserve]
+    .reduce((max, value) => value > max ? value : max, 0n);
+  const spendableWei = available > reserveWei ? available - reserveWei : 0n;
+  const quotedTargetWei = quoted > 0n ? (quoted * 96n) / 100n : spendableWei;
+  const spendWei = spendableWei < quotedTargetWei ? spendableWei : quotedTargetWei;
+  return {
+    spendWei: spendWei.toString(),
+    spendEth: ethers.formatEther(spendWei),
+    gasReserveWei: reserveWei.toString(),
+    gasReserveEth: ethers.formatEther(reserveWei),
+    maxFeePerGasWei: maxFee.toString()
+  };
+}
+
+export async function rhBuySpendPlan({ availableWei, quotedEth, userReserveEth = 0, gasUnits = 800_000n, rpcUrl }) {
+  const feeData = await rhProvider(rpcUrl).getFeeData().catch(() => ({}));
+  const maxFeePerGasWei = feeData.maxFeePerGas || feeData.gasPrice || 0n;
+  let quotedWei = 0n;
+  let userReserveWei = 0n;
+  try { quotedWei = ethers.parseEther(String(quotedEth || 0)); } catch { /* quote remains zero */ }
+  try { userReserveWei = ethers.parseEther(String(Math.max(0, Number(userReserveEth) || 0))); } catch { /* live reserve wins */ }
+  return rhBuySpendPlanFromWei({ availableWei, quotedWei, maxFeePerGasWei, userReserveWei, gasUnits });
+}
+
+export async function relayQuoteSolToRhEth({ solanaAddress, evmRecipient, lamports }) {
+  const data = await relayPostQuote({
+    user: solanaAddress,
+    recipient: evmRecipient,
+    originChainId: RELAY_SOLANA_CHAIN_ID,
+    destinationChainId: RH_CHAIN_ID,
+    originCurrency: "11111111111111111111111111111111",
+    destinationCurrency: "0x0000000000000000000000000000000000000000",
+    amount: String(lamports),
+    tradeType: "EXACT_INPUT"
+  }, "SOL to Robinhood quote");
   const item = data.steps?.[0]?.items?.[0];
   if (!item?.data?.instructions?.length) throw new Error("Relay quote returned no Solana transaction to sign.");
   return {
@@ -927,28 +985,16 @@ export async function relayCheckStatus(checkEndpoint) {
 // chain's live pools; sells come back as TWO sequential txs (ERC-20 approve, then swap) — live-verified
 // both directions (0.001 ETH -> 6201 CAPTAIN; 5000 CAPTAIN -> 0.000786 ETH, ~-1.5% impact).
 export async function relayQuoteRhSwap({ address, fromCurrency, toCurrency, amountRaw }) {
-  const response = await fetch(`${RELAY_API}/quote`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user: address,
-      recipient: address,
-      originChainId: RH_CHAIN_ID,
-      destinationChainId: RH_CHAIN_ID,
-      originCurrency: fromCurrency,
-      destinationCurrency: toCurrency,
-      amount: String(amountRaw),
-      tradeType: "EXACT_INPUT"
-    }),
-    signal: AbortSignal.timeout ? AbortSignal.timeout(20_000) : undefined
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.message) {
-    const raw = String(data.message || `HTTP ${response.status}`);
-    throw new Error(/no routes found/i.test(raw)
-      ? "No trading route for this coin right now — its pool may be too new or too thin. Try again soon."
-      : `Swap quote failed: ${raw.slice(0, 200)}`);
-  }
+  const data = await relayPostQuote({
+    user: address,
+    recipient: address,
+    originChainId: RH_CHAIN_ID,
+    destinationChainId: RH_CHAIN_ID,
+    originCurrency: fromCurrency,
+    destinationCurrency: toCurrency,
+    amount: String(amountRaw),
+    tradeType: "EXACT_INPUT"
+  }, "Robinhood swap quote");
   const txs = [];
   for (const step of data.steps || []) {
     for (const item of step.items || []) {
@@ -1010,6 +1056,109 @@ export async function sushiQuoteRhSwap({ address, fromCurrency, toCurrency, amou
     outSymbol: String(outToken?.symbol || ""),
     impactPercent: Number.isFinite(Number(data.priceImpact)) ? String(Number(data.priceImpact) * 100) : "",
     venue: "sushiswap",
+  };
+}
+
+// Direct Uniswap V3 fallback for Robinhood pools Relay has not indexed yet.
+// The factory/router/quoter relationship is verified on-chain (factory() and
+// WETH9()), and every returned transaction is still simulated by the signer
+// in rhExecuteEvmSteps before anything is sent.
+export async function uniswapQuoteRhSwap({ address, fromCurrency, toCurrency, amountRaw, maxSlippage = 0.03, rpcUrl }) {
+  const zero = ethers.ZeroAddress;
+  const sender = ethers.getAddress(address);
+  const from = String(fromCurrency || "").toLowerCase() === zero.toLowerCase()
+    ? RH_UNIV3.weth
+    : ethers.getAddress(fromCurrency);
+  const to = String(toCurrency || "").toLowerCase() === zero.toLowerCase()
+    ? RH_UNIV3.weth
+    : ethers.getAddress(toCurrency);
+  if (from.toLowerCase() === to.toLowerCase()) throw new Error("Uniswap swap needs two different assets.");
+  const amountIn = BigInt(amountRaw || 0);
+  if (amountIn <= 0n) throw new Error("Uniswap swap amount must be above zero.");
+
+  const provider = rhProvider(rpcUrl);
+  const factory = new ethers.Contract(RH_UNIV3.factory, [
+    "function getPool(address tokenA,address tokenB,uint24 fee) view returns(address pool)"
+  ], provider);
+  const quoter = new ethers.Contract(RH_UNIV3.quoterV2, [
+    "function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns(uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)"
+  ], provider);
+  const candidates = (await Promise.all([10_000, 3_000, 500, 100].map(async (fee) => {
+    const pool = await factory.getPool(from, to, fee).catch(() => zero);
+    if (!pool || String(pool).toLowerCase() === zero.toLowerCase()) return null;
+    try {
+      const quoted = await quoter.quoteExactInputSingle.staticCall({
+        tokenIn: from,
+        tokenOut: to,
+        amountIn,
+        fee,
+        sqrtPriceLimitX96: 0
+      });
+      const amountOut = BigInt(quoted?.amountOut ?? quoted?.[0] ?? 0);
+      return amountOut > 0n ? { fee, pool, amountOut } : null;
+    } catch { return null; /* this pool cannot execute the requested size */ }
+  }))).filter(Boolean);
+  candidates.sort((a, b) => a.amountOut === b.amountOut ? 0 : (a.amountOut > b.amountOut ? -1 : 1));
+  const best = candidates[0];
+  if (!best) throw new Error("No executable Uniswap V3 pool for this Robinhood coin right now.");
+
+  const slippageBps = BigInt(Math.round(Math.max(0.001, Math.min(0.25, Number(maxSlippage) || 0.03)) * 10_000));
+  const amountOutMinimum = (best.amountOut * (10_000n - slippageBps)) / 10_000n;
+  const router = new ethers.Interface([
+    "function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96)) payable returns(uint256 amountOut)",
+    "function unwrapWETH9(uint256 amountMinimum,address recipient) payable",
+    "function multicall(bytes[] data) payable returns(bytes[] results)"
+  ]);
+  const nativeInput = String(fromCurrency || "").toLowerCase() === zero.toLowerCase();
+  const nativeOutput = String(toCurrency || "").toLowerCase() === zero.toLowerCase();
+  const swapRecipient = nativeOutput ? RH_UNIV3.swapRouter : sender;
+  const swapData = router.encodeFunctionData("exactInputSingle", [{
+    tokenIn: from,
+    tokenOut: to,
+    fee: best.fee,
+    recipient: swapRecipient,
+    amountIn,
+    amountOutMinimum,
+    sqrtPriceLimitX96: 0
+  }]);
+  const txs = [];
+  if (!nativeInput) {
+    const approve = new ethers.Interface(["function approve(address spender,uint256 amount) returns(bool)"]);
+    txs.push({ stepId: "uniswap-approve", to: from, data: approve.encodeFunctionData("approve", [RH_UNIV3.swapRouter, amountIn]), value: "0" });
+  }
+  const swapCall = nativeOutput
+    ? router.encodeFunctionData("multicall", [[
+      swapData,
+      router.encodeFunctionData("unwrapWETH9", [amountOutMinimum, sender])
+    ]])
+    : swapData;
+  txs.push({
+    stepId: "uniswap-swap",
+    to: RH_UNIV3.swapRouter,
+    data: swapCall,
+    value: nativeInput ? amountIn.toString() : "0"
+  });
+
+  let decimals = 18;
+  let symbol = nativeOutput ? "ETH" : "";
+  if (!nativeOutput) {
+    const outputToken = new ethers.Contract(to, [
+      "function decimals() view returns(uint8)",
+      "function symbol() view returns(string)"
+    ], provider);
+    [decimals, symbol] = await Promise.all([
+      outputToken.decimals().then(Number).catch(() => 18),
+      outputToken.symbol().then(String).catch(() => "")
+    ]);
+  }
+  return {
+    txs,
+    outFormatted: ethers.formatUnits(best.amountOut, decimals),
+    outSymbol: symbol,
+    impactPercent: "",
+    venue: "uniswap-v3",
+    pool: best.pool,
+    fee: best.fee
   };
 }
 
@@ -1117,23 +1266,16 @@ export async function rhSweepFeesToSol({ appSecret, solFeeWallet, rpcUrl, minEth
     return { swept: false, reason: "below threshold", balanceEth: ethers.formatEther(balanceWei), feeAddress: feeWallet.address };
   }
   const sendWei = balanceWei - reserveWei;
-  const response = await fetch(`${RELAY_API}/quote`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user: feeWallet.address,
-      recipient: solFeeWallet,
-      originChainId: RH_CHAIN_ID,
-      destinationChainId: RELAY_SOLANA_CHAIN_ID,
-      originCurrency: "0x0000000000000000000000000000000000000000",
-      destinationCurrency: "11111111111111111111111111111111",
-      amount: sendWei.toString(),
-      tradeType: "EXACT_INPUT"
-    }),
-    signal: AbortSignal.timeout ? AbortSignal.timeout(20_000) : undefined
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.message) throw new Error(`Fee sweep quote failed: ${String(data.message || response.status).slice(0, 200)}`);
+  const data = await relayPostQuote({
+    user: feeWallet.address,
+    recipient: solFeeWallet,
+    originChainId: RH_CHAIN_ID,
+    destinationChainId: RELAY_SOLANA_CHAIN_ID,
+    originCurrency: "0x0000000000000000000000000000000000000000",
+    destinationCurrency: "11111111111111111111111111111111",
+    amount: sendWei.toString(),
+    tradeType: "EXACT_INPUT"
+  }, "Fee sweep quote");
   const txs = [];
   for (const step of data.steps || []) {
     for (const item of step.items || []) {
@@ -1181,23 +1323,16 @@ export async function rhBridgeEthToSol({ solanaSecretKey, solRecipient, amountEt
     const e = new Error(`This wallet has ${ethers.formatEther(balanceWei)} ETH — after leaving ${gasReserveEth} ETH for gas that's not enough to bridge (need ~0.0005 ETH). Trade or fund more first.`);
     e.statusCode = 400; throw e;
   }
-  const response = await fetch(`${RELAY_API}/quote`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user: wallet.address,
-      recipient: solRecipient,
-      originChainId: RH_CHAIN_ID,
-      destinationChainId: RELAY_SOLANA_CHAIN_ID,
-      originCurrency: "0x0000000000000000000000000000000000000000",
-      destinationCurrency: "11111111111111111111111111111111",
-      amount: sendWei.toString(),
-      tradeType: "EXACT_INPUT"
-    }),
-    signal: AbortSignal.timeout ? AbortSignal.timeout(20_000) : undefined
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.message) throw new Error(`ETH → SOL quote failed: ${String(data.message || response.status).slice(0, 200)}`);
+  const data = await relayPostQuote({
+    user: wallet.address,
+    recipient: solRecipient,
+    originChainId: RH_CHAIN_ID,
+    destinationChainId: RELAY_SOLANA_CHAIN_ID,
+    originCurrency: "0x0000000000000000000000000000000000000000",
+    destinationCurrency: "11111111111111111111111111111111",
+    amount: sendWei.toString(),
+    tradeType: "EXACT_INPUT"
+  }, "ETH to SOL quote");
   const txs = [];
   for (const step of data.steps || []) {
     for (const item of step.items || []) {

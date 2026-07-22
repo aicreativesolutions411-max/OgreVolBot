@@ -2261,6 +2261,9 @@
         <div class="read-card"><h3>How it runs</h3><p>Round-trip funds a fresh wallet, buys, sells it back down to one token, sweeps the SOL to your funding wallet, retires the wallet, and repeats — until Stop or your SOL runs out. Rolling pool keeps a few wallets open for a more organic tape.</p></div>
         <div class="field"><label>Token contract</label><input data-volume-token data-volume-chain="solana" value="${escapeHtml(key)}" placeholder="Solana contract address"></div>
         <div class="field"><label>Fund from wallet</label><select data-volume-wallet>${volumeWalletOptions()}</select></div>
+        <div class="field"><label>Start with</label><select data-volume-funding><option value="sol" selected>SOL balance</option><option value="token">Held target token</option></select></div>
+        <div class="field" data-volume-token-funding hidden><label>Token slice to seed</label><select data-volume-token-percent><option value="10">10%</option><option value="25" selected>25%</option><option value="50">50%</option></select></div>
+        <p class="fineprint" data-volume-token-funding-note hidden>The slice sells once to seed rolling capital. Existing SOL stays protected, a small SOL gas balance is required, and recovered value returns as SOL.</p>
         <div class="field"><label>Style</label><select data-volume-pool><option value="1" selected>Round-trip · one wallet at a time</option><option value="3">Rolling pool · 3 wallets (organic)</option><option value="5">Wide pool · 5 wallets</option></select></div>
         <div class="field-row"><div class="field"><label>Min buy SOL</label><input data-volume-min inputmode="decimal" value="0.012"></div><div class="field"><label>Max buy SOL</label><input data-volume-max inputmode="decimal" value="0.03"></div></div>
         <div class="field-row"><div class="field"><label>Cadence</label><select data-volume-speed><option value="20">Calm</option><option value="8" selected>Natural</option><option value="3">Fast</option></select></div><div class="field"><label>Pattern</label><select data-volume-pattern><option value="organic" selected>Organic mix</option><option value="waves">Waves</option><option value="steady">Steady</option><option value="ladder">Uptrend bias</option></select></div></div>
@@ -2288,7 +2291,8 @@
           : `<button class="recovery-button danger-button" type="button" data-release-volume="${escapeHtml(bot.id)}">Halt &amp; Release</button>`)
         : (running ? `<button class="recovery-button" type="button" data-stop-volume-plan="${escapeHtml(bot.id)}">Stop &amp; sweep</button>` : "");
       const logLines = (bot.log || []).slice(-8).reverse().map((row) => `<small>${escapeHtml(typeof row === "string" ? row : row.message || "")}</small>`).join("");
-      return `<div class="volume-run"><b>${escapeHtml(bot.shortMint || short(bot.tokenMint))}<span>${escapeHtml(running ? bot.stage || "running" : "complete")}</span></b><p>Buys ${Number(stats.buys || 0)} · sells ${Number(stats.sells || 0)} · volume ${Number(stats.volumeSol || 0).toFixed(3)} SOL${Number(stats.sweptSol || 0) ? ` · swept ${Number(stats.sweptSol).toFixed(3)}` : ""}</p><div class="volume-log">${logLines || '<small>Starting…</small>'}</div>${action}</div>`;
+      const funding = bot.fundingAsset === "token" ? `${Number(bot.tokenSeedPercent || 0)}% held token` : "SOL";
+      return `<div class="volume-run"><b>${escapeHtml(bot.shortMint || short(bot.tokenMint))}<span>${escapeHtml(running ? bot.stage || "running" : "complete")}</span></b><p>${escapeHtml(funding)} · buys ${Number(stats.buys || 0)} · sells ${Number(stats.sells || 0)} · volume ${Number(stats.volumeSol || 0).toFixed(3)} SOL${Number(stats.sweptSol || 0) ? ` · swept ${Number(stats.sweptSol).toFixed(3)}` : ""}</p><div class="volume-log">${logLines || '<small>Starting…</small>'}</div>${action}</div>`;
     }).join("");
   }
   async function pollFunVolume(rh) {
@@ -2314,8 +2318,11 @@
   async function startFunVolume(button) {
     if (!(await ensureTradeReady())) return;
     const tokenField = $("[data-volume-token]"), token = String(tokenField?.value || "").trim(), configuredRh = tokenField?.dataset.volumeChain === "robinhood", detectedRh = isRh(token), rh = detectedRh, walletIndex = Number($("[data-volume-wallet]")?.value || state.activeWallet), min = $("[data-volume-min]")?.value || "", max = $("[data-volume-max]")?.value || "";
+    const fundingAsset = $("[data-volume-funding]")?.value === "token" ? "token" : "sol";
+    const tokenSeedPercent = fundingAsset === "token" ? Number($("[data-volume-token-percent]")?.value || 25) : 0;
     if (configuredRh !== detectedRh) { openVolumeSheet(token); toast(`Switched to the ${detectedRh ? "Robinhood" : "Solana"} volume controls. Review the settings and tap Start.`); return; }
     if (!token || (!rh && (!(Number(min) > 0) || !(Number(max) >= Number(min))))) { toast(rh ? "Check the Robinhood contract." : "Check the contract and min/max size.", true); return; }
+    if (!rh && fundingAsset === "token" && !confirm(`Sell ${tokenSeedPercent}% of this wallet's current target-token balance once to seed the volume bot? Existing SOL stays protected and recovered value returns as SOL.`)) return;
     button.disabled = true; button.textContent = "Starting…";
     let result;
     if (rh) {
@@ -2327,7 +2334,7 @@
       const pattern = $("[data-volume-pattern]")?.value || "organic", delaySecs = $("[data-volume-speed]")?.value || "8";
       const sourceWallet = state.wallets.find((wallet) => Number(wallet.index) === walletIndex);
       const poolSize = $("[data-volume-pool]")?.value || "1";   // 1 = clean round-trip, one wallet at a time
-      result = await post("/api/web/volume-bot/start", { tokenMint: token, sourceWalletIndex: walletIndex, sourceWalletPublicKey: sourceWallet?.publicKey || "", rollingWallets: true, buyAmountSol: String((Number(min) + Number(max)) / 2), minBuyAmountSol: min, maxBuyAmountSol: max, poolSize, maxRounds: "0", sellPercent: "100", buyBias: pattern === "ladder" ? "75" : "55", delaySecs, slippageBps: 600, sweepBack: true, keepDust: true, offsetSell: Boolean($("[data-volume-offset]")?.checked), staggerPattern: pattern, tradeAttemptId: attemptId("fun-volume") });
+      result = await post("/api/web/volume-bot/start", { tokenMint: token, sourceWalletIndex: walletIndex, sourceWalletPublicKey: sourceWallet?.publicKey || "", fundingAsset, tokenSeedPercent, rollingWallets: true, buyAmountSol: String((Number(min) + Number(max)) / 2), minBuyAmountSol: min, maxBuyAmountSol: max, poolSize, maxRounds: "0", sellPercent: "100", buyBias: pattern === "ladder" ? "75" : "55", delaySecs, slippageBps: 600, sweepBack: true, keepDust: true, offsetSell: Boolean($("[data-volume-offset]")?.checked), staggerPattern: pattern, tradeAttemptId: attemptId("fun-volume") });
     }
     button.disabled = false; button.textContent = rh ? "Start with SOL" : "Start";
     if (result.ok && result.data?.ok) { toast("Volume run started"); pollFunVolume(rh); }
@@ -2667,6 +2674,11 @@
   });
 
   document.addEventListener("change", (event) => {
+    if (event.target.matches("[data-volume-funding]")) {
+      const tokenFunding = event.target.value === "token";
+      $$("[data-volume-token-funding], [data-volume-token-funding-note]").forEach((node) => { node.hidden = !tokenFunding; });
+      return;
+    }
     if (event.target.matches("[data-quick-wallet-select]")) { state.activeWallet = Number(event.target.value);localStorage.setItem(ACTIVE_WALLET_KEY,String(state.activeWallet)); paintWalletPill(); renderQuickRoute(); return; }
     if (event.target.matches("[data-send-sol-wallet]")) { const input = $("[data-send-sol-amount]"); if (input?.dataset.sendAll === "true") selectFunSendAll(); return; }
     if (event.target.matches("[data-wallet-batch-select]")) { updateWalletManagerSelection(); return; }

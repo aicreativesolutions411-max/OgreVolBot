@@ -418,6 +418,8 @@ const state = {
   slimeBotStagger: "steady",
   slimeBotKeepDust: true,
   slimeBotOffset: false,
+  slimeBotFundingAsset: "sol",
+  slimeBotTokenSeedPercent: 25,
   distributeStatus: "",
   distributeBusy: false,
   returnFundsStatus: "",
@@ -9796,7 +9798,7 @@ function volumeBotListHtml() {
           <div><span>Sells</span><strong>${escapeHtml(Number(stats.sells || 0))}</strong></div>
           ${bot.robinhood
             ? `<div><span>Funding</span><strong>SOL → RH</strong></div><div><span>Trade sizing</span><strong>Automatic</strong></div>`
-            : `<div><span>Flat fee</span><strong>0.05 SOL / 50 tx</strong></div><div><span>Next fee</span><strong>${escapeHtml(Number(stats.nextFlatFeeIn || 50))} tx</strong></div>`}
+            : `<div><span>Funding</span><strong>${bot.fundingAsset === "token" ? `${escapeHtml(Number(bot.tokenSeedPercent || 0))}% token` : "SOL"}</strong></div><div><span>Flat fee</span><strong>0.05 SOL / 50 tx</strong></div><div><span>Next fee</span><strong>${escapeHtml(Number(stats.nextFlatFeeIn || 50))} tx</strong></div>`}
           <div><span>Errors</span><strong>${escapeHtml(Number(stats.errors || 0))}</strong></div>
         </div>
         <small>${escapeHtml(bot.message || "")}</small>
@@ -9833,6 +9835,11 @@ function volumeBotQueueHtml() {
 }
 
 function volumeBotPanelHtml() {
+  const heldTokenFunding = state.slimeBotFundingAsset === "token";
+  const investmentMin = heldTokenFunding ? "0.005" : "0.1";
+  const investmentMax = heldTokenFunding ? "0.5" : "10";
+  const investmentStep = heldTokenFunding ? "0.005" : "0.1";
+  const investmentValue = heldTokenFunding ? "0.02" : "6";
   return `
     ${ogreVolumeStageHtml()}
     <section class="trade-card volume-bot-card slime-configurator ovs-skin" data-preserve-focus>
@@ -9841,10 +9848,10 @@ function volumeBotPanelHtml() {
         <span class="ovs-mlabel" aria-hidden="true">VOLUME CONFIGURATOR</span>
         <span class="ovs-mlabel ovs-mlabel-field" aria-hidden="true">Contract Address</span>
         <input class="ovs-ca" data-vbot-token type="text" placeholder="Paste contract address" value="${escapeHtml(state.volumeToken || state.tradeToken || "")}" aria-label="Contract address">
-        <span class="ovs-mlabel ovs-mlabel-field" aria-hidden="true">Investment (SOL)</span>
+        <span class="ovs-mlabel ovs-mlabel-field" data-vbot-invest-label aria-hidden="true">${heldTokenFunding ? "Max buy size (SOL)" : "Investment (SOL)"}</span>
         <div class="ovs-invest">
-          <input data-vbot-invest type="range" min="0.1" max="10" step="0.1" value="6" aria-label="Investment in SOL">
-          <input data-vbot-invest-num type="number" min="0.1" max="10" step="0.1" value="6" class="ovs-invest-num" aria-label="Investment in SOL">
+          <input data-vbot-invest type="range" min="${investmentMin}" max="${investmentMax}" step="${investmentStep}" value="${investmentValue}" aria-label="${heldTokenFunding ? "Maximum buy size" : "Investment"} in SOL">
+          <input data-vbot-invest-num type="number" min="${investmentMin}" max="${investmentMax}" step="${investmentStep}" value="${investmentValue}" class="ovs-invest-num" aria-label="${heldTokenFunding ? "Maximum buy size" : "Investment"} in SOL">
           <span class="ovs-invest-unit">SOL</span>
         </div>
         <span class="ovs-mlabel ovs-mlabel-field" aria-hidden="true">Duration</span>
@@ -9862,6 +9869,20 @@ function volumeBotPanelHtml() {
           <span class="vbot-config-label">Pay From (source wallet)</span>
           <select data-vbot-source>${volumeBotSourceOptionsHtml()}</select>
         </label>
+
+        <div class="vbot-config-row">
+          <div class="vbot-config-field">
+            <span class="vbot-config-label">Start with</span>
+            ${slimeBotSegment("funding", state.slimeBotFundingAsset, [["sol", "SOL"], ["token", "Held token"]])}
+          </div>
+          <label class="vbot-config-field" data-vbot-token-funding ${state.slimeBotFundingAsset === "token" ? "" : "hidden"}>
+            <span class="vbot-config-label">Token slice to seed</span>
+            <select data-vbot-token-percent>
+              ${[10, 25, 50].map((percent) => `<option value="${percent}" ${Number(state.slimeBotTokenSeedPercent) === percent ? "selected" : ""}>${percent}% of this token</option>`).join("")}
+            </select>
+          </label>
+        </div>
+        <p class="fineprint" data-vbot-token-funding-note ${state.slimeBotFundingAsset === "token" ? "" : "hidden"}>The selected token slice sells once to seed the bot. Existing SOL is protected, a small SOL gas balance is still required, and recovered value returns as SOL rather than the original token quantity.</p>
 
         <div class="vbot-config-row">
           <div class="vbot-config-field">
@@ -9914,9 +9935,13 @@ function volumeBotPanelHtml() {
 function readVolumeBotForm() {
   const mode = state.slimeBotMode === "spam" ? "spam" : "smart";
   const aggr = ["low", "med", "high"].includes(state.slimeBotAggr) ? state.slimeBotAggr : "med";
+  const fundingAsset = state.slimeBotFundingAsset === "token" ? "token" : "sol";
+  const tokenSeedPercent = fundingAsset === "token"
+    ? Math.max(1, Math.min(50, Number($('[data-vbot-token-percent]')?.value || state.slimeBotTokenSeedPercent || 25)))
+    : 0;
   const tokenMint = $("[data-vbot-token]")?.value?.trim() || "";
   const robinhood = /^0x[0-9a-fA-F]{40}$/.test(tokenMint);
-  const investment = Math.max(0.05, Math.min(robinhood ? 5 : 50, Number($("[data-vbot-invest-num]")?.value || $("[data-vbot-invest]")?.value || "1")));
+  const investment = Math.max(fundingAsset === "token" ? 0.005 : 0.05, Math.min(robinhood ? 5 : (fundingAsset === "token" ? 0.5 : 50), Number($("[data-vbot-invest-num]")?.value || $("[data-vbot-invest]")?.value || "1")));
   const durationMin = Math.max(20, Math.min(360, Number($("[data-vbot-duration]")?.value || "60")));
 
   const aggrMap = {
@@ -9925,16 +9950,20 @@ function readVolumeBotForm() {
     high: { delaySecs: 5, buyBias: 70, walletCount: 10 }
   };
   const a = aggrMap[aggr];
-  const rolling = mode === "smart"; // Smart = fresh wallet each round (organic)
+  const rolling = fundingAsset === "token" || mode === "smart"; // Held tokens always use the durable fresh-wallet engine.
   const stepSec = a.delaySecs * (rolling ? 4 : 1);
   let rounds = Math.round((durationMin * 60) / stepSec);
   // Bound rounds so total spend never blows past the chosen investment.
   rounds = Math.max(1, Math.min(250, rounds, Math.floor(investment / 0.01)));
-  const buyAmountSol = Math.max(0.005, Math.min(0.5, investment / rounds));
+  const buyAmountSol = fundingAsset === "token"
+    ? Math.max(0.005, Math.min(0.5, investment))
+    : Math.max(0.005, Math.min(0.5, investment / rounds));
 
   return {
     tokenMint,
     chain: robinhood ? "robinhood" : "solana",
+    fundingAsset,
+    tokenSeedPercent,
     sourceWalletIndex: $("[data-vbot-source]")?.value || "1",
     rollingWallets: rolling,
     autoCreateWallets: !rolling,
@@ -9990,6 +10019,10 @@ async function startVolumeBot() {
   }
   const durLabel = form.durationMin >= 60 ? `${(form.durationMin / 60).toFixed(form.durationMin % 60 ? 1 : 0)}h` : `${form.durationMin}m`;
   const rh = form.chain === "robinhood";
+  if (rh && form.fundingAsset === "token") {
+    setVolumeBotStatus("Held-token funding is available for Solana tokens. Choose SOL for Robinhood volume.");
+    return;
+  }
   const rhRounds = Math.max(1, Math.min(10, Math.round(form.durationMin / 20)));
   const confirmed = await slimeConfirm({
     title: "Start SlimeBot",
@@ -9999,6 +10032,13 @@ async function startVolumeBot() {
       `${form.investment} SOL is converted once for Wallet ${form.sourceWalletIndex}.`,
       `${rhRounds} randomized Robinhood buy + sell round(s); trade sizing is automatic.`,
       "Stop waits for the current on-chain action to finish."
+    ] : form.fundingAsset === "token" ? [
+      "This sells real tokens once before the rolling run starts.",
+      `Token: ${form.tokenMint}`,
+      `Wallet ${form.sourceWalletIndex}: sell ${form.tokenSeedPercent}% of its current target-token balance.`,
+      `The sale proceeds fund fresh-wallet volume with buys up to about ${form.buyAmountSol} SOL.`,
+      "Pre-existing SOL stays protected.",
+      "A small SOL gas balance is required; recovered value returns as SOL, not the original token quantity."
     ] : [
       "This spends REAL SOL.",
       `Token: ${form.tokenMint}`,
@@ -10011,7 +10051,7 @@ async function startVolumeBot() {
   });
   if (!confirmed) return;
   state.volumeBotBusy = true;
-  setVolumeBotStatus("Funding wallets and starting bot...");
+  setVolumeBotStatus(form.fundingAsset === "token" ? "Verifying holdings and arming the token seed..." : "Funding wallets and starting bot...");
   render();
   try {
     const data = await api(rh ? "/api/web/rh/volume/start" : "/api/web/volume-bot/start", {
@@ -25697,11 +25737,40 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-volume-start]")) {
     await createVolumePlan();
   }
+  const vbotFundingBtn = target.closest?.("[data-vbot-set-funding]");
+  if (vbotFundingBtn) {
+    event.preventDefault();
+    state.slimeBotFundingAsset = vbotFundingBtn.dataset.vbotSetFunding === "token" ? "token" : "sol";
+    vbotFundingBtn.parentElement?.querySelectorAll("[data-vbot-set-funding]").forEach((btn) => { btn.dataset.active = String(btn === vbotFundingBtn); });
+    document.querySelectorAll("[data-vbot-token-funding], [data-vbot-token-funding-note]").forEach((node) => { node.hidden = state.slimeBotFundingAsset !== "token"; });
+    const heldTokenFunding = state.slimeBotFundingAsset === "token";
+    const investRange = document.querySelector("[data-vbot-invest]");
+    const investNumber = document.querySelector("[data-vbot-invest-num]");
+    const investLabel = document.querySelector("[data-vbot-invest-label]");
+    const investmentSettings = heldTokenFunding
+      ? { min: "0.005", max: "0.5", step: "0.005", value: "0.02", label: "Max buy size (SOL)" }
+      : { min: "0.1", max: "10", step: "0.1", value: "6", label: "Investment (SOL)" };
+    for (const input of [investRange, investNumber].filter(Boolean)) {
+      input.min = investmentSettings.min;
+      input.max = investmentSettings.max;
+      input.step = investmentSettings.step;
+      input.value = investmentSettings.value;
+    }
+    if (investLabel) investLabel.textContent = investmentSettings.label;
+    if (state.slimeBotFundingAsset === "token") {
+      state.slimeBotMode = "smart";
+      document.querySelectorAll("[data-vbot-set-mode]").forEach((btn) => { btn.dataset.active = String(btn.dataset.vbotSetMode === "smart"); });
+      setVolumeBotStatus("Held-token mode sells the chosen slice once, then runs from those SOL proceeds.");
+    } else {
+      setVolumeBotStatus("SOL mode runs from the source wallet's available SOL.");
+    }
+    return;
+  }
   const vbotModeBtn = target.closest?.("[data-vbot-set-mode]");
   if (vbotModeBtn) {
     event.preventDefault();
-    state.slimeBotMode = vbotModeBtn.dataset.vbotSetMode || "smart";
-    vbotModeBtn.parentElement?.querySelectorAll("[data-vbot-set-mode]").forEach((btn) => { btn.dataset.active = String(btn === vbotModeBtn); });
+    state.slimeBotMode = state.slimeBotFundingAsset === "token" ? "smart" : (vbotModeBtn.dataset.vbotSetMode || "smart");
+    vbotModeBtn.parentElement?.querySelectorAll("[data-vbot-set-mode]").forEach((btn) => { btn.dataset.active = String(btn.dataset.vbotSetMode === state.slimeBotMode); });
     return;
   }
   const vbotAggrBtn = target.closest?.("[data-vbot-set-aggr]");
@@ -27047,7 +27116,9 @@ if (!window.__slimeVolumeBotTimer) {
 document.addEventListener("input", (event) => {
   const target = event.target;
   if (!target || !target.matches) return;
-  if (target.matches("[data-vbot-invest]")) {
+  if (target.matches("[data-vbot-token-percent]")) {
+    state.slimeBotTokenSeedPercent = Math.max(1, Math.min(50, Number(target.value || 25)));
+  } else if (target.matches("[data-vbot-invest]")) {
     const num = document.querySelector("[data-vbot-invest-num]");
     if (num) num.value = target.value;
   } else if (target.matches("[data-vbot-invest-num]")) {
