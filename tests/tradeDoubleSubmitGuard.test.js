@@ -63,6 +63,11 @@ test("Trade opens the focused cross-chain search with shared recent coins", () =
   assert.match(ggSource, /data-focus="'\+\(buyFirst\?'buy':'chart'\)\+'"/);
   assert.doesNotMatch(functionBody(ggSource, "openCoinRoute"), /_nextTradeFocus/, "Market rows should stay chart-first");
   assert.match(ggSource, /marketCapLabel:row\.marketCapLabel/);
+  assert.match(ggSource, /function writeTradeRecents\(rows\)/);
+  assert.match(ggSource, /const addrs=\(rows\|\|\[\]\)\.map\(tradeSearchKey\)/);
+  assert.match(ggSource, /byLower=new Map\(Object\.entries\(by\)/);
+  assert.match(ggSource, /enrichSearchRows\(recents\)\.then/);
+  assert.match(ggSource, /writeTradeRecents\(recents\)/);
   assert.match(ggSource, /rememberTradeRecent\(r\);const th=/);
   assert.doesNotMatch(ggSource, /Fees before trading/);
 });

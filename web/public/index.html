@@ -1186,6 +1186,7 @@
   const TRADE_RECENTS_KEY="slimewireFunRecents";
   let tradeSearchTimer=null,tradeSearchRows=[],tradeSearchSeq=0;
   function readTradeRecents(){try{const rows=JSON.parse(localStorage.getItem(TRADE_RECENTS_KEY)||"[]");return Array.isArray(rows)?rows.slice(0,8):[];}catch(e){return[];}}
+  function writeTradeRecents(rows){try{localStorage.setItem(TRADE_RECENTS_KEY,JSON.stringify((rows||[]).slice(0,8)));}catch(e){}}
   function tradeSearchKey(row){return String((row&&(row.address||row.tokenMint||row.mint||row.key))||"").trim();}
   function rememberTradeRecent(row){const key=tradeSearchKey(row);if(!key)return;const chain=(String(row.chain||"").toLowerCase()==="robinhood"||isRobinhoodAddress(key))?"robinhood":"solana";const item={key,chain,symbol:row.symbol||short(key),name:row.name||"",imageUrl:row.imageUrl||row.avatarUrl||"",marketCap:Number(row.marketCap)||null,marketCapLabel:row.marketCapLabel||"",liquidityUsd:Number(row.liquidityUsd)||null,liquidityLabel:row.liquidityLabel||""};try{const old=readTradeRecents().find(x=>String(x.key||"").toLowerCase()===key.toLowerCase())||{};const merged={...old,...item,imageUrl:item.imageUrl||old.imageUrl||"",symbol:(row.symbol&&row.symbol!==short(key))?row.symbol:(old.symbol||item.symbol),name:item.name||old.name||"",marketCap:item.marketCap||old.marketCap||null,marketCapLabel:item.marketCapLabel||old.marketCapLabel||"",liquidityUsd:item.liquidityUsd||old.liquidityUsd||null,liquidityLabel:item.liquidityLabel||old.liquidityLabel||""};const next=[merged,...readTradeRecents().filter(x=>String(x.key||"").toLowerCase()!==key.toLowerCase())].slice(0,8);localStorage.setItem(TRADE_RECENTS_KEY,JSON.stringify(next));}catch(e){}}
   function tradeSearchResultHtml(row,index){const key=tradeSearchKey(row),chain=(String(row.chain||"").toLowerCase()==="robinhood"||isRobinhoodAddress(key))?"RH":"SOL";
@@ -1198,20 +1199,21 @@
   // Fill MC / liquidity / volume / pfp for search rows straight from DexScreener (the same live
   // enrichment the feed uses), then re-render — so results are never blank fields.
   async function enrichSearchRows(rows){
-    const addrs=(rows||[]).map(r=>r.tokenMint||r.address).filter(Boolean);
+    const addrs=(rows||[]).map(tradeSearchKey).filter(Boolean);
     if(!addrs.length)return false;
     const maps=await Promise.all([dexTokensBatch(addrs.slice(0,30)),dexTokensBatch(addrs.slice(30,60))]);
-    const by=Object.assign({},maps[0]||{},maps[1]||{});let changed=false;
-    for(const r of rows){const o=by[r.tokenMint||r.address];if(o&&applyDexInfoToRow(r,o))changed=true;}
+    const by=Object.assign({},maps[0]||{},maps[1]||{}),byLower=new Map(Object.entries(by).map(([key,value])=>[key.toLowerCase(),value]));let changed=false;
+    for(const r of rows){const key=tradeSearchKey(r),o=by[key]||byLower.get(key.toLowerCase());if(o&&applyDexInfoToRow(r,o))changed=true;}
     return changed;
   }
   function openTradeSearchRow(row){const key=tradeSearchKey(row);if(!key)return;rememberTradeRecent(row);state._nextTradeFocus="buy";closeModal();go(coinRouteName(key),key);}
   function wireTradeSearchResults(){document.querySelectorAll("[data-trade-search-result]").forEach(btn=>btn.onclick=()=>{const row=tradeSearchRows[Number(btn.dataset.tradeSearchResult)];if(row)openTradeSearchRow(row);});}
   function topLiquidityRows(){return (state.rows||[]).filter(r=>Number(r.liquidityUsd)>0).sort((a,b)=>Number(b.liquidityUsd)-Number(a.liquidityUsd)).slice(0,6);}
-  function renderTradeSearchHome(){const body=$("#tradeSearchBody");if(!body)return;const recents=readTradeRecents(),top=topLiquidityRows();tradeSearchRows=recents.concat(top);
+  function renderTradeSearchHome(refreshLive=true){const body=$("#tradeSearchBody");if(!body)return;const recents=readTradeRecents(),top=topLiquidityRows();tradeSearchRows=recents.concat(top);
     body.innerHTML='<div class="trade-search-section"><span>Recent searches</span><div class="trade-recents">'+(recents.length?recents.map((r,i)=>tradeSearchResultHtml(r,i)).join(""):'<small class="mut">Your recent coins will appear here.</small>')+'</div></div>'
       +(top.length?'<div class="trade-search-section"><span>💧 Top liquidity right now</span><div class="trade-search-results">'+top.map((r,i)=>tradeSearchResultHtml(r,i+recents.length)).join("")+'</div></div>':'');
-    wireTradeSearchResults();}
+    wireTradeSearchResults();
+    if(refreshLive&&recents.length){const seq=++tradeSearchSeq;enrichSearchRows(recents).then(changed=>{const input=$("#tradeSearchInput");if(!changed||seq!==tradeSearchSeq||!input||input.value.trim())return;writeTradeRecents(recents);renderTradeSearchHome(false);});}}
   // Name/ticker search runs DIRECTLY against DexScreener from the browser (this host's IP is
   // rate-limited server-side, the user's isn't), falling back to the backend. "cashcow" matches
   // "Cash Cow" via space-stripped comparison, and results order is top liquidity -> lowest.
@@ -1763,6 +1765,7 @@
   // sniper feed so every row can be vetted + copied in one tap.
   function socialIconsHtml(r){
     let s="";
+    s+='<a href="/c/'+encodeURIComponent(r.tokenMint||r.address||'')+'" onclick="event.stopPropagation()" title="Coin community">Community</a>';
     if(r.twitterUrl)s+='<a href="'+esc(r.twitterUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">𝕏</a>';
     if(r.telegramUrl)s+='<a href="'+esc(r.telegramUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">✈</a>';
     if(r.websiteUrl)s+='<a href="'+esc(r.websiteUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">🌐</a>';
@@ -3122,6 +3125,7 @@
   }
   function theadHtml(r){
     const soc=[];
+    soc.push('<a href="/c/'+encodeURIComponent(r.tokenMint||'')+'" title="Coin community">Community</a>');
     if(r.twitterUrl)soc.push('<a href="'+esc(r.twitterUrl)+'" target="_blank" rel="noopener noreferrer" title="X / Twitter">𝕏</a>');
     if(r.telegramUrl)soc.push('<a href="'+esc(r.telegramUrl)+'" target="_blank" rel="noopener noreferrer" title="Telegram">✈</a>');
     if(r.websiteUrl)soc.push('<a href="'+esc(r.websiteUrl)+'" target="_blank" rel="noopener noreferrer" title="Website">🌐</a>');

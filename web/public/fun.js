@@ -730,6 +730,7 @@
     const coin = state.selected || {}, key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
     $("[data-coin-mini]").innerHTML = `<div class="coin-identity"><img ${coinImageAttrs(coin)} style="background-image:url('${coinBadge(coin)}')" alt="" decoding="async" referrerpolicy="no-referrer"><div><b>${escapeHtml(coin.symbol || short(key))}</b><button class="coin-ca-button" type="button" data-copy-coin title="Copy ${escapeHtml(key)}"><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span><i>▣</i></button></div></div><div class="coin-head-quote"><b>${formatUsd(coin.marketCap || coin.mc)}</b><span class="${Number(coin.change) >= 0 ? "up" : "down"}">${formatPct(coin.change)} · 1H</span></div>`;
     $("[data-coin-stats]").innerHTML = `<div><span>Market cap</span><b>${formatUsd(coin.marketCap || coin.mc)}</b></div><div><span>Liquidity</span><b>${formatUsd(coin.liquidity || coin.liq || coin.liquidityUsd)}</b></div><div><span>Holders</span><b>${Number(coin.holders || coin.holderCount) > 0 ? Number(coin.holders || coin.holderCount).toLocaleString() : "checking"}</b></div><div><span>Volume</span><b>${coin.volume > 0 ? formatUsd(coin.volume) : escapeHtml(coin.volumeLabel || "checking")}</b></div>`;
+    $(`[data-coin-mini] .coin-head-quote`)?.insertAdjacentHTML("beforebegin", `<a class="coin-community-link" href="/c/${encodeURIComponent(key)}">Community</a>`);
     renderChart();
     renderQuickTrade();
     renderPositionCard();
@@ -1252,11 +1253,19 @@
     const overlay = $("[data-search-overlay]"), input = $("[data-search-input]"); overlay.hidden = false; renderSearchHome(); setTimeout(() => input.focus(), 30);
   }
   function closeSearch() { state.searchRequestVersion += 1; $("[data-search-overlay]").hidden = true; $("[data-search-input]").value = ""; }
-  function renderSearchHome() {
+  function renderSearchHome(refreshLive = true) {
     const content = $("[data-search-content]");
     // Big names doing well: the highest-liquidity coins from the live feed, one tap to open.
     const topLiq = (state.rows || []).filter((row) => Number(row.liquidityUsd) > 0).sort((a, b) => Number(b.liquidityUsd) - Number(a.liquidityUsd)).slice(0, 6);
     content.innerHTML = `<h3>Recent searches</h3><div class="recent-list">${state.recents.length ? state.recents.map((item) => { const rh = item.chain === "robinhood", mc = item.marketCapLabel || formatUsd(item.marketCap); return `<button type="button" data-open-coin="${escapeHtml(item.key)}" data-chain-kind="${rh ? "rh" : "sol"}"><span class="recent-avatar"><img src="${escapeHtml(item.imageUrl || mascot(item.key))}" alt=""><i class="chain-badge ${rh ? "rh" : "sol"}">${rh ? "RH" : "SOL"}</i></span><span><b>${escapeHtml(item.symbol || short(item.key))}</b><small>${escapeHtml((item.name ? `${item.name} · ` : "") + short(item.key))}</small></span><em>${mc !== "—" ? `MC ${escapeHtml(mc)}` : "recent"}</em></button>`; }).join("") : '<span style="color:var(--muted);font-size:11px">Your recent coins stay on this device.</span>'}</div>${topLiq.length ? `<h3 style="margin-top:24px">💧 Top liquidity</h3><div class="coin-list">${topLiq.map(coinRowHtml).join("")}</div>` : ""}<h3 style="margin-top:24px">Quick routes</h3><div class="tool-grid"><button class="tool-card" type="button" data-search-chain="solana"><b>Solana movers</b><span>Live market feed</span></button><button class="tool-card" type="button" data-search-chain="robinhood"><b>Robinhood</b><span>New chain coins</span></button><button class="tool-card" type="button" data-nav="leaders"><b>Discover traders</b><span>Follow alerts · public proof</span></button></div>`;
+    if (refreshLive && state.recents.length) {
+      const version = ++state.searchRequestVersion;
+      refreshRecentSearches().then((changed) => {
+        const input = $("[data-search-input]");
+        if (!changed || version !== state.searchRequestVersion || !input || input.value.trim() || $("[data-search-overlay]").hidden) return;
+        renderSearchHome(false);
+      });
+    }
   }
   let searchTimer = null;
   function normalizeSearchCoin(row = {}) {
@@ -1366,14 +1375,28 @@
     if (!addrs.length) return;
     const parts = await Promise.all([funDexBatch(addrs.slice(0, 30)), funDexBatch(addrs.slice(30, 60))]);
     const by = Object.assign({}, parts[0], parts[1]);
+    const byLower = new Map(Object.entries(by).map(([key, value]) => [key.toLowerCase(), value]));
     for (const m of matches) {
-      const o = by[m.tokenMint || m.address]; if (!o) continue;
+      const key = String(m.tokenMint || m.address || m.key || ""), o = by[key] || byLower.get(key.toLowerCase()); if (!o) continue;
       if (o.mc > 0) { m.marketCap = o.mc; m.marketCapUsd = o.mc; }
       if (o.liq > 0) m.liquidityUsd = o.liq;
       const v = o.v24 || o.v1; if (v > 0) { m.volumeH24 = v; m.volumeUsd = v; }
       if (o.img && !m.imageUrl) m.imageUrl = o.img;
       if (Number.isFinite(o.m5)) m.m5 = o.m5;
     }
+  }
+  async function refreshRecentSearches() {
+    const rows = state.recents.map((item) => ({ ...item, address: item.key, tokenMint: item.key }));
+    await enrichSearchMatches(rows);
+    let changed = false;
+    state.recents = rows.map((row, index) => {
+      const current = state.recents[index] || {}, marketCap = Number(row.marketCap || row.marketCapUsd || 0), liquidity = Number(row.liquidityUsd || row.liquidity || 0), volume = Number(row.volumeH24 || row.volumeUsd || 0);
+      const next = { ...current, symbol: row.symbol || current.symbol, name: row.name || current.name, imageUrl: row.imageUrl || current.imageUrl, marketCap: marketCap > 0 ? marketCap : current.marketCap, marketCapLabel: marketCap > 0 ? "" : current.marketCapLabel, liquidityUsd: liquidity > 0 ? liquidity : current.liquidityUsd, volumeUsd: volume > 0 ? volume : current.volumeUsd, marketUpdatedAt: marketCap > 0 ? Date.now() : current.marketUpdatedAt };
+      if (JSON.stringify(next) !== JSON.stringify(current)) changed = true;
+      return next;
+    });
+    if (changed) saveLocal(RECENTS_KEY, state.recents);
+    return changed;
   }
   async function runSearch(query) {
     const content = $("[data-search-content]");

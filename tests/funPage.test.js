@@ -547,6 +547,10 @@ test("unified search and Robinhood detail support the two-chain mobile experienc
   assert.match(js, /\/api\/web\/rh\/token\?address=/);
   assert.match(js, /\/api\/web\/token-read\?mint=/);
   assert.match(js, /const RECENTS_KEY = "slimewireFunRecents"/);
+  assert.match(js, /async function refreshRecentSearches\(\)/);
+  assert.match(js, /await enrichSearchMatches\(rows\)/);
+  assert.match(js, /saveLocal\(RECENTS_KEY, state\.recents\)/);
+  assert.match(js, /renderSearchHome\(false\)/);
   assert.match(js, /marketCapLabel: coin\.marketCapLabel/);
   assert.match(js, /class="recent-list"/);
   assert.match(css, /\.recent-list>button\{display:grid/);

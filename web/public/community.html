@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#061008">
+  <title>SlimeWire Coin Communities</title>
+  <meta name="description" content="Live coin communities with market data, charts, X-linked profiles and community threads.">
+  <link rel="icon" href="/assets/slimewire/png/slimewire-mark.png">
+  <link rel="stylesheet" href="/community.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="SlimeWire terminal">
+      <img src="/assets/slimewire/png/slimewire-mark.png" alt="">
+      <span><b>SLIMEWIRE</b><small>COIN COMMUNITIES</small></span>
+    </a>
+    <div class="top-actions">
+      <button class="quiet" type="button" data-change-coin>Change coin</button>
+      <a class="terminal-link" href="/">Back to Terminal</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="finder" data-finder>
+      <div class="finder-copy">
+        <span class="eyebrow">COMMUNITY LAYER FOR EVERY COIN</span>
+        <h1>Give your coin a home that stays live.</h1>
+        <p>Paste a Solana or Robinhood Chain contract. SlimeWire builds the market page, chart route and a clean community thread around it.</p>
+        <form class="ca-form" data-ca-form>
+          <label for="community-ca">Coin contract address</label>
+          <div><input id="community-ca" data-ca-input autocomplete="off" spellcheck="false" placeholder="Paste a Solana or 0x CA"><button type="submit">Open community</button></div>
+          <small>Community creation is open to every signed-in SlimeWire user.</small>
+        </form>
+      </div>
+      <div class="finder-art" aria-hidden="true">
+        <div class="orbit one"></div><div class="orbit two"></div>
+        <img src="/assets/slimewire/png/slimewire-mark.png" alt="">
+        <span class="signal s1">LIVE MC</span><span class="signal s2">X PROFILES</span><span class="signal s3">CHART + TRADE</span>
+      </div>
+    </section>
+
+    <section class="community-shell" data-community-shell hidden>
+      <div class="hero" data-hero>
+        <div class="hero-shade"></div>
+        <div class="hero-main">
+          <div class="coin-avatar" data-coin-avatar><span>SW</span></div>
+          <div class="coin-identity">
+            <div class="identity-top"><span class="chain-pill" data-chain>CHAIN</span><span class="live-pill"><i></i> LIVE DATA</span></div>
+            <h1 data-community-title>Coin community</h1>
+            <p><b data-ticker></b><button class="ca-copy" type="button" data-copy-ca></button></p>
+            <div class="social-row" data-socials></div>
+          </div>
+        </div>
+        <div class="hero-actions">
+          <button class="join" type="button" data-join hidden>Join community</button>
+          <a class="trade" data-terminal href="/">Chart &amp; Trade</a>
+          <button class="icon-button" type="button" data-share aria-label="Share community">Share</button>
+          <button class="icon-button" type="button" data-edit hidden>Edit page</button>
+        </div>
+      </div>
+
+      <div class="market-strip" aria-label="Live market data">
+        <div><span>MARKET CAP</span><b data-stat="mc">—</b><small data-change>updating</small></div>
+        <div><span>24H VOLUME</span><b data-stat="volume">—</b><small>live</small></div>
+        <div><span>LIQUIDITY</span><b data-stat="liquidity">—</b><small>live</small></div>
+        <div><span>HOLDERS</span><b data-stat="holders">—</b><small>on-chain</small></div>
+      </div>
+
+      <nav class="tabs" aria-label="Community sections">
+        <button class="active" type="button" data-tab="feed">Community</button>
+        <button type="button" data-tab="chart">Chart</button>
+        <button type="button" data-tab="about">About</button>
+      </nav>
+
+      <div class="content-grid">
+        <section class="panel feed-panel" data-panel="feed">
+          <div class="community-empty" data-not-created hidden>
+            <span class="eyebrow">THIS SPACE IS OPEN</span>
+            <h2>Start the official community page.</h2>
+            <p>Set the banner, links and description. The contract and live market data stay locked to this coin.</p>
+            <button type="button" data-start-community>Create this community</button>
+          </div>
+          <div data-created-content hidden>
+            <div class="composer" data-composer>
+              <div class="user-avatar" data-viewer-avatar>SW</div>
+              <div><textarea data-post-text maxlength="700" placeholder="Share an update, idea, chart read or community news…"></textarea><div class="composer-actions"><span data-character-count>0 / 700</span><a data-share-x target="_blank" rel="noopener">Continue on X</a><button type="button" data-post>Post</button></div></div>
+            </div>
+            <div class="thread-head"><div><h2>Community thread</h2><p>Profiles can carry their SlimeWire name, X handle and PFP.</p></div><button type="button" data-refresh>Refresh</button></div>
+            <div class="thread" data-thread></div>
+          </div>
+        </section>
+
+        <section class="panel chart-panel" data-panel="chart" hidden>
+          <div class="chart-glow"></div>
+          <span class="eyebrow">SLIMEWIRE TERMINAL</span>
+          <h2>One tap from discussion to execution.</h2>
+          <p>Open this exact contract in the full chart with transactions, indicators, positions, quick trade and Slime Mode.</p>
+          <div class="mini-chart" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><svg viewBox="0 0 600 160" preserveAspectRatio="none"><path d="M0 132 C60 140,70 90,130 112 S210 125,255 68 S320 105,365 72 S440 90,475 28 S550 72,600 18"/></svg></div>
+          <a class="large-trade" data-terminal href="/">Open live chart &amp; trade</a>
+        </section>
+
+        <section class="panel about-panel" data-panel="about" hidden>
+          <span class="eyebrow">ABOUT THIS COMMUNITY</span>
+          <h2 data-about-title>Coin community</h2>
+          <p class="description" data-description>No description yet.</p>
+          <div class="about-block"><h3>Community rules</h3><p data-rules>Keep it useful. No impersonation, wallet requests or misleading links.</p></div>
+          <div class="about-block"><h3>Contract</h3><button class="contract-row" type="button" data-copy-ca><code data-contract></code><span>Copy</span></button></div>
+          <p class="safety-note">Community pages are user-created. Live data and social links are informational, not an endorsement by SlimeWire.</p>
+        </section>
+
+        <aside class="sidebar">
+          <section class="side-card"><div class="side-title"><h3>Community</h3><span data-member-count>0 members</span></div><div class="owner-row"><div class="user-avatar" data-owner-avatar>SW</div><div><span>CREATED BY</span><b data-owner-name>SlimeWire member</b><a data-owner-x target="_blank" rel="noopener" hidden></a></div></div></section>
+          <section class="side-card"><div class="side-title"><h3>Official links</h3><span>community-set</span></div><div class="official-links" data-official-links><span>No links added yet.</span></div></section>
+          <section class="side-card status-card"><i></i><div><b>Market data refreshes automatically</b><span data-updated>Connecting to live sources…</span></div></section>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <dialog data-editor>
+    <form class="dialog-card" data-editor-form>
+      <div class="dialog-head"><div><span class="eyebrow">COMMUNITY SETUP</span><h2 data-editor-title>Create coin community</h2></div><button type="button" data-close-dialog aria-label="Close">×</button></div>
+      <label>Banner image<input type="file" data-banner accept="image/png,image/jpeg,image/webp"><small>Wide images work best. SlimeWire crops and optimizes the upload.</small></label>
+      <div class="form-row"><label>Community name<input data-field="title" maxlength="60" placeholder="Cash Cow Community"></label><label>Ticker<input data-field="ticker" maxlength="16" placeholder="CASHCOW"></label></div>
+      <label>Description<textarea data-field="description" maxlength="700" placeholder="What this coin and community are building"></textarea></label>
+      <div class="form-row"><label>X community or profile<input data-field="xUrl" placeholder="@handle or x.com/i/communities/…"></label><label>Telegram<input data-field="telegramUrl" placeholder="@group or t.me/group"></label></div>
+      <label>Website<input data-field="websiteUrl" placeholder="https://…"></label>
+      <label>Rules<textarea data-field="rules" maxlength="500" placeholder="Short, useful community rules"></textarea></label>
+      <div class="x-identity"><div><b>Your X identity</b><span>Posts show this handle and your saved SlimeWire PFP. This is a profile link, not X verification.</span></div><input data-x-handle maxlength="15" placeholder="@yourhandle"></div>
+      <p class="form-error" data-form-error></p>
+      <div class="dialog-actions"><button type="button" data-close-dialog>Cancel</button><button class="primary" type="submit">Save community</button></div>
+    </form>
+  </dialog>
+
+  <dialog data-auth-dialog>
+    <form class="dialog-card auth-card" data-auth-form>
+      <div class="dialog-head"><div><span class="eyebrow">SLIMEWIRE ACCOUNT</span><h2>Sign in to participate</h2></div><button type="button" data-close-auth aria-label="Close">×</button></div>
+      <p>Reading stays public. Creating, joining and posting use your SlimeWire profile.</p>
+      <label>Username<input data-auth-user autocomplete="username" minlength="3" maxlength="24"></label>
+      <label>Password<input data-auth-password type="password" autocomplete="current-password" minlength="8"></label>
+      <p class="form-error" data-auth-error></p>
+      <div class="auth-actions"><button type="button" data-auth-mode="login">Sign in</button><button class="primary" type="button" data-auth-mode="create">Create account</button></div>
+      <small>Already use the Telegram bot? You can also use its <code>/web</code> login on the main terminal.</small>
+    </form>
+  </dialog>
+
+  <div class="toast" data-toast role="status"></div>
+  <script src="/community.js" defer></script>
+</body>
+</html>

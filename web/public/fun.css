@@ -25,6 +25,7 @@
 
 /* Keep a deterministic slime face visible underneath metadata art while remote/CDN bytes resolve. */
 .coin-avatar,.coin-identity img{background-position:center;background-size:cover;background-repeat:no-repeat}
+.coin-community-link{margin-left:auto;border:1px solid var(--line2);border-radius:8px;padding:6px 8px;color:var(--green2);font-size:9px;font-weight:850;text-decoration:none}.coin-community-link+.coin-head-quote{margin-left:0}
 
 /* Fun v2: faster coin trading and a cleaner branded home. */
 .pulse-card{min-height:205px;padding:23px 19px 18px;background:linear-gradient(90deg,rgba(2,6,2,.98) 0%,rgba(2,7,3,.88) 44%,rgba(2,7,3,.10) 78%),url('/assets/slimewire/fun-hero-v3.webp') 61% center/cover no-repeat}
