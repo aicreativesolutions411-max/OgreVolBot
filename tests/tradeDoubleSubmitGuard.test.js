@@ -29,6 +29,23 @@ test("main website mirrors stay identical", () => {
   assert.equal(indexSource, ggSource, "index.html and gg.html drifted; shared site fixes must ship together");
 });
 
+test("desktop and responsive wallet addresses copy when the address itself is clicked", () => {
+  const addressButton = functionBody(appSource, "walletAddressCopyHtml");
+  assert.match(addressButton, /class="wallet-address-copy"/);
+  assert.match(addressButton, /data-copy=/);
+  assert.match(functionBody(appSource, "walletsHtml"), /walletAddressCopyHtml\(wallet\.publicKey\)/);
+  assert.match(functionBody(appSource, "connectedWalletCardHtml"), /walletAddressCopyHtml\(connected\.publicKey/);
+  assert.match(functionBody(appSource, "walletPositionGroupHtml"), /walletAddressCopyHtml\(wallet\.publicKey/);
+  assert.match(appSource, /target\.closest\?\.\("\[data-copy\]"\)/);
+  assert.match(functionBody(appSource, "copyBrowserText"), /document\.execCommand\?\.\("copy"\)/);
+  for (const liveTerminal of [ggSource, indexSource]) {
+    assert.match(liveTerminal, /class="addr wallet-address-tap"[^>]+Copy full wallet address/);
+    assert.match(liveTerminal, /⧉ Copy full address/);
+    assert.match(liveTerminal, /⧉ Tap to copy/);
+    assert.match(functionBody(liveTerminal, "copy"), /document\.execCommand\?\.\("copy"\)/);
+  }
+});
+
 test("desktop bundle plans can leave selected wallets completely manual", () => {
   const bundleUi = functionBody(appSource, "walletExitTargetsHtml");
   const bundleForm = functionBody(appSource, "readBundlePlanForm");
@@ -1243,7 +1260,7 @@ test("launch dev + bundle presets support shared, per-wallet ladders, and manual
     assert.match(src, /manual=!!\(sel&&sel\.value==="manual"\)/);
     assert.match(src, /id="lcJoinSlEnabled" checked/);
     assert.match(src, /exitMode:mode,stopLossEnabled,stopLossPct:stopLossEnabled\?/);
-    assert.match(src, /body\.devExitStrategy=lcReadExitStrategy\("lcDev"\)/);
+    assert.match(src, /body\.devExitStrategy=\{\.\.\.lcReadExitStrategy\("lcDev"\),proceedsRouting\}/);
     assert.match(src, /walletConfigs:configs/);
     assert.match(src, /takeProfitLadder/);
   }
@@ -4696,6 +4713,11 @@ test("launch participant invites are non-custodial, durable, idempotent, and res
   assert.match(serverSource, /pathname === "\/api\/web\/launch\/bundle-invite\/approve"/);
   assert.match(serverSource, /pathname === "\/api\/web\/launch\/bundle-invites"/);
   assert.match(serverSource, /participantEntries = await fulfillLaunchBundleInvites/);
+  const publicInvite = functionBody(serverSource, "publicLaunchBundleInvite");
+  assert.match(publicInvite, /exitConfig/);
+  assert.match(publicInvite, /stopLossPct/);
+  assert.match(publicInvite, /takeProfitLadder: savedLadder/);
+  assert.doesNotMatch(publicInvite, /walletPublicKey:/);
 
   for (const file of ["gg.html", "index.html"]) {
     const html = fs.readFileSync(new URL(`../web/public/${file}`, import.meta.url), "utf8");
@@ -4707,5 +4729,21 @@ test("launch participant invites are non-custodial, durable, idempotent, and res
     assert.match(html, /Your wallet stays yours/);
     assert.match(html, /data-lc-participant-pick/);
     assert.match(html, /participantInviteIds/);
+    assert.match(html, /function lcInviteSavedSummary/);
+    assert.match(html, /Saved now/);
+    assert.match(html, /const cfg=invite\.exitConfig/);
+    assert.match(html, /short\(w\.publicKey\)===invite\.walletShort/);
+    assert.match(html, /id="lcRouteProceeds"/);
+    assert.doesNotMatch(html, /id="lcRouteProceeds"[^>]*checked/);
+    assert.match(html, /Pass confirmed sale proceeds to the next wallet/);
+    assert.match(html, /It does not create a rebuy or repeat back to the first wallet/);
+    assert.match(html, /proceedsRouting=lcReadProceedsRouting\(devIdx\)/);
   }
+  const routing = functionBody(serverSource, "routeConfirmedExitProceeds");
+  assert.match(routing, /sourceIndex >= order\.length - 1/);
+  assert.match(routing, /sourceSignature/);
+  assert.match(routing, /status: "submitting"/);
+  assert.match(routing, /SystemProgram\.transfer/);
+  assert.doesNotMatch(routing, /buyTokenForPlan/);
+  assert.match(serverSource, /proceedsRouting = await resolveWebProceedsRouting/);
 });

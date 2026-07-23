@@ -16861,6 +16861,32 @@ async function sweepBackgroundWallets(attempt = 0) {
   }
 }
 
+async function copyBrowserText(value) {
+  const text = String(value || "");
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const field = document.createElement("textarea");
+  field.value = text;
+  field.setAttribute("readonly", "");
+  field.style.position = "fixed";
+  field.style.opacity = "0";
+  document.body.appendChild(field);
+  field.select();
+  const copied = document.execCommand?.("copy");
+  field.remove();
+  if (!copied) throw new Error("Clipboard unavailable.");
+}
+
+function walletAddressCopyHtml(address, options = {}) {
+  const publicKey = String(address || "").trim();
+  if (!publicKey) return "";
+  const visible = options.full === false ? shortAddress(publicKey) : publicKey;
+  const label = options.label || "Copy address";
+  return `<button type="button" class="wallet-address-copy" data-copy="${escapeHtml(publicKey)}" data-copy-label="${escapeHtml(label)}" title="Copy full wallet address" aria-label="Copy full wallet address"><code>${escapeHtml(visible)}</code><span>${escapeHtml(label)}</span></button>`;
+}
+
 function walletsHtml() {
   const connected = connectedWalletCardHtml();
   const balancesPanel = `
@@ -16884,7 +16910,7 @@ function walletsHtml() {
             <div class="user-avatar mini" aria-hidden="true">${userAvatarHtml(String(wallet.index))}</div>
             <div>
             <strong>${wallet.index}. ${escapeHtml(wallet.label)}${wallet.sessionWallet ? ` <span class="session-wallet-badge">${escapeHtml(wallet.sessionStatus === "funded" ? "Session Funded" : "Session")}</span>` : ""}</strong>
-            <code>${wallet.publicKey}</code>
+            ${walletAddressCopyHtml(wallet.publicKey)}
             ${walletBalanceLine(wallet)}
             ${wallet.sessionWallet ? `<small>Session source: ${escapeHtml(shortAddress(wallet.sourceConnectedWallet || ""))}${wallet.fundingAmountSol ? ` | Budget ${escapeHtml(wallet.fundingAmountSol)} SOL` : ""}</small>` : ""}
             </div>
@@ -17084,7 +17110,8 @@ function connectedWalletCardHtml() {
     <section class="connected-wallet-card">
       <div>
         <h3>Funding wallet connected</h3>
-        <p>${escapeHtml(connected.provider || "Solana Wallet")} ${escapeHtml(shortAddress(connected.publicKey))}</p>
+        <p>${escapeHtml(connected.provider || "Solana Wallet")}</p>
+        ${walletAddressCopyHtml(connected.publicKey, { full: false })}
         <small>This external wallet is only used to approve funding. Its balances and coins are never mixed into your SlimeWire portfolio.</small>
         ${sessionWalletCtaHtml()}
         <small>${state.walletFastApprovalsEnabled ? "Fast approvals are on for connected-wallet prompts." : "Fast approvals are off."}</small>
@@ -17206,7 +17233,7 @@ function walletPositionGroupHtml(group) {
           <div class="user-avatar mini" aria-hidden="true">${userAvatarHtml(String(wallet.index))}</div>
           <div>
             <strong>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.sessionWallet ? ` <span class="session-wallet-badge">Session</span>` : ""}</strong>
-            <code>${escapeHtml(shortAddress(wallet.publicKey || ""))}</code>
+            ${walletAddressCopyHtml(wallet.publicKey, { full: false })}
           </div>
         </div>
         <div class="wallet-position-totals">
@@ -26419,12 +26446,14 @@ document.addEventListener("click", async (event) => {
     runDeferredUiTask(() => loadScan(state.scanMode));
   }
 
-  const copyValue = target.getAttribute("data-copy");
+  const copyTarget = target.closest?.("[data-copy]");
+  const copyValue = copyTarget?.getAttribute("data-copy");
   if (copyValue) {
-    const originalLabel = target.getAttribute("data-copy-label") || target.textContent || "Copy";
-    await navigator.clipboard.writeText(copyValue);
-    writeText(target, "Copied");
-    setTimeout(() => { writeText(target, originalLabel); }, 1000);
+    const addressLabel = copyTarget.matches(".wallet-address-copy") ? copyTarget.querySelector("span") : null;
+    const originalLabel = copyTarget.getAttribute("data-copy-label") || addressLabel?.textContent || copyTarget.textContent || "Copy";
+    await copyBrowserText(copyValue);
+    writeText(addressLabel || copyTarget, "Copied");
+    setTimeout(() => { writeText(addressLabel || copyTarget, originalLabel); }, 1000);
   }
 });
 

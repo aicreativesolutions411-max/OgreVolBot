@@ -20,7 +20,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "62", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "63", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -33,7 +33,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v52/);
+  assert.match(funWorker, /slimewire-fun-v53/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -89,9 +89,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=38/);
-  assert.match(funWorker, /slimewire-fun-v52/);
-  assert.match(funWorker, /fun\.css\?v=38/);
+  assert.match(html, /fun\.css\?v=39/);
+  assert.match(funWorker, /slimewire-fun-v53/);
+  assert.match(funWorker, /fun\.css\?v=39/);
 });
 
 test("/fun keeps the wallet funding card compact and scannable", () => {
@@ -100,8 +100,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=62/);
-  assert.match(funWorker, /fun\.js\?v=62/);
+  assert.match(html, /fun\.js\?v=63/);
+  assert.match(funWorker, /fun\.js\?v=63/);
 });
 
 test("Fun volume switches pasted contracts to their authoritative chain", () => {
@@ -163,7 +163,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v52"/);
+  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v53"/);
   assert.match(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
   assert.match(funWorker, /self\.clients\.claim\(\)/);
@@ -696,7 +696,7 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, MACD, and 
   assert.ok(html.indexOf("lightweight-charts.standalone.production.js") < html.indexOf("fun-indicators.js"));
   assert.match(html, /fun-indicators\.js\?v=7/);
   assert.match(funWorker, /fun-indicators\.js\?v=7/);
-  assert.match(funWorker, /fun\.css\?v=38/);
+  assert.match(funWorker, /fun\.css\?v=39/);
   assert.match(indicators, /new URLSearchParams\(\{ ca: key, tf: timeframe \}\)/);
   assert.match(indicators, /`\$\{API_BASE\}\/api\/chart\?\$\{query\.toString\(\)\}`/);
   assert.match(indicators, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/pools/);
@@ -883,6 +883,19 @@ test("/quick preloads social coins and keeps wallet setup inside the fast trade 
 test("wallet manager can create, restore, export, select, and safely remove wallets", () => {
   for (const path of ["/api/web/wallets/create", "/api/web/wallets/restore", "/api/web/wallets/import", "/api/web/wallets/export", "/api/web/wallets/remove", "/api/web/wallets/rename"]) assert.match(js, new RegExp(path.replaceAll("/", "\\/")));
   for (const marker of ["data-manage-wallets", "data-wallet-backup-file", "data-select-wallet", "data-remove-wallet", "data-rename-wallet"]) assert.match(html + js, new RegExp(marker));
+});
+
+test("mobile wallet addresses are visible and tap-to-copy from the hero, manager, positions, and Receive", () => {
+  assert.match(js, /class="wallet-hero-address"[^>]+data-copy-wallet-address/);
+  assert.match(js, /Tap to copy full address/);
+  assert.match(js, /class="wallet-manager-address"[^>]+data-copy-wallet-address/);
+  assert.match(js, /class="fun-wallet-group-address"[^>]+data-copy-wallet-address/);
+  assert.match(js, /class="wallet-full-address"[^>]+data-copy-wallet-address/);
+  assert.match(js, /<code>\$\{escapeHtml\(wallet\.publicKey\)\}<\/code>/);
+  assert.match(js, /async function copyWalletAddress\(address\)/);
+  assert.match(js, /event\.target\.closest\("\[data-copy-wallet-address\]"\)/);
+  assert.match(js, /document\.execCommand\?\.\("copy"\)/);
+  for (const marker of ["wallet-hero-address", "wallet-manager-address", "wallet-full-address"]) assert.match(css, new RegExp(marker));
 });
 
 test("wallet manager batch-funds exact allocations and can sell or consolidate selected wallets", () => {

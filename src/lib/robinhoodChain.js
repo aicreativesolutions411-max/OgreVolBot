@@ -154,6 +154,7 @@ export const RH_SUSHI = Object.freeze({
   v3Factory: "0xe51960f1b45f1c9fb6d166e6a884f866fc70433b",
   v3PositionManager: "0x51d0e5188afe12d502e29d982d20c190e7816107",
   v3Quoter: "0x3e290e5e01818002a0b672148bdc7514d861c7b3",
+  v3SwapRouter: "0x1e406484f1f204b23ce84b9901c0171a738fd406",
   v2Factory: "0xe52abd50ad151ecdf56427effd715e703696a6b1",
   v2Router: "0x9a55d3d0c0f09859c7869510f53ed0a30b340766",
   weth: "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
@@ -1056,6 +1057,110 @@ export async function sushiQuoteRhSwap({ address, fromCurrency, toCurrency, amou
     outSymbol: String(outToken?.symbol || ""),
     impactPercent: Number.isFinite(Number(data.priceImpact)) ? String(Number(data.priceImpact) * 100) : "",
     venue: "sushiswap",
+  };
+}
+
+// Direct Sushi V3 fallback for confirmed on-chain pools. Sushi's hosted route
+// service can return `NoWay` while a brand-new SlimeWire pool is already live.
+// The factory, quoter and SwapRouter below are one verified Sushi deployment,
+// so this path does not depend on an off-chain index catching up first.
+export async function sushiV3QuoteRhSwap({ address, fromCurrency, toCurrency, amountRaw, maxSlippage = 0.03, rpcUrl }) {
+  const zero = ethers.ZeroAddress;
+  const sender = ethers.getAddress(address);
+  const from = String(fromCurrency || "").toLowerCase() === zero.toLowerCase()
+    ? RH_SUSHI.weth
+    : ethers.getAddress(fromCurrency);
+  const to = String(toCurrency || "").toLowerCase() === zero.toLowerCase()
+    ? RH_SUSHI.weth
+    : ethers.getAddress(toCurrency);
+  if (from.toLowerCase() === to.toLowerCase()) throw new Error("Sushi V3 swap needs two different assets.");
+  const amountIn = BigInt(amountRaw || 0);
+  if (amountIn <= 0n) throw new Error("Sushi V3 swap amount must be above zero.");
+
+  const provider = rhProvider(rpcUrl);
+  const factory = new ethers.Contract(RH_SUSHI.v3Factory, [
+    "function getPool(address tokenA,address tokenB,uint24 fee) view returns(address pool)"
+  ], provider);
+  const quoter = new ethers.Contract(RH_SUSHI.v3Quoter, [
+    "function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns(uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)"
+  ], provider);
+  const candidates = (await Promise.all([10_000, 3_000, 500, 100].map(async (fee) => {
+    const pool = await factory.getPool(from, to, fee).catch(() => zero);
+    if (!pool || String(pool).toLowerCase() === zero.toLowerCase()) return null;
+    try {
+      const quoted = await quoter.quoteExactInputSingle.staticCall({
+        tokenIn: from,
+        tokenOut: to,
+        amountIn,
+        fee,
+        sqrtPriceLimitX96: 0
+      });
+      const amountOut = BigInt(quoted?.amountOut ?? quoted?.[0] ?? 0);
+      return amountOut > 0n ? { fee, pool, amountOut } : null;
+    } catch { return null; }
+  }))).filter(Boolean);
+  candidates.sort((a, b) => a.amountOut === b.amountOut ? 0 : (a.amountOut > b.amountOut ? -1 : 1));
+  const best = candidates[0];
+  if (!best) throw new Error("No executable Sushi V3 pool for this Robinhood coin right now.");
+
+  const slippageBps = BigInt(Math.round(Math.max(0.001, Math.min(0.25, Number(maxSlippage) || 0.03)) * 10_000));
+  const amountOutMinimum = (best.amountOut * (10_000n - slippageBps)) / 10_000n;
+  const router = new ethers.Interface([
+    "function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 deadline,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96)) payable returns(uint256 amountOut)",
+    "function unwrapWETH9(uint256 amountMinimum,address recipient) payable",
+    "function multicall(bytes[] data) payable returns(bytes[] results)"
+  ]);
+  const nativeInput = String(fromCurrency || "").toLowerCase() === zero.toLowerCase();
+  const nativeOutput = String(toCurrency || "").toLowerCase() === zero.toLowerCase();
+  const swapRecipient = nativeOutput ? RH_SUSHI.v3SwapRouter : sender;
+  const swapData = router.encodeFunctionData("exactInputSingle", [{
+    tokenIn: from,
+    tokenOut: to,
+    fee: best.fee,
+    recipient: swapRecipient,
+    deadline: Math.floor(Date.now() / 1000) + 600,
+    amountIn,
+    amountOutMinimum,
+    sqrtPriceLimitX96: 0
+  }]);
+  const txs = [];
+  if (!nativeInput) {
+    const approve = new ethers.Interface(["function approve(address spender,uint256 amount) returns(bool)"]);
+    txs.push({ stepId: "sushi-v3-approve", to: from, data: approve.encodeFunctionData("approve", [RH_SUSHI.v3SwapRouter, amountIn]), value: "0" });
+  }
+  const swapCall = nativeOutput
+    ? router.encodeFunctionData("multicall", [[
+      swapData,
+      router.encodeFunctionData("unwrapWETH9", [amountOutMinimum, sender])
+    ]])
+    : swapData;
+  txs.push({
+    stepId: "sushi-v3-swap",
+    to: RH_SUSHI.v3SwapRouter,
+    data: swapCall,
+    value: nativeInput ? amountIn.toString() : "0"
+  });
+
+  let decimals = 18;
+  let symbol = nativeOutput ? "ETH" : "";
+  if (!nativeOutput) {
+    const outputToken = new ethers.Contract(to, [
+      "function decimals() view returns(uint8)",
+      "function symbol() view returns(string)"
+    ], provider);
+    [decimals, symbol] = await Promise.all([
+      outputToken.decimals().then(Number).catch(() => 18),
+      outputToken.symbol().then(String).catch(() => "")
+    ]);
+  }
+  return {
+    txs,
+    outFormatted: ethers.formatUnits(best.amountOut, decimals),
+    outSymbol: symbol,
+    impactPercent: "",
+    venue: "sushiswap-v3-direct",
+    pool: best.pool,
+    fee: best.fee
   };
 }
 

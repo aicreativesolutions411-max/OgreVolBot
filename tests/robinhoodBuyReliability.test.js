@@ -51,11 +51,12 @@ test("Relay uses the current quote API with availability-only legacy fallback", 
   assert.doesNotMatch(chain, /fetch\(`\$\{RELAY_API\}\/quote`/);
 });
 
-test("Robinhood trades use live fee reserve, three quote routes, and failure audit", () => {
+test("Robinhood trades use live fee reserve, four quote routes, and failure audit", () => {
   assert.match(server, /await rhBuySpendPlan\(\{/);
   assert.doesNotMatch(server, /reserveEth = Math\.max\(0\.00035/);
-  assert.match(server, /quote = await uniswapQuoteRhSwap/);
-  assert.match(server, /quote = await sushiQuoteRhSwap/);
+  assert.match(server, /\["Uniswap V3", \(\) => uniswapQuoteRhSwap/);
+  assert.match(server, /sushiV3QuoteRhSwap/);
+  assert.match(server, /sushiQuoteRhSwap/);
   assert.match(server, /web_rh_trade_failed/);
   assert.match(server, /No executable Robinhood trade route right now/);
 });

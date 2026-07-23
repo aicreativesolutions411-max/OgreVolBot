@@ -1893,6 +1893,41 @@ code {
   margin-top: 6px;
 }
 
+.wallet-address-copy {
+  display: flex;
+  width: min(100%, 620px);
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid rgba(114, 255, 35, 0.22);
+  border-radius: 10px;
+  background: rgba(114, 255, 35, 0.05);
+  color: var(--green-2);
+  text-align: left;
+}
+
+.wallet-address-copy:hover,
+.wallet-address-copy:focus-visible {
+  border-color: rgba(114, 255, 35, 0.55);
+  background: rgba(114, 255, 35, 0.1);
+}
+
+.wallet-address-copy code {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.wallet-address-copy span {
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .row-card span,
 .row-card small {
   display: block;

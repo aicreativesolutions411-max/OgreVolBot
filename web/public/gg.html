@@ -399,6 +399,10 @@
   .walletrow .info b{font-size:13px}
   .walletrow .info .addr{font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-top:3px}
   .walletrow .info .addr button{color:var(--muted);font-size:12px}.walletrow .info .addr button:hover{color:var(--green)}
+  .walletrow .info button.wallet-address-tap{width:max-content;max-width:100%;padding:6px 8px;border:1px solid rgba(114,255,35,.22);border-radius:8px;background:rgba(114,255,35,.05);color:var(--green2);cursor:pointer;text-align:left;overflow-wrap:anywhere}
+  .walletrow .info button.wallet-address-tap:hover,.walletrow .info button.wallet-address-tap:focus-visible{border-color:rgba(114,255,35,.55);background:rgba(114,255,35,.1)}
+  .wallet-address-tap .copy-note{color:var(--muted);font-family:var(--font);font-size:9px;font-weight:800;white-space:nowrap}
+  .wallet-address-tap>span:first-child{min-width:0;overflow-wrap:anywhere}
   .walletrow .rename{display:flex;gap:7px;margin-top:8px}
   .walletrow .rename input{min-width:0;flex:1;padding:8px 9px;border-radius:9px;border:1px solid var(--border2);background:#020703;color:var(--text);font-size:12px}
   .walletrow .rename button{flex:0 0 auto;padding:8px 11px;border-radius:9px;font-size:11px}
@@ -735,7 +739,7 @@
   }
   function avImg(r,cls){const raw=av(r),mint=String((r&&(r.tokenMint||r.mint||r.address))||"");const ph=letterAvatar(mint||raw||((r&&r.symbol)||"?"),(r&&r.symbol)||"?"),srcs=imgCascade(raw,mint,64),first=srcs[0]||ph;return'<img class="'+cls+'" loading="eager" decoding="async" src="'+esc(first)+'" data-raw="'+esc(raw||"")+'" data-avatar-mint="'+esc(mint)+'" data-srcs="'+esc(srcs.join("|"))+'" data-si="0" data-ph="'+esc(ph)+'" onerror="GG.imgNext(this)">';}
   function toast(msg,err){const t=$("#toast");t.textContent=msg;t.className="toast show"+(err?" err":"");clearTimeout(t._t);t._t=setTimeout(()=>t.className="toast",3400);}
-  function copy(text){navigator.clipboard?.writeText(text).then(()=>toast("Copied "+short(text))).catch(()=>{});}
+  async function copy(text){try{if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(text);else{const f=document.createElement("textarea");f.value=String(text||"");f.setAttribute("readonly","");f.style.position="fixed";f.style.opacity="0";document.body.appendChild(f);f.select();const ok=document.execCommand?.("copy");f.remove();if(!ok)throw new Error("Clipboard unavailable");}toast("Copied "+short(text));}catch{toast("Could not copy address",true);}}
   async function getJson(url,opts){try{const r=await fetch(url,opts);let d=null;try{d=await r.json();}catch(e){}return{ok:r.ok,status:r.status,d};}catch(e){return{ok:false,status:0,d:null};}}
   function downloadText(filename,text){try{const b=new Blob([text],{type:"text/plain"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=filename||"backup.txt";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),3000);}catch(e){}}
 
@@ -4051,7 +4055,7 @@
         const sel=w.index===state.activeWallet;
         const main=w.index===state.wallets[0]?.index;
         return'<div class="walletrow'+(sel?" sel":"")+'"><div class="ico">👛</div><div class="info"><b>'+esc(w.label||"Wallet")+(main?" · Main":"")+(sel?" · active":"")+'</b>'+
-          '<div class="addr">'+esc(short(w.publicKey))+'<button onclick="GG.copy(\''+esc(w.publicKey)+'\')" title="Copy address">⧉</button></div>'+
+          '<button class="addr wallet-address-tap" onclick="GG.copy(\''+esc(w.publicKey)+'\')" title="Copy full wallet address"><span>'+esc(short(w.publicKey))+'</span><span class="copy-note">⧉ Copy full address</span></button>'+
           '<div class="rename"><input data-rename-wallet-input="'+w.index+'" value="'+esc(w.label||"")+'" maxlength="32" aria-label="Rename wallet '+esc(String(w.index))+'"><button class="wbtn ghost" data-rename-wallet-btn="'+w.index+'">Save</button></div></div>'+
           '<div class="bal"><b>◎ '+Number(w.sol||0).toFixed(3)+'</b><span>balance</span></div>'+
           (sel?'':'<button class="wbtn ghost" style="margin-left:10px" onclick="GG.pickWallet('+w.index+')">Use</button>')+
@@ -4064,7 +4068,7 @@
         (list||'<p class="mut">No wallets yet.</p>')+
         '<div style="display:flex;gap:9px;margin-top:6px;flex-wrap:wrap"><button class="wbtn" id="connectFundBtn" style="flex:1;min-width:160px">🔗 Connect &amp; fund</button><button class="wbtn ghost" id="mkWallet">+ New wallet</button><button class="wbtn ghost" id="refWallet">↻ Refresh</button></div></div>'+
         (w?'<div class="wbox"><h3>Deposit SOL</h3><p class="sub">Send SOL to your active wallet to start trading. Solana network only.</p>'+
-          '<div class="walletrow"><div class="ico">⬇</div><div class="info"><b>'+esc(w.label||"Wallet")+'</b><div class="addr">'+esc(w.publicKey)+'</div></div></div>'+
+          '<div class="walletrow"><div class="ico">⬇</div><div class="info"><b>'+esc(w.label||"Wallet")+'</b><button class="addr wallet-address-tap" onclick="GG.copy(\''+esc(w.publicKey)+'\')" title="Copy full wallet address"><span>'+esc(w.publicKey)+'</span><span class="copy-note">⧉ Tap to copy</span></button></div></div>'+
           '<div style="display:flex;gap:9px;margin-top:6px"><button class="wbtn" id="copyDep">Copy deposit address</button></div>'+
           '<p class="wnote" style="margin-top:12px">Tip: keep a little SOL for fees. Once funds land, hit Refresh and your balance updates here and on every Buy button.</p></div>':'')+
         additionalWalletFundingHtml()+
@@ -4640,6 +4644,11 @@
     }
     return{preset:"balanced",takeProfitPct:"40",stopLossPct:stopLossEnabled?"8":"0",takeProfitLadder:[],breakEvenAfterTp1:false};
   }
+  function lcReadProceedsRouting(devIdx){
+    const enabled=!!($("#lcRouteProceeds")&&$("#lcRouteProceeds").checked);
+    const walletIndexes=[String(devIdx),...[...document.querySelectorAll('#v-launch [data-lc-bundle-pick]:checked')].map(cb=>String(cb.dataset.lcBundlePick)).filter(i=>String(i)!==String(devIdx))];
+    return{enabled:enabled&&walletIndexes.length>1,mode:"next-wallet",percent:Number(($("#lcRoutePercent")||{}).value||100),walletIndexes};
+  }
   function lcBundleWalletRowsHtml(){
     const wallets=state.wallets||[];
     if(!wallets.length)return '<div class="lcnote">Create and fund another wallet in Wallet before adding bundle buys.</div>';
@@ -4651,11 +4660,12 @@
     const mode=String(($("#lcBundleMode")||{}).value||"same"),shared=$("#lcBundleShared"),per=$("#lcBundlePer");if(shared)shared.style.display=mode==="same"?"":"none";if(per)per.style.display="";
     const devIdx=String(($("#lcDevWallet")||{}).value||state.activeWallet||"");
     document.querySelectorAll('#v-launch [data-lc-wallet-row]').forEach(row=>{const idx=String(row.dataset.lcWalletRow),isDev=idx===devIdx,pick=row.querySelector('[data-lc-bundle-pick]'),cfg=row.querySelector('[data-lc-wallet-config]');row.style.display=isDev?"none":"";if(cfg)cfg.style.display=!isDev&&mode==="wallet"&&pick&&pick.checked?"":"none";});
+    const route=$("#lcRouteProceeds"),routeFields=$("#lcRouteFields"),routeSummary=$("#lcRouteSummary"),ordered=[devIdx,...[...document.querySelectorAll('#v-launch [data-lc-bundle-pick]:checked')].map(cb=>String(cb.dataset.lcBundlePick)).filter(i=>i!==devIdx)];if(routeFields)routeFields.style.display=route&&route.checked?"":"none";if(routeSummary){const names=ordered.map(i=>{const w=(state.wallets||[]).find(x=>String(x.index)===String(i));return w&&(w.label||("Wallet "+i));}).filter(Boolean);routeSummary.textContent=names.length>1?names.join(" → ")+". Each confirmed exit can pass proceeds forward once; the last wallet stops.":"Choose at least one additional wallet.";}
   }
   function lcWireLaunchStrategies(){
     document.querySelectorAll('#v-launch [data-lc-strategy] select').forEach(sel=>sel.onchange=lcSyncLaunchStrategies);
     document.querySelectorAll('#v-launch [data-lc-stop-toggle]').forEach(cb=>cb.onchange=lcSyncLaunchStrategies);
-    const bw=$("#lcBundleWallets"),mode=$("#lcBundleMode");if(bw)bw.onchange=lcSyncLaunchStrategies;if(mode)mode.onchange=lcSyncLaunchStrategies;
+    const bw=$("#lcBundleWallets"),mode=$("#lcBundleMode"),route=$("#lcRouteProceeds");if(bw)bw.onchange=lcSyncLaunchStrategies;if(mode)mode.onchange=lcSyncLaunchStrategies;if(route)route.onchange=lcSyncLaunchStrategies;
     document.querySelectorAll('#v-launch [data-lc-bundle-pick]').forEach(cb=>cb.onchange=lcSyncLaunchStrategies);
     lcSyncLaunchStrategies();
   }
@@ -4699,6 +4709,13 @@
   function lcInviteCustomHtml(){
     return '<label id="lcJoinStopControl" class="lcheck" style="margin:8px 0 0"><input type="checkbox" id="lcJoinSlEnabled" checked> <span><b id="lcJoinSlLabel">Stop loss on</b> · uncheck for take-profit ladder only. Break-even protection also stays off.</span></label><div id="lcJoinCustom" class="feebox" style="display:none;margin-top:8px"><div class="field"><label>Stop loss (%)</label><input id="lcJoinSl" inputmode="decimal" value="10"></div><div class="field row2"><div><label>Target 1 / sell %</label><div style="display:flex;gap:6px"><input id="lcJoinTp1" inputmode="decimal" value="50"><input id="lcJoinSell1" inputmode="decimal" value="40"></div></div><div><label>Target 2 / sell %</label><div style="display:flex;gap:6px"><input id="lcJoinTp2" inputmode="decimal" value="120"><input id="lcJoinSell2" inputmode="decimal" value="35"></div></div><div><label>Target 3 / sell %</label><div style="display:flex;gap:6px"><input id="lcJoinTp3" inputmode="decimal" value="300"><input id="lcJoinSell3" inputmode="decimal" value="25"></div></div></div></div>';
   }
+  function lcInviteSavedSummary(invite){
+    if(invite.status!=="READY")return"";
+    const cfg=invite.exitConfig||{},lad=Array.isArray(cfg.takeProfitLadder)?cfg.takeProfitLadder:[];
+    const exit=invite.exitMode==="manual"?"Manual only":(lad.length?lad.map(r=>"+"+Number(r.pct)+"% / sell "+Number(r.sellPercent)+"%").join(" → "):invite.exitLabel||"Managed exit");
+    const sl=invite.exitMode==="manual"?"":(invite.stopLossEnabled?" · stop loss -"+Number(cfg.stopLossPct||0)+"%":" · stop loss off");
+    return '<div class="launch-summary"><span class="mark">✓</span><div><b>Saved now</b><br><span class="mut">'+esc(invite.walletLabel||invite.walletShort||"Wallet")+' · '+esc(invite.amountSol)+' SOL · '+esc(exit+sl)+'</span></div></div>';
+  }
   async function renderLaunchBundleInvite(){
     setActiveView("v-launch");subbarTool("Launch entry approval");
     const token=state.launchInviteToken;
@@ -4714,14 +4731,22 @@
     else if(final) action='<div class="launch-summary"><span class="mark">!</span><div><b>This invite is '+esc(invite.status.toLowerCase())+'.</b><br><span class="mut">Ask the launcher for a fresh link if needed.</span></div></div>';
     else if(!state.token) action='<div class="launch-summary"><span class="mark">1</span><div><b>Sign in to approve your own wallet.</b><br><span class="mut">Use an existing SlimeWire profile or create one. The launcher never sees your wallet key.</span></div></div><div style="display:flex;gap:9px;flex-wrap:wrap"><button class="wbtn" id="lcJoinLogin" style="flex:1">Log in</button><button class="wbtn ghost" id="lcJoinCreate" style="flex:1">Create profile</button></div>';
     else if(!(state.wallets||[]).length) action='<div class="launch-summary"><span class="mark">2</span><div><b>Create or restore your wallet first.</b><br><span class="mut">Then return here; this invite stays attached to the link.</span></div></div><button class="wbtn" id="lcJoinWallet" style="width:100%">Set up my wallet</button>';
-    else action='<div class="field"><label>Your wallet</label>'+walletSelectHtml("lcJoinWalletSelect")+'<span class="mut" style="font-size:10px">Only this wallet will enter. You keep full control.</span></div>'+
+    else action=lcInviteSavedSummary(invite)+'<div class="field"><label>Your wallet</label>'+walletSelectHtml("lcJoinWalletSelect")+'<span class="mut" style="font-size:10px">Only this wallet will enter. You keep full control.</span></div>'+
       '<div class="field"><label>Entry amount (SOL)</label><input id="lcJoinAmount" inputmode="decimal" value="'+esc(invite.amountSol||"0.05")+'"><span class="mut" style="font-size:10px">Keep a little SOL for network fees.</span></div>'+
       '<div class="field"><label>After entry</label><select id="lcJoinExit"><option value="manual">Manual only — no automatic selling</option><option value="balanced">Balanced preset · TP +40% / SL -8%</option><option value="smart">Smart ladder · +50 / +120 / +300</option><option value="fast">Fast ladder · +25 / +50 / +100</option><option value="custom">Custom ladder</option></select><span class="mut" style="font-size:10px">A preset enables managed-wallet TP/SL for 30 days; revoke it anytime in Wallet. Manual only leaves automation off.</span></div>'+lcInviteCustomHtml()+
       '<label class="lcheck"><input type="checkbox" id="lcJoinConfirm"> <span>I approve one buy from this wallet when the launch completes. I understand launches are high risk and fills are not guaranteed.</span></label>'+
       '<button class="bigbuy" id="lcJoinApprove">'+(invite.status==="READY"?'Update approved entry':'Approve launch entry')+'</button>'+(invite.status==="READY"?'<button class="wbtn ghost" id="lcJoinCancel" style="width:100%;margin-top:8px">Cancel my approval</button>':'')+'<div id="lcJoinMsg" class="mut" style="font-size:11px;margin-top:8px"></div>';
     $("#v-launch").innerHTML='<div class="wgrid"><div class="wbox launch-card" style="grid-column:1/-1;max-width:720px;margin:auto"><div class="launch-head"><div><h3>Join '+esc(invite.label||"launch entry")+'</h3><p class="sub">Invited by '+esc(invite.launcherName||"a SlimeWire launcher")+' · '+esc(invite.status==="READY"?"Already approved — you can update it until launch.":"Choose your settings once, then the launch handles the entry.")+'</p></div><a class="wbtn ghost" href="/">Terminal</a></div>'+action+'<div class="lcnote" style="margin-top:12px"><b>Your wallet stays yours.</b> This approval is limited to one buy for this invite. Manual only means SlimeWire will not auto-sell; presets can be changed only before launch starts.</div></div></div>';
     const li=$("#lcJoinLogin"),cr=$("#lcJoinCreate"),wa=$("#lcJoinWallet");if(li)li.onclick=loginModal;if(cr)cr.onclick=createAccountModal;if(wa)wa.onclick=()=>go("wallet");
-    const exit=$("#lcJoinExit");if(exit){exit.value=invite.exitMode||"manual";const slToggle=$("#lcJoinSlEnabled");if(slToggle&&invite.stopLossEnabled===false)slToggle.checked=false;const sync=()=>{const manual=exit.value==="manual",c=$("#lcJoinCustom"),control=$("#lcJoinStopControl"),sl=$("#lcJoinSl"),label=$("#lcJoinSlLabel"),on=!manual&&!!(slToggle&&slToggle.checked);if(c)c.style.display=exit.value==="custom"?"":"none";if(control)control.style.display=manual?"none":"";if(sl)sl.disabled=!on;if(label)label.textContent=on?"Stop loss on":"Stop loss off";};exit.onchange=sync;if(slToggle)slToggle.onchange=sync;sync();}
+    const exit=$("#lcJoinExit");if(exit){
+      exit.value=invite.exitMode||"manual";
+      const cfg=invite.exitConfig||{},lad=Array.isArray(cfg.takeProfitLadder)?cfg.takeProfitLadder:[],slToggle=$("#lcJoinSlEnabled"),walletSelect=$("#lcJoinWalletSelect");
+      if(walletSelect&&invite.status==="READY"){const match=[...walletSelect.options].find(o=>{const w=(state.wallets||[])[Number(o.value)-1];return (w&&short(w.publicKey)===invite.walletShort)||o.textContent.includes(invite.walletLabel||"\u0000");});if(match)walletSelect.value=match.value;}
+      if(slToggle&&invite.stopLossEnabled===false)slToggle.checked=false;
+      if($("#lcJoinSl")&&cfg.stopLossPct!==undefined)$("#lcJoinSl").value=String(cfg.stopLossPct);
+      lad.slice(0,3).forEach((r,i)=>{const n=i+1,tp=$("#lcJoinTp"+n),sell=$("#lcJoinSell"+n);if(tp)tp.value=String(r.pct);if(sell)sell.value=String(r.sellPercent);});
+      const sync=()=>{const manual=exit.value==="manual",c=$("#lcJoinCustom"),control=$("#lcJoinStopControl"),sl=$("#lcJoinSl"),label=$("#lcJoinSlLabel"),on=!manual&&!!(slToggle&&slToggle.checked);if(c)c.style.display=exit.value==="custom"?"":"none";if(control)control.style.display=manual?"none":"";if(sl)sl.disabled=!on;if(label)label.textContent=on?"Stop loss on":"Stop loss off";};exit.onchange=sync;if(slToggle)slToggle.onchange=sync;sync();
+    }
     const approve=$("#lcJoinApprove");if(approve)approve.onclick=async()=>{
       const msg=$("#lcJoinMsg");if(!$("#lcJoinConfirm").checked){msg.textContent="Check the approval box first.";return;}
       const mode=$("#lcJoinExit").value,ladder=[1,2,3].map(i=>({pct:Number(($("#lcJoinTp"+i)||{}).value||0),sellPercent:Number(($("#lcJoinSell"+i)||{}).value||0)}));
@@ -4933,7 +4958,7 @@
         lcExitStrategyHtml("lcDev","Dev wallet exit preset")+
         '<label class="lcheck"><input type="checkbox" id="lcBundle" checked> <span><b>Bundle my dev buy with launch</b> — it lands with the create transaction. If the Jito bundle does not land, SlimeWire retries and falls back to an immediate standard launch + buy.</span></label>'+
         '<label class="lcheck"><input type="checkbox" id="lcBundleWallets"> <span><b>Buy from my other wallets too</b> — use funded wallets for first-block buys.</span></label>'+
-        '<div id="lcBundleSetup" class="feebox" style="display:none;margin-top:8px"><div class="field"><label>Bundle strategy</label><select id="lcBundleMode"><option value="same">Same settings for every wallet</option><option value="wallet">Set each wallet</option></select></div><div id="lcBundleShared"><div class="field"><label>Buy per wallet (SOL)</label><input id="lcBundleSharedAmount" inputmode="decimal" value="0.05"></div>'+lcExitStrategyHtml("lcBundleSharedExit","Exit preset for every wallet")+'</div><div class="mut" style="font-size:10px;margin:8px 0 4px">Choose bundle wallets</div><div id="lcBundlePer">'+lcBundleWalletRowsHtml()+'</div><div class="lcnote" style="margin-top:8px">Only selected managed wallets buy. Atomic launches use up to the available Jito transaction slots; the safe fallback buys the rest immediately after launch.</div></div>'+
+        '<div id="lcBundleSetup" class="feebox" style="display:none;margin-top:8px"><div class="field"><label>Bundle strategy</label><select id="lcBundleMode"><option value="same">Same settings for every wallet</option><option value="wallet">Set each wallet</option></select></div><div id="lcBundleShared"><div class="field"><label>Buy per wallet (SOL)</label><input id="lcBundleSharedAmount" inputmode="decimal" value="0.05"></div>'+lcExitStrategyHtml("lcBundleSharedExit","Exit preset for every wallet")+'</div><div class="mut" style="font-size:10px;margin:8px 0 4px">Choose bundle wallets</div><div id="lcBundlePer">'+lcBundleWalletRowsHtml()+'</div><div class="lcnote" style="margin-top:8px">Only selected managed wallets buy. Atomic launches use up to the available Jito transaction slots; the safe fallback buys the rest immediately after launch.</div><label class="lcheck" style="margin-top:9px"><input type="checkbox" id="lcRouteProceeds"> <span><b>Pass confirmed sale proceeds to the next wallet</b> — optional and off by default.</span></label><div id="lcRouteFields" style="display:none"><div class="field"><label>Amount to pass forward</label><select id="lcRoutePercent"><option value="50">50% of confirmed proceeds</option><option value="75">75% of confirmed proceeds</option><option value="100" selected>100% of confirmed proceeds</option></select></div><div id="lcRouteSummary" class="lcnote"></div><div class="mut" style="font-size:10px;margin-top:6px">This transfers SOL once to the next selected wallet after a completed managed exit. It does not create a rebuy or repeat back to the first wallet.</div></div></div>'+
         lcParticipantInviteHtml()+
         '<details class="launch-advanced"><summary>Advanced</summary><div><div class="field"><label>Slippage (bps)</label><input id="lcSlip" inputmode="numeric" value="300"></div></div></details>'+
         '</div>'+
@@ -5027,6 +5052,7 @@
       // fee to MAX (1000), matching the proven old launch flow (empty used to mean 0 = creator earns nothing).
       const dw=$("#lcDevWallet");const devIdx=String(dw&&dw.value?dw.value:state.activeWallet);
       const devW=(state.wallets||[]).find(w=>String(w.index)===devIdx);
+      const proceedsRouting=lcReadProceedsRouting(devIdx);
       // Creator fee is now a simple toggle: checked = MAX (1000 bps) to the dev wallet, unchecked = none.
       const creatorFeeBps="1000";
       const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps,holderRewards:lcReadHolderRewards("lc"),rail:state.launchRail||"pump",nftCollection:{enabled:!!($("#lcNftEnabled")&&$("#lcNftEnabled").checked),name:String(($("#lcNftName")||{}).value||"").trim(),description:String(($("#lcNftDescription")||{}).value||"").trim(),useCoinArt:true,supplyMode:String(($("#lcNftSupplyMode")||{}).value||"expandable"),supplyCap:Math.max(1,Math.min(500,Number(($("#lcNftSupplyCap")||{}).value||500))),royaltyBps:Math.max(0,Math.min(1000,Number(($("#lcNftRoyalty")||{}).value||500)))}};
@@ -5037,12 +5063,12 @@
       if(state.launchRail==="meteora"&&$("#lcCustomCurve")&&$("#lcCustomCurve").checked){body.customCurve=true;body.customInitialMcap=String(($("#lcCustomInit")&&$("#lcCustomInit").value)||"5000");body.customMigrationMcap=String(($("#lcCustomMig")&&$("#lcCustomMig").value)||"69000");}
       if(state.launchImg){body.imageDataUrl=state.launchImg.dataUrl;body.imageName=state.launchImg.name;body.imageType=state.launchImg.type;}
       if(state.launchBanner){body.bannerDataUrl=state.launchBanner.dataUrl;body.bannerName=state.launchBanner.name;body.bannerType=state.launchBanner.type;}
-      if(requestedDevBuySol>0){body.devBuyEnabled=true;body.devBuySol=String(requestedDevBuySol);body.bundleDevBuy=!!($("#lcBundle")&&$("#lcBundle").checked);body.antiSnipe=body.bundleDevBuy;body.devExitStrategy=lcReadExitStrategy("lcDev");Object.assign(body,body.devExitStrategy);}
+      if(requestedDevBuySol>0){body.devBuyEnabled=true;body.devBuySol=String(requestedDevBuySol);body.bundleDevBuy=!!($("#lcBundle")&&$("#lcBundle").checked);body.antiSnipe=body.bundleDevBuy;body.devExitStrategy={...lcReadExitStrategy("lcDev"),proceedsRouting};Object.assign(body,body.devExitStrategy);}
       // Multi-wallet launch bundle (matches the old "bundle" action): first-block buys across the user's
       // OTHER funded wallets, landed atomically with the create when the Jito bundle env is enabled.
       if($("#lcBundleWallets")&&$("#lcBundleWallets").checked){
-        const mode=String(($("#lcBundleMode")||{}).value||"same"),sharedStrategy=lcReadExitStrategy("lcBundleSharedExit"),sharedAmount=String(($("#lcBundleSharedAmount")||{}).value||"0.05");
-        const configs=[...document.querySelectorAll('#v-launch [data-lc-bundle-pick]:checked')].map(cb=>String(cb.dataset.lcBundlePick)).filter(i=>i!==devIdx).map(i=>{const pfx="lcBw"+i;return{walletIndex:i,amountSol:mode==="same"?sharedAmount:String(($("#"+pfx+"Amount")||{}).value||"0"),...(mode==="same"?sharedStrategy:lcReadExitStrategy(pfx))};}).filter(x=>Number(x.amountSol)>0);
+        const mode=String(($("#lcBundleMode")||{}).value||"same"),sharedStrategy={...lcReadExitStrategy("lcBundleSharedExit"),proceedsRouting},sharedAmount=String(($("#lcBundleSharedAmount")||{}).value||"0.05");
+        const configs=[...document.querySelectorAll('#v-launch [data-lc-bundle-pick]:checked')].map(cb=>String(cb.dataset.lcBundlePick)).filter(i=>i!==devIdx).map(i=>{const pfx="lcBw"+i;return{walletIndex:i,amountSol:mode==="same"?sharedAmount:String(($("#"+pfx+"Amount")||{}).value||"0"),...(mode==="same"?sharedStrategy:{...lcReadExitStrategy(pfx),proceedsRouting})};}).filter(x=>Number(x.amountSol)>0);
         const others=configs.map(x=>x.walletIndex),bAmt=configs.length?configs[0].amountSol:"0";
         if(others.length){body.action="bundle";body.bundleBuy={walletIndexes:others,amountSol:String(bAmt),slippageBps:body.slippageBps,strategyMode:mode,exitStrategy:mode==="same"?sharedStrategy:null,walletConfigs:configs};}
         else toast("Add more wallets (Wallet tab) to bundle-buy from — launching without it.",true);

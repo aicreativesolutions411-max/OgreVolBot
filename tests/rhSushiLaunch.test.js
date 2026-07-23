@@ -13,6 +13,7 @@ test("Robinhood Sushi addresses are distinct from the legacy Uniswap venue", () 
   assert.equal(RH_SUSHI.launchFactory, "0xd611FEca4504dAa1Ab09fa36AD20F0C4153C24FA");
   assert.equal(RH_SUSHI.v3Factory, "0xe51960f1b45f1c9fb6d166e6a884f866fc70433b");
   assert.equal(RH_SUSHI.v3PositionManager, "0x51d0e5188afe12d502e29d982d20c190e7816107");
+  assert.equal(RH_SUSHI.v3SwapRouter, "0x1e406484f1f204b23ce84b9901c0171a738fd406");
   assert.equal(RH_SUSHI.v2Factory, "0xe52abd50ad151ecdf56427effd715e703696a6b1");
   assert.equal(RH_SUSHI.v2Router, "0x9a55d3d0c0f09859c7869510f53ed0a30b340766");
   assert.match(RH_SUSHI.quoteApi, /\/4663$/);
@@ -62,10 +63,24 @@ test("web launch defaults to the live automatic Sushi factory", () => {
   assert.match(server, /RH_SUSHI_LAUNCH_FACTORY_ADDRESS \|\| RH_SUSHI\.launchFactory/);
   assert.match(server, /rhLaunchTokenOnSushi/);
   assert.match(server, /sushiQuoteRhSwap/);
+  assert.match(server, /sushiV3QuoteRhSwap/);
   assert.match(server, /automaticMarket[\s\S]*rhDeployToken/);
   assert.match(web, /Automatic Sushi launch/);
   assert.match(web, /liquidity permanently locked/);
   assert.match(web, /d\.automaticMarket\?'Sushi V3 market live/);
+});
+
+test("Robinhood trades can use Sushi V3 directly before its hosted index catches up", () => {
+  const chain = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
+  const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+  assert.match(chain, /export async function sushiV3QuoteRhSwap/);
+  assert.match(chain, /RH_SUSHI\.v3Factory/);
+  assert.match(chain, /RH_SUSHI\.v3Quoter/);
+  assert.match(chain, /RH_SUSHI\.v3SwapRouter/);
+  assert.match(chain, /"sushi-v3-approve"/);
+  assert.match(chain, /"sushi-v3-swap"/);
+  assert.match(chain, /unwrapWETH9/);
+  assert.match(server, /\["Sushi V3", \(\) => sushiV3QuoteRhSwap/);
 });
 
 test("Robinhood launches cannot overlap and wait for the long chain confirmation", () => {

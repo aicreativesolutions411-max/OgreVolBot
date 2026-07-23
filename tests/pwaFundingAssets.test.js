@@ -32,11 +32,11 @@ test("Cash and Fun source shells install the same funding release", () => {
   assert.match(publicCashHtml, /cash\.js\?v=22/);
   assert.match(publicCashWorker, /cash\.css\?v=22/);
   assert.match(publicCashWorker, /cash\.js\?v=22/);
-  assert.match(publicFunHtml, /fun\.css\?v=38/);
-  assert.match(publicFunHtml, /fun\.js\?v=62/);
+  assert.match(publicFunHtml, /fun\.css\?v=39/);
+  assert.match(publicFunHtml, /fun\.js\?v=63/);
   assert.match(publicFunHtml, /fun-indicators\.js\?v=7/);
-  assert.match(publicFunWorker, /fun\.css\?v=38/);
-  assert.match(publicFunWorker, /fun\.js\?v=62/);
+  assert.match(publicFunWorker, /fun\.css\?v=39/);
+  assert.match(publicFunWorker, /fun\.js\?v=63/);
   assert.match(publicFunWorker, /fun-indicators\.js\?v=7/);
 });
 
@@ -54,7 +54,7 @@ test("installed Cash and Fun apps force worker updates and isolate their caches"
   assert.match(publicCashJs, /serviceWorker\.register\("\/cash\/sw\.js", \{ updateViaCache: "none" \}\)/);
   assert.match(publicFunJs, /serviceWorker\.register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
   assert.match(publicCashWorker, /const CACHE = "slimecash-v24"/);
-  assert.match(publicFunWorker, /const FUN_CACHE = "slimewire-fun-v52"/);
+  assert.match(publicFunWorker, /const FUN_CACHE = "slimewire-fun-v53"/);
   assert.match(publicCashWorker, /key\.startsWith\("slimecash-"\) && key !== CACHE/);
   assert.match(publicFunWorker, /key\.startsWith\("slimewire-fun-"\) && key !== FUN_CACHE/);
   assert.doesNotMatch(publicCashWorker, /keys\.filter\(\(key\) => key !== CACHE\)/);

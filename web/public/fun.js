@@ -945,7 +945,7 @@
     const wallet = activeWallet(), hero = $("[data-wallet-hero]");
     if (!wallet) { hero.innerHTML = `<img class="wallet-pfp" src="${slimePfp("guest")}" alt=""><h1>Slime guest</h1><p>No wallet created yet</p><div class="wallet-total">Ready when you are</div>`; return; }
     const sol = positionNumber(wallet.sol) ?? 0;
-    hero.innerHTML = `<img class="wallet-pfp" src="${slimePfp(wallet.publicKey)}" alt=""><h1>${escapeHtml(wallet.label || "Slime wallet")}</h1><p>${escapeHtml(short(wallet.publicKey))}</p><div class="wallet-total-line"><div class="wallet-total"><b>◎ ${sol.toFixed(4)} SOL</b><span>Available in this wallet</span></div><button class="wallet-backup-button" type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Backup wallet</button></div>`;
+    hero.innerHTML = `<img class="wallet-pfp" src="${slimePfp(wallet.publicKey)}" alt=""><h1>${escapeHtml(wallet.label || "Slime wallet")}</h1><button class="wallet-hero-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}" aria-label="Copy full wallet address"><b>${escapeHtml(short(wallet.publicKey))}</b><span>Tap to copy full address</span></button><div class="wallet-total-line"><div class="wallet-total"><b>◎ ${sol.toFixed(4)} SOL</b><span>Available in this wallet</span></div><button class="wallet-backup-button" type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Backup wallet</button></div>`;
   }
   function renderSocialProfile() {
     const panel = $("[data-profile-panel]"), user = state.user || {};
@@ -1056,7 +1056,7 @@
           <button class="fun-position-send" type="button" data-fun-send-token="${escapeHtml(asset.tokenMint)}" data-fun-send-wallet-index="${wallet.index}" data-fun-send-wallet="${escapeHtml(wallet.publicKey)}" data-fun-send-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}" data-fun-send-symbol="${escapeHtml(asset.symbol || short(asset.tokenMint))}" data-fun-send-balance="${escapeHtml(String(asset.quantity))}">Send tokens</button>
         </article>`;
       }).join("");
-      return `<section class="fun-wallet-position-group"><header><span><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}</b><small>${escapeHtml(short(wallet.publicKey))}</small></span><strong>${escapeHtml(coinValue)}</strong></header>${rows}</section>`;
+      return `<section class="fun-wallet-position-group"><header><span><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}</b><button class="fun-wallet-group-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}">${escapeHtml(short(wallet.publicKey))} · Copy</button></span><strong>${escapeHtml(coinValue)}</strong></header>${rows}</section>`;
     }).join("");
     const rh = state.rhWalletPosition;
     const active = activeWallet();
@@ -1744,13 +1744,40 @@
       if (readPendingFunFunding()) void checkPendingFunFunding();
     }, delay));
   }
+  async function writeClipboardText(value) {
+    const text = String(value || "").trim();
+    if (!text) throw new Error("Nothing to copy.");
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const field = document.createElement("textarea");
+    field.value = text;
+    field.setAttribute("readonly", "");
+    field.style.position = "fixed";
+    field.style.opacity = "0";
+    document.body.appendChild(field);
+    field.select();
+    const copied = document.execCommand?.("copy");
+    field.remove();
+    if (!copied) throw new Error("Clipboard unavailable.");
+  }
+  async function copyWalletAddress(address) {
+    try {
+      await writeClipboardText(address);
+      toast("Full wallet address copied");
+      return true;
+    } catch {
+      toast("Could not copy automatically. Open Receive and press the full address.", true);
+      return false;
+    }
+  }
   async function copyFundingAddress() {
     if (!activeWallet() && !(await createWallet())) return;
     const wallet = activeWallet();
     walletReceive();
     if (!wallet) return;
-    try { await navigator.clipboard?.writeText(wallet.publicKey); toast("Wallet address copied"); }
-    catch { toast("Address is ready to copy below."); }
+    await copyWalletAddress(wallet.publicKey);
   }
   async function startCoinbaseFunding(button) {
     if (button) button.disabled = true;
@@ -2002,7 +2029,7 @@
       ? `<details class="wallet-assets"><summary><span>Coin positions</span><b>${summary.assets.length} token${summary.assets.length === 1 ? "" : "s"} ›</b></summary><div>${assetRows}</div></details>`
       : `<div class="wallet-assets-empty">No coin positions in this wallet</div>`;
     const backupLabel = walletBackedUp(wallet) ? "Backup again" : "Backup";
-    return `<div class="wallet-manage-row" data-wallet-manager-row="${wallet.index}"><label class="wallet-batch-check" title="Select wallet"><input type="checkbox" data-wallet-batch-select="${wallet.index}" checked><span></span></label><div class="wallet-manage-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.index === state.activeWallet && String(wallet.label || "").trim().toLowerCase() !== "main" ? " · Main" : ""}</b><span>${escapeHtml(short(wallet.publicKey))}</span><div class="wallet-value-strip"><span><small>SOL</small><b>${escapeHtml(formatPositionSol(summary.liquidSol))}</b></span><span><small>COINS</small><b>${escapeHtml(coinValue)}</b></span><span><small>TOTAL</small><b>${escapeHtml(totalLabel)}</b></span></div>${positionDetails}<span class="wallet-fund-amount"><input data-wallet-fund-amount="${wallet.index}" inputmode="decimal" placeholder="SOL for this wallet" aria-label="SOL amount for ${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}"></span><span class="wallet-rename"><input data-wallet-rename-input="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40"><button type="button" data-rename-wallet="${wallet.index}">Rename</button></span></div><div class="wallet-row-actions"><button type="button" data-select-wallet="${wallet.index}" ${wallet.index === state.activeWallet ? "disabled" : ""}>${wallet.index === state.activeWallet ? "Active" : "Main"}</button><button type="button" data-wallet-funds="${wallet.index}">Only</button><button type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">${backupLabel}</button><button class="danger" type="button" data-remove-wallet="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button></div></div>`;
+    return `<div class="wallet-manage-row" data-wallet-manager-row="${wallet.index}"><label class="wallet-batch-check" title="Select wallet"><input type="checkbox" data-wallet-batch-select="${wallet.index}" checked><span></span></label><div class="wallet-manage-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.index === state.activeWallet && String(wallet.label || "").trim().toLowerCase() !== "main" ? " · Main" : ""}</b><button class="wallet-manager-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><span>${escapeHtml(short(wallet.publicKey))}</span><small>Copy full address</small></button><div class="wallet-value-strip"><span><small>SOL</small><b>${escapeHtml(formatPositionSol(summary.liquidSol))}</b></span><span><small>COINS</small><b>${escapeHtml(coinValue)}</b></span><span><small>TOTAL</small><b>${escapeHtml(totalLabel)}</b></span></div>${positionDetails}<span class="wallet-fund-amount"><input data-wallet-fund-amount="${wallet.index}" inputmode="decimal" placeholder="SOL for this wallet" aria-label="SOL amount for ${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}"></span><span class="wallet-rename"><input data-wallet-rename-input="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40"><button type="button" data-rename-wallet="${wallet.index}">Rename</button></span></div><div class="wallet-row-actions"><button type="button" data-select-wallet="${wallet.index}" ${wallet.index === state.activeWallet ? "disabled" : ""}>${wallet.index === state.activeWallet ? "Active" : "Main"}</button><button type="button" data-wallet-funds="${wallet.index}">Only</button><button type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">${backupLabel}</button><button class="danger" type="button" data-remove-wallet="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button></div></div>`;
   }
   async function openWalletManager() {
     if (state.token) {
@@ -2580,7 +2607,7 @@
   function walletReceive() {
     const wallet = activeWallet();
     if (!wallet) { openFundingSheet("Choose a funding source, or use Create & copy for a manual deposit address."); return; }
-    openSheet(`<div class="sheet-title"><img src="${slimePfp(wallet.publicKey)}" alt=""><div><h2>Receive SOL</h2><p>${escapeHtml(wallet.label || "Slime wallet")}</p></div></div><div class="read-card"><h3>Solana address</h3><p style="word-break:break-all">${escapeHtml(wallet.publicKey)}</p></div><button class="submit-trade" type="button" data-copy-wallet>Copy address</button><p class="fineprint">Only send Solana assets to this address. Robinhood ETH uses the derived RH address available in the full wallet tools.</p>`);
+    openSheet(`<div class="sheet-title"><img src="${slimePfp(wallet.publicKey)}" alt=""><div><h2>Receive SOL</h2><p>${escapeHtml(wallet.label || "Slime wallet")}</p></div></div><div class="read-card"><h3>Solana address</h3><button class="wallet-full-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><code>${escapeHtml(wallet.publicKey)}</code><span>Tap address to copy</span></button></div><button class="submit-trade" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}">Copy address</button><p class="fineprint">Only send Solana assets to this address. Robinhood ETH uses the derived RH address available in the full wallet tools.</p>`);
   }
 
   document.addEventListener("click", async (event) => {
@@ -2685,7 +2712,8 @@
     const releaseVolume = event.target.closest("[data-release-volume]"); if (releaseVolume) { await releaseFunVolume(releaseVolume.dataset.releaseVolume); return; }
     if (event.target.closest("[data-sweep-volume]")) { await sweepFunVolume(); return; }
     const submitBundle = event.target.closest("[data-submit-bundle]"); if (submitBundle) { await submitFunBundle(submitBundle); return; }
-    if (event.target.closest("[data-copy-wallet]")) { const wallet = activeWallet(); if (wallet) { await navigator.clipboard?.writeText(wallet.publicKey); toast("Wallet address copied"); } return; }
+    const walletAddressCopy = event.target.closest("[data-copy-wallet-address]"); if (walletAddressCopy) { await copyWalletAddress(walletAddressCopy.dataset.copyWalletAddress); return; }
+    if (event.target.closest("[data-copy-wallet]")) { const wallet = activeWallet(); if (wallet) await copyWalletAddress(wallet.publicKey); return; }
     if (event.target.closest("[data-market-orders]")) { await openMarketOrdersSheet(); return; }
     const submitMarketOrder = event.target.closest("[data-submit-market-orders]"); if (submitMarketOrder) { await submitMarketOrders(submitMarketOrder); return; }
     const cancelOrder = event.target.closest("[data-cancel-market-order]"); if (cancelOrder) { await cancelMarketOrder(cancelOrder); return; }
