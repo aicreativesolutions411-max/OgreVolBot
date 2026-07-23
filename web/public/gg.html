@@ -4660,7 +4660,8 @@
     const mode=String(($("#lcBundleMode")||{}).value||"same"),shared=$("#lcBundleShared"),per=$("#lcBundlePer");if(shared)shared.style.display=mode==="same"?"":"none";if(per)per.style.display="";
     const devIdx=String(($("#lcDevWallet")||{}).value||state.activeWallet||"");
     document.querySelectorAll('#v-launch [data-lc-wallet-row]').forEach(row=>{const idx=String(row.dataset.lcWalletRow),isDev=idx===devIdx,pick=row.querySelector('[data-lc-bundle-pick]'),cfg=row.querySelector('[data-lc-wallet-config]');row.style.display=isDev?"none":"";if(cfg)cfg.style.display=!isDev&&mode==="wallet"&&pick&&pick.checked?"":"none";});
-    const route=$("#lcRouteProceeds"),routeFields=$("#lcRouteFields"),routeSummary=$("#lcRouteSummary"),ordered=[devIdx,...[...document.querySelectorAll('#v-launch [data-lc-bundle-pick]:checked')].map(cb=>String(cb.dataset.lcBundlePick)).filter(i=>i!==devIdx)];if(routeFields)routeFields.style.display=route&&route.checked?"":"none";if(routeSummary){const names=ordered.map(i=>{const w=(state.wallets||[]).find(x=>String(x.index)===String(i));return w&&(w.label||("Wallet "+i));}).filter(Boolean);routeSummary.textContent=names.length>1?names.join(" → ")+". Each confirmed exit can pass proceeds forward once; the last wallet stops.":"Choose at least one additional wallet.";}
+    const isRh=(state.launchRail||"pump")==="robinhood",timing=$("#lcBundleTimingNote"),routeOption=$("#lcRouteOption");if(timing)timing.innerHTML=isRh?"Only selected managed wallets buy. Robinhood entries start together as soon as the launch pool is confirmed; SOL conversion happens automatically.":"Only selected managed wallets buy. Atomic Pump launches use available Jito slots; the safe fallback buys the rest immediately after launch.";if(routeOption)routeOption.style.display=isRh?"none":"";
+    const route=$("#lcRouteProceeds"),routeFields=$("#lcRouteFields"),routeSummary=$("#lcRouteSummary"),ordered=[devIdx,...[...document.querySelectorAll('#v-launch [data-lc-bundle-pick]:checked')].map(cb=>String(cb.dataset.lcBundlePick)).filter(i=>i!==devIdx)];if(routeFields)routeFields.style.display=!isRh&&route&&route.checked?"":"none";if(routeSummary){const names=ordered.map(i=>{const w=(state.wallets||[]).find(x=>String(x.index)===String(i));return w&&(w.label||("Wallet "+i));}).filter(Boolean);routeSummary.textContent=names.length>1?names.join(" → ")+". Each confirmed exit can pass proceeds forward once; the last wallet stops.":"Choose at least one additional wallet.";}
   }
   function lcWireLaunchStrategies(){
     document.querySelectorAll('#v-launch [data-lc-strategy] select').forEach(sel=>sel.onchange=lcSyncLaunchStrategies);
@@ -4816,10 +4817,8 @@
   function rhLaunchDevHtml(automatic){
     return '<div class="launch-summary"><span class="mark">🪶</span><div><b>'+(automatic?'Automatic Sushi launch':'Simple Robinhood launch')+'</b><br><span class="mut">'+(automatic?'One click creates the fixed-supply coin, opens its Sushi V3 market, and permanently locks the liquidity position. No separate add-liquidity step.':'The fixed supply deploys to your creator wallet. Automatic Sushi markets will appear here after the launch factory is enabled.')+'</span></div></div>'+
       '<div class="field row2"><div><label>Total supply</label><input id="lcRhSupply" inputmode="numeric" value="1000000000"></div><div><label>Starting market cap ($)</label><input id="lcRhStartMc" inputmode="numeric" value="5000" '+(automatic?'':'disabled')+'></div></div>'+
-      (automatic?'<div class="field"><label>First buy (SOL) <span style="text-transform:none">(optional)</span></label><input id="lcRhDevBuy" inputmode="decimal" placeholder="0.1"><span class="mut" style="font-size:10px">The market opens first, then your selected creator wallet buys immediately. Leave blank for a fair no-dev-buy launch.</span></div>':'')+
+      (automatic?'<div class="field"><label>First buy (SOL) <span style="text-transform:none">(optional)</span></label><input id="lcRhDevBuy" inputmode="decimal" placeholder="0.1"><span class="mut" style="font-size:10px">The market opens first, then your selected creator wallet buys immediately. Leave blank for a fair no-dev-buy launch.</span></div>'+lcExitStrategyHtml("lcRhDev","Creator wallet exit preset"):'')+
       '<div class="lcnote"><b>Pay only with SOL.</b> SlimeWire converts the small Robinhood network amount automatically.'+(automatic?' The full token supply goes into the launch curve; your first buy is your starting position.':'')+'</div>'+
-      '<label class="lcheck"><input type="checkbox" id="lcRhAutoBundle"> <span><b>Buy from my other wallets when trading opens</b> — each wallet pays in SOL and SlimeWire handles conversion automatically.</span></label>'+
-      '<div class="field row2"><div><label>Min buy (SOL)</label><input id="lcRhBundleMin" inputmode="decimal" value="0.01"></div><div><label>Max buy (SOL)</label><input id="lcRhBundleMax" inputmode="decimal" value="0.05"></div></div>'+
       '<div class="lcnote">'+(automatic?'<b>Sushi V3 · 1% launch pool.</b> Liquidity cannot be withdrawn. Earned pool fees are automatically collected back to this creator wallet.':'Tokens deploy first; use <b>Open trading</b> after launch to seed the legacy pool.')+'</div>';
   }
   // Robinhood Chain rail: each saved SlimeWire wallet already has a deterministic EVM address.
@@ -4828,7 +4827,7 @@
     const isRh=(state.launchRail||"pump")==="robinhood";
     const devRh=$("#lcDevRhNote"),devSol=$("#lcDevSol");
     if(devRh&&devSol){
-      if(isRh){devSol.style.display="none";devRh.style.display="";devRh.innerHTML=rhLaunchDevHtml(!!state.rhAutomaticLaunch);}
+      if(isRh){devSol.style.display="none";devRh.style.display="";devRh.innerHTML=rhLaunchDevHtml(!!state.rhAutomaticLaunch);lcRestore();}
       else{devRh.style.display="none";devSol.style.display="";}
     }
     const el=$("#lcRhSetup");if(!el)return;
@@ -4971,11 +4970,11 @@
         '<div class="field"><label>Dev buy (SOL) <span style="text-transform:none">(optional)</span></label><input id="lcDevBuy" inputmode="decimal" placeholder="0.1"><span class="mut" style="font-size:10px">Your first position in the coin. Leave blank to launch without buying.</span></div>'+
         lcExitStrategyHtml("lcDev","Dev wallet exit preset")+
         '<label class="lcheck"><input type="checkbox" id="lcBundle" checked> <span><b>Bundle my dev buy with launch</b> — it lands with the create transaction. If the Jito bundle does not land, SlimeWire retries and falls back to an immediate standard launch + buy.</span></label>'+
-        '<label class="lcheck"><input type="checkbox" id="lcBundleWallets"> <span><b>Buy from my other wallets too</b> — use funded wallets for first-block buys.</span></label>'+
-        '<div id="lcBundleSetup" class="feebox" style="display:none;margin-top:8px"><div class="field"><label>Bundle strategy</label><select id="lcBundleMode"><option value="same">Same settings for every wallet</option><option value="wallet">Set each wallet</option></select></div><div id="lcBundleShared"><div class="field"><label>Buy per wallet (SOL)</label><input id="lcBundleSharedAmount" inputmode="decimal" value="0.05"></div>'+lcExitStrategyHtml("lcBundleSharedExit","Exit preset for every wallet")+'</div><div class="mut" style="font-size:10px;margin:8px 0 4px">Choose bundle wallets</div><div id="lcBundlePer">'+lcBundleWalletRowsHtml()+'</div><div class="lcnote" style="margin-top:8px">Only selected managed wallets buy. Atomic launches use up to the available Jito transaction slots; the safe fallback buys the rest immediately after launch.</div><label class="lcheck" style="margin-top:9px"><input type="checkbox" id="lcRouteProceeds"> <span><b>Pass confirmed sale proceeds to the next wallet</b> — optional and off by default.</span></label><div id="lcRouteFields" style="display:none"><div class="field"><label>Amount to pass forward</label><select id="lcRoutePercent"><option value="50">50% of confirmed proceeds</option><option value="75">75% of confirmed proceeds</option><option value="100" selected>100% of confirmed proceeds</option></select></div><div id="lcRouteSummary" class="lcnote"></div><div class="mut" style="font-size:10px;margin-top:6px">This transfers SOL once to the next selected wallet after a completed managed exit. It does not create a rebuy or repeat back to the first wallet.</div></div></div>'+
+        '</div>'+
+        '<label class="lcheck"><input type="checkbox" id="lcBundleWallets"> <span><b>Buy from my other wallets too</b> — use the selected funded wallets as trading opens.</span></label>'+
+        '<div id="lcBundleSetup" class="feebox" style="display:none;margin-top:8px"><div class="field"><label>Bundle strategy</label><select id="lcBundleMode"><option value="same">Same settings for every wallet</option><option value="wallet">Set each wallet</option></select></div><div id="lcBundleShared"><div class="field"><label>Buy per wallet (SOL)</label><input id="lcBundleSharedAmount" inputmode="decimal" value="0.05"></div>'+lcExitStrategyHtml("lcBundleSharedExit","Exit preset for every wallet")+'</div><div class="mut" style="font-size:10px;margin:8px 0 4px">Choose bundle wallets</div><div id="lcBundlePer">'+lcBundleWalletRowsHtml()+'</div><div id="lcBundleTimingNote" class="lcnote" style="margin-top:8px">Only selected managed wallets buy.</div><div id="lcRouteOption"><label class="lcheck" style="margin-top:9px"><input type="checkbox" id="lcRouteProceeds"> <span><b>Pass confirmed sale proceeds to the next wallet</b> — optional and off by default.</span></label><div id="lcRouteFields" style="display:none"><div class="field"><label>Amount to pass forward</label><select id="lcRoutePercent"><option value="50">50% of confirmed proceeds</option><option value="75">75% of confirmed proceeds</option><option value="100" selected>100% of confirmed proceeds</option></select></div><div id="lcRouteSummary" class="lcnote"></div><div class="mut" style="font-size:10px;margin-top:6px">This transfers SOL once to the next selected wallet after a completed managed exit. It does not create a rebuy or repeat back to the first wallet.</div></div></div></div>'+
         lcParticipantInviteHtml()+
         '<details class="launch-advanced"><summary>Advanced</summary><div><div class="field"><label>Slippage (bps)</label><input id="lcSlip" inputmode="numeric" value="300"></div></div></details>'+
-        '</div>'+
       '</div>'+
       '<div class="launch-action"><button class="bigbuy" id="lcGo">Review &amp; launch</button></div><div id="lcOut" style="margin-top:12px"></div></div></div>';
     const bossHost=$("#v-launch .wbox"),bossTabs=$("#v-launch .tabs");
@@ -4983,7 +4982,7 @@
     // Tab switching toggles panel visibility WITHOUT re-rendering, so typed fields + uploaded images survive.
     document.querySelectorAll("#v-launch [data-ltab]").forEach(b=>b.onclick=()=>{lcSnapshot();state.launchTab=b.dataset.ltab;document.querySelectorAll("#v-launch [data-ltab]").forEach(x=>x.classList.toggle("on",x===b));document.querySelectorAll("#v-launch [data-lpanel]").forEach(p=>p.style.display=(p.dataset.lpanel===b.dataset.ltab?"":"none"));if(b.dataset.ltab==="dev"){lcRestore();lcSyncLaunchStrategies();}if(b.dataset.ltab==="chat")lcWireChat();});
     // Rail picker (no re-render — keeps typed fields/images). meteora is dark; the backend returns a clear "test mode" message.
-    document.querySelectorAll("#lcRails [data-rail]").forEach(b=>b.onclick=()=>{state.launchRail=b.dataset.rail;document.querySelectorAll("#lcRails [data-rail]").forEach(x=>x.classList.toggle("on",x===b));refreshMeteoraSetup();refreshRhSetup();});
+    document.querySelectorAll("#lcRails [data-rail]").forEach(b=>b.onclick=()=>{lcSnapshot();state.launchRail=b.dataset.rail;document.querySelectorAll("#lcRails [data-rail]").forEach(x=>x.classList.toggle("on",x===b));refreshMeteoraSetup();refreshRhSetup();});
     refreshMeteoraSetup();refreshRhSetup();
     // Auto-compress big photos client-side (like pump) instead of rejecting them: draw to a canvas,
     // scale down, re-encode as JPEG dropping quality until it's small enough. Falls back to the raw
@@ -5005,7 +5004,7 @@
     const pm=$("#lcPromo");if(pm)pm.onchange=()=>{const e=$("#lcPromoRows"),pp=$("#lcPayPromo");if(e)e.style.display=pm.checked?"":"none";if(pp)pp.style.display=pm.checked?"":"none";};
     lcWireHolderRewards("lc");lcWireHolderRewards("lcRh");
     const pp=$("#lcPayPromo");if(pp)pp.onclick=()=>payPromotersModal();
-    const dwSel=$("#lcDevWallet");if(dwSel)dwSel.onchange=()=>{refreshRhSetup();lcSyncLaunchStrategies();};   // RH address + bundle list are per-wallet
+    const dwSel=$("#lcDevWallet");if(dwSel)dwSel.onchange=()=>{lcSnapshot();refreshRhSetup();lcSyncLaunchStrategies();};   // RH address + bundle list are per-wallet
     lcWireChat();
     // Persist every edit so navigating away (Wallet/dev wallet) and back keeps text + images. One
     // delegated handler on the container survives innerHTML swaps and never double-binds (property, not addEventListener).
@@ -5024,15 +5023,18 @@
         // Image + socials go into OUR metadata registry (EVM has no native token-image standard) so the
         // coin shows its PFP/links on the 🪶 Robinhood board like pump coins do.
         const rhHolderRewards={enabled:false};
-        const rhAutoBundle=!!($("#lcRhAutoBundle")&&$("#lcRhAutoBundle").checked);
-        const rhBundleMin=(($("#lcRhBundleMin")||{}).value||"0.01").trim(),rhBundleMax=(($("#lcRhBundleMax")||{}).value||"0.05").trim();
-        const rhBundleWallets=(state.wallets||[]).map(w=>w.index).filter(i=>String(i)!==devIdx);
+        const rhAutoBundle=!!($("#lcBundleWallets")&&$("#lcBundleWallets").checked),rhBundleMode=String(($("#lcBundleMode")||{}).value||"same");
+        const rhSharedAmount=String(($("#lcBundleSharedAmount")||{}).value||"0.05"),rhSharedStrategy=lcReadExitStrategy("lcBundleSharedExit");
+        const rhBundleConfigs=[...document.querySelectorAll('#v-launch [data-lc-bundle-pick]:checked')].map(cb=>String(cb.dataset.lcBundlePick)).filter(i=>i!==devIdx).map(i=>{const pfx="lcBw"+i;return{walletIndex:i,amountSol:rhBundleMode==="same"?rhSharedAmount:String(($("#"+pfx+"Amount")||{}).value||"0"),exitStrategy:rhBundleMode==="same"?rhSharedStrategy:lcReadExitStrategy(pfx)};}).filter(x=>Number(x.amountSol)>0);
+        const rhBundleWallets=rhBundleConfigs.map(x=>x.walletIndex),rhBundleAmounts=rhBundleConfigs.map(x=>Number(x.amountSol));
+        const rhBundleMin=rhBundleAmounts.length?String(Math.min(...rhBundleAmounts)):"0.01",rhBundleMax=rhBundleAmounts.length?String(Math.max(...rhBundleAmounts)):"0.05";
         const rhBody={name,symbol:sym,supplyTokens:supply,devWalletIndex:devIdx,launchAttemptId:attemptId(),
           fundRhWithSol:true,fundSolAmount:state.rhAutomaticLaunch?"0.03":"0.01",
           initialMarketCapUsd:(($("#lcRhStartMc")||{}).value||"5000").trim(),devBuySol:(($("#lcRhDevBuy")||{}).value||"").trim(),
+          devExitStrategy:lcReadExitStrategy("lcRhDev"),
           creatorFeeEnabled:true,holderRewards:rhHolderRewards,
           description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim()};
-        if(rhAutoBundle&&rhBundleWallets.length)rhBody.autoBundle={walletIndexes:rhBundleWallets,payCurrency:"SOL",minSol:rhBundleMin,maxSol:rhBundleMax,launchWave:true};
+        if(rhAutoBundle&&rhBundleWallets.length)rhBody.autoBundle={walletIndexes:rhBundleWallets,walletConfigs:rhBundleConfigs,payCurrency:"SOL",minSol:rhBundleMin,maxSol:rhBundleMax,launchWave:true};
         const participantInviteIds=[...document.querySelectorAll('#v-launch [data-lc-participant-pick]:checked')].map(cb=>String(cb.dataset.lcParticipantPick||"")).filter(Boolean);
         if(participantInviteIds.length)rhBody.participantInviteIds=participantInviteIds;
         if(state.launchImg)rhBody.imageDataUrl=state.launchImg.dataUrl;
@@ -5040,7 +5042,7 @@
         b.disabled=false;b.textContent="Review & launch";
         if(ok&&d&&d.ok){
           let bundleArmed=!!d.ownerBundleArmed;
-          if(rhAutoBundle&&rhBundleWallets.length&&!bundleArmed){const armed=await jpost("/api/web/rh/auto-bundle",{tokenAddress:d.tokenAddress,symbol:sym,walletIndexes:rhBundleWallets,payCurrency:"SOL",minSol:rhBundleMin,maxSol:rhBundleMax,launchWave:true});bundleArmed=!!(armed.ok&&armed.d&&armed.d.ok);}
+          if(rhAutoBundle&&rhBundleWallets.length&&!bundleArmed){const armed=await jpost("/api/web/rh/auto-bundle",{tokenAddress:d.tokenAddress,symbol:sym,walletIndexes:rhBundleWallets,walletConfigs:rhBundleConfigs,payCurrency:"SOL",minSol:rhBundleMin,maxSol:rhBundleMax,launchWave:true});bundleArmed=!!(armed.ok&&armed.d&&armed.d.ok);}
           state._launchKept=false;state.launchForm=null;state.launchImg=null;state.launchBanner=null;
           $("#lcOut").innerHTML='<div class="feebox">🪶 <b>'+esc(name)+' ('+esc(sym)+') is LIVE on Robinhood Chain!</b>'+
             '<div class="ln">Token: <b style="word-break:break-all">'+esc(d.tokenAddress)+'</b></div>'+

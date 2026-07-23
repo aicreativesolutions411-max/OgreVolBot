@@ -966,17 +966,22 @@ test("RH: auto-bundle-when-pool-opens + coin age everywhere + 75% sells", () => 
   assert.match(abTick, /noPool/);                              // keep waiting until a pool exists
   assert.match(abTick, /status = "firing"/);                  // persist before firing (no double-fire)
   assert.match(abTick, /launchWave: Boolean\(b\.launchWave\)/);
+  assert.match(abTick, /walletConfigs: b\.walletConfigs/);
   assert.match(functionBody(serverSource, "webRhArmAutoBundle"), /launchWave: Boolean\(body\.launchWave\)/);
-  assert.match(functionBody(serverSource, "webRhBundleCore"), /runWithConcurrency\(selectedWallets, Math\.min\(20, selectedWallets\.length\), buyOne\)/);
+  const bundleCore = functionBody(serverSource, "webRhBundleCore");
+  assert.match(bundleCore, /rhLaunchBundleWalletConfigs/);
+  assert.match(bundleCore, /configByIndex\.get\(idx\)/);
+  assert.match(bundleCore, /webRhArmGuard/);
+  assert.match(bundleCore, /runWithConcurrency\(selectedWallets, Math\.min\(20, selectedWallets\.length\), buyOne\)/);
   assert.match(functionBody(serverSource, "rhGuardTick"), /rhAutoBundleTick/); // shares the interval
   // Age on Trending + chart (creation-time cache filled in background).
   assert.match(serverSource, /scheduleRhCreatedFill/);
   assert.match(functionBody(serverSource, "webRhPairs"), /rhCreatedCache/);
   for (const src of [ggSource, indexSource]) {
     assert.match(src, /function rhAutoBundleModal/);
-    assert.match(functionBody(src, "renderLaunch"), /lcRhAutoBundle/);
+    assert.match(functionBody(src, "renderLaunch"), /lcBundleWallets/);
     assert.match(functionBody(src, "renderLaunch"), /\/api\/web\/rh\/auto-bundle/);
-    assert.match(functionBody(src, "renderLaunch"), /rhBody\.autoBundle=.*launchWave:true/);
+    assert.match(functionBody(src, "renderLaunch"), /rhBody\.autoBundle=\{walletIndexes:rhBundleWallets,walletConfigs:rhBundleConfigs[\s\S]{0,120}launchWave:true/);
     assert.match(functionBody(src, "renderLaunch"), /!bundleArmed/);
     assert.match(src, /\[25,50,75,100\]/);                     // 75% sell added
     assert.match(src, /Age <b>/);                              // age in the coin-screen stats
@@ -1257,10 +1262,16 @@ test("launch dev + bundle presets support shared, per-wallet ladders, and manual
     assert.match(src, /Same settings for every wallet/);
     assert.match(src, /Set each wallet/);
     assert.match(src, /data-lc-bundle-pick/);
+    assert.match(src, /id="lcBundle" checked[\s\S]{0,420}<\/div>'\+\s*'<label class="lcheck"><input type="checkbox" id="lcBundleWallets"/);
+    assert.match(src, /lcBundleTimingNote/);
+    assert.match(src, /Robinhood entries start together as soon as the launch pool is confirmed/);
     assert.match(src, /function loadLaunchBundleInvites\(\)[\s\S]{0,450}if\(ok&&d&&Array\.isArray\(d\.invites\)\)state\.launchInvites=d\.invites/);
     assert.doesNotMatch(src, /state\.launchInvites=ok&&d&&Array\.isArray\(d\.invites\)\?d\.invites:\[\]/);
     assert.match(src, /\[data-ltab\][\s\S]{0,220}lcSnapshot\(\);state\.launchTab/);
     assert.match(src, /b\.dataset\.ltab==="dev"\)\{lcRestore\(\);lcSyncLaunchStrategies\(\);\}/);
+    assert.match(src, /#lcRails \[data-rail\][\s\S]{0,180}lcSnapshot\(\);state\.launchRail/);
+    assert.match(src, /dwSel\.onchange=\(\)=>\{lcSnapshot\(\);refreshRhSetup\(\)/);
+    assert.match(src, /devRh\.innerHTML=rhLaunchDevHtml\(!!state\.rhAutomaticLaunch\);lcRestore\(\)/);
     assert.match(src, /data-lc-stop-toggle checked/);
     assert.match(src, /stopLossPct:stopLossEnabled\?"12":"0"/);
     assert.match(src, /breakEvenAfterTp1:stopLossEnabled/);
