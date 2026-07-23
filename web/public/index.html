@@ -5032,12 +5032,15 @@
           initialMarketCapUsd:(($("#lcRhStartMc")||{}).value||"5000").trim(),devBuySol:(($("#lcRhDevBuy")||{}).value||"").trim(),
           creatorFeeEnabled:true,holderRewards:rhHolderRewards,
           description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim()};
+        if(rhAutoBundle&&rhBundleWallets.length)rhBody.autoBundle={walletIndexes:rhBundleWallets,payCurrency:"SOL",minSol:rhBundleMin,maxSol:rhBundleMax,launchWave:true};
+        const participantInviteIds=[...document.querySelectorAll('#v-launch [data-lc-participant-pick]:checked')].map(cb=>String(cb.dataset.lcParticipantPick||"")).filter(Boolean);
+        if(participantInviteIds.length)rhBody.participantInviteIds=participantInviteIds;
         if(state.launchImg)rhBody.imageDataUrl=state.launchImg.dataUrl;
         const {ok,d}=await jpost("/api/web/launch/rh-coin",rhBody,330000);
         b.disabled=false;b.textContent="Review & launch";
         if(ok&&d&&d.ok){
-          let bundleArmed=false;
-          if(rhAutoBundle&&rhBundleWallets.length){const armed=await jpost("/api/web/rh/auto-bundle",{tokenAddress:d.tokenAddress,symbol:sym,walletIndexes:rhBundleWallets,payCurrency:"SOL",minSol:rhBundleMin,maxSol:rhBundleMax});bundleArmed=!!(armed.ok&&armed.d&&armed.d.ok);}
+          let bundleArmed=!!d.ownerBundleArmed;
+          if(rhAutoBundle&&rhBundleWallets.length&&!bundleArmed){const armed=await jpost("/api/web/rh/auto-bundle",{tokenAddress:d.tokenAddress,symbol:sym,walletIndexes:rhBundleWallets,payCurrency:"SOL",minSol:rhBundleMin,maxSol:rhBundleMax,launchWave:true});bundleArmed=!!(armed.ok&&armed.d&&armed.d.ok);}
           state._launchKept=false;state.launchForm=null;state.launchImg=null;state.launchBanner=null;
           $("#lcOut").innerHTML='<div class="feebox">🪶 <b>'+esc(name)+' ('+esc(sym)+') is LIVE on Robinhood Chain!</b>'+
             '<div class="ln">Token: <b style="word-break:break-all">'+esc(d.tokenAddress)+'</b></div>'+

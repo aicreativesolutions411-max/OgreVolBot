@@ -965,6 +965,9 @@ test("RH: auto-bundle-when-pool-opens + coin age everywhere + 75% sells", () => 
   assert.match(abTick, /webRhBundleCore/);
   assert.match(abTick, /noPool/);                              // keep waiting until a pool exists
   assert.match(abTick, /status = "firing"/);                  // persist before firing (no double-fire)
+  assert.match(abTick, /launchWave: Boolean\(b\.launchWave\)/);
+  assert.match(functionBody(serverSource, "webRhArmAutoBundle"), /launchWave: Boolean\(body\.launchWave\)/);
+  assert.match(functionBody(serverSource, "webRhBundleCore"), /runWithConcurrency\(selectedWallets, Math\.min\(20, selectedWallets\.length\), buyOne\)/);
   assert.match(functionBody(serverSource, "rhGuardTick"), /rhAutoBundleTick/); // shares the interval
   // Age on Trending + chart (creation-time cache filled in background).
   assert.match(serverSource, /scheduleRhCreatedFill/);
@@ -973,6 +976,8 @@ test("RH: auto-bundle-when-pool-opens + coin age everywhere + 75% sells", () => 
     assert.match(src, /function rhAutoBundleModal/);
     assert.match(functionBody(src, "renderLaunch"), /lcRhAutoBundle/);
     assert.match(functionBody(src, "renderLaunch"), /\/api\/web\/rh\/auto-bundle/);
+    assert.match(functionBody(src, "renderLaunch"), /rhBody\.autoBundle=.*launchWave:true/);
+    assert.match(functionBody(src, "renderLaunch"), /!bundleArmed/);
     assert.match(src, /\[25,50,75,100\]/);                     // 75% sell added
     assert.match(src, /Age <b>/);                              // age in the coin-screen stats
     assert.match(src, /⏱/);                                    // age chip on rows
@@ -4709,6 +4714,7 @@ test("launch participant invites are non-custodial, durable, idempotent, and res
   assert.match(serverSource, /walletsForOwner\(walletStore, participantUserId\)/);
   assert.match(serverSource, /async function reserveLaunchBundleInvites/);
   assert.match(serverSource, /async function fulfillLaunchBundleInvites/);
+  assert.match(serverSource, /async function fulfillRhLaunchBundleInvites/);
   assert.match(serverSource, /runIdempotentMoneyOp\("launch-bundle-invite"/);
   assert.match(serverSource, /error\?\.tradeSubmissionAmbiguous/);
   assert.match(serverSource, /attempts < 3/);
@@ -4756,6 +4762,23 @@ test("launch participant invites are non-custodial, durable, idempotent, and res
   assert.match(postLaunchBuys, /entrySlippageBps = launchWaveEntrySlippageBps/);
   assert.match(postLaunchBuys, /slippage: entrySlippagePct/);
 
+  const fulfillRhInvites = functionBody(serverSource, "fulfillRhLaunchBundleInvites");
+  assert.match(fulfillRhInvites, /runWithConcurrency\(pending, Math\.min\(20, pending\.length\)/);
+  assert.match(fulfillRhInvites, /runIdempotentMoneyOp\(\s*"launch-bundle-invite-rh"/);
+  assert.match(fulfillRhInvites, /webRhTradeCore\(participantUserId/);
+  assert.match(fulfillRhInvites, /payCurrency: "SOL"/);
+  assert.match(fulfillRhInvites, /amountSol: Number\(invite\.amountSol\)/);
+  assert.match(fulfillRhInvites, /error\?\.tradeSubmissionAmbiguous/);
+  assert.match(fulfillRhInvites, /status: ambiguous \? "OUTCOME_UNKNOWN"/);
+  assert.match(fulfillRhInvites, /webRhArmGuard\(participantUserId/);
+  const rhLaunch = functionBody(serverSource, "webLaunchRhCoinCore");
+  assert.match(rhLaunch, /participantEntriesPromise = participantInviteIds\.length/);
+  assert.ok(rhLaunch.indexOf("participantEntriesPromise") < rhLaunch.indexOf("-rh-dev-buy"), "RH participant entries must start before waiting on the optional dev buy");
+  assert.match(rhLaunch, /participantEntries = await participantEntriesPromise/);
+  const retryInvites = functionBody(serverSource, "resumeLaunchBundleInviteEntries");
+  assert.match(retryInvites, /chain === "robinhood"/);
+  assert.match(retryInvites, /fulfillRhLaunchBundleInvites/);
+
   for (const file of ["gg.html", "index.html"]) {
     const html = fs.readFileSync(new URL(`../web/public/${file}`, import.meta.url), "utf8");
     assert.match(html, /focused invite flow is already phone-friendly/);
@@ -4771,6 +4794,7 @@ test("launch participant invites are non-custodial, durable, idempotent, and res
     assert.match(html, /Your wallet stays yours/);
     assert.match(html, /data-lc-participant-pick/);
     assert.match(html, /participantInviteIds/);
+    assert.match(html, /rhBody\.participantInviteIds=participantInviteIds/);
     assert.match(html, /function lcInviteSavedSummary/);
     assert.match(html, /Saved now/);
     assert.match(html, /const cfg=invite\.exitConfig/);
