@@ -77,7 +77,8 @@ test("Fun Launch keeps the complete existing launcher inside the Go layout", () 
     assert.match(page, /const funLaunchHandoff = q\.get\("from"\) === "fun"/);
     assert.match(page, /\^#launch\(\?:\\\/\|\$\)\/i\.test\(location\.hash \|\| ""\)/);
     assert.match(page, /if \(funLaunchHandoff\) return;/);
-    assert.match(page, /const embed=new URLSearchParams\(location\.search\)\.get\("embed"\);if\(embed===\"fun-launch\"\)/);
+    assert.match(page, /const query=new URLSearchParams\(location\.search\),embed=query\.get\("embed"\);if\(embed===\"fun-launch\"\)/);
+    assert.match(page, /if\(query\.get\("bundleInvite"\)\)document\.body\.classList\.add\("bundle-invite-flow"\)/);
     assert.match(page, /body\.fun-launch-embed \.topbar/);
   }
 });

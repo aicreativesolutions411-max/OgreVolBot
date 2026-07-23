@@ -86,6 +86,42 @@ test("desktop funding matches mobile with visible wallet selection and one revie
   }
 });
 
+test("wallet sweeps use saved destinations and explicit source checkboxes on every web layout", () => {
+  const classicUi = functionBody(appSource, "walletSweepToolsHtml");
+  const classicPayload = functionBody(appSource, "walletSweepSelectionPayload");
+  const classicSync = functionBody(appSource, "updateWalletSweepUi");
+  const tokenSweep = functionBody(serverSource, "webSweepTokens");
+
+  assert.match(functionBody(appSource, "sweepDestinationEntries"), /Connected wallet/);
+  assert.match(classicUi, /data-wallet-sweep-destination-select/);
+  assert.match(classicUi, /data-wallet-sweep-target/);
+  assert.match(classicUi, /data-wallet-sweep-select="all"/);
+  assert.match(classicUi, /data-wallet-sweep-select="none"/);
+  assert.match(classicUi, /Other wallet address/);
+  assert.match(classicPayload, /selectedSweepWalletIndexes/);
+  assert.match(classicPayload, /selectedSweepDestination/);
+  assert.match(classicPayload, /createClientAttemptId\("wallet-sweep"\)/);
+  assert.match(classicSync, /Destination wallet/);
+  assert.match(classicSync, /input\.disabled = isDestination/);
+  assert.match(tokenSweep, /wallet\.publicKey.*destination\.toBase58/);
+
+  for (const liveTerminal of [ggSource, indexSource]) {
+    const ui = functionBody(liveTerminal, "sweepWalletControlsHtml");
+    const sync = functionBody(liveTerminal, "syncSweepWalletControls");
+    assert.match(functionBody(liveTerminal, "sweepDestinationEntries"), /Connected wallet/);
+    assert.match(ui, /id="swDestSelect"/);
+    assert.match(ui, /class="swTarget"/);
+    assert.match(ui, /Other wallet address/);
+    assert.match(ui, /Sweep selected SOL/);
+    assert.match(ui, /Sweep selected tokens/);
+    assert.match(sync, /input\.disabled=isDest/);
+    assert.match(sync, /Destination wallet/);
+    assert.match(functionBody(liveTerminal, "sweepSol"), /tradeAttemptId:attemptId\(\)/);
+    assert.match(functionBody(liveTerminal, "sweepTokens"), /tradeAttemptId:attemptId\(\)/);
+    assert.match(liveTerminal, /wireSweepWalletControls\(\)/);
+  }
+});
+
 test("SOL-first prediction trades, payouts, and recovery stay durable and idempotent", () => {
   const funding = functionBody(serverSource, "submitPolySolFunding");
   const cashout = functionBody(serverSource, "startPolyCashout");
@@ -1197,6 +1233,12 @@ test("launch dev + bundle presets support shared and per-wallet ladders end to e
     assert.match(src, /Same settings for every wallet/);
     assert.match(src, /Set each wallet/);
     assert.match(src, /data-lc-bundle-pick/);
+    assert.match(src, /data-lc-stop-toggle checked/);
+    assert.match(src, /stopLossPct:stopLossEnabled\?"12":"0"/);
+    assert.match(src, /breakEvenAfterTp1:stopLossEnabled/);
+    assert.match(src, /Stop loss off[^\n]+no break-even stop/);
+    assert.match(src, /id="lcJoinSlEnabled" checked/);
+    assert.match(src, /exitMode:mode,stopLossEnabled,stopLossPct:stopLossEnabled\?/);
     assert.match(src, /body\.devExitStrategy=lcReadExitStrategy\("lcDev"\)/);
     assert.match(src, /walletConfigs:configs/);
     assert.match(src, /takeProfitLadder/);
@@ -1218,6 +1260,9 @@ test("launch dev + bundle presets support shared and per-wallet ladders end to e
   const standard = functionBody(serverSource, "webLaunchPumpPortalLocal");
   assert.match(standard, /firePostLaunchBuysServerSide/);
   assert.match(standard, /postLaunchBuys/);
+  const invitedExit = functionBody(serverSource, "launchBundleInviteExit");
+  assert.match(invitedExit, /body\.stopLossEnabled === undefined \? true : cleanLaunchBoolean/);
+  assert.match(invitedExit, /stopLossPct: "0", breakEvenAfterTp1: false/);
 });
 
 test("Jito fallback requires exact candidate proof before recording atomic buys", () => {
@@ -4618,4 +4663,33 @@ test("Buy Bot posts one persisted active-coin statistics recap every eight hours
   assert.match(tick, /entry\.buyStats = buyStats/);
   assert.match(queue, /return delivered/);
   assert.match(start, /setInterval\(\(\) => \{ void pollGroupBuyStats\(\); \}, 5 \* 60_000\)/);
+});
+
+test("launch participant invites are non-custodial, durable, idempotent, and responsive", () => {
+  assert.match(serverSource, /launch-bundle-invites\.json/);
+  assert.match(serverSource, /async function createLaunchBundleInvite/);
+  assert.match(serverSource, /async function approveLaunchBundleInvite/);
+  assert.match(serverSource, /walletsForOwner\(walletStore, participantUserId\)/);
+  assert.match(serverSource, /async function reserveLaunchBundleInvites/);
+  assert.match(serverSource, /async function fulfillLaunchBundleInvites/);
+  assert.match(serverSource, /runIdempotentMoneyOp\("launch-bundle-invite"/);
+  assert.match(serverSource, /error\?\.tradeSubmissionAmbiguous/);
+  assert.match(serverSource, /attempts < 3/);
+  assert.match(serverSource, /!isRetryableSwapError\(error\)/);
+  assert.match(serverSource, /pathname === "\/api\/web\/launch\/bundle-invite"/);
+  assert.match(serverSource, /pathname === "\/api\/web\/launch\/bundle-invite\/approve"/);
+  assert.match(serverSource, /pathname === "\/api\/web\/launch\/bundle-invites"/);
+  assert.match(serverSource, /participantEntries = await fulfillLaunchBundleInvites/);
+
+  for (const file of ["gg.html", "index.html"]) {
+    const html = fs.readFileSync(new URL(`../web/public/${file}`, import.meta.url), "utf8");
+    assert.match(html, /focused invite flow is already phone-friendly/);
+    assert.match(html, /External participant wallets/);
+    assert.match(html, /Create secure invite/);
+    assert.match(html, /Manual only — no automatic selling/);
+    assert.match(html, /Approve launch entry/);
+    assert.match(html, /Your wallet stays yours/);
+    assert.match(html, /data-lc-participant-pick/);
+    assert.match(html, /participantInviteIds/);
+  }
 });

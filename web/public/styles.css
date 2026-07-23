@@ -2585,7 +2585,8 @@ code {
   flex-wrap: wrap;
 }
 
-.fund-wallet-toolbar [data-wallet-fund-count] {
+.fund-wallet-toolbar [data-wallet-fund-count],
+.fund-wallet-toolbar [data-wallet-sweep-count] {
   margin-right: auto;
   color: var(--green-2);
   font-size: 12px;
@@ -2628,6 +2629,12 @@ code {
 }
 
 .fund-wallet-row[data-source="true"] {
+  cursor: default;
+  opacity: 0.68;
+  border-style: dashed;
+}
+
+.fund-wallet-row[data-destination="true"] {
   cursor: default;
   opacity: 0.68;
   border-style: dashed;

@@ -13296,17 +13296,94 @@ async function renameManagedWallet(walletIndex) {
   }
 }
 
-function walletSweepSelectionPayload() {
+function sweepDestinationEntries() {
+  const connected = state.user?.connectedWallet || state.connectedWalletBalance || null;
+  const entries = [];
+  if (connected?.publicKey) {
+    entries.push({
+      value: connected.publicKey,
+      walletIndex: "",
+      label: `Connected wallet${connected.provider ? ` · ${connected.provider}` : ""}`
+    });
+  }
+  displayWallets().forEach((wallet, position) => {
+    entries.push({
+      value: wallet.publicKey,
+      walletIndex: String(wallet.index),
+      label: `${wallet.index}. ${wallet.label || "Wallet"}${position === 0 ? " · Main" : ""}`
+    });
+  });
+  return entries;
+}
+
+function defaultSweepDestinationValue() {
+  const entries = sweepDestinationEntries();
+  const connected = entries.find((entry) => !entry.walletIndex);
+  if (connected) return connected.value;
+  return displayWallets().length > 1 ? String(displayWallets()[0]?.publicKey || "") : "__custom__";
+}
+
+function selectedSweepWalletIndexes() {
+  return [...document.querySelectorAll("[data-wallet-sweep-target]:checked")]
+    .map((input) => Number.parseInt(input.value, 10))
+    .filter((index) => Number.isInteger(index) && index > 0);
+}
+
+function selectedSweepDestination() {
+  const choice = String($("[data-wallet-sweep-destination-select]")?.value || "").trim();
+  return choice === "__custom__"
+    ? String($("[data-wallet-sweep-destination]")?.value || "").trim()
+    : choice;
+}
+
+function updateWalletSweepUi() {
+  const select = $("[data-wallet-sweep-destination-select]");
+  const option = select?.selectedOptions?.[0];
+  const destinationWalletIndex = Number.parseInt(String(option?.dataset?.walletIndex || ""), 10);
+  const custom = String(select?.value || "") === "__custom__";
+  const customWrap = $("[data-wallet-sweep-custom-wrap]");
+  if (customWrap) customWrap.hidden = !custom;
+  document.querySelectorAll("[data-wallet-sweep-row]").forEach((row) => {
+    const walletIndex = Number.parseInt(String(row.dataset.walletSweepRow || ""), 10);
+    const input = row.querySelector("[data-wallet-sweep-target]");
+    const wasDestination = row.dataset.destination === "true";
+    const isDestination = Number.isInteger(destinationWalletIndex) && walletIndex === destinationWalletIndex;
+    row.dataset.destination = isDestination ? "true" : "false";
+    if (input) {
+      input.disabled = isDestination;
+      if (isDestination) input.checked = false;
+      else if (wasDestination) input.checked = true;
+    }
+    const code = row.querySelector("code");
+    if (code && isDestination) code.textContent = "Destination wallet";
+    if (code && !isDestination) {
+      const balance = state.balances.find((item) => Number(item.index) === walletIndex);
+      code.textContent = Number.isFinite(Number(balance?.sol)) ? `${Number(balance.sol).toFixed(4)} SOL` : "Balance loading";
+    }
+  });
+  const count = selectedSweepWalletIndexes().length;
+  const countNode = $("[data-wallet-sweep-count]");
+  if (countNode) countNode.textContent = `${count} source wallet${count === 1 ? "" : "s"} selected`;
+}
+
+function walletSweepSelectionPayload({ destinationRequired = true } = {}) {
+  const targets = document.querySelectorAll("[data-wallet-sweep-target]");
   const indexes = String($("[data-wallet-sweep-indexes]")?.value || "all").trim() || "all";
-  const walletIndexes = indexes.toLowerCase() === "all"
-    ? "all"
-    : indexes.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean);
+  const walletIndexes = targets.length
+    ? selectedSweepWalletIndexes()
+    : indexes.toLowerCase() === "all"
+      ? "all"
+      : indexes.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean);
+  if (targets.length && !walletIndexes.length) throw new Error("Check at least one wallet to sweep.");
+  const destination = selectedSweepDestination();
+  if (destinationRequired && !destination) throw new Error("Choose a destination wallet or enter another address.");
   return {
     walletIndexes,
     walletGroup: String($("[data-wallet-sweep-group]")?.value || "").trim(),
-    destination: String($("[data-wallet-sweep-destination]")?.value || "").trim(),
+    destination,
     tokenMint: String($("[data-wallet-sweep-token]")?.value || "").trim(),
-    slippageBps: String($("[data-wallet-sweep-slippage]")?.value || "1500").trim()
+    slippageBps: String($("[data-wallet-sweep-slippage]")?.value || "1500").trim(),
+    tradeAttemptId: createClientAttemptId("wallet-sweep")
   };
 }
 
@@ -13514,7 +13591,9 @@ async function runWalletSweepAction(action, payloadOverride = null) {
     const endpoint = endpointByAction[action];
     if (!endpoint) throw new Error("Unknown wallet action.");
 
-    const payload = payloadOverride || (action === "send-sol-many" ? walletSendManyPayload() : walletSweepSelectionPayload());
+    const payload = payloadOverride || (action === "send-sol-many"
+      ? walletSendManyPayload()
+      : walletSweepSelectionPayload({ destinationRequired: action !== "sell-all" }));
     if (action === "sell-all") payload.destination = "";
     if (action === "sell-all-sweep" && !payload.destination) {
       throw new Error("Enter a destination wallet for Sell Tokens + Send SOL.");
@@ -16604,6 +16683,20 @@ async function cancelLaunchWatch(planId) {
 
 function walletSweepToolsHtml() {
   const fundingSourceIndex = Number(displayWallets()[0]?.index || 1);
+  const sweepDefaultDestination = defaultSweepDestinationValue();
+  const sweepDestinationOptions = sweepDestinationEntries().map((entry) => `
+    <option value="${escapeHtml(entry.value)}" data-wallet-index="${escapeHtml(entry.walletIndex)}" ${entry.value === sweepDefaultDestination ? "selected" : ""}>${escapeHtml(entry.label)}</option>`).join("");
+  const sweepWalletRows = displayWallets().map((wallet, position) => {
+    const isDestination = wallet.publicKey === sweepDefaultDestination;
+    const balance = state.balances.find((row) => Number(row.index) === Number(wallet.index));
+    const sol = Number.isFinite(Number(balance?.sol)) ? `${Number(balance.sol).toFixed(4)} SOL` : "Balance loading";
+    return `
+      <label class="wallet-check fund-wallet-row" data-wallet-sweep-row="${wallet.index}" data-destination="${isDestination ? "true" : "false"}">
+        <input type="checkbox" data-wallet-sweep-target value="${wallet.index}" ${isDestination ? "disabled" : "checked"}>
+        <span><strong>${wallet.index}. ${escapeHtml(wallet.label || "Wallet")}${position === 0 ? " · Main" : ""}</strong><small>${escapeHtml(shortAddress(wallet.publicKey))}</small></span>
+        <code>${escapeHtml(isDestination ? "Destination wallet" : sol)}</code>
+      </label>`;
+  }).join("");
   const fundingSourceOptions = displayWallets().map((wallet) => {
     const balance = state.balances.find((row) => Number(row.index) === Number(wallet.index));
     const sol = Number.isFinite(Number(balance?.sol)) ? ` · ${Number(balance.sol).toFixed(4)} SOL` : "";
@@ -16621,33 +16714,46 @@ function walletSweepToolsHtml() {
       </label>`;
   }).join("");
   return `
-    <section class="account-check-card wallet-sweep-card wallet-command-card">
+    <section class="account-check-card wallet-sweep-card wallet-command-card fund-additional-card">
       <div>
         <h3>Sweep / Exit / Recover</h3>
-        <p>Sell or transfer from saved managed wallets, then send SOL or tokens to any wallet address you paste.</p>
+        <p>Choose where funds go, then check exactly which saved wallets should be swept.</p>
       </div>
-      <label>Wallet numbers
-        <input data-wallet-sweep-indexes value="all" placeholder="all or 1,2,3">
-      </label>
-      <label>Group label
-        <input data-wallet-sweep-group placeholder="Optional group name">
-      </label>
-      <label>Destination wallet
-        <input data-wallet-sweep-destination placeholder="Wallet to receive SOL or tokens">
-      </label>
-      <label>Token mint
-        <input data-wallet-sweep-token placeholder="Optional: leave blank for all tokens">
-      </label>
-      <label>Sell slippage bps
-        <input data-wallet-sweep-slippage type="number" min="50" max="5000" step="50" value="1500">
-      </label>
+      <div class="fund-wallet-simple-grid">
+        <label>Sweep into
+          <select data-wallet-sweep-destination-select>${sweepDestinationOptions}<option value="__custom__" ${sweepDefaultDestination === "__custom__" ? "selected" : ""}>Other wallet address…</option></select>
+        </label>
+        <label data-wallet-sweep-custom-wrap ${sweepDefaultDestination === "__custom__" ? "" : "hidden"}>Other destination address
+          <input data-wallet-sweep-destination placeholder="Paste a Solana wallet address">
+        </label>
+      </div>
+      <div class="fund-wallet-toolbar">
+        <strong>Wallets to sweep</strong>
+        <span data-wallet-sweep-count>${sweepWalletRows ? `${displayWallets().filter((wallet) => wallet.publicKey !== sweepDefaultDestination).length} source wallets selected` : "No managed wallets"}</span>
+        <button type="button" data-wallet-sweep-select="all">Select all</button>
+        <button type="button" data-wallet-sweep-select="none">Clear</button>
+      </div>
+      <div class="wallet-checks fund-wallet-list">${sweepWalletRows}</div>
+      <details class="fund-wallet-advanced">
+        <summary>Advanced sweep options</summary>
+        <input data-wallet-sweep-indexes type="hidden" value="all">
+        <label>Optional group label
+          <input data-wallet-sweep-group placeholder="Only wallets in this saved group">
+        </label>
+        <label>Token mint
+          <input data-wallet-sweep-token placeholder="Optional: leave blank for all tokens">
+        </label>
+        <label>Sell slippage bps
+          <input data-wallet-sweep-slippage type="number" min="50" max="5000" step="50" value="1500">
+        </label>
+      </details>
       <div class="card-actions compact">
         <button class="primary" data-wallet-sweep-action="sell-all-sweep">Sell All + Send SOL</button>
         <button data-wallet-sweep-action="sell-all">Sell All Tokens</button>
         <button data-wallet-sweep-action="sweep-sol">Sweep SOL</button>
         <button data-wallet-sweep-action="sweep-tokens">Send Tokens</button>
       </div>
-      <small>Use Sell All + Send SOL to exit tokens across selected wallets and drain SOL to one destination. Token transfer keeps tokens as tokens. Browser-only wallets still require wallet approval and are not swept by this managed-wallet tool.</small>
+      <small>The destination wallet is automatically excluded from the source list. Use Sell All + Send SOL to exit tokens across checked wallets and drain SOL to the selected destination. Browser-only wallets still require wallet approval and are never swept as a source.</small>
       <small data-wallet-sweep-status>${escapeHtml(state.walletSweepStatus || "")}</small>
     </section>
     <section class="account-check-card wallet-sweep-card wallet-command-card fund-additional-card" data-wallet-funding-card>
@@ -25909,6 +26015,14 @@ document.addEventListener("click", async (event) => {
     updateAdditionalFundingUi();
     return;
   }
+  if (target.matches("[data-wallet-sweep-select]")) {
+    const checked = target.dataset.walletSweepSelect === "all";
+    document.querySelectorAll("[data-wallet-sweep-target]").forEach((input) => {
+      if (!input.disabled) input.checked = checked;
+    });
+    updateWalletSweepUi();
+    return;
+  }
   if (target.matches("[data-wallet-fund-review]")) {
     reviewAdditionalWalletFunding();
     return;
@@ -26347,6 +26461,10 @@ document.addEventListener("change", async (event) => {
   const target = event.target;
   if (target?.matches?.("[data-wallet-fund-source], [data-wallet-fund-target]")) {
     updateAdditionalFundingUi();
+    return;
+  }
+  if (target?.matches?.("[data-wallet-sweep-destination-select], [data-wallet-sweep-target]")) {
+    updateWalletSweepUi();
     return;
   }
   if (target?.matches?.("[data-vbot-autocreate]")) {
