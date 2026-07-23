@@ -500,7 +500,7 @@
     list.innerHTML = state.wallets.map((wallet) => {
       const main = Number(wallet.index) === mainIndex;
       const active = Number(wallet.index) === Number(state.wallet?.index);
-      return `<div class="cash-wallet-row ${active ? "active" : ""}"><div class="cash-wallet-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${main ? " <em>Main</em>" : ""}${active ? " <em>Using</em>" : ""}</b><span>${escapeHtml(shortAddress(wallet.publicKey))}</span><input data-cash-wallet-name="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40" aria-label="Wallet name"></div><div class="cash-wallet-row-actions"><button type="button" data-cash-wallet-use="${wallet.index}">${active ? "Selected" : "Use"}</button><button type="button" data-cash-wallet-rename="${wallet.index}">Rename</button>${main ? '<button type="button" disabled title="Your Main wallet stays with your account">Main</button>' : `<button class="danger" type="button" data-cash-wallet-remove="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button>`}</div></div>`;
+      return `<div class="cash-wallet-row ${active ? "active" : ""}"><div class="cash-wallet-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${main ? " <em>Main</em>" : ""}${active ? " <em>Using</em>" : ""}</b><span>${escapeHtml(shortAddress(wallet.publicKey))}</span><input data-cash-wallet-name="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40" aria-label="Wallet name"></div><div class="cash-wallet-row-actions"><button type="button" data-cash-wallet-use="${wallet.index}">${active ? "Selected" : "Use"}</button><button type="button" data-cash-wallet-rename="${wallet.index}">Rename</button><button type="button" data-cash-wallet-backup="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Solflare / Phantom Backup</button>${main ? '<button type="button" disabled title="Your Main wallet stays with your account">Main</button>' : `<button class="danger" type="button" data-cash-wallet-remove="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button>`}</div></div>`;
     }).join("");
   }
 
@@ -534,6 +534,22 @@
     renderCashWallets();
     renderProfile();
     $("cashWalletStatus").textContent = "Wallet renamed.";
+  }
+
+  async function backupCashWallet(index, publicKey, button) {
+    if (!(await ensureAccount())) return;
+    const oldLabel = button?.textContent || "Solflare / Phantom Backup";
+    if (button) { button.disabled = true; button.textContent = "Preparing…"; }
+    const result = await post("/api/web/wallets/export", { walletIndex: Number(index), publicKey: String(publicKey || "") });
+    if (button) { button.disabled = false; button.textContent = oldLabel; }
+    if (!result.ok || !result.data?.backup?.downloads) {
+      $("cashWalletStatus").textContent = result.data?.error || "Could not prepare that wallet backup.";
+      $("cashWalletStatus").className = "status bad";
+      return;
+    }
+    downloadWalletFiles(result.data.backup.downloads);
+    $("cashWalletStatus").textContent = "SlimeWire and Solflare/Phantom backups downloaded for this wallet.";
+    $("cashWalletStatus").className = "status ok";
   }
 
   async function addCashWallet() {
@@ -1516,6 +1532,13 @@
     if (tab !== "home") stopDepositWatch();
   }
 
+  function closeSendView() {
+    const url = new URL(location.href);
+    url.searchParams.delete("tab");
+    history.replaceState(history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    switchTab("home");
+  }
+
   function openSheet(id) {
     const backdrop = $(id); if (!backdrop) return; backdrop.hidden = false; document.body.style.overflow = "hidden";
     setTimeout(() => backdrop.querySelector("button, input, a, textarea")?.focus(), 0);
@@ -1710,6 +1733,7 @@
     copyText(url || `${entry.title} · ${formatUsd(Math.abs(entry.amountUsd || 0))}`);
   });
   $("sendQuickBtn").addEventListener("click", () => switchTab("send"));
+  $("sendCloseBtn").addEventListener("click", closeSendView);
   $("sendBtn").addEventListener("click", submitSend);
   $("confirmSendBtn").addEventListener("click", confirmSend);
   $("copyDepositBtn").addEventListener("click", copyFundingAddress);
@@ -1742,7 +1766,7 @@
     const button = $("backupCashWalletsBtn");
     button.disabled = true; button.textContent = "Preparing…";
     const backedUp = await backupCashAccount({ includeWallets: true, quiet: true });
-    button.disabled = false; button.textContent = "Back up wallets";
+    button.disabled = false; button.textContent = "Solflare / Phantom Backup";
     $("cashWalletStatus").textContent = backedUp ? "Account and wallet backups downloaded." : "Could not prepare backups.";
   });
   $("cashWalletList").addEventListener("click", (event) => {
@@ -1750,6 +1774,7 @@
     if (!button) return;
     if (button.dataset.cashWalletUse) selectCashWallet(button.dataset.cashWalletUse);
     if (button.dataset.cashWalletRename) renameCashWallet(button.dataset.cashWalletRename);
+    if (button.dataset.cashWalletBackup) backupCashWallet(button.dataset.cashWalletBackup, button.dataset.walletKey, button);
     if (button.dataset.cashWalletRemove) removeCashWallet(button.dataset.cashWalletRemove, button.dataset.walletKey);
   });
   $("avatarBtn").addEventListener("click", () => switchTab("more"));

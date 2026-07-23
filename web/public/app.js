@@ -2557,6 +2557,22 @@ function resetWebSession(message = "") {
 
 async function ensureWebAccount(statusElement = null, message = "Creating secure web profile...") {
   if (state.user && state.token) return state.user;
+  // An unnamed account is still the secure owner of its managed wallets. If a
+  // valid device token already exists, recover that anonymous account before
+  // ever creating a new one; otherwise Backup could land on an empty account.
+  if (state.token) {
+    try {
+      const current = await api("/api/web/me", { timeoutMs: 10_000 });
+      if (current?.user) {
+        applyUserFromApi(current.user);
+        return state.user;
+      }
+    } catch (error) {
+      if (Number(error?.status || 0) !== 401) throw error;
+      // api() clears an expired token on 401; creating a fresh anonymous account
+      // below is safe, but it will never fabricate a recovery key for an old one.
+    }
+  }
   writeText(statusElement, message);
   const data = await api("/api/web/signup", {
     method: "POST",
@@ -7445,7 +7461,7 @@ function backupRestoreSection() {
     <section class="create-wallet-card restore-card">
       <div>
         <h3>Backup / Restore</h3>
-        <p>Load bot backup files or pasted recovery text back into this web account. Keep backup files private.</p>
+        <p>Every new wallet automatically downloads an encrypted SlimeWire backup and a Solflare/Phantom recovery file. No username or named profile is required. Load bot backups here; keep both files private.</p>
       </div>
       <label>
         Backup File
@@ -7456,7 +7472,7 @@ function backupRestoreSection() {
         <textarea data-restore-text rows="5" placeholder="Paste the wallet-backup text here, or choose the backup .txt file above."></textarea>
       </label>
       <button data-restore-backup>Restore Wallets</button>
-      <button type="button" class="secondary" data-export-backup>Download Current Backup</button>
+      <button type="button" class="secondary" data-export-backup>Solflare / Phantom Backup</button>
       <small data-restore-status>${state.restoreResult ? escapeHtml(state.restoreResult.message || "Restore complete.") : ""}</small>
       <small data-export-status>${state.backupResult ? escapeHtml(state.backupResult.message || "Backup ready.") : ""}</small>
     </section>
@@ -7490,10 +7506,14 @@ function downloadsHtml() {
     <section class="download-card">
       <div>
         <h3>Wallet Backups Ready</h3>
-        <p>Keep both files private. The recovery file contains raw private keys.</p>
+        <p>Both files were sent automatically. The recovery file contains the Base58 keys and exact steps for loading each wallet in Phantom or Solflare.</p>
       </div>
       <button data-download="encryptedBackup">Download Bot Backup</button>
-      <button data-download="recoveryKeys">Download Solflare Keys</button>
+      <button data-download="recoveryKeys">Solflare / Phantom Backup</button>
+      <div class="external-wallet-load-actions">
+        <a href="https://phantom.app/download" target="_blank" rel="noreferrer">Open Phantom to load</a>
+        <a href="https://solflare.com/download" target="_blank" rel="noreferrer">Open Solflare to load</a>
+      </div>
     </section>
   `;
 }
@@ -12738,7 +12758,7 @@ async function createWalletSet() {
       downloadText(data.downloads.recoveryKeys.filename, data.downloads.recoveryKeys.text);
     }
     writeText(status, data.downloads
-      ? `Created ${wallets.length} wallet(s). Backup downloads started.`
+      ? `Created ${wallets.length} wallet(s). SlimeWire and Solflare/Phantom backup downloads started.`
       : `Created ${wallets.length} wallet(s). Use Download Backup before funding.`);
     // Pull the full list NOW and land on Balances showing the new rows -
     // waiting on the background refresh made a successful create look dead.

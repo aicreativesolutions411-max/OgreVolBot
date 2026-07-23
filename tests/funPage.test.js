@@ -403,7 +403,7 @@ test("/fun keeps SOL in the header and shows SOL plus coins as cash in the fundi
 });
 
 test("/fun backs up every wallet, auto-backs up new wallets, and keeps backup-all explicit", () => {
-  assert.match(js, /data-backup-wallet data-wallet-index="\$\{wallet\.index\}" data-wallet-key="\$\{escapeHtml\(wallet\.publicKey\)\}">Backup wallet/);
+  assert.match(js, /data-backup-wallet data-wallet-index="\$\{wallet\.index\}" data-wallet-key="\$\{escapeHtml\(wallet\.publicKey\)\}">Solflare \/ Phantom Backup/);
   assert.match(js, /function walletManagerRowHtml\(wallet\)[\s\S]{0,3500}data-backup-wallet data-wallet-index="\$\{wallet\.index\}" data-wallet-key="\$\{escapeHtml\(wallet\.publicKey\)\}"/);
   assert.match(js, /const previousWallets = new Set\(state\.wallets\.map[\s\S]{0,650}for \(const wallet of created\) markWalletBackedUp\(wallet\)/);
   assert.match(js, /sessionStorage\.getItem\(WALLET_BACKUP_REMINDER_KEY\)[\s\S]{0,260}Back up Wallet 1 before using another device/);
@@ -411,13 +411,33 @@ test("/fun backs up every wallet, auto-backs up new wallets, and keeps backup-al
   assert.match(js, /post\("\/api\/web\/wallets\/export", requestBody\)/);
   assert.match(js, /exportWallets\(backupWallet, \{ recoveryOnly: true, walletPublicKey: backupWallet\.dataset\.walletKey[\s\S]{0,180}walletIndex: backupWallet\.dataset\.walletIndex/);
   assert.match(js, /downloads\.recoveryKeys\?\.text[\s\S]{0,180}downloadText\(downloads\.recoveryKeys\.filename, downloads\.recoveryKeys\.text\)/);
-  assert.match(js, /Selected wallet recovery key downloaded\. Keep it private\./);
+  assert.match(js, /Solflare\/Phantom backup downloaded\. Open the file for load steps and keep it private\./);
   assert.match(js, /markWalletBackedUp\(selected \|\| options\.walletPublicKey\)/);
   const allFiles = js.slice(js.indexOf("function downloadWalletFiles"), js.indexOf("async function downloadFunAccountBackup"));
   assert.match(allFiles, /downloads\.encryptedBackup, downloads\.recoveryKeys/);
   assert.match(js, /const exportButton = event\.target\.closest\("\[data-export-wallets\]"\)[\s\S]{0,100}exportWallets\(exportButton\)/);
   assert.match(css, /\.wallet-total-line\{display:flex/);
   assert.match(css, /\.wallet-backup-button\{/);
+});
+
+test("wallet creation automatically sends both backup formats with outside-wallet load guidance", () => {
+  const createWallet = js.slice(js.indexOf("async function createWallet()"), js.indexOf("function walletPositionAssets"));
+  const ensureDesktopAccount = terminalApp.slice(terminalApp.indexOf("async function ensureWebAccount"), terminalApp.indexOf("async function createWebAccount"));
+  assert.match(createWallet, /downloads\.encryptedBackup, downloads\.recoveryKeys/);
+  assert.match(createWallet, /SlimeWire and Solflare\/Phantom backups downloaded/);
+  assert.match(terminalApp, /Solflare \/ Phantom Backup/);
+  assert.match(terminalApp, /No username or named profile is required/);
+  assert.match(terminalApp, /Open Phantom to load/);
+  assert.match(terminalApp, /Open Solflare to load/);
+  assert.match(ensureDesktopAccount, /if \(state\.token\)[\s\S]{0,500}api\("\/api\/web\/me"/);
+  assert.ok(ensureDesktopAccount.indexOf('api("/api/web/me"') < ensureDesktopAccount.indexOf('api("/api/web/signup"'), "an existing anonymous wallet session must be recovered before creating another account");
+  assert.match(server, /LOAD IN PHANTOM/);
+  assert.match(server, /Import Private Key and select Solana/);
+  assert.match(server, /LOAD IN SOLFLARE/);
+  assert.match(server, /Base58 secret key/);
+  assert.match(server, /derivedPublicKey !== wallet\.publicKey/);
+  assert.match(server, /Recovery key verification failed/);
+  assert.match(server, /autoSendRecoveryKeyFile: parseBoolean\(process\.env\.AUTO_SEND_RECOVERY_KEY_FILE \|\| "true"\)/);
 });
 
 test("web wallet exports exclude ghost wallets, retain funded sessions, and validate active key plus stable index", () => {

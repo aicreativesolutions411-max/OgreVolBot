@@ -1537,7 +1537,28 @@ body.launch-focus .panel-host { max-width: 1000px; margin: 0 auto; }
 }
 
 .download-card {
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto minmax(180px, auto);
+}
+
+.external-wallet-load-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.external-wallet-load-actions a {
+  display: inline-grid;
+  min-height: 38px;
+  place-items: center;
+  padding: 0 12px;
+  border: 1px solid rgba(114, 255, 35, 0.34);
+  border-radius: 8px;
+  background: rgba(114, 255, 35, 0.08);
+  color: var(--green-2);
+  text-align: center;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 850;
 }
 
 .connected-wallet-card {

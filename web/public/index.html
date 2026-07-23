@@ -4672,7 +4672,10 @@
   async function loadLaunchBundleInvites(){
     if(!state.token){state.launchInvites=[];return[];}
     const {ok,d}=await api("/api/web/launch/bundle-invites");
-    state.launchInvites=ok&&d&&Array.isArray(d.invites)?d.invites:[];
+    // A transient request failure must never make an already-loaded launch
+    // bundle look deleted. Keep the last confirmed rows until a successful
+    // response replaces them; a page refresh should not be needed to recover.
+    if(ok&&d&&Array.isArray(d.invites))state.launchInvites=d.invites;
     return state.launchInvites;
   }
   function lcParticipantInviteHtml(){
@@ -4714,7 +4717,8 @@
     const cfg=invite.exitConfig||{},lad=Array.isArray(cfg.takeProfitLadder)?cfg.takeProfitLadder:[];
     const exit=invite.exitMode==="manual"?"Manual only":(lad.length?lad.map(r=>"+"+Number(r.pct)+"% / sell "+Number(r.sellPercent)+"%").join(" → "):invite.exitLabel||"Managed exit");
     const sl=invite.exitMode==="manual"?"":(invite.stopLossEnabled?" · stop loss -"+Number(cfg.stopLossPct||0)+"%":" · stop loss off");
-    return '<div class="launch-summary"><span class="mark">✓</span><div><b>Saved now</b><br><span class="mut">'+esc(invite.walletLabel||invite.walletShort||"Wallet")+' · '+esc(invite.amountSol)+' SOL · '+esc(exit+sl)+'</span></div></div>';
+    const push=invite.notifyOnLaunch?" · launch push on":"";
+    return '<div class="launch-summary"><span class="mark">✓</span><div><b>Saved now</b><br><span class="mut">'+esc(invite.walletLabel||invite.walletShort||"Wallet")+' · '+esc(invite.amountSol)+' SOL · '+esc(exit+sl+push)+'</span></div></div>';
   }
   async function renderLaunchBundleInvite(){
     setActiveView("v-launch");subbarTool("Launch entry approval");
@@ -4734,6 +4738,8 @@
     else action=lcInviteSavedSummary(invite)+'<div class="field"><label>Your wallet</label>'+walletSelectHtml("lcJoinWalletSelect")+'<span class="mut" style="font-size:10px">Only this wallet will enter. You keep full control.</span></div>'+
       '<div class="field"><label>Entry amount (SOL)</label><input id="lcJoinAmount" inputmode="decimal" value="'+esc(invite.amountSol||"0.05")+'"><span class="mut" style="font-size:10px">Keep a little SOL for network fees.</span></div>'+
       '<div class="field"><label>After entry</label><select id="lcJoinExit"><option value="manual">Manual only — no automatic selling</option><option value="balanced">Balanced preset · TP +40% / SL -8%</option><option value="smart">Smart ladder · +50 / +120 / +300</option><option value="fast">Fast ladder · +25 / +50 / +100</option><option value="custom">Custom ladder</option></select><span class="mut" style="font-size:10px">A preset enables managed-wallet TP/SL for 30 days; revoke it anytime in Wallet. Manual only leaves automation off.</span></div>'+lcInviteCustomHtml()+
+      '<label class="lcheck"><input type="checkbox" id="lcJoinNotify" '+(invite.notifyOnLaunch?'checked':'')+'> <span><b>Notify me when the coin launches</b> · enable a push alert on this phone or browser as soon as the launch is confirmed.</span></label>'+
+      '<div id="lcJoinNotifyMsg" class="mut" style="font-size:10px;margin:3px 0 8px">'+(invite.notifyOnLaunch?'Launch push is enabled for this entry.':'Optional · you can approve the entry without notifications.')+'</div>'+
       '<label class="lcheck"><input type="checkbox" id="lcJoinConfirm"> <span>I approve one buy from this wallet when the launch completes. I understand launches are high risk and fills are not guaranteed.</span></label>'+
       '<button class="bigbuy" id="lcJoinApprove">'+(invite.status==="READY"?'Update approved entry':'Approve launch entry')+'</button>'+(invite.status==="READY"?'<button class="wbtn ghost" id="lcJoinCancel" style="width:100%;margin-top:8px">Cancel my approval</button>':'')+'<div id="lcJoinMsg" class="mut" style="font-size:11px;margin-top:8px"></div>';
     $("#v-launch").innerHTML='<div class="wgrid"><div class="wbox launch-card" style="grid-column:1/-1;max-width:720px;margin:auto"><div class="launch-head"><div><h3>Join '+esc(invite.label||"launch entry")+'</h3><p class="sub">Invited by '+esc(invite.launcherName||"a SlimeWire launcher")+' · '+esc(invite.status==="READY"?"Already approved — you can update it until launch.":"Choose your settings once, then the launch handles the entry.")+'</p></div><a class="wbtn ghost" href="/">Terminal</a></div>'+action+'<div class="lcnote" style="margin-top:12px"><b>Your wallet stays yours.</b> This approval is limited to one buy for this invite. Manual only means SlimeWire will not auto-sell; presets can be changed only before launch starts.</div></div></div>';
@@ -4747,13 +4753,21 @@
       lad.slice(0,3).forEach((r,i)=>{const n=i+1,tp=$("#lcJoinTp"+n),sell=$("#lcJoinSell"+n);if(tp)tp.value=String(r.pct);if(sell)sell.value=String(r.sellPercent);});
       const sync=()=>{const manual=exit.value==="manual",c=$("#lcJoinCustom"),control=$("#lcJoinStopControl"),sl=$("#lcJoinSl"),label=$("#lcJoinSlLabel"),on=!manual&&!!(slToggle&&slToggle.checked);if(c)c.style.display=exit.value==="custom"?"":"none";if(control)control.style.display=manual?"none":"";if(sl)sl.disabled=!on;if(label)label.textContent=on?"Stop loss on":"Stop loss off";};exit.onchange=sync;if(slToggle)slToggle.onchange=sync;sync();
     }
+    const notify=$("#lcJoinNotify"),notifyMsg=$("#lcJoinNotifyMsg");
     const approve=$("#lcJoinApprove");if(approve)approve.onclick=async()=>{
       const msg=$("#lcJoinMsg");if(!$("#lcJoinConfirm").checked){msg.textContent="Check the approval box first.";return;}
       const mode=$("#lcJoinExit").value,ladder=[1,2,3].map(i=>({pct:Number(($("#lcJoinTp"+i)||{}).value||0),sellPercent:Number(($("#lcJoinSell"+i)||{}).value||0)}));
       approve.disabled=true;approve.textContent="Checking wallet and saving…";
       const stopLossEnabled=mode!=="manual"&&!!($("#lcJoinSlEnabled")&&$("#lcJoinSlEnabled").checked);
-      const {ok,d}=await jpost("/api/web/launch/bundle-invite/approve",{token,walletIndex:$("#lcJoinWalletSelect").value,amountSol:$("#lcJoinAmount").value,exitMode:mode,stopLossEnabled,stopLossPct:stopLossEnabled?(($("#lcJoinSl")||{}).value||10):0,takeProfitLadder:ladder});
+      const {ok,d}=await jpost("/api/web/launch/bundle-invite/approve",{token,walletIndex:$("#lcJoinWalletSelect").value,amountSol:$("#lcJoinAmount").value,exitMode:mode,stopLossEnabled,stopLossPct:stopLossEnabled?(($("#lcJoinSl")||{}).value||10):0,takeProfitLadder:ladder,notifyOnLaunch:!!(notify&&notify.checked)});
       if(ok){toast("Entry approved");renderLaunchBundleInvite();}else{msg.textContent=apiMessage(d,"Could not approve entry.");approve.disabled=false;approve.textContent="Approve launch entry";}
+    };
+    if(notify)notify.onchange=async()=>{
+      if(!notify.checked){notifyMsg.textContent="Launch push is off for this entry. Save the entry to apply.";return;}
+      notify.disabled=true;if(approve)approve.disabled=true;notifyMsg.textContent="Enabling push notifications…";
+      const enabled=await ensurePushSubscribed();
+      notify.checked=enabled;notify.disabled=false;if(approve)approve.disabled=false;
+      notifyMsg.textContent=enabled?"Push is ready. Save the entry to get the launch alert.":"Push could not be enabled. On iPhone, add SlimeWire to your Home Screen and allow notifications.";
     };
     const cancel=$("#lcJoinCancel");if(cancel)cancel.onclick=async()=>{if(!confirm("Cancel your launch entry approval? No buy will be made unless you approve again."))return;cancel.disabled=true;const {ok,d}=await jpost("/api/web/launch/bundle-invite/cancel",{token});if(ok){toast("Approval cancelled");renderLaunchBundleInvite();}else{toast(apiMessage(d,"Could not cancel approval."),true);cancel.disabled=false;}};
   }
@@ -4967,7 +4981,7 @@
     const bossHost=$("#v-launch .wbox"),bossTabs=$("#v-launch .tabs");
     if(false&&bossHost&&bossTabs){const h=document.createElement("div");h.innerHTML=launchBossFoldHtml();if(h.firstElementChild)bossHost.insertBefore(h.firstElementChild,bossTabs);}
     // Tab switching toggles panel visibility WITHOUT re-rendering, so typed fields + uploaded images survive.
-    document.querySelectorAll("#v-launch [data-ltab]").forEach(b=>b.onclick=()=>{state.launchTab=b.dataset.ltab;document.querySelectorAll("#v-launch [data-ltab]").forEach(x=>x.classList.toggle("on",x===b));document.querySelectorAll("#v-launch [data-lpanel]").forEach(p=>p.style.display=(p.dataset.lpanel===b.dataset.ltab?"":"none"));if(b.dataset.ltab==="chat")lcWireChat();});
+    document.querySelectorAll("#v-launch [data-ltab]").forEach(b=>b.onclick=()=>{lcSnapshot();state.launchTab=b.dataset.ltab;document.querySelectorAll("#v-launch [data-ltab]").forEach(x=>x.classList.toggle("on",x===b));document.querySelectorAll("#v-launch [data-lpanel]").forEach(p=>p.style.display=(p.dataset.lpanel===b.dataset.ltab?"":"none"));if(b.dataset.ltab==="dev"){lcRestore();lcSyncLaunchStrategies();}if(b.dataset.ltab==="chat")lcWireChat();});
     // Rail picker (no re-render — keeps typed fields/images). meteora is dark; the backend returns a clear "test mode" message.
     document.querySelectorAll("#lcRails [data-rail]").forEach(b=>b.onclick=()=>{state.launchRail=b.dataset.rail;document.querySelectorAll("#lcRails [data-rail]").forEach(x=>x.classList.toggle("on",x===b));refreshMeteoraSetup();refreshRhSetup();});
     refreshMeteoraSetup();refreshRhSetup();

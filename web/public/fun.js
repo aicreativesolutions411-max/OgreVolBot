@@ -428,7 +428,7 @@
     const backedUp = walletBackedUp(wallet);
     const { totalSol } = portfolioSolTotal();
     const totalUsd = state.solUsd > 0 ? totalSol * state.solUsd : null;
-    target.innerHTML = `<section class="readiness-card ready"><div class="readiness-summary"><div><span>WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL ready` : "Add SOL to trade"}</h2><p>${backedUp ? (sol > 0 ? "Pick a coin and choose your amount." : "Add SOL from Phantom, Solflare, or another Solana wallet.") : "Save this wallet backup before trading on another device."}</p></div><div class="wallet-cash-total"><span>TOTAL VALUE</span><b>${formatWalletUsd(totalUsd)}</b><small>SOL + COINS</small></div></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b class="${backedUp ? "done" : "needs-action"}">${backedUp ? "OK" : "2"} <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Add SOL"}</i></b></div><div class="readiness-actions"><button type="button" data-deposit>${sol > 0 ? "Add more SOL" : "Add SOL"}</button><button class="secondary" type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">${backedUp ? "Download backup again" : "Backup this wallet"}</button></div></section>`;
+    target.innerHTML = `<section class="readiness-card ready"><div class="readiness-summary"><div><span>WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL ready` : "Add SOL to trade"}</h2><p>${backedUp ? (sol > 0 ? "Pick a coin and choose your amount." : "Add SOL from Phantom, Solflare, or another Solana wallet.") : "Save this wallet backup before trading on another device."}</p></div><div class="wallet-cash-total"><span>TOTAL VALUE</span><b>${formatWalletUsd(totalUsd)}</b><small>SOL + COINS</small></div></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b class="${backedUp ? "done" : "needs-action"}">${backedUp ? "OK" : "2"} <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Add SOL"}</i></b></div><div class="readiness-actions"><button type="button" data-deposit>${sol > 0 ? "Add more SOL" : "Add SOL"}</button><button class="secondary" type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Solflare / Phantom Backup</button></div></section>`;
   }
 
   function normalizeSol(row) {
@@ -945,7 +945,7 @@
     const wallet = activeWallet(), hero = $("[data-wallet-hero]");
     if (!wallet) { hero.innerHTML = `<img class="wallet-pfp" src="${slimePfp("guest")}" alt=""><h1>Slime guest</h1><p>No wallet created yet</p><div class="wallet-total">Ready when you are</div>`; return; }
     const sol = positionNumber(wallet.sol) ?? 0;
-    hero.innerHTML = `<img class="wallet-pfp" src="${slimePfp(wallet.publicKey)}" alt=""><h1>${escapeHtml(wallet.label || "Slime wallet")}</h1><button class="wallet-hero-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}" aria-label="Copy full wallet address"><b>${escapeHtml(short(wallet.publicKey))}</b><span>Tap to copy full address</span></button><div class="wallet-total-line"><div class="wallet-total"><b>◎ ${sol.toFixed(4)} SOL</b><span>Available in this wallet</span></div><button class="wallet-backup-button" type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Backup wallet</button></div>`;
+    hero.innerHTML = `<img class="wallet-pfp" src="${slimePfp(wallet.publicKey)}" alt=""><h1>${escapeHtml(wallet.label || "Slime wallet")}</h1><button class="wallet-hero-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}" aria-label="Copy full wallet address"><b>${escapeHtml(short(wallet.publicKey))}</b><span>Tap to copy full address</span></button><div class="wallet-total-line"><div class="wallet-total"><b>◎ ${sol.toFixed(4)} SOL</b><span>Available in this wallet</span></div><button class="wallet-backup-button" type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Solflare / Phantom Backup</button></div>`;
   }
   function renderSocialProfile() {
     const panel = $("[data-profile-panel]"), user = state.user || {};
@@ -1971,7 +1971,7 @@
       const created = state.wallets.filter((wallet) => !previousWallets.has(String(wallet.publicKey || "")));
       for (const wallet of created) markWalletBackedUp(wallet);
     }
-    renderHomeReadiness(); renderWalletHero(); renderWalletPositions(); if (state.view === "quick") renderQuickRoute(); toast("Wallet created. Backups downloaded—store them safely."); return true;
+    renderHomeReadiness(); renderWalletHero(); renderWalletPositions(); if (state.view === "quick") renderQuickRoute(); toast("Wallet created. SlimeWire and Solflare/Phantom backups downloaded—store them safely."); return true;
   }
   function downloadText(filename, text) { const blob = new Blob([text], { type: "text/plain" }), url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = filename || "slimewire-backup.txt"; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000); }
   function downloadWalletFiles(downloads = {}) {
@@ -2028,7 +2028,7 @@
     const positionDetails = summary.assets.length
       ? `<details class="wallet-assets"><summary><span>Coin positions</span><b>${summary.assets.length} token${summary.assets.length === 1 ? "" : "s"} ›</b></summary><div>${assetRows}</div></details>`
       : `<div class="wallet-assets-empty">No coin positions in this wallet</div>`;
-    const backupLabel = walletBackedUp(wallet) ? "Backup again" : "Backup";
+    const backupLabel = "Solflare / Phantom Backup";
     return `<div class="wallet-manage-row" data-wallet-manager-row="${wallet.index}"><label class="wallet-batch-check" title="Select wallet"><input type="checkbox" data-wallet-batch-select="${wallet.index}" checked><span></span></label><div class="wallet-manage-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.index === state.activeWallet && String(wallet.label || "").trim().toLowerCase() !== "main" ? " · Main" : ""}</b><button class="wallet-manager-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><span>${escapeHtml(short(wallet.publicKey))}</span><small>Copy full address</small></button><div class="wallet-value-strip"><span><small>SOL</small><b>${escapeHtml(formatPositionSol(summary.liquidSol))}</b></span><span><small>COINS</small><b>${escapeHtml(coinValue)}</b></span><span><small>TOTAL</small><b>${escapeHtml(totalLabel)}</b></span></div>${positionDetails}<span class="wallet-fund-amount"><input data-wallet-fund-amount="${wallet.index}" inputmode="decimal" placeholder="SOL for this wallet" aria-label="SOL amount for ${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}"></span><span class="wallet-rename"><input data-wallet-rename-input="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40"><button type="button" data-rename-wallet="${wallet.index}">Rename</button></span></div><div class="wallet-row-actions"><button type="button" data-select-wallet="${wallet.index}" ${wallet.index === state.activeWallet ? "disabled" : ""}>${wallet.index === state.activeWallet ? "Active" : "Main"}</button><button type="button" data-wallet-funds="${wallet.index}">Only</button><button type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">${backupLabel}</button><button class="danger" type="button" data-remove-wallet="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button></div></div>`;
   }
   async function openWalletManager() {
@@ -2042,10 +2042,10 @@
     openSheet(`<div class="sheet-title"><img src="${slimePfp(activeWallet()?.publicKey || "wallet-manager")}" alt=""><div><h2>Wallet manager</h2><p>See SOL and coin value per wallet, then fund or consolidate the wallets you select.</p></div></div>
       <div class="wallet-select-bar"><button type="button" data-wallet-select-all>All</button><button type="button" data-wallet-select-none>None</button><span data-wallet-selected-count>${state.wallets.length} selected</span></div>
       <div class="wallet-manager-list">${rows}</div>
-      <div class="wallet-manager-actions"><button type="button" data-create-wallet>+ Add one wallet</button><button type="button" data-export-wallets ${state.wallets.length ? "" : "disabled"}>Download backups</button></div>
+      <div class="wallet-manager-actions"><button type="button" data-create-wallet>+ Add one wallet</button><button type="button" data-export-wallets ${state.wallets.length ? "" : "disabled"}>Download both backups</button></div>
       ${state.wallets.length > 1 ? `<section class="wallet-batch-card" data-wallet-funding-card><div class="wallet-batch-heading"><div><h3>Fund selected wallets</h3><p>One review, one transaction.</p></div></div><div class="field"><label>Fund from</label><select data-wallet-fund-source>${walletOptions}</select></div><div class="wallet-mode-toggle"><button class="active" type="button" data-wallet-fund-mode="equal">Same amount each</button><button type="button" data-wallet-fund-mode="custom">Different amounts</button></div><div class="field" data-wallet-equal-funding><label>SOL per wallet</label><input data-wallet-fund-equal inputmode="decimal" value="0.1" placeholder="0.1"></div><button class="submit-trade" type="button" data-review-wallet-fund>Review funding</button><p class="fineprint">The Main/source wallet is never funded into itself. Network fees are shown by Solana when submitted.</p></section>` : ""}
       ${state.wallets.length ? `<section class="wallet-batch-card" data-wallet-consolidate-card><div class="wallet-batch-heading"><div><h3>Sell &amp; consolidate</h3><p>Use the selected wallets, or tap Only on a wallet above.</p></div></div><div class="field"><label>Sweep SOL into</label><select data-wallet-consolidate-destination>${walletOptions}</select></div><div class="wallet-consolidate-actions"><button type="button" data-review-wallet-action="sell">Sell all tokens</button><button type="button" data-review-wallet-action="sweep">Sweep SOL</button><button class="primary" type="button" data-review-wallet-action="sell-sweep">Sell tokens + sweep</button></div><p class="fineprint">Selling swaps every sellable token to SOL. Sweeping drains transferable SOL into the wallet above and keeps network fees covered.</p></section>` : ""}
-      <details class="wallet-restore-box"><summary>Restore or import a wallet</summary><label class="file-button">Choose backup file<input type="file" data-wallet-backup-file accept=".txt,.json,application/json,text/plain" hidden></label><textarea data-wallet-backup-text placeholder="Or paste an encrypted backup, recovery file, or private key"></textarea><button class="submit-trade" type="button" data-restore-wallet>Restore / import wallet</button></details><p class="wallet-manager-status" data-wallet-manager-status></p><p class="fineprint">Each Solana wallet deterministically controls its Robinhood address. Keep downloaded backup files private.</p>`);
+      <details class="wallet-restore-box"><summary>Restore or import a wallet</summary><label class="file-button">Choose backup file<input type="file" data-wallet-backup-file accept=".txt,.json,application/json,text/plain" hidden></label><textarea data-wallet-backup-text placeholder="Or paste an encrypted backup, recovery file, or private key"></textarea><button class="submit-trade" type="button" data-restore-wallet>Restore / import wallet</button></details><div class="external-wallet-links"><a href="https://phantom.app/download" target="_blank" rel="noreferrer">Open Phantom to load</a><a href="https://solflare.com/download" target="_blank" rel="noreferrer">Open Solflare to load</a></div><p class="wallet-manager-status" data-wallet-manager-status></p><p class="fineprint">No username or named profile is required. New wallets automatically download both the encrypted SlimeWire backup and the raw Solflare/Phantom recovery file. The recovery file contains the Base58 import steps. Keep both private.</p>`);
     updateWalletManagerSelection();
     updateWalletFundingSource();
   }
@@ -2183,7 +2183,7 @@
         }
         renderHomeReadiness();
         const message = options.recoveryOnly && count === 1
-          ? "Selected wallet recovery key downloaded. Keep it private."
+          ? "Solflare/Phantom backup downloaded. Open the file for load steps and keep it private."
           : (count === 2 ? "Both wallet backup files downloaded." : (result.data.backup?.message || "Wallet backup downloaded."));
         if (status) status.textContent = message;
         toast(message);
@@ -2193,7 +2193,7 @@
         toast(message, true);
       }
     } finally {
-      if (button) { button.disabled = false; button.textContent = oldLabel || "Backup wallet"; }
+      if (button) { button.disabled = false; button.textContent = oldLabel || "Solflare / Phantom Backup"; }
     }
   }
   async function restoreWallet() {

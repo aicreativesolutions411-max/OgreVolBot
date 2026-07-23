@@ -50,15 +50,31 @@ test("SlimeCash automatically downloads account and wallet recovery material", (
   assert.doesNotMatch(cash, /copyText\(state\.token\)/);
 });
 
+test("SlimeCash lets unnamed accounts export either all wallets or one exact wallet", () => {
+  assert.match(html, /No username is required for wallet backup/);
+  assert.match(html, /id="backupCashWalletsBtn"[^>]*>Solflare \/ Phantom Backup</);
+  assert.match(cash, /data-cash-wallet-backup="\$\{wallet\.index\}"/);
+  assert.match(cash, /async function backupCashWallet\(index, publicKey, button\)/);
+  assert.match(cash, /post\("\/api\/web\/wallets\/export", \{ walletIndex: Number\(index\), publicKey: String\(publicKey \|\| ""\) \}\)/);
+  assert.match(cash, /button\.dataset\.cashWalletBackup[\s\S]{0,180}button\.dataset\.walletKey/);
+  assert.match(cash, /SlimeWire and Solflare\/Phantom backups downloaded for this wallet/);
+});
+
 test("SlimeCash service worker prefers the current deploy and retains offline fallback", () => {
   const build = html.match(/slimecash-build" content="(\d+)"/)?.[1];
-  assert.equal(build, "22", "SlimeCash should publish the current app build");
-  assert.match(sw, /const CACHE = "slimecash-v24"/);
+  assert.equal(build, "23", "SlimeCash should publish the current app build");
+  assert.match(sw, /const CACHE = "slimecash-v25"/);
   assert.match(html, new RegExp(`cash\\.js\\?v=${build}`));
   assert.match(html, new RegExp(`cash\\.css\\?v=${build}`));
   assert.match(sw, /const fetched = fetch/);
   assert.match(sw, /return fetched/);
   assert.match(sw, /catch\(\(\) => cached\)/);
+});
+
+test("SlimeCash Send has an obvious close control that returns to Cash", () => {
+  assert.match(html, /id="sendCloseBtn"[^>]+aria-label="Close Send and return to Cash"/);
+  assert.match(cash, /function closeSendView\(\)[\s\S]{0,350}searchParams\.delete\("tab"\)[\s\S]{0,250}switchTab\("home"\)/);
+  assert.match(cash, /\$\("sendCloseBtn"\)\.addEventListener\("click", closeSendView\)/);
 });
 
 test("SlimeCash deploys its runtime as an integrity-checked content-addressed asset", () => {
@@ -192,8 +208,8 @@ test("SlimeCash uses a separate PWA identity and a synchronized shell", () => {
   assert.equal(manifest.id, "/slimecash-app");
   assert.equal(manifest.start_url, "/cash/?src=slimecash-pwa");
   assert.equal(manifest.scope, "/cash/");
-  assert.match(html, /slimecash-build" content="22"/);
-  assert.match(sw, /slimecash-v24/);
+  assert.match(html, /slimecash-build" content="23"/);
+  assert.match(sw, /slimecash-v25/);
   assert.match(sw, /\/slimewire-funding\.js\?v=8/);
   assert.match(cash, /serviceWorker\.register\("\/cash\/sw\.js", \{ updateViaCache: "none" \}\)/);
   assert.match(sw, /key\.startsWith\("slimecash-"\) && key !== CACHE/);

@@ -1252,6 +1252,10 @@ test("launch dev + bundle presets support shared, per-wallet ladders, and manual
     assert.match(src, /Same settings for every wallet/);
     assert.match(src, /Set each wallet/);
     assert.match(src, /data-lc-bundle-pick/);
+    assert.match(src, /function loadLaunchBundleInvites\(\)[\s\S]{0,450}if\(ok&&d&&Array\.isArray\(d\.invites\)\)state\.launchInvites=d\.invites/);
+    assert.doesNotMatch(src, /state\.launchInvites=ok&&d&&Array\.isArray\(d\.invites\)\?d\.invites:\[\]/);
+    assert.match(src, /\[data-ltab\][\s\S]{0,220}lcSnapshot\(\);state\.launchTab/);
+    assert.match(src, /b\.dataset\.ltab==="dev"\)\{lcRestore\(\);lcSyncLaunchStrategies\(\);\}/);
     assert.match(src, /data-lc-stop-toggle checked/);
     assert.match(src, /stopLossPct:stopLossEnabled\?"12":"0"/);
     assert.match(src, /breakEvenAfterTp1:stopLossEnabled/);
@@ -4717,7 +4721,40 @@ test("launch participant invites are non-custodial, durable, idempotent, and res
   assert.match(publicInvite, /exitConfig/);
   assert.match(publicInvite, /stopLossPct/);
   assert.match(publicInvite, /takeProfitLadder: savedLadder/);
+  assert.match(publicInvite, /notifyOnLaunch: Boolean\(invite\.notifyOnLaunch\)/);
+  assert.match(publicInvite, /launchNotified: Boolean\(invite\.launchNotifiedAt\)/);
   assert.doesNotMatch(publicInvite, /walletPublicKey:/);
+  const approveInvite = functionBody(serverSource, "approveLaunchBundleInvite");
+  assert.match(approveInvite, /notifyOnLaunch: cleanLaunchBoolean\(body\.notifyOnLaunch\)/);
+  const notifyInvite = functionBody(serverSource, "notifyLaunchBundleInviteParticipants");
+  assert.match(notifyInvite, /row\.notifyOnLaunch === true/);
+  assert.match(notifyInvite, /!row\.launchNotifiedAt/);
+  assert.match(notifyInvite, /invite\.launchNotifiedAt = now/);
+  assert.match(notifyInvite, /sendWebPushToUser\(invite\.participantUserId/);
+  assert.match(notifyInvite, /url: `\/t\?ca=\$\{encodeURIComponent\(tokenMint\)\}`/);
+  const fulfillInvites = functionBody(serverSource, "fulfillLaunchBundleInvites");
+  assert.ok(
+    fulfillInvites.indexOf("notifyLaunchBundleInviteParticipants") < fulfillInvites.indexOf("buyTokenForPlan"),
+    "launch push should fire when the mint is confirmed, without waiting for the participant buy"
+  );
+  assert.match(serverSource, /function launchWaveEntrySlippageBps/);
+  assert.match(fulfillInvites, /const launchWaveSize = store\.invites\.filter/);
+  assert.match(fulfillInvites, /launchWaveEntrySlippageBps\(/);
+  assert.match(fulfillInvites, /Number\(invite\.entry\?\.attempts \|\| 0\) \+ attempts - 1/);
+  assert.match(fulfillInvites, /runWithConcurrency\(pending, Math\.min\(20, pending\.length\)/);
+  assert.match(fulfillInvites, /buyTokenForPlan\(wallet, tokenMint, amountLamports, entrySlippageBps/);
+
+  const slippageHelper = Function("requestedBps", "walletCount", "priorAttempts", functionBody(serverSource, "launchWaveEntrySlippageBps"));
+  assert.equal(slippageHelper(1500, 1, 0), 3000);
+  assert.equal(slippageHelper(1500, 12, 0), 4000);
+  assert.equal(slippageHelper(1500, 12, 1), 4500);
+  assert.equal(slippageHelper(1500, 12, 2), 5000);
+  assert.equal(slippageHelper(1500, 50, 0), 5000);
+  assert.equal(slippageHelper(9000, 1, 0), 5000);
+
+  const postLaunchBuys = functionBody(serverSource, "firePostLaunchBuysServerSide");
+  assert.match(postLaunchBuys, /entrySlippageBps = launchWaveEntrySlippageBps/);
+  assert.match(postLaunchBuys, /slippage: entrySlippagePct/);
 
   for (const file of ["gg.html", "index.html"]) {
     const html = fs.readFileSync(new URL(`../web/public/${file}`, import.meta.url), "utf8");
@@ -4726,6 +4763,11 @@ test("launch participant invites are non-custodial, durable, idempotent, and res
     assert.match(html, /Create secure invite/);
     assert.match(html, /Manual only — no automatic selling/);
     assert.match(html, /Approve launch entry/);
+    assert.match(html, /id="lcJoinNotify"/);
+    assert.match(html, /Notify me when the coin launches/);
+    assert.match(html, /ensurePushSubscribed\(\)/);
+    assert.match(html, /notifyOnLaunch:!!\(notify&&notify\.checked\)/);
+    assert.match(html, /Push is ready\. Save the entry to get the launch alert\./);
     assert.match(html, /Your wallet stays yours/);
     assert.match(html, /data-lc-participant-pick/);
     assert.match(html, /participantInviteIds/);
