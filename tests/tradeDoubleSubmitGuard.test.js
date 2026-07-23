@@ -813,6 +813,60 @@ test("RH board acts like the Solana boards: live MC/liq data, chart, quick-buy, 
   }
 });
 
+test("Robinhood Positions discovers every managed wallet live and keeps wallet-scoped actions", () => {
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/wallets"/);
+  const wallets = functionBody(serverSource, "webRhWallets");
+  assert.match(wallets, /walletsForOwner/);
+  assert.match(wallets, /!wallet\.volumeBot && !wallet\.ephemeral/);
+  assert.match(wallets, /readRhTradeHistory/);                 // confirmed buys fill the indexer gap
+  assert.match(wallets, /readPumpLaunchAttempts/);            // creator bag is also a live candidate
+  assert.match(wallets, /rhErc20Balance/);                    // positive balance must be proven on-chain
+  for (const src of [ggSource, indexSource]) {
+    const positions = functionBody(src, "loadRhPositions");
+    assert.match(positions, /\/api\/web\/rh\/wallets/);
+    assert.match(positions, /heldWallets/);
+    assert.match(positions, /GG\.rhSellPos[\s\S]*Number\(w\.walletIndex\)/);
+    assert.match(positions, /GG\.rhSendToken[\s\S]*Number\(w\.walletIndex\)/);
+    assert.match(positions, /GG\.rhGuardModal[\s\S]*Number\(w\.walletIndex\)/);
+    assert.match(functionBody(src, "rhTrade"), /tradeOpts\.walletIndex\|\|state\.activeWallet/);
+    assert.match(src, /rhSellPos:async\(a,p,w\)/);
+  }
+});
+
+test("Robinhood launch-wave buys and sells safely requote without duplicating unknown submissions", () => {
+  const trade = functionBody(serverSource, "webRhTradeCore");
+  assert.match(trade, /fundingTry <= 3/);
+  assert.match(trade, /routeRound <= 4/);
+  assert.match(trade, /error\?\.tradeSubmissionAmbiguous/);
+  assert.match(trade, /isRetryableSwapError/);
+  assert.match(trade, /await rhExecuteEvmSteps/);
+  const tick = functionBody(serverSource, "rhAutoBundleTick");
+  assert.match(tick, /needs_attention/);
+  assert.match(tick, /b\.rows/);                               // exact failed wallet is preserved for support/retry
+  assert.match(tick, /result\.summary/);
+});
+
+test("SlimeCash has native multi-wallet coin positions, exact-wallet sells, and RH fund recovery", () => {
+  const cash = fs.readFileSync(new URL("../web/public/cash/cash.js", import.meta.url), "utf8");
+  const cashHtml = fs.readFileSync(new URL("../web/public/cash/index.html", import.meta.url), "utf8");
+  assert.match(cashHtml, /id="view-trade"/);
+  assert.match(cashHtml, /id="cashPositions"/);
+  const load = functionBody(cash, "loadCashPositions");
+  assert.match(load, /\/api\/web\/positions\?fast=true/);
+  assert.match(load, /\/api\/web\/rh\/wallets/);
+  assert.match(load, /account\.walletPublicKey/);
+  assert.match(load, /data-wallet-index/);
+  assert.match(load, /Robinhood launch funds/);
+  const sell = functionBody(cash, "sellCashPosition");
+  assert.match(sell, /walletIndex/);
+  assert.match(sell, /\/api\/web\/rh\/trade/);
+  assert.match(sell, /\/api\/web\/trade\/sell/);
+  assert.match(sell, /tradeAttemptId/);
+  const recover = functionBody(cash, "cashOutRhWallet");
+  assert.match(recover, /\/api\/web\/rh\/bridge-to-sol/);
+  assert.match(recover, /amountEth: "all"/);
+});
+
 test("Telegram balances and Positions include Robinhood bags from the managed wallet's derived account", () => {
   const snapshots = functionBody(serverSource, "buildTelegramRhWalletSnapshots");
   assert.match(snapshots, /evmAddressFromSolana/);

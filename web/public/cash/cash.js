@@ -48,7 +48,8 @@
     cashSecurity: null,
     pendingSendAttemptId: "",
     pendingRequestId: "",
-    deferredInstall: null
+    deferredInstall: null,
+    positionsLoading: false
   };
 
   const $ = (id) => document.getElementById(id);
@@ -1518,17 +1519,114 @@
     }; reader.onerror = () => { output.textContent = "Could not read that file."; output.className = "verification-box bad"; }; reader.readAsText(file);
   }
 
+  function cashPositionWalletIndex(publicKey) {
+    return Number(state.wallets.find((wallet) => wallet.publicKey === publicKey)?.index || 0);
+  }
+
+  function cashTokenAmount(raw, decimals) {
+    const value = Number(raw || 0), scale = 10 ** Math.min(30, Math.max(0, Number(decimals) || 0));
+    return Number.isFinite(value) && scale > 0 ? value / scale : 0;
+  }
+
+  async function loadCashPositions({ force = false } = {}) {
+    const wrap = $("cashPositions"), status = $("cashPositionsStatus");
+    if (!wrap || state.positionsLoading) return;
+    if (!state.token) { wrap.innerHTML = '<div class="activity-empty">Sign in to see coin positions.</div>'; return; }
+    state.positionsLoading = true;
+    status.textContent = "Reading every wallet on-chainâ€¦"; status.className = "status";
+    if (!wrap.querySelector(".cash-position-group")) wrap.innerHTML = '<div class="activity-empty">Loading coin positionsâ€¦</div>';
+    try {
+      if (!state.wallets.length) await ensureWallet({ create: false });
+      const [solResult, rhResult] = await Promise.all([
+        get(`/api/web/positions?fast=true${force ? "&force=true" : ""}`),
+        get("/api/web/rh/wallets")
+      ]);
+      const groups = [];
+      if (solResult.ok && solResult.data?.ok) {
+        for (const position of (solResult.data.positions || [])) {
+          const accountsByWallet = new Map();
+          for (const account of (position.accounts || [])) {
+            const walletIndex = cashPositionWalletIndex(account.walletPublicKey);
+            if (!walletIndex) continue;
+            const amount = cashTokenAmount(account.rawAmount, account.decimals);
+            if (!(amount > 0)) continue;
+            accountsByWallet.set(walletIndex, (accountsByWallet.get(walletIndex) || 0) + amount);
+          }
+          for (const [walletIndex, amount] of accountsByWallet) {
+            const wallet = state.wallets.find((row) => Number(row.index) === Number(walletIndex));
+            groups.push({ chain: "solana", walletIndex, walletLabel: wallet?.label || `Wallet ${walletIndex}`, token: position.tokenMint, symbol: position.symbol || "Coin", name: position.name || "Solana", amount });
+          }
+        }
+      }
+      const rhCashWallets = [];
+      if (rhResult.ok && rhResult.data?.ok) {
+        for (const wallet of (rhResult.data.wallets || [])) {
+          if (Number(wallet.eth || 0) > 0.0001) rhCashWallets.push(wallet);
+          for (const token of (wallet.tokens || [])) {
+            const amount = Number(token.uiAmount || 0);
+            if (!(amount > 0)) continue;
+            groups.push({ chain: "robinhood", walletIndex: Number(wallet.walletIndex), walletLabel: wallet.label || `Wallet ${wallet.walletIndex}`, token: token.address, symbol: token.symbol || "Coin", name: token.name || "Robinhood Chain", amount, valueUsd: token.valueUsd });
+          }
+        }
+      }
+      const byWallet = new Map();
+      for (const row of groups) {
+        const key = `${row.walletIndex}:${row.chain}`;
+        if (!byWallet.has(key)) byWallet.set(key, []);
+        byWallet.get(key).push(row);
+      }
+      const fundsHtml = rhCashWallets.length ? `<section class="cash-position-group cash-rh-funds"><div class="cash-position-head"><div><b>Robinhood launch funds</b><span>Unspent ETH stays in its original wallet</span></div><em>${rhCashWallets.length} funded</em></div>${rhCashWallets.map((wallet) => `<div class="cash-position-row cash-fund-row"><div class="cash-position-coin"><span class="cash-position-avatar">RH</span><span><b>${escapeHtml(wallet.label || `Wallet ${wallet.walletIndex}`)}</b><small>Wallet ${wallet.walletIndex} Â· ${escapeHtml(shortAddress(wallet.address || ""))}</small></span></div><div class="cash-position-balance"><b>${Number(wallet.eth).toFixed(6)} ETH</b><small>available</small></div><div class="cash-position-actions"><a href="/fun?from=cash" class="cash-position-link">Use in terminal</a><button type="button" data-rh-cashout="${wallet.walletIndex}">Return to SOL</button></div></div>`).join("")}</section>` : "";
+      const positionsHtml = byWallet.size ? [...byWallet.values()].map((rows) => {
+        const first = rows[0], rh = first.chain === "robinhood";
+        return `<section class="cash-position-group"><div class="cash-position-head"><div><b>${escapeHtml(first.walletLabel)}</b><span>${rh ? "Robinhood Chain" : "Solana"} Â· wallet ${first.walletIndex}</span></div><em>${rows.length} ${rows.length === 1 ? "coin" : "coins"}</em></div>${rows.map((row) => {
+          const href = `/fun?from=cash#${row.chain === "robinhood" ? "rhtrade" : "trade"}/${encodeURIComponent(row.token)}`;
+          return `<div class="cash-position-row"><a class="cash-position-coin" href="${href}"><span class="cash-position-avatar">${escapeHtml(String(row.symbol || "?").slice(0, 2).toUpperCase())}</span><span><b>${escapeHtml(row.symbol || "Coin")}</b><small>${escapeHtml(row.name || shortAddress(row.token))}</small></span></a><div class="cash-position-balance"><b>${Number(row.amount).toLocaleString(undefined,{maximumSignificantDigits:7})}</b>${row.valueUsd != null ? `<small>${formatUsd(row.valueUsd)}</small>` : ""}</div><div class="cash-position-actions"><button type="button" data-cash-sell="25" data-chain="${row.chain}" data-wallet-index="${row.walletIndex}" data-token="${escapeHtml(row.token)}" data-symbol="${escapeHtml(row.symbol || "Coin")}">25%</button><button class="sell-all" type="button" data-cash-sell="100" data-chain="${row.chain}" data-wallet-index="${row.walletIndex}" data-token="${escapeHtml(row.token)}" data-symbol="${escapeHtml(row.symbol || "Coin")}">Sell all</button></div></div>`;
+        }).join("")}</section>`;
+      }).join("") : '<div class="activity-empty">No coin positions found in your managed wallets.</div>';
+      wrap.innerHTML = fundsHtml + positionsHtml;
+      const partial = !solResult.ok || !rhResult.ok;
+      status.textContent = partial ? "Some networks could not refresh. The positions shown are the successful live reads." : `${groups.length} held ${groups.length === 1 ? "position" : "positions"} across your wallets.`;
+      status.className = partial ? "status bad" : "status ok";
+    } catch (error) {
+      status.textContent = error?.message || "Could not refresh positions."; status.className = "status bad";
+    } finally { state.positionsLoading = false; }
+  }
+
+  async function sellCashPosition(button) {
+    const percent = Number(button.dataset.cashSell), walletIndex = Number(button.dataset.walletIndex);
+    const token = String(button.dataset.token || ""), symbol = String(button.dataset.symbol || "coin");
+    if (![25, 100].includes(percent) || !walletIndex || !token) return;
+    if (!confirm(`Sell ${percent}% of ${symbol} from wallet ${walletIndex}?${button.dataset.chain === "robinhood" ? " Proceeds return to SOL automatically." : ""}`)) return;
+    const old = button.textContent; button.disabled = true; button.textContent = "Sellingâ€¦";
+    const tradeAttemptId = `cash-sell-${Date.now()}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`;
+    const result = button.dataset.chain === "robinhood"
+      ? await post("/api/web/rh/trade", { walletIndex, side: "sell", tokenAddress: token, percent, tradeAttemptId })
+      : await post("/api/web/trade/sell", { walletIndex, tokenMint: token, percent: String(percent), slippageBps: "1200", tradeAttemptId });
+    button.disabled = false; button.textContent = old;
+    if (result.ok && result.data?.ok) {
+      toast(button.dataset.chain === "robinhood" && result.data.solCashout?.outSol ? `Sold Â· ${result.data.solCashout.outSol} SOL returned` : "Sell confirmed");
+      setTimeout(() => loadCashPositions({ force: true }), 1600);
+    } else toast(result.data?.message || result.data?.error || "Sell failed", true);
+  }
+
+  async function cashOutRhWallet(button) {
+    const walletIndex = Number(button.dataset.rhCashout || 0);
+    if (!walletIndex || !confirm(`Return the available Robinhood ETH in wallet ${walletIndex} to that wallet's SOL address?`)) return;
+    const old = button.textContent; button.disabled = true; button.textContent = "Returningâ€¦";
+    const result = await post("/api/web/rh/bridge-to-sol", { walletIndex, amountEth: "all", tradeAttemptId: `cash-rh-return-${Date.now()}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}` });
+    button.disabled = false; button.textContent = old;
+    if (result.ok && result.data?.ok) { toast(`${result.data.outSol || "SOL"} returned`); setTimeout(() => loadCashPositions({ force: true }), 1600); }
+    else toast(result.data?.message || result.data?.error || "Could not return these funds", true);
+  }
+
   /* ---------------- ui plumbing ---------------- */
   function switchTab(tab) {
-    if (tab === "trade") {
-      location.assign("/fun?from=cash");
-      return;
-    }
     document.querySelectorAll(".tab").forEach((button) => button.classList.toggle("active", button.dataset.tab === tab));
-    for (const view of ["home", "send", "more"]) {
+    for (const view of ["home", "send", "trade", "more"]) {
       $(`view-${view}`).hidden = view !== tab;
     }
     if (tab === "more") { loadAccount(); refreshProfile(); }
+    if (tab === "trade") void loadCashPositions();
     if (tab !== "home") stopDepositWatch();
   }
 
@@ -1703,6 +1801,10 @@
     }
     const tabButton = event.target.closest(".tab");
     if (tabButton) switchTab(tabButton.dataset.tab);
+    const sellPosition = event.target.closest("[data-cash-sell]");
+    if (sellPosition) void sellCashPosition(sellPosition);
+    const rhCashout = event.target.closest("[data-rh-cashout]");
+    if (rhCashout) void cashOutRhWallet(rhCashout);
     const receipt = event.target.closest("[data-receipt]");
     if (receipt) openReceipt(receipt.dataset.receipt);
     const payContact = event.target.closest("[data-pay-contact]");
@@ -1726,6 +1828,7 @@
   $("receiveBtn").addEventListener("click", openReceive);
   $("activityAllBtn").addEventListener("click", () => loadCashHistory({ open: true }));
   $("activityRefreshBtn").addEventListener("click", () => loadCashHistory({ open: true }));
+  $("positionsRefreshBtn").addEventListener("click", () => loadCashPositions({ force: true }));
   $("shareReceiptBtn").addEventListener("click", async () => {
     const entry = state.selectedReceipt; if (!entry) return;
     const url = entry.signature ? `https://solscan.io/tx/${entry.signature}` : "";

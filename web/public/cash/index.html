@@ -6,7 +6,7 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="23">
+<meta name="slimecash-build" content="24">
 <link rel="manifest" href="/cash/manifest.webmanifest?v=11">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
@@ -17,7 +17,7 @@
 <meta property="og:title" content="SlimeCash">
 <meta property="og:description" content="Money for the trenches. Send, receive, and swap coins with your $handle.">
 <meta property="og:image" content="https://www.slimewire.org/cash/icons/icon-512.png">
-<link rel="stylesheet" href="/cash/cash.css?v=23">
+<link rel="stylesheet" href="/cash/cash.css?v=24">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -98,6 +98,21 @@
     <div id="sendStatus" class="status"></div>
   </section>
 
+  <!-- POSITIONS / TRADE TAB -->
+  <section id="view-trade" class="view" hidden>
+    <div class="view-title-row">
+      <div><div class="section-title">Coin positions</div><div class="trade-view-copy">Every managed wallet, with the wallet that actually holds each bag.</div></div>
+      <button id="positionsRefreshBtn" class="text-action" type="button">Refresh</button>
+    </div>
+    <div id="cashPositionsStatus" class="status"></div>
+    <div id="cashPositions" class="cash-positions"><div class="activity-empty">Open this tab to load your coins.</div></div>
+    <a class="suite-handoff" href="/fun?from=cash">
+      <img src="/assets/slimewire/png/slimewire-mark.png" alt="">
+      <span><b>Open the full terminal</b><small>Charts, buys, TP/SL and advanced orders</small></span>
+      <em>Open →</em>
+    </a>
+  </section>
+
   <!-- MORE TAB -->
   <section id="view-more" class="view" hidden>
     <div class="section-title">Profile</div>
@@ -133,7 +148,7 @@
   <nav class="tabbar">
     <button class="tab active" data-tab="home" type="button"><span class="tab-ico">$</span>Cash</button>
     <button class="tab" data-tab="send" type="button"><span class="tab-ico">➤</span>Send</button>
-    <button class="tab" data-tab="trade" type="button"><span class="tab-ico">⇄</span>Trade</button>
+    <button class="tab" data-tab="trade" type="button"><span class="tab-ico">⇄</span>Positions</button>
     <button class="tab" data-tab="more" type="button"><span class="tab-ico">◎</span>Profile</button>
   </nav>
 </main>
@@ -471,6 +486,6 @@
 <div id="toast" class="toast" hidden></div>
 <script src="/config.js"></script>
 <script src="/slimewire-funding.js?v=8"></script>
-<script src="/cash/cash.js?v=23"></script>
+<script src="/cash/cash.js?v=24"></script>
 </body>
 </html>
