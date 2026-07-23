@@ -1224,12 +1224,14 @@ test("launch UI is Pump-simple: Pump + Robinhood only, NFT-ready tabs, dormant t
   }
 });
 
-test("launch dev + bundle presets support shared and per-wallet ladders end to end", () => {
+test("launch dev + bundle presets support shared, per-wallet ladders, and manual-only buys end to end", () => {
   for (const src of [ggSource, indexSource]) {
     assert.match(src, /function lcReadExitStrategy\(pfx\)/);
     assert.match(src, /Smart ladder/);
     assert.match(src, /Fast ladder/);
     assert.match(src, /Custom ladder/);
+    assert.match(src, /Manual only · buy at launch, I sell myself/);
+    assert.match(src, /Manual control · this wallet buys at launch with no automatic selling/);
     assert.match(src, /Same settings for every wallet/);
     assert.match(src, /Set each wallet/);
     assert.match(src, /data-lc-bundle-pick/);
@@ -1237,6 +1239,8 @@ test("launch dev + bundle presets support shared and per-wallet ladders end to e
     assert.match(src, /stopLossPct:stopLossEnabled\?"12":"0"/);
     assert.match(src, /breakEvenAfterTp1:stopLossEnabled/);
     assert.match(src, /Stop loss off[^\n]+no break-even stop/);
+    assert.match(src, /if\(preset==="manual"\)return\{preset,manualExit:true,disableAutoExit:true/);
+    assert.match(src, /manual=!!\(sel&&sel\.value==="manual"\)/);
     assert.match(src, /id="lcJoinSlEnabled" checked/);
     assert.match(src, /exitMode:mode,stopLossEnabled,stopLossPct:stopLossEnabled\?/);
     assert.match(src, /body\.devExitStrategy=lcReadExitStrategy\("lcDev"\)/);
@@ -1247,9 +1251,20 @@ test("launch dev + bundle presets support shared and per-wallet ladders end to e
   assert.match(plans, /bundle\.walletConfigs/);
   assert.match(plans, /config\.amountSol \?\? bundle\.amountSol/);
   assert.match(plans, /pumpLaunchExitStrategy\(config, sharedExit\)/);
+  const manual = functionBody(serverSource, "pumpLaunchManualExit");
+  assert.match(manual, /preset[^\n]+manual/);
+  assert.match(manual, /manualExit/);
+  assert.match(manual, /disableAutoExit/);
+  const strategy = functionBody(serverSource, "pumpLaunchExitStrategy");
+  assert.match(strategy, /manualExit: true/);
+  assert.match(strategy, /disableAutoExit: true/);
+  assert.match(strategy, /takeProfitLadder: \[\]/);
   const fallback = functionBody(serverSource, "firePostLaunchBuysServerSide");
   assert.match(fallback, /groupPumpLaunchPlans\(bundlePlans\)/);
   assert.match(fallback, /plan\.amountSol/);
+  assert.match(fallback, /pumpLaunchManualExit\(devExitStrategy\)/);
+  assert.match(fallback, /pumpLaunchManualExit\(group\.exitStrategy\)/);
+  assert.match(fallback, /dev manual-only/);
   const atomic = functionBody(serverSource, "webLaunchPumpJitoBundle");
   assert.match(atomic, /grossAmountSol: bundlePlan\.amountSol/);
   assert.match(atomic, /const swapLamports = grossLamports - feeLamports/);
@@ -1257,6 +1272,7 @@ test("launch dev + bundle presets support shared and per-wallet ladders end to e
   assert.match(atomic, /walletPublicKeys: group\.plans\.map/);
   assert.match(atomic, /returnCoverageDetails: true/);
   assert.match(atomic, /overflowBundlePlans/);
+  assert.match(atomic, /filter\(\(entry\) => !pumpLaunchManualExit\(entry\.exitStrategy\)\)/);
   const standard = functionBody(serverSource, "webLaunchPumpPortalLocal");
   assert.match(standard, /firePostLaunchBuysServerSide/);
   assert.match(standard, /postLaunchBuys/);
