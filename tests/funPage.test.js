@@ -20,7 +20,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "63", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "65", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -33,7 +33,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v53/);
+  assert.match(funWorker, /slimewire-fun-v55/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -90,7 +90,7 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
   assert.match(html, /fun\.css\?v=39/);
-  assert.match(funWorker, /slimewire-fun-v53/);
+  assert.match(funWorker, /slimewire-fun-v55/);
   assert.match(funWorker, /fun\.css\?v=39/);
 });
 
@@ -100,8 +100,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=63/);
-  assert.match(funWorker, /fun\.js\?v=63/);
+  assert.match(html, /fun\.js\?v=65/);
+  assert.match(funWorker, /fun\.js\?v=65/);
 });
 
 test("Fun volume switches pasted contracts to their authoritative chain", () => {
@@ -163,7 +163,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v53"/);
+  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v55"/);
   assert.match(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
   assert.match(funWorker, /self\.clients\.claim\(\)/);
@@ -394,27 +394,39 @@ test("/fun keeps SOL in the header and shows SOL plus coins as cash in the fundi
   assert.match(js, /totalSol: liquidSol \+ coinsSol/);
   assert.match(js, /compactSol\(wallet\.sol\)/);
   assert.match(js, /<small>AVAILABLE<\/small>/);
-  assert.match(js, /const totalUsd = state\.solUsd > 0 \? totalSol \* state\.solUsd : null/);
-  assert.match(js, /class="wallet-cash-total"[\s\S]{0,180}TOTAL VALUE[\s\S]{0,180}SOL \+ COINS/);
+  assert.match(js, /const totalUsd = baseUsd == null \? null : baseUsd \+ rhEth \* Math\.max\(0, state\.rhEthUsd\)/);
+  assert.match(js, /class="wallet-cash-total"[\s\S]{0,180}TOTAL VALUE[\s\S]{0,180}SOL \+ COINS \+ RH ETH/);
   assert.match(css, /\.readiness-summary\{display:grid;grid-template-columns:minmax\(0,1fr\) auto/);
   assert.match(server, /getSolUsdPrice\(\{ timeoutMs: 1_800 \}\)[\s\S]{0,200}return \{ balances, connectedWallet, solUsd \}/);
   assert.match(js, /function paintPositionSurfaces\(\)[\s\S]{0,160}paintWalletPill\(\);[\s\S]{0,80}renderHomeReadiness\(\)/);
   assert.match(js, /async function loadPositions\(options = \{\}\)[\s\S]{0,600}paintPositionSurfaces\(\)/);
 });
 
+test("Fun exposes the complete paired Robinhood ETH wallet without hiding recovery controls", () => {
+  assert.match(js, /function openFunRhWalletTools/);
+  assert.match(js, /data-rh-wallet-tools="\$\{wallet\.index\}"/);
+  assert.match(js, /\/api\/web\/rh\/fund-with-sol/);
+  assert.match(js, /\/api\/web\/rh\/bridge-to-sol/);
+  assert.match(js, /\/api\/web\/rh\/send-eth/);
+  assert.match(js, /Manual ETH sends keep a protected network reserve/);
+  assert.match(js, /const rhEthUsd = Math\.max\(0, Number\(wallet\.rhEth\)/);
+  assert.match(js, /Solana address[\s\S]{0,800}Robinhood Chain address/);
+});
+
 test("/fun backs up every wallet, auto-backs up new wallets, and keeps backup-all explicit", () => {
   assert.match(js, /data-backup-wallet data-wallet-index="\$\{wallet\.index\}" data-wallet-key="\$\{escapeHtml\(wallet\.publicKey\)\}">Solflare \/ Phantom Backup/);
-  assert.match(js, /function walletManagerRowHtml\(wallet\)[\s\S]{0,3500}data-backup-wallet data-wallet-index="\$\{wallet\.index\}" data-wallet-key="\$\{escapeHtml\(wallet\.publicKey\)\}"/);
+  assert.match(js, /function walletManagerRowHtml\(wallet\)[\s\S]{0,5000}data-backup-wallet data-wallet-index="\$\{wallet\.index\}" data-wallet-key="\$\{escapeHtml\(wallet\.publicKey\)\}"/);
   assert.match(js, /const previousWallets = new Set\(state\.wallets\.map[\s\S]{0,650}for \(const wallet of created\) markWalletBackedUp\(wallet\)/);
   assert.match(js, /sessionStorage\.getItem\(WALLET_BACKUP_REMINDER_KEY\)[\s\S]{0,260}Back up Wallet 1 before using another device/);
   assert.match(js, /const requestBody = options\.walletPublicKey \|\| options\.walletIndex[\s\S]{0,180}publicKey: options\.walletPublicKey[\s\S]{0,100}walletIndex: options\.walletIndex/);
   assert.match(js, /post\("\/api\/web\/wallets\/export", requestBody\)/);
   assert.match(js, /exportWallets\(backupWallet, \{ recoveryOnly: true, walletPublicKey: backupWallet\.dataset\.walletKey[\s\S]{0,180}walletIndex: backupWallet\.dataset\.walletIndex/);
   assert.match(js, /downloads\.recoveryKeys\?\.text[\s\S]{0,180}downloadText\(downloads\.recoveryKeys\.filename, downloads\.recoveryKeys\.text\)/);
+  assert.match(js, /downloads\.evmRecoveryKeys\?\.text[\s\S]{0,180}downloadText\(downloads\.evmRecoveryKeys\.filename, downloads\.evmRecoveryKeys\.text\)/);
   assert.match(js, /Solflare\/Phantom backup downloaded\. Open the file for load steps and keep it private\./);
   assert.match(js, /markWalletBackedUp\(selected \|\| options\.walletPublicKey\)/);
   const allFiles = js.slice(js.indexOf("function downloadWalletFiles"), js.indexOf("async function downloadFunAccountBackup"));
-  assert.match(allFiles, /downloads\.encryptedBackup, downloads\.recoveryKeys/);
+  assert.match(allFiles, /downloads\.encryptedBackup, downloads\.recoveryKeys, downloads\.evmRecoveryKeys/);
   assert.match(js, /const exportButton = event\.target\.closest\("\[data-export-wallets\]"\)[\s\S]{0,100}exportWallets\(exportButton\)/);
   assert.match(css, /\.wallet-total-line\{display:flex/);
   assert.match(css, /\.wallet-backup-button\{/);
@@ -423,8 +435,8 @@ test("/fun backs up every wallet, auto-backs up new wallets, and keeps backup-al
 test("wallet creation automatically sends both backup formats with outside-wallet load guidance", () => {
   const createWallet = js.slice(js.indexOf("async function createWallet()"), js.indexOf("function walletPositionAssets"));
   const ensureDesktopAccount = terminalApp.slice(terminalApp.indexOf("async function ensureWebAccount"), terminalApp.indexOf("async function createWebAccount"));
-  assert.match(createWallet, /downloads\.encryptedBackup, downloads\.recoveryKeys/);
-  assert.match(createWallet, /SlimeWire and Solflare\/Phantom backups downloaded/);
+  assert.match(createWallet, /downloads\.encryptedBackup, downloads\.recoveryKeys, downloads\.evmRecoveryKeys/);
+  assert.match(createWallet, /Solana and Robinhood\/EVM backups downloaded/);
   assert.match(terminalApp, /Solflare \/ Phantom Backup/);
   assert.match(terminalApp, /No username or named profile is required/);
   assert.match(terminalApp, /Open Phantom to load/);

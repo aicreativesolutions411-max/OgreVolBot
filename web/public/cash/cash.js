@@ -26,6 +26,11 @@
     lamports: null,
     usdcRaw: null,
     usdc: 0,
+    rhEth: null,
+    rhEthUsd: 0,
+    rhAddress: "",
+    rhWalletRows: [],
+    rhToolWalletIndex: null,
     convertFrom: "USDC",
     convertTo: "SOL",
     tokens: [],
@@ -246,9 +251,13 @@
     } catch { toast("Backup is ready, but the download was blocked. Tap Back up account in Profile.", true); }
   }
 
-  function downloadWalletFiles(downloads) {
-    if (downloads?.encryptedBackup?.text) downloadText(downloads.encryptedBackup.filename, downloads.encryptedBackup.text);
-    if (downloads?.recoveryKeys?.text) downloadText(downloads.recoveryKeys.filename, downloads.recoveryKeys.text);
+  function downloadWalletFiles(downloads, options = {}) {
+    const includeEncrypted = options.includeEncrypted !== false;
+    const includeSolana = options.includeSolana !== false;
+    const includeEvm = options.includeEvm !== false;
+    if (includeEncrypted && downloads?.encryptedBackup?.text) downloadText(downloads.encryptedBackup.filename, downloads.encryptedBackup.text);
+    if (includeSolana && downloads?.recoveryKeys?.text) downloadText(downloads.recoveryKeys.filename, downloads.recoveryKeys.text);
+    if (includeEvm && downloads?.evmRecoveryKeys?.text) downloadText(downloads.evmRecoveryKeys.filename, downloads.evmRecoveryKeys.text);
   }
 
   async function backupCashAccount({ includeWallets = false, quiet = false } = {}) {
@@ -490,6 +499,29 @@
     return state.wallet;
   }
 
+  async function refreshCashRhBalances({ walletIndex = null, render = true } = {}) {
+    if (!state.token) return false;
+    const query = walletIndex ? `?walletIndex=${encodeURIComponent(walletIndex)}` : "";
+    const result = await get(`/api/web/rh/balances${query}`);
+    if (!result.ok) return false;
+    state.rhEthUsd = Number(result.data.ethUsd || 0);
+    const byIndex = new Map((result.data.wallets || []).map((row) => [Number(row.walletIndex), row]));
+    state.wallets = state.wallets.map((wallet) => {
+      const row = byIndex.get(Number(wallet.index));
+      return row ? { ...wallet, rhAddress: row.address || "", rhEth: row.available ? Number(row.eth || 0) : null, rhAvailable: Boolean(row.available), rhExplorer: row.explorer || "" } : wallet;
+    });
+    const active = byIndex.get(Number(state.wallet?.index));
+    if (active) {
+      state.rhAddress = active.address || "";
+      state.rhEth = active.available ? Number(active.eth || 0) : null;
+    }
+    if (render) {
+      renderBalance();
+      renderCashWallets();
+    }
+    return true;
+  }
+
   function renderCashWallets() {
     const list = $("cashWalletList");
     if (!list) return;
@@ -501,7 +533,11 @@
     list.innerHTML = state.wallets.map((wallet) => {
       const main = Number(wallet.index) === mainIndex;
       const active = Number(wallet.index) === Number(state.wallet?.index);
-      return `<div class="cash-wallet-row ${active ? "active" : ""}"><div class="cash-wallet-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${main ? " <em>Main</em>" : ""}${active ? " <em>Using</em>" : ""}</b><span>${escapeHtml(shortAddress(wallet.publicKey))}</span><input data-cash-wallet-name="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40" aria-label="Wallet name"></div><div class="cash-wallet-row-actions"><button type="button" data-cash-wallet-use="${wallet.index}">${active ? "Selected" : "Use"}</button><button type="button" data-cash-wallet-rename="${wallet.index}">Rename</button><button type="button" data-cash-wallet-backup="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Solflare / Phantom Backup</button>${main ? '<button type="button" disabled title="Your Main wallet stays with your account">Main</button>' : `<button class="danger" type="button" data-cash-wallet-remove="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button>`}</div></div>`;
+      const rhBalance = wallet.rhAvailable === false ? "ETH unavailable" : wallet.rhEth == null ? "ETH loading…" : `${Number(wallet.rhEth).toFixed(6)} ETH`;
+      const rhLine = wallet.rhAddress
+        ? `<span>Robinhood · <button class="cash-inline-copy" type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress)}">${escapeHtml(shortAddress(wallet.rhAddress))}</button> · <strong>${escapeHtml(rhBalance)}</strong></span>`
+        : `<span>Robinhood · ${escapeHtml(rhBalance)}</span>`;
+      return `<div class="cash-wallet-row ${active ? "active" : ""}"><div class="cash-wallet-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${main ? " <em>Main</em>" : ""}${active ? " <em>Using</em>" : ""}</b><span>Solana · <button class="cash-inline-copy" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}">${escapeHtml(shortAddress(wallet.publicKey))}</button></span>${rhLine}<input data-cash-wallet-name="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40" aria-label="Wallet name"></div><div class="cash-wallet-row-actions"><button type="button" data-cash-wallet-use="${wallet.index}">${active ? "Selected" : "Use"}</button><button type="button" data-cash-wallet-rename="${wallet.index}">Rename</button><button type="button" data-cash-wallet-backup="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Solflare / Phantom Backup</button><button type="button" data-cash-wallet-evm-backup="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Robinhood / ETH Backup</button>${main ? '<button type="button" disabled title="Your Main wallet stays with your account">Main</button>' : `<button class="danger" type="button" data-cash-wallet-remove="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button>`}</div></div>`;
     }).join("");
   }
 
@@ -511,6 +547,7 @@
     renderCashWallets();
     $("cashWalletStatus").textContent = "";
     openSheet("wallets");
+    await refreshCashRhBalances();
   }
 
   async function selectCashWallet(index) {
@@ -519,6 +556,8 @@
     state.wallet = { index: wallet.index, publicKey: wallet.publicKey, label: wallet.label || "" };
     localStorage.setItem(ACTIVE_WALLET_KEY, String(wallet.index));
     state.lamports = state.usdcRaw = null;
+    state.rhEth = null;
+    state.rhAddress = "";
     await refreshBalance({ silent: true });
     renderProfile();
     renderCashWallets();
@@ -548,8 +587,26 @@
       $("cashWalletStatus").className = "status bad";
       return;
     }
-    downloadWalletFiles(result.data.backup.downloads);
+    downloadWalletFiles(result.data.backup.downloads, { includeEvm: false });
     $("cashWalletStatus").textContent = "SlimeWire and Solflare/Phantom backups downloaded for this wallet.";
+    $("cashWalletStatus").className = "status ok";
+  }
+
+  async function backupCashEvmWallet(index, publicKey, button) {
+    if (!(await ensureAccount())) return;
+    if (!confirm("Download this wallet's Robinhood/EVM private key? Anyone with this file can move its ETH and Robinhood coins.")) return;
+    const oldLabel = button?.textContent || "Robinhood / ETH Backup";
+    if (button) { button.disabled = true; button.textContent = "Preparing…"; }
+    const result = await post("/api/web/wallets/export", { walletIndex: Number(index), publicKey: String(publicKey || "") });
+    if (button) { button.disabled = false; button.textContent = oldLabel; }
+    const downloads = result.data?.backup?.downloads;
+    if (!result.ok || !downloads?.evmRecoveryKeys?.text) {
+      $("cashWalletStatus").textContent = result.data?.error || "Could not prepare that Robinhood/EVM backup.";
+      $("cashWalletStatus").className = "status bad";
+      return;
+    }
+    downloadWalletFiles(downloads, { includeEncrypted: false, includeSolana: false });
+    $("cashWalletStatus").textContent = "Robinhood/EVM recovery key downloaded for this wallet.";
     $("cashWalletStatus").className = "status ok";
   }
 
@@ -661,6 +718,7 @@
     state.usdc = Number(result.data.assets?.USDC?.uiAmount || 0);
     if (result.data.wallet?.address) state.wallet = { index: result.data.wallet.index, publicKey: result.data.wallet.address, label: result.data.wallet.label || "" };
     renderBalance();
+    void refreshCashRhBalances({ walletIndex: state.wallet?.index });
     if (previousUsdc !== null && state.usdcRaw > previousUsdc) {
       const gainedUsdc = (state.usdcRaw - previousUsdc) / 1e6;
       addActivity({ type: "in", title: "USDC arrived", sub: "Digital dollars landed on Solana", amountUsd: gainedUsdc, at: Date.now() });
@@ -700,13 +758,16 @@
 
   function totalUsd() {
     const sol = (state.lamports || 0) / 1e9;
-    return state.usdc + sol * state.solUsd;
+    const rhEthValue = Math.max(0, Number(state.rhEth || 0)) * Math.max(0, Number(state.rhEthUsd || 0));
+    return state.usdc + sol * state.solUsd + rhEthValue;
   }
 
   function renderBalance() {
     const sol = (state.lamports || 0) / 1e9;
     $("balanceUsd").textContent = formatUsd(totalUsd());
-    $("balanceSub").textContent = `$${state.usdc.toFixed(2)} USD · ${sol.toFixed(4)} SOL`;
+    const rhValue = Math.max(0, Number(state.rhEth || 0)) * Math.max(0, Number(state.rhEthUsd || 0));
+    const rh = state.rhEth == null ? "ETH loading…" : `${Number(state.rhEth).toFixed(6)} ETH (Robinhood)${rhValue > 0 ? ` · ${formatUsd(rhValue)}` : ""}`;
+    $("balanceSub").textContent = `$${state.usdc.toFixed(2)} USD · ${sol.toFixed(4)} SOL · ${rh}`;
   }
 
   /* ---------------- activity (device-local) ---------------- */
@@ -766,6 +827,7 @@
     $("receiptBody").innerHTML = `<div class="receipt-status">${escapeHtml(entry.status || (entry.signature ? "Confirmed" : "Saved on this device"))}</div><div class="receipt-line"><span>Amount</span><b>${entry.type === "in" ? "+" : "-"}${formatUsd(Math.abs(entry.amountUsd || 0))} ${escapeHtml(entry.asset || "")}</b></div><div class="receipt-line"><span>Type</span><b>${entry.type === "in" ? "Received" : "Sent"}</b></div><div class="receipt-line"><span>Details</span><b>${escapeHtml(entry.title || entry.sub || "Payment")}</b></div><div class="receipt-line"><span>Date</span><b>${new Date(entry.at).toLocaleString()}</b></div>${entry.signature ? `<div class="receipt-line"><span>Signature</span><b>${escapeHtml(entry.signature.slice(0, 12))}…${escapeHtml(entry.signature.slice(-8))}</b></div>` : ""}`;
     $("receiptExplorer").hidden = !entry.signature;
     $("receiptExplorer").href = entry.explorerUrl || `https://solscan.io/tx/${encodeURIComponent(entry.signature)}`;
+    $("receiptExplorer").textContent = entry.asset === "ETH" ? "View on Robinhood Chain" : "View on Solana";
     openSheet("receipt");
   }
 
@@ -829,6 +891,17 @@
     state.resolved = null;
     const hint = $("resolveHint");
     if (!value) { hint.textContent = ""; hint.className = "field-hint"; return; }
+    if (state.sendAsset === "ETH") {
+      if (isLikelyEvmAddress(value)) {
+        state.resolved = { address: value, handle: "" };
+        hint.textContent = `→ Robinhood Chain wallet · ${shortAddress(value)}`;
+        hint.className = "field-hint ok";
+      } else {
+        hint.textContent = "Paste a 0x Robinhood Chain wallet address.";
+        hint.className = "field-hint bad";
+      }
+      return;
+    }
     if (/^\$?[a-zA-Z0-9]{1,20}$/.test(value) && /[a-zA-Z]/.test(value.replace(/^\$/, "")) && value.replace(/^\$/, "").length <= 20 && !isLikelyAddress(value)) {
       const handle = value.replace(/^\$/, "").toLowerCase();
       const result = await get(`/api/web/cash/resolve?handle=${encodeURIComponent(handle)}`);
@@ -855,6 +928,9 @@
   function isLikelyAddress(value) {
     return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(value).trim());
   }
+  function isLikelyEvmAddress(value) {
+    return /^0x[0-9a-fA-F]{40}$/.test(String(value || "").trim());
+  }
 
   function amountToSol() {
     const raw = Number($("sendAmount").value || 0);
@@ -866,41 +942,53 @@
   function sendUsdValue() {
     const raw = Number($("sendAmount").value || 0);
     if (!(raw > 0)) return 0;
+    if (state.sendAsset === "ETH") return raw * Math.max(0, Number(state.rhEthUsd || 0));
     return state.sendAsset !== "SOL" ? raw : amountToSol() * state.solUsd;
   }
 
   function selectSendAsset(asset) {
-    state.sendAsset = asset === "SOL" ? "SOL" : "USDC";
+    state.sendAsset = asset === "SOL" ? "SOL" : asset === "ETH" ? "ETH" : "USDC";
     state.sendAll = false;
+    state.resolved = null;
+    $("resolveHint").textContent = "";
+    $("sendTo").value = "";
     document.querySelectorAll("[data-send-asset]").forEach((button) => button.classList.toggle("active", button.dataset.sendAsset === state.sendAsset));
-    $("amountUnit").textContent = state.sendAsset !== "SOL" ? "USD" : state.amountUnit;
+    $("amountUnit").textContent = state.sendAsset === "ETH" ? "ETH" : state.sendAsset !== "SOL" ? "USD" : state.amountUnit;
     $("amountUnit").disabled = state.sendAsset !== "SOL";
+    $("sendTo").placeholder = state.sendAsset === "ETH" ? "0x Robinhood Chain address" : "$frankie or Solana address";
     $("sendAmount").placeholder = "0.00";
-    $("sendAllBtn").hidden = state.sendAsset !== "SOL";
+    $("sendAllBtn").hidden = !["SOL", "ETH"].includes(state.sendAsset);
     $("sendAllBtn").classList.remove("active");
     renderAmountAlt();
   }
 
   function selectSendAll() {
-    if (state.sendAsset !== "SOL") return;
-    const balanceSol = Math.max(0, Number(state.lamports || 0) / 1e9);
-    if (!(balanceSol > 0)) {
-      $("sendStatus").textContent = "This wallet has no SOL to send.";
+    if (!["SOL", "ETH"].includes(state.sendAsset)) return;
+    const balance = state.sendAsset === "ETH" ? Math.max(0, Number(state.rhEth || 0)) : Math.max(0, Number(state.lamports || 0) / 1e9);
+    if (!(balance > 0)) {
+      $("sendStatus").textContent = `This wallet has no ${state.sendAsset} to send.`;
       $("sendStatus").className = "status bad";
       return;
     }
     state.sendAll = true;
-    state.amountUnit = "SOL";
-    $("amountUnit").textContent = "SOL";
-    $("sendAmount").value = balanceSol.toFixed(9).replace(/0+$/, "").replace(/\.$/, "");
+    if (state.sendAsset === "SOL") state.amountUnit = "SOL";
+    $("amountUnit").textContent = state.sendAsset;
+    $("sendAmount").value = balance.toFixed(state.sendAsset === "ETH" ? 18 : 9).replace(/0+$/, "").replace(/\.$/, "");
     $("sendAllBtn").classList.add("active");
-    $("sendStatus").textContent = "All available SOL selected. Network and app fees are calculated when you confirm.";
+    $("sendStatus").textContent = state.sendAsset === "ETH"
+      ? "Available ETH selected. A protected Robinhood network reserve stays in this wallet."
+      : "All available SOL selected. Network and app fees are calculated when you confirm.";
     $("sendStatus").className = "status";
     renderAmountAlt();
   }
 
   function renderAmountAlt() {
     const alt = $("amountAlt");
+    if (state.sendAsset === "ETH") {
+      const amount = Number($("sendAmount").value || 0);
+      alt.textContent = amount > 0 ? `≈ ${formatUsd(amount * Math.max(0, Number(state.rhEthUsd || 0)))} · Robinhood Chain` : "";
+      return;
+    }
     if (state.sendAsset !== "SOL") {
       const amount = Number($("sendAmount").value || 0);
       alt.textContent = amount > 0 ? `$${amount.toFixed(2)} USD as USDC on Solana` : "";
@@ -920,7 +1008,8 @@
     const target = state.resolved;
     const sol = amountToSol();
     const usdc = Number($("sendAmount").value || 0);
-    const amount = state.sendAsset !== "SOL" ? usdc : sol;
+    const eth = Number($("sendAmount").value || 0);
+    const amount = state.sendAsset === "ETH" ? eth : state.sendAsset !== "SOL" ? usdc : sol;
     const status = $("sendStatus");
     if (!target) { status.textContent = "Pick who you're sending to first."; status.className = "status bad"; return; }
     if (!(amount > 0)) { status.textContent = "Enter an amount."; status.className = "status bad"; return; }
@@ -929,11 +1018,16 @@
       if (securityResult.ok) state.cashSecurity = securityResult.data.security || securityResult.data;
     }
     const to = target.handle ? `$${target.handle}` : shortAddress(target.address);
-    const amountText = state.sendAsset !== "SOL" ? `$${usdc.toFixed(2)} ${state.sendAsset}` : state.sendAll ? "All available SOL" : `${sol.toFixed(4)} SOL (${formatUsd(sol * state.solUsd)})`;
+    const amountText = state.sendAsset === "ETH"
+      ? state.sendAll ? "Available Robinhood ETH" : `${eth.toFixed(6)} ETH (${formatUsd(eth * state.rhEthUsd)})`
+      : state.sendAsset !== "SOL" ? `$${usdc.toFixed(2)} ${state.sendAsset}` : state.sendAll ? "All available SOL" : `${sol.toFixed(4)} SOL (${formatUsd(sol * state.solUsd)})`;
+    const networkText = state.sendAsset === "ETH"
+      ? "Robinhood Chain · network fee · protected gas reserve"
+      : `Solana network · 0.5% app fee · ${state.sendAsset !== "SOL" ? "a little SOL is needed for network fees" : "network fee ~0.000005 SOL"}`;
     $("confirmSummary").innerHTML =
       `Send <b>${amountText}</b><br>` +
       `to <b>${escapeHtml(to)}</b><br>` +
-      `<span style="color:var(--dim);font-size:12px">Solana network · 0.5% app fee · ${state.sendAsset !== "SOL" ? "a little SOL is needed for network fees" : "network fee ~0.000005 SOL"}</span>`;
+      `<span style="color:var(--dim);font-size:12px">${networkText}</span>`;
     $("confirmPinWrap").hidden = !state.cashSecurity?.pinEnabled;
     $("confirmSpendPin").value = "";
     state.pendingSendAttemptId = crypto.randomUUID();
@@ -945,6 +1039,7 @@
     const target = state.resolved;
     const sol = amountToSol();
     const usdc = Number($("sendAmount").value || 0);
+    const eth = Number($("sendAmount").value || 0);
     const note = $("sendNote").value.trim();
     const spendPin = $("confirmSpendPin").value.trim();
     if (state.cashSecurity?.pinEnabled && !/^\d{4,8}$/.test(spendPin)) {
@@ -959,7 +1054,7 @@
       fromWalletIndex: state.wallet?.index || 1,
       destination: target.address,
       asset: state.sendAsset,
-      ...(state.sendAsset !== "SOL" ? { amount: String(usdc) } : state.sendAll ? { sendAll: true } : { amountSol: String(sol) }),
+      ...(state.sendAsset === "ETH" ? (state.sendAll ? { sendAll: true, amountEth: "all" } : { amountEth: String(eth) }) : state.sendAsset !== "SOL" ? { amount: String(usdc) } : state.sendAll ? { sendAll: true } : { amountSol: String(sol) }),
       note,
       recipientLabel: target.handle ? `$${target.handle}` : "",
       ...(spendPin ? { spendPin } : {}),
@@ -971,7 +1066,8 @@
     if (result.ok) {
       closeSheet("confirm");
       const to = target.handle ? `$${target.handle}` : shortAddress(target.address);
-      addActivity({ type: "out", title: `To ${to}`, sub: note || `${state.sendAsset} sent`, asset: state.sendAsset, amountUsd: sendUsdValue(), signature: result.data.signature || "", at: Date.now() });
+      const sentUsd = state.sendAsset === "ETH" ? Number(result.data.amountEth || 0) * Math.max(0, Number(state.rhEthUsd || 0)) : sendUsdValue();
+      addActivity({ type: "out", title: `To ${to}`, sub: note || `${state.sendAsset} sent`, asset: state.sendAsset, amountUsd: sentUsd, signature: result.data.signature || "", explorerUrl: result.data.explorerUrl || "", at: Date.now() });
       state.activity = [];
       renderActivity();
       $("sendStatus").textContent = `Sent. Signature ${String(result.data.signature || "").slice(0, 8)}…`;
@@ -1328,16 +1424,26 @@
   }
 
   function receiveRequestUrl() {
+    if (state.receiveAsset === "ETH") return state.rhAddress || "";
     return solanaPayUrl(state.wallet.publicKey, state.receiveAsset, $("receiveAmount").value, "SlimeCash payment request");
   }
 
   function renderReceiveRequest() {
     if (!state.wallet) return;
     document.querySelectorAll("[data-receive-asset]").forEach((button) => button.classList.toggle("active", button.dataset.receiveAsset === state.receiveAsset));
-    $("receiveAddress").textContent = state.wallet.publicKey;
-    QR.draw($("receiveQr"), state.wallet.publicKey);
-    $("openReceiveWallet").href = receiveRequestUrl();
-    $("receiveStatus").textContent = state.receiveAsset === "SOL"
+    const rh = state.receiveAsset === "ETH";
+    const address = rh ? state.rhAddress : state.wallet.publicKey;
+    $("receiveAddress").textContent = address || "Robinhood address loading…";
+    if (address) QR.draw($("receiveQr"), address);
+    $("receiveNetwork").textContent = rh ? "Robinhood Chain" : "Solana network";
+    $("openReceiveWallet").hidden = rh;
+    $("trackRequestBtn").hidden = rh;
+    $("receiveAmount").disabled = rh;
+    $("shareReceiveBtn").textContent = rh ? "Share ETH address" : "Share request";
+    if (!rh) $("openReceiveWallet").href = receiveRequestUrl();
+    $("receiveStatus").textContent = rh
+      ? "Only send Robinhood Chain ETH or coins to this 0x address. Use the backup in Wallets for independent recovery."
+      : state.receiveAsset === "SOL"
       ? "SOL arrives on Solana. The button includes the requested amount when entered."
       : "USD arrives as USDC on Solana. The QR is your Solana address; the button includes the exact request.";
   }
@@ -1345,12 +1451,14 @@
   async function openReceive() {
     if (!(await ensureAccount())) return;
     if (!state.wallet && !(await ensureWallet({ create: true, label: "SlimeCash" }))) return;
+    await refreshCashRhBalances({ walletIndex: state.wallet.index, render: false });
     renderReceiveRequest();
     openSheet("receive");
   }
 
   async function shareReceive() {
     const url = receiveRequestUrl();
+    if (!url) { toast("Robinhood address is still loading.", true); return; }
     const text = `${state.receiveAsset} payment request${Number($("receiveAmount").value) > 0 ? ` for ${$("receiveAmount").value} ${state.receiveAsset}` : ""}`;
     if (navigator.share) {
       try { await navigator.share({ title: "SlimeCash request", text, url }); return; } catch { /* copy fallback */ }
@@ -1561,7 +1669,7 @@
       const rhCashWallets = [];
       if (rhResult.ok && rhResult.data?.ok) {
         for (const wallet of (rhResult.data.wallets || [])) {
-          if (Number(wallet.eth || 0) > 0.0001) rhCashWallets.push(wallet);
+          rhCashWallets.push(wallet);
           for (const token of (wallet.tokens || [])) {
             const amount = Number(token.uiAmount || 0);
             if (!(amount > 0)) continue;
@@ -1569,13 +1677,14 @@
           }
         }
       }
+      state.rhWalletRows = rhCashWallets;
       const byWallet = new Map();
       for (const row of groups) {
         const key = `${row.walletIndex}:${row.chain}`;
         if (!byWallet.has(key)) byWallet.set(key, []);
         byWallet.get(key).push(row);
       }
-      const fundsHtml = rhCashWallets.length ? `<section class="cash-position-group cash-rh-funds"><div class="cash-position-head"><div><b>Robinhood launch funds</b><span>Unspent ETH stays in its original wallet</span></div><em>${rhCashWallets.length} funded</em></div>${rhCashWallets.map((wallet) => `<div class="cash-position-row cash-fund-row"><div class="cash-position-coin"><span class="cash-position-avatar">RH</span><span><b>${escapeHtml(wallet.label || `Wallet ${wallet.walletIndex}`)}</b><small>Wallet ${wallet.walletIndex} Â· ${escapeHtml(shortAddress(wallet.address || ""))}</small></span></div><div class="cash-position-balance"><b>${Number(wallet.eth).toFixed(6)} ETH</b><small>available</small></div><div class="cash-position-actions"><a href="/fun?from=cash" class="cash-position-link">Use in terminal</a><button type="button" data-rh-cashout="${wallet.walletIndex}">Return to SOL</button></div></div>`).join("")}</section>` : "";
+      const fundsHtml = rhCashWallets.length ? `<section class="cash-position-group cash-rh-funds"><div class="cash-position-head"><div><b>Robinhood ETH wallets</b><span>Receive, convert, send, trade and recover each exact wallet</span></div><em>${rhCashWallets.length} wallets</em></div>${rhCashWallets.map((wallet) => `<div class="cash-position-row cash-fund-row"><div class="cash-position-coin"><span class="cash-position-avatar">RH</span><span><b>${escapeHtml(wallet.label || `Wallet ${wallet.walletIndex}`)}</b><small>Wallet ${wallet.walletIndex} · ${escapeHtml(shortAddress(wallet.address || ""))}</small></span></div><div class="cash-position-balance"><b>${Number(wallet.eth).toFixed(6)} ETH</b><small>${formatUsd(Number(wallet.eth || 0) * Number(state.rhEthUsd || 0))}</small></div><div class="cash-position-actions"><button type="button" data-rh-wallet-tools="${wallet.walletIndex}">Manage ETH</button><a href="/fun?from=cash" class="cash-position-link">Trade</a></div></div>`).join("")}</section>` : "";
       const positionsHtml = byWallet.size ? [...byWallet.values()].map((rows) => {
         const first = rows[0], rh = first.chain === "robinhood";
         return `<section class="cash-position-group"><div class="cash-position-head"><div><b>${escapeHtml(first.walletLabel)}</b><span>${rh ? "Robinhood Chain" : "Solana"} Â· wallet ${first.walletIndex}</span></div><em>${rows.length} ${rows.length === 1 ? "coin" : "coins"}</em></div>${rows.map((row) => {
@@ -1623,6 +1732,62 @@
       setTimeout(() => loadCashPositions({ force: true }), 1600);
     }
     else toast(result.data?.message || result.data?.error || "Could not return these funds", true);
+  }
+
+  async function openRhCashWallet(walletIndex) {
+    const index = Number(walletIndex || state.wallet?.index || 0);
+    if (!index) return;
+    state.rhToolWalletIndex = index;
+    await refreshCashRhBalances({ render: false });
+    let row = state.rhWalletRows.find((wallet) => Number(wallet.walletIndex) === index);
+    const managed = state.wallets.find((wallet) => Number(wallet.index) === index);
+    if (!row) row = { walletIndex: index, label: managed?.label || `Wallet ${index}`, address: managed?.rhAddress || "", eth: managed?.rhEth || 0, wallet: managed?.publicKey || "" };
+    const eth = Math.max(0, Number(managed?.rhEth ?? row.eth ?? 0));
+    const address = String(managed?.rhAddress || row.address || "");
+    $("rhWalletTitle").textContent = `${row.label || `Wallet ${index}`} · Robinhood ETH`;
+    $("rhWalletBalance").textContent = `${eth.toFixed(6)} ETH`;
+    $("rhWalletUsd").textContent = `${formatUsd(eth * Math.max(0, Number(state.rhEthUsd || 0)))} · available for Robinhood coins and network fees`;
+    $("rhWalletAddress").dataset.address = address;
+    $("rhWalletAddress").querySelector("span").textContent = address || "Address unavailable";
+    $("rhWalletStatus").textContent = "Buys can convert SOL automatically. Sells settle back to SOL automatically. Manual controls below always use this exact wallet.";
+    openSheet("rhwallet");
+  }
+
+  async function fundRhCashWallet() {
+    const walletIndex = Number(state.rhToolWalletIndex || 0), amountSol = Number($("rhFundSolAmount").value || 0);
+    if (!walletIndex || !(amountSol > 0)) { $("rhWalletStatus").textContent = "Enter a SOL amount above 0."; return; }
+    const button = $("rhFundSolBtn"); button.disabled = true; button.textContent = "Converting…";
+    const result = await post("/api/web/rh/fund-with-sol", { walletIndex, amountSol: String(amountSol), tradeAttemptId: crypto.randomUUID() });
+    button.disabled = false; button.textContent = "Convert";
+    if (!result.ok || !result.data?.ok) { $("rhWalletStatus").textContent = result.data?.message || result.data?.error || "SOL could not be converted."; return; }
+    $("rhWalletStatus").textContent = `Conversion submitted · approximately ${result.data.quotedEth || "ETH"} is routing to this wallet.`;
+    setTimeout(() => openRhCashWallet(walletIndex), 1800);
+  }
+
+  async function returnRhCashWallet() {
+    const walletIndex = Number(state.rhToolWalletIndex || 0), raw = String($("rhReturnEthAmount").value || "").trim();
+    const amountEth = raw || "all";
+    if (!walletIndex || (amountEth !== "all" && !(Number(amountEth) > 0))) { $("rhWalletStatus").textContent = "Enter an ETH amount, or leave it blank to return all available ETH."; return; }
+    if (!confirm(`Return ${amountEth === "all" ? "available" : amountEth} Robinhood ETH to wallet ${walletIndex}'s SOL address?`)) return;
+    const button = $("rhReturnEthBtn"); button.disabled = true; button.textContent = "Returning…";
+    const result = await post("/api/web/rh/bridge-to-sol", { walletIndex, amountEth, tradeAttemptId: crypto.randomUUID() });
+    button.disabled = false; button.textContent = "Return";
+    if (!result.ok || !result.data?.ok) { $("rhWalletStatus").textContent = result.data?.message || result.data?.error || "ETH could not be returned."; return; }
+    $("rhWalletStatus").textContent = result.data.settlementPending ? "ETH reached the Solana wallet as USD; automatic SOL conversion is still settling." : `${result.data.outSol || "SOL"} returned to the paired Solana wallet.`;
+    setTimeout(() => openRhCashWallet(walletIndex), 1800);
+  }
+
+  function sendFromRhCashWallet() {
+    const wallet = state.wallets.find((row) => Number(row.index) === Number(state.rhToolWalletIndex));
+    if (wallet) {
+      state.wallet = { index: wallet.index, publicKey: wallet.publicKey, label: wallet.label || "" };
+      localStorage.setItem(ACTIVE_WALLET_KEY, String(wallet.index));
+    }
+    closeSheet("rhwallet");
+    switchTab("send");
+    selectSendAsset("ETH");
+    $("sendStatus").textContent = "Paste the recipient's Robinhood Chain 0x address. Your spend PIN and daily limit still apply.";
+    $("sendStatus").className = "status";
   }
 
   /* ---------------- ui plumbing ---------------- */
@@ -1789,7 +1954,7 @@
     if (pill?.dataset.sendAsset) selectSendAsset(pill.dataset.sendAsset);
     if (pill?.dataset.depositAsset) selectDepositAsset(pill.dataset.depositAsset);
     if (pill?.dataset.receiveAsset) {
-      state.receiveAsset = pill.dataset.receiveAsset === "SOL" ? "SOL" : "USDC";
+      state.receiveAsset = pill.dataset.receiveAsset === "SOL" ? "SOL" : pill.dataset.receiveAsset === "ETH" ? "ETH" : "USDC";
       renderReceiveRequest();
     }
     const fundWallet = event.target.closest("[data-fund-wallet]");
@@ -1809,6 +1974,8 @@
     if (tabButton) switchTab(tabButton.dataset.tab);
     const sellPosition = event.target.closest("[data-cash-sell]");
     if (sellPosition) void sellCashPosition(sellPosition);
+    const rhWalletTools = event.target.closest("[data-rh-wallet-tools]");
+    if (rhWalletTools) void openRhCashWallet(rhWalletTools.dataset.rhWalletTools);
     const rhCashout = event.target.closest("[data-rh-cashout]");
     if (rhCashout) void cashOutRhWallet(rhCashout);
     const receipt = event.target.closest("[data-receipt]");
@@ -1837,7 +2004,7 @@
   $("positionsRefreshBtn").addEventListener("click", () => loadCashPositions({ force: true }));
   $("shareReceiptBtn").addEventListener("click", async () => {
     const entry = state.selectedReceipt; if (!entry) return;
-    const url = entry.signature ? `https://solscan.io/tx/${entry.signature}` : "";
+    const url = entry.signature ? (entry.explorerUrl || `https://solscan.io/tx/${entry.signature}`) : "";
     if (navigator.share) { try { await navigator.share({ title: "SlimeCash receipt", text: `${entry.title} · ${formatUsd(Math.abs(entry.amountUsd || 0))}`, url }); return; } catch {} }
     copyText(url || `${entry.title} · ${formatUsd(Math.abs(entry.amountUsd || 0))}`);
   });
@@ -1847,8 +2014,22 @@
   $("confirmSendBtn").addEventListener("click", confirmSend);
   $("copyDepositBtn").addEventListener("click", copyFundingAddress);
   $("coinbaseFundBtn").addEventListener("click", startCoinbaseFunding);
-  $("copyReceiveBtn").addEventListener("click", () => state.wallet && copyText(state.wallet.publicKey));
+  $("copyReceiveBtn").addEventListener("click", () => {
+    const address = state.receiveAsset === "ETH" ? state.rhAddress : state.wallet?.publicKey;
+    if (address) copyText(address); else toast("Address is still loading.", true);
+  });
   $("shareReceiveBtn").addEventListener("click", shareReceive);
+  $("rhWalletAddress").addEventListener("click", () => {
+    const address = $("rhWalletAddress").dataset.address || "";
+    if (address) copyText(address);
+  });
+  $("rhFundSolBtn").addEventListener("click", fundRhCashWallet);
+  $("rhReturnEthBtn").addEventListener("click", returnRhCashWallet);
+  $("rhSendEthOpenBtn").addEventListener("click", sendFromRhCashWallet);
+  $("rhWalletBackupBtn").addEventListener("click", () => {
+    const wallet = state.wallets.find((row) => Number(row.index) === Number(state.rhToolWalletIndex));
+    if (wallet) backupCashEvmWallet(wallet.index, wallet.publicKey, $("rhWalletBackupBtn"));
+  });
   $("trackRequestBtn").addEventListener("click", createTrackedRequest);
   $("receiveAmount").addEventListener("input", renderReceiveRequest);
   $("fundAmount").addEventListener("input", () => {
@@ -1875,8 +2056,8 @@
     const button = $("backupCashWalletsBtn");
     button.disabled = true; button.textContent = "Preparing…";
     const backedUp = await backupCashAccount({ includeWallets: true, quiet: true });
-    button.disabled = false; button.textContent = "Solflare / Phantom Backup";
-    $("cashWalletStatus").textContent = backedUp ? "Account and wallet backups downloaded." : "Could not prepare backups.";
+    button.disabled = false; button.textContent = "Back up all wallets";
+    $("cashWalletStatus").textContent = backedUp ? "Account, Solana and Robinhood/EVM backups downloaded." : "Could not prepare backups.";
   });
   $("cashWalletList").addEventListener("click", (event) => {
     const button = event.target.closest("button");
@@ -1884,6 +2065,8 @@
     if (button.dataset.cashWalletUse) selectCashWallet(button.dataset.cashWalletUse);
     if (button.dataset.cashWalletRename) renameCashWallet(button.dataset.cashWalletRename);
     if (button.dataset.cashWalletBackup) backupCashWallet(button.dataset.cashWalletBackup, button.dataset.walletKey, button);
+    if (button.dataset.cashWalletEvmBackup) backupCashEvmWallet(button.dataset.cashWalletEvmBackup, button.dataset.walletKey, button);
+    if (button.dataset.copyWalletAddress) copyText(button.dataset.copyWalletAddress);
     if (button.dataset.cashWalletRemove) removeCashWallet(button.dataset.cashWalletRemove, button.dataset.walletKey);
   });
   $("avatarBtn").addEventListener("click", () => switchTab("more"));
@@ -1913,7 +2096,7 @@
   });
   $("sendAllBtn").addEventListener("click", selectSendAll);
   $("amountUnit").addEventListener("click", () => {
-    if (state.sendAsset === "USDC") return;
+    if (state.sendAsset !== "SOL") return;
     state.amountUnit = state.amountUnit === "USD" ? "SOL" : "USD";
     $("amountUnit").textContent = state.amountUnit;
     renderAmountAlt();

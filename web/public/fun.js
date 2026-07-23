@@ -30,6 +30,8 @@
     user: null,
     wallets: [],
     solUsd: 0,
+    rhEthUsd: 0,
+    rhBalancePromise: null,
     activeWallet: Number(localStorage.getItem(ACTIVE_WALLET_KEY)) || null,
     chain: FROM_CASH ? "solana" : "all",
     feed: FROM_CASH ? "new" : "movers",
@@ -294,8 +296,28 @@
       paintWalletPill();
       renderCashHandoff();
       renderHomeReadiness();
+      void hydrateFunRhBalances();
     }
     return state.wallets;
+  }
+  async function hydrateFunRhBalances(render = true) {
+    if (!state.token) return false;
+    if (!state.rhBalancePromise) {
+      state.rhBalancePromise = (async () => {
+        const result = await request("/api/web/rh/balances");
+        if (!result.ok || !result.data?.ok) return false;
+        state.rhEthUsd = Math.max(0, Number(result.data.ethUsd) || 0);
+        const byIndex = new Map((result.data.wallets || []).map((row) => [Number(row.walletIndex), row]));
+        state.wallets = state.wallets.map((wallet) => {
+          const row = byIndex.get(Number(wallet.index));
+          return row ? { ...wallet, rhAddress: row.address || "", rhEth: row.available ? Number(row.eth || 0) : null, rhAvailable: Boolean(row.available), rhExplorer: row.explorer || "" } : wallet;
+        });
+        return true;
+      })().finally(() => { state.rhBalancePromise = null; });
+    }
+    const refreshed = await state.rhBalancePromise;
+    if (refreshed && render) { renderWalletHero(); renderHomeReadiness(); if (state.view === "quick") renderQuickRoute(); }
+    return refreshed;
   }
   async function loadPresets() {
     if (!state.token) return state.presets;
@@ -427,8 +449,10 @@
     const sol = Number(wallet.sol || 0);
     const backedUp = walletBackedUp(wallet);
     const { totalSol } = portfolioSolTotal();
-    const totalUsd = state.solUsd > 0 ? totalSol * state.solUsd : null;
-    target.innerHTML = `<section class="readiness-card ready"><div class="readiness-summary"><div><span>WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL ready` : "Add SOL to trade"}</h2><p>${backedUp ? (sol > 0 ? "Pick a coin and choose your amount." : "Add SOL from Phantom, Solflare, or another Solana wallet.") : "Save this wallet backup before trading on another device."}</p></div><div class="wallet-cash-total"><span>TOTAL VALUE</span><b>${formatWalletUsd(totalUsd)}</b><small>SOL + COINS</small></div></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b class="${backedUp ? "done" : "needs-action"}">${backedUp ? "OK" : "2"} <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Add SOL"}</i></b></div><div class="readiness-actions"><button type="button" data-deposit>${sol > 0 ? "Add more SOL" : "Add SOL"}</button><button class="secondary" type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Solflare / Phantom Backup</button></div></section>`;
+    const rhEth = state.wallets.reduce((sum, row) => sum + Math.max(0, Number(row.rhEth) || 0), 0);
+    const baseUsd = state.solUsd > 0 ? totalSol * state.solUsd : null;
+    const totalUsd = baseUsd == null ? null : baseUsd + rhEth * Math.max(0, state.rhEthUsd);
+    target.innerHTML = `<section class="readiness-card ready"><div class="readiness-summary"><div><span>WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL ready` : "Add SOL to trade"}</h2><p>${backedUp ? (sol > 0 ? "Pick a coin and choose your amount." : "Add SOL from Phantom, Solflare, or another Solana wallet.") : "Save this wallet backup before trading on another device."}</p></div><div class="wallet-cash-total"><span>TOTAL VALUE</span><b>${formatWalletUsd(totalUsd)}</b><small>SOL + COINS + RH ETH</small></div></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b class="${backedUp ? "done" : "needs-action"}">${backedUp ? "OK" : "2"} <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Add SOL"}</i></b></div><div class="readiness-actions"><button type="button" data-deposit>${sol > 0 ? "Add more SOL" : "Add SOL"}</button><button class="secondary" type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Wallet backups</button></div></section>`;
   }
 
   function normalizeSol(row) {
@@ -945,7 +969,9 @@
     const wallet = activeWallet(), hero = $("[data-wallet-hero]");
     if (!wallet) { hero.innerHTML = `<img class="wallet-pfp" src="${slimePfp("guest")}" alt=""><h1>Slime guest</h1><p>No wallet created yet</p><div class="wallet-total">Ready when you are</div>`; return; }
     const sol = positionNumber(wallet.sol) ?? 0;
-    hero.innerHTML = `<img class="wallet-pfp" src="${slimePfp(wallet.publicKey)}" alt=""><h1>${escapeHtml(wallet.label || "Slime wallet")}</h1><button class="wallet-hero-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}" aria-label="Copy full wallet address"><b>${escapeHtml(short(wallet.publicKey))}</b><span>Tap to copy full address</span></button><div class="wallet-total-line"><div class="wallet-total"><b>◎ ${sol.toFixed(4)} SOL</b><span>Available in this wallet</span></div><button class="wallet-backup-button" type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Solflare / Phantom Backup</button></div>`;
+    const rhEth = wallet.rhEth == null ? null : Math.max(0, Number(wallet.rhEth) || 0);
+    const rhAddress = wallet.rhAddress ? `<button class="wallet-hero-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress)}" aria-label="Copy full Robinhood address"><b>RH ${escapeHtml(short(wallet.rhAddress))}</b><span>Tap to copy ETH address</span></button>` : "";
+    hero.innerHTML = `<img class="wallet-pfp" src="${slimePfp(wallet.publicKey)}" alt=""><h1>${escapeHtml(wallet.label || "Slime wallet")}</h1><button class="wallet-hero-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}" aria-label="Copy full wallet address"><b>${escapeHtml(short(wallet.publicKey))}</b><span>Tap to copy full address</span></button>${rhAddress}<div class="wallet-total-line"><div class="wallet-total"><b>◎ ${sol.toFixed(4)} SOL</b><span>${rhEth == null ? "Robinhood ETH loading…" : `${rhEth.toFixed(6)} ETH · Robinhood`}</span></div><button class="wallet-backup-button" type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Wallet backups</button></div>`;
   }
   function renderSocialProfile() {
     const panel = $("[data-profile-panel]"), user = state.user || {};
@@ -1587,7 +1613,7 @@
         const createdWallet = await post("/api/web/wallets/create", { label: "SlimeWire Go", count: 1 });
         if (!createdWallet.ok || !createdWallet.data?.ok || !createdWallet.data?.wallets?.length) throw new Error(apiMessage(createdWallet.data, "Could not create the trading wallet."));
         const downloads = createdWallet.data.downloads || {};
-        for (const item of [downloads.encryptedBackup, downloads.recoveryKeys].filter(Boolean)) downloadText(item.filename, item.text);
+        for (const item of [downloads.encryptedBackup, downloads.recoveryKeys, downloads.evmRecoveryKeys].filter(Boolean)) downloadText(item.filename, item.text);
         const createdRow = createdWallet.data.wallets[0];
         state.activeWallet = Number(createdRow.index);
         localStorage.setItem(ACTIVE_WALLET_KEY, String(createdRow.index));
@@ -1971,11 +1997,11 @@
       const created = state.wallets.filter((wallet) => !previousWallets.has(String(wallet.publicKey || "")));
       for (const wallet of created) markWalletBackedUp(wallet);
     }
-    renderHomeReadiness(); renderWalletHero(); renderWalletPositions(); if (state.view === "quick") renderQuickRoute(); toast("Wallet created. SlimeWire and Solflare/Phantom backups downloaded—store them safely."); return true;
+    renderHomeReadiness(); renderWalletHero(); renderWalletPositions(); if (state.view === "quick") renderQuickRoute(); toast("Wallet created. Solana and Robinhood/EVM backups downloaded—store them safely."); return true;
   }
   function downloadText(filename, text) { const blob = new Blob([text], { type: "text/plain" }), url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = filename || "slimewire-backup.txt"; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000); }
   function downloadWalletFiles(downloads = {}) {
-    const files = [downloads.encryptedBackup, downloads.recoveryKeys].filter((entry) => entry?.text);
+    const files = [downloads.encryptedBackup, downloads.recoveryKeys, downloads.evmRecoveryKeys].filter((entry) => entry?.text);
     for (const item of files) downloadText(item.filename, item.text);
     return files.length;
   }
@@ -2011,7 +2037,9 @@
     const coinsSol = assets.reduce((sum, asset) => sum + (asset.valueSol == null ? 0 : asset.valueSol), 0);
     const hasPendingValue = assets.some((asset) => asset.valueSol == null);
     const totalSol = liquidSol + coinsSol;
-    return { assets, liquidSol, coinsSol, hasPendingValue, totalSol, totalUsd: state.solUsd > 0 ? totalSol * state.solUsd : null };
+    const rhEthUsd = Math.max(0, Number(wallet.rhEth) || 0) * Math.max(0, Number(state.rhEthUsd) || 0);
+    const solValueUsd = state.solUsd > 0 ? totalSol * state.solUsd : null;
+    return { assets, liquidSol, coinsSol, hasPendingValue, totalSol, rhEthUsd, totalUsd: solValueUsd == null ? (rhEthUsd > 0 ? rhEthUsd : null) : solValueUsd + rhEthUsd };
   }
   function walletManagerRowHtml(wallet) {
     const summary = walletAssetSummary(wallet);
@@ -2028,12 +2056,13 @@
     const positionDetails = summary.assets.length
       ? `<details class="wallet-assets"><summary><span>Coin positions</span><b>${summary.assets.length} token${summary.assets.length === 1 ? "" : "s"} ›</b></summary><div>${assetRows}</div></details>`
       : `<div class="wallet-assets-empty">No coin positions in this wallet</div>`;
-    const backupLabel = "Solflare / Phantom Backup";
-    return `<div class="wallet-manage-row" data-wallet-manager-row="${wallet.index}"><label class="wallet-batch-check" title="Select wallet"><input type="checkbox" data-wallet-batch-select="${wallet.index}" checked><span></span></label><div class="wallet-manage-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.index === state.activeWallet && String(wallet.label || "").trim().toLowerCase() !== "main" ? " · Main" : ""}</b><button class="wallet-manager-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><span>${escapeHtml(short(wallet.publicKey))}</span><small>Copy full address</small></button><div class="wallet-value-strip"><span><small>SOL</small><b>${escapeHtml(formatPositionSol(summary.liquidSol))}</b></span><span><small>COINS</small><b>${escapeHtml(coinValue)}</b></span><span><small>TOTAL</small><b>${escapeHtml(totalLabel)}</b></span></div>${positionDetails}<span class="wallet-fund-amount"><input data-wallet-fund-amount="${wallet.index}" inputmode="decimal" placeholder="SOL for this wallet" aria-label="SOL amount for ${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}"></span><span class="wallet-rename"><input data-wallet-rename-input="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40"><button type="button" data-rename-wallet="${wallet.index}">Rename</button></span></div><div class="wallet-row-actions"><button type="button" data-select-wallet="${wallet.index}" ${wallet.index === state.activeWallet ? "disabled" : ""}>${wallet.index === state.activeWallet ? "Active" : "Main"}</button><button type="button" data-wallet-funds="${wallet.index}">Only</button><button type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">${backupLabel}</button><button class="danger" type="button" data-remove-wallet="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button></div></div>`;
+    const rhAddress = wallet.rhAddress ? `<button class="wallet-manager-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress)}"><span>RH ${escapeHtml(short(wallet.rhAddress))}</span><small>Copy ETH address · ${wallet.rhEth == null ? "loading" : `${Number(wallet.rhEth).toFixed(6)} ETH`}</small></button>` : "";
+    return `<div class="wallet-manage-row" data-wallet-manager-row="${wallet.index}"><label class="wallet-batch-check" title="Select wallet"><input type="checkbox" data-wallet-batch-select="${wallet.index}" checked><span></span></label><div class="wallet-manage-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.index === state.activeWallet && String(wallet.label || "").trim().toLowerCase() !== "main" ? " · Main" : ""}</b><button class="wallet-manager-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><span>${escapeHtml(short(wallet.publicKey))}</span><small>Copy full address</small></button>${rhAddress}<div class="wallet-value-strip"><span><small>SOL</small><b>${escapeHtml(formatPositionSol(summary.liquidSol))}</b></span><span><small>RH ETH</small><b>${wallet.rhEth == null ? "…" : escapeHtml(Number(wallet.rhEth).toFixed(6))}</b></span><span><small>COINS</small><b>${escapeHtml(coinValue)}</b></span><span><small>TOTAL</small><b>${escapeHtml(totalLabel)}</b></span></div>${positionDetails}<span class="wallet-fund-amount"><input data-wallet-fund-amount="${wallet.index}" inputmode="decimal" placeholder="SOL for this wallet" aria-label="SOL amount for ${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}"></span><span class="wallet-rename"><input data-wallet-rename-input="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40"><button type="button" data-rename-wallet="${wallet.index}">Rename</button></span></div><div class="wallet-row-actions"><button type="button" data-select-wallet="${wallet.index}" ${wallet.index === state.activeWallet ? "disabled" : ""}>${wallet.index === state.activeWallet ? "Active" : "Main"}</button><button type="button" data-wallet-funds="${wallet.index}">Only</button><button type="button" data-rh-wallet-tools="${wallet.index}">Manage RH ETH</button><button type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Solflare / Phantom Backup</button><button type="button" data-backup-evm-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Robinhood / ETH Backup</button><button class="danger" type="button" data-remove-wallet="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button></div></div>`;
   }
   async function openWalletManager() {
     if (state.token) {
       await Promise.all([loadWallets(), loadPositions()]);
+      await hydrateFunRhBalances(false);
       await loadValuedPositions(state.positionLoadVersion);
     }
     state.pendingWalletManagerAction = null;
@@ -2042,10 +2071,10 @@
     openSheet(`<div class="sheet-title"><img src="${slimePfp(activeWallet()?.publicKey || "wallet-manager")}" alt=""><div><h2>Wallet manager</h2><p>See SOL and coin value per wallet, then fund or consolidate the wallets you select.</p></div></div>
       <div class="wallet-select-bar"><button type="button" data-wallet-select-all>All</button><button type="button" data-wallet-select-none>None</button><span data-wallet-selected-count>${state.wallets.length} selected</span></div>
       <div class="wallet-manager-list">${rows}</div>
-      <div class="wallet-manager-actions"><button type="button" data-create-wallet>+ Add one wallet</button><button type="button" data-export-wallets ${state.wallets.length ? "" : "disabled"}>Download both backups</button></div>
+      <div class="wallet-manager-actions"><button type="button" data-create-wallet>+ Add one wallet</button><button type="button" data-export-wallets ${state.wallets.length ? "" : "disabled"}>Download all backups</button></div>
       ${state.wallets.length > 1 ? `<section class="wallet-batch-card" data-wallet-funding-card><div class="wallet-batch-heading"><div><h3>Fund selected wallets</h3><p>One review, one transaction.</p></div></div><div class="field"><label>Fund from</label><select data-wallet-fund-source>${walletOptions}</select></div><div class="wallet-mode-toggle"><button class="active" type="button" data-wallet-fund-mode="equal">Same amount each</button><button type="button" data-wallet-fund-mode="custom">Different amounts</button></div><div class="field" data-wallet-equal-funding><label>SOL per wallet</label><input data-wallet-fund-equal inputmode="decimal" value="0.1" placeholder="0.1"></div><button class="submit-trade" type="button" data-review-wallet-fund>Review funding</button><p class="fineprint">The Main/source wallet is never funded into itself. Network fees are shown by Solana when submitted.</p></section>` : ""}
       ${state.wallets.length ? `<section class="wallet-batch-card" data-wallet-consolidate-card><div class="wallet-batch-heading"><div><h3>Sell &amp; consolidate</h3><p>Use the selected wallets, or tap Only on a wallet above.</p></div></div><div class="field"><label>Sweep SOL into</label><select data-wallet-consolidate-destination>${walletOptions}</select></div><div class="wallet-consolidate-actions"><button type="button" data-review-wallet-action="sell">Sell all tokens</button><button type="button" data-review-wallet-action="sweep">Sweep SOL</button><button class="primary" type="button" data-review-wallet-action="sell-sweep">Sell tokens + sweep</button></div><p class="fineprint">Selling swaps every sellable token to SOL. Sweeping drains transferable SOL into the wallet above and keeps network fees covered.</p></section>` : ""}
-      <details class="wallet-restore-box"><summary>Restore or import a wallet</summary><label class="file-button">Choose backup file<input type="file" data-wallet-backup-file accept=".txt,.json,application/json,text/plain" hidden></label><textarea data-wallet-backup-text placeholder="Or paste an encrypted backup, recovery file, or private key"></textarea><button class="submit-trade" type="button" data-restore-wallet>Restore / import wallet</button></details><div class="external-wallet-links"><a href="https://phantom.app/download" target="_blank" rel="noreferrer">Open Phantom to load</a><a href="https://solflare.com/download" target="_blank" rel="noreferrer">Open Solflare to load</a></div><p class="wallet-manager-status" data-wallet-manager-status></p><p class="fineprint">No username or named profile is required. New wallets automatically download both the encrypted SlimeWire backup and the raw Solflare/Phantom recovery file. The recovery file contains the Base58 import steps. Keep both private.</p>`);
+      <details class="wallet-restore-box"><summary>Restore or import a wallet</summary><label class="file-button">Choose backup file<input type="file" data-wallet-backup-file accept=".txt,.json,application/json,text/plain" hidden></label><textarea data-wallet-backup-text placeholder="Or paste an encrypted backup, recovery file, or private key"></textarea><button class="submit-trade" type="button" data-restore-wallet>Restore / import wallet</button></details><div class="external-wallet-links"><a href="https://phantom.app/download" target="_blank" rel="noreferrer">Open Phantom to load</a><a href="https://solflare.com/download" target="_blank" rel="noreferrer">Open Solflare to load</a></div><p class="wallet-manager-status" data-wallet-manager-status></p><p class="fineprint">No username or named profile is required. New wallets automatically download the encrypted SlimeWire backup, Solflare/Phantom recovery file, and a separate Robinhood/EVM key file. Keep all files private.</p>`);
     updateWalletManagerSelection();
     updateWalletFundingSource();
   }
@@ -2168,7 +2197,10 @@
       if (result.ok && result.data?.ok) {
         const downloads = result.data.backup?.downloads || {};
         let count = 0;
-        if (options.recoveryOnly && downloads.recoveryKeys?.text) {
+        if (options.evmOnly && downloads.evmRecoveryKeys?.text) {
+          downloadText(downloads.evmRecoveryKeys.filename, downloads.evmRecoveryKeys.text);
+          count = 1;
+        } else if (options.recoveryOnly && downloads.recoveryKeys?.text) {
           downloadText(downloads.recoveryKeys.filename, downloads.recoveryKeys.text);
           count = 1;
         } else if (!options.recoveryOnly) {
@@ -2182,9 +2214,11 @@
           for (const wallet of state.wallets) markWalletBackedUp(wallet);
         }
         renderHomeReadiness();
-        const message = options.recoveryOnly && count === 1
-          ? "Solflare/Phantom backup downloaded. Open the file for load steps and keep it private."
-          : (count === 2 ? "Both wallet backup files downloaded." : (result.data.backup?.message || "Wallet backup downloaded."));
+        const message = options.evmOnly && count === 1
+          ? "Robinhood/EVM recovery key downloaded. Keep it private."
+          : options.recoveryOnly && count === 1
+            ? "Solflare/Phantom backup downloaded. Open the file for load steps and keep it private."
+            : (count >= 3 ? "All wallet backup files downloaded." : (result.data.backup?.message || "Wallet backup downloaded."));
         if (status) status.textContent = message;
         toast(message);
       } else {
@@ -2193,7 +2227,7 @@
         toast(message, true);
       }
     } finally {
-      if (button) { button.disabled = false; button.textContent = oldLabel || "Solflare / Phantom Backup"; }
+      if (button) { button.disabled = false; button.textContent = oldLabel || (options.evmOnly ? "Robinhood / ETH Backup" : "Solflare / Phantom Backup"); }
     }
   }
   async function restoreWallet() {
@@ -2604,10 +2638,62 @@
     toast(sent > 0 ? `${sent.toFixed(6)} SOL sent` : "SOL sent");
   }
 
+  async function openFunRhWalletTools(walletIndex) {
+    await hydrateFunRhBalances(false);
+    const wallet = state.wallets.find((row) => Number(row.index) === Number(walletIndex)) || activeWallet();
+    if (!wallet) { openFundingSheet(); return; }
+    const eth = wallet.rhEth == null ? null : Math.max(0, Number(wallet.rhEth) || 0);
+    const ethValue = eth == null ? "loading" : formatWalletUsd(eth * Math.max(0, Number(state.rhEthUsd) || 0));
+    openSheet(`<div class="sheet-title"><img src="${slimePfp(wallet.publicKey)}" alt=""><div><h2>Robinhood ETH wallet</h2><p>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)} · wallet ${wallet.index}</p></div></div>
+      <div class="read-card"><h3>${eth == null ? "ETH loading…" : `${eth.toFixed(6)} ETH`}</h3><p>${escapeHtml(ethValue)} · used for Robinhood coins and network fees</p></div>
+      <div class="read-card"><h3>Receive Robinhood ETH or coins</h3><button class="wallet-full-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress || "")}"><code>${escapeHtml(wallet.rhAddress || "Address loading…")}</code><span>Tap the 0x address to copy</span></button></div>
+      <div class="field"><label>Convert SOL to Robinhood ETH</label><input data-rh-fund-sol inputmode="decimal" value="0.1" placeholder="0.1 SOL"></div><button class="submit-trade" type="button" data-rh-fund-submit="${wallet.index}">Convert SOL → ETH</button>
+      <div class="field"><label>Return ETH to this wallet's SOL address</label><input data-rh-return-eth inputmode="decimal" placeholder="blank = all available"></div><button class="sheet-secondary" type="button" data-rh-return-submit="${wallet.index}">Return ETH → SOL</button>
+      <div class="field"><label>Send RH ETH to another 0x wallet</label><input data-rh-send-destination autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="0x…"></div><div class="field-row"><div class="field"><label>ETH amount</label><input data-rh-send-amount inputmode="decimal" placeholder="0.001"></div><button class="amount-chip" type="button" data-rh-send-all>All</button></div><button class="sheet-secondary" type="button" data-rh-send-submit="${wallet.index}">Review & send ETH</button>
+      <button class="sheet-secondary" type="button" data-backup-evm-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Robinhood / ETH backup</button>
+      <p class="fineprint" data-rh-wallet-status>Normal Robinhood buys accept SOL automatically. Coin sells and automated exits return to SOL automatically. Manual ETH sends keep a protected network reserve.</p>`);
+  }
+
+  async function submitFunRhFund(button) {
+    const walletIndex = Number(button.dataset.rhFundSubmit || 0), amountSol = Number($('[data-rh-fund-sol]')?.value || 0);
+    const status = $('[data-rh-wallet-status]');
+    if (!walletIndex || !(amountSol > 0)) { if (status) status.textContent = "Enter a SOL amount above 0."; return; }
+    button.disabled = true; button.textContent = "Converting…";
+    const result = await post("/api/web/rh/fund-with-sol", { walletIndex, amountSol: String(amountSol), tradeAttemptId: attemptId("fun-rh-fund") }, { timeout: 75_000 });
+    button.disabled = false; button.textContent = "Convert SOL → ETH";
+    if (!result.ok || !result.data?.ok) { if (status) status.textContent = apiMessage(result.data, "SOL conversion failed."); return; }
+    toast("SOL conversion submitted"); await loadWallets(true); await openFunRhWalletTools(walletIndex);
+  }
+
+  async function submitFunRhReturn(button) {
+    const walletIndex = Number(button.dataset.rhReturnSubmit || 0), raw = String($('[data-rh-return-eth]')?.value || "").trim(), amountEth = raw || "all";
+    const status = $('[data-rh-wallet-status]');
+    if (!walletIndex || (amountEth !== "all" && !(Number(amountEth) > 0))) { if (status) status.textContent = "Enter an ETH amount, or leave blank for all."; return; }
+    if (!confirm(`Return ${amountEth === "all" ? "available" : amountEth} ETH to this wallet's paired SOL address?`)) return;
+    button.disabled = true; button.textContent = "Returning…";
+    const result = await post("/api/web/rh/bridge-to-sol", { walletIndex, amountEth, tradeAttemptId: attemptId("fun-rh-return") }, { timeout: 120_000 });
+    button.disabled = false; button.textContent = "Return ETH → SOL";
+    if (!result.ok || !result.data?.ok) { if (status) status.textContent = apiMessage(result.data, "ETH return failed."); return; }
+    toast(result.data.settlementPending ? "ETH reached Solana as USD; SOL conversion is settling" : "ETH returned to SOL"); await loadWallets(true); await openFunRhWalletTools(walletIndex);
+  }
+
+  async function submitFunRhSend(button) {
+    const walletIndex = Number(button.dataset.rhSendSubmit || 0), destination = String($('[data-rh-send-destination]')?.value || "").trim(), raw = String($('[data-rh-send-amount]')?.value || "").trim();
+    const status = $('[data-rh-wallet-status]');
+    if (!/^0x[0-9a-fA-F]{40}$/.test(destination)) { if (status) status.textContent = "Paste a valid Robinhood Chain 0x address."; return; }
+    if (raw !== "all" && !(Number(raw) > 0)) { if (status) status.textContent = "Enter an ETH amount or tap All."; return; }
+    if (!confirm(`Send ${raw === "all" ? "available" : raw} ETH to ${short(destination)} on Robinhood Chain?`)) return;
+    button.disabled = true; button.textContent = "Sending…";
+    const result = await post("/api/web/rh/send-eth", { walletIndex, destination, ...(raw === "all" ? { sendAll: true, amountEth: "all" } : { amountEth: raw }), sendAttemptId: attemptId("fun-rh-send") }, { timeout: 90_000 });
+    button.disabled = false; button.textContent = "Review & send ETH";
+    if (!result.ok || !result.data?.ok) { if (status) status.textContent = apiMessage(result.data, "ETH send failed."); return; }
+    toast("Robinhood ETH sent"); await loadWallets(true); await openFunRhWalletTools(walletIndex);
+  }
+
   function walletReceive() {
     const wallet = activeWallet();
     if (!wallet) { openFundingSheet("Choose a funding source, or use Create & copy for a manual deposit address."); return; }
-    openSheet(`<div class="sheet-title"><img src="${slimePfp(wallet.publicKey)}" alt=""><div><h2>Receive SOL</h2><p>${escapeHtml(wallet.label || "Slime wallet")}</p></div></div><div class="read-card"><h3>Solana address</h3><button class="wallet-full-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><code>${escapeHtml(wallet.publicKey)}</code><span>Tap address to copy</span></button></div><button class="submit-trade" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}">Copy address</button><p class="fineprint">Only send Solana assets to this address. Robinhood ETH uses the derived RH address available in the full wallet tools.</p>`);
+    openSheet(`<div class="sheet-title"><img src="${slimePfp(wallet.publicKey)}" alt=""><div><h2>Receive funds</h2><p>${escapeHtml(wallet.label || "Slime wallet")}</p></div></div><div class="read-card"><h3>Solana address</h3><button class="wallet-full-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><code>${escapeHtml(wallet.publicKey)}</code><span>Use for SOL and Solana coins</span></button></div><div class="read-card"><h3>Robinhood Chain address</h3><button class="wallet-full-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress || "")}"><code>${escapeHtml(wallet.rhAddress || "Open Manage RH ETH to load")}</code><span>Use for Robinhood ETH and coins</span></button></div><button class="submit-trade" type="button" data-rh-wallet-tools="${wallet.index}">Manage RH ETH</button><p class="fineprint">The two addresses belong to the same saved SlimeWire wallet. Always use the address matching the network.</p>`);
   }
 
   document.addEventListener("click", async (event) => {
@@ -2626,7 +2712,12 @@
     const sendSolChip = event.target.closest("[data-send-sol-chip]"); if (sendSolChip) { const input = $("[data-send-sol-amount]"); if (input) { input.value = sendSolChip.dataset.sendSolChip; delete input.dataset.sendAll; } $$('[data-send-sol-all]').forEach((button) => button.classList.remove("active")); return; }
     if (event.target.closest("[data-review-sol-send]")) { reviewFunSolSend(); return; }
     const confirmSolSend = event.target.closest("[data-confirm-sol-send]"); if (confirmSolSend) { await confirmFunSolSend(confirmSolSend); return; }
-    if (event.target.closest("[data-receive]")) { walletReceive(); return; }
+    if (event.target.closest("[data-receive]")) { await hydrateFunRhBalances(false); walletReceive(); return; }
+    const rhWalletTools = event.target.closest("[data-rh-wallet-tools]"); if (rhWalletTools) { await openFunRhWalletTools(rhWalletTools.dataset.rhWalletTools); return; }
+    const rhFundSubmit = event.target.closest("[data-rh-fund-submit]"); if (rhFundSubmit) { await submitFunRhFund(rhFundSubmit); return; }
+    const rhReturnSubmit = event.target.closest("[data-rh-return-submit]"); if (rhReturnSubmit) { await submitFunRhReturn(rhReturnSubmit); return; }
+    const rhSendSubmit = event.target.closest("[data-rh-send-submit]"); if (rhSendSubmit) { await submitFunRhSend(rhSendSubmit); return; }
+    if (event.target.closest("[data-rh-send-all]")) { const input = $('[data-rh-send-amount]'); if (input) input.value = "all"; return; }
     const fundCoinbase = event.target.closest("[data-fund-coinbase]"); if (fundCoinbase) { await startCoinbaseFunding(fundCoinbase); return; }
     const fundWallet = event.target.closest("[data-fund-wallet]"); if (fundWallet) { await startWalletFunding(fundWallet.dataset.fundWallet, fundWallet); return; }
     const fundAmount = event.target.closest("[data-fund-amount]"); if (fundAmount) { const input = $("[data-fund-sol]"); if (input) input.value = fundAmount.dataset.fundAmount; return; }
@@ -2702,6 +2793,7 @@
     const walletAction = event.target.closest("[data-review-wallet-action]"); if (walletAction) { reviewWalletAction(walletAction.dataset.reviewWalletAction); return; }
     const confirmWalletAction = event.target.closest("[data-confirm-wallet-manager-action]"); if (confirmWalletAction) { await confirmWalletManagerAction(confirmWalletAction); return; }
     const exportButton = event.target.closest("[data-export-wallets]"); if (exportButton) { await exportWallets(exportButton); return; }
+    const evmBackup = event.target.closest("[data-backup-evm-wallet]"); if (evmBackup) { if (confirm("Download this wallet's Robinhood/EVM private key? Anyone with it can move its ETH and Robinhood coins.")) await exportWallets(evmBackup, { evmOnly: true, walletPublicKey: evmBackup.dataset.walletKey || "", walletIndex: evmBackup.dataset.walletIndex || "" }); return; }
     if (event.target.closest("[data-restore-wallet]")) { await restoreWallet(); return; }
     const remove = event.target.closest("[data-remove-wallet]"); if (remove) { await removeWallet(remove.dataset.removeWallet, remove.dataset.walletKey); return; }
     const select = event.target.closest("[data-select-wallet]"); if (select) { state.activeWallet = Number(select.dataset.selectWallet);localStorage.setItem(ACTIVE_WALLET_KEY,String(state.activeWallet)); paintWalletPill(); renderWalletHero(); renderQuickTrade(); if (state.view === "quick") renderQuickRoute(); await openWalletManager(); return; }

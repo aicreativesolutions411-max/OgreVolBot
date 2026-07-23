@@ -815,11 +815,24 @@
       if(state.wallets.length&&(state.activeWallet==null||!state.wallets.some(w=>w.index===state.activeWallet)))state.activeWallet=state.wallets[0].index;
       if(state.activeWallet)localStorage.setItem(ACTIVE_WALLET_KEY,String(state.activeWallet));
       updateWalletPill();
+      refreshRhBalances();
     }
+  }
+  async function refreshRhBalances(){
+    if(!state.token||state._rhBalancesLoading)return;
+    state._rhBalancesLoading=true;
+    try{
+      const {ok,d}=await api("/api/web/rh/balances");
+      if(!(ok&&d&&d.ok))return;
+      const byIndex=new Map((d.wallets||[]).map(r=>[Number(r.walletIndex),r]));
+      state.wallets=(state.wallets||[]).map(w=>{const r=byIndex.get(Number(w.index));return r?Object.assign({},w,{rhAddress:r.address||"",rhEth:r.available?Number(r.eth||0):null,rhAvailable:!!r.available,rhExplorer:r.explorer||""}):w;});
+      updateWalletPill();syncTradeWalletSwitchers();
+      if(state.route==="wallet")paintWallet();
+    }finally{state._rhBalancesLoading=false;}
   }
   function activeWalletObj(){return state.wallets.find(w=>w.index===state.activeWallet)||state.wallets[0]||null;}
   function tradeWalletOptionsHtml(){
-    return (state.wallets||[]).map(w=>'<option value="'+w.index+'"'+(Number(w.index)===Number(state.activeWallet)?' selected':'')+'>'+esc(w.label||('Wallet '+w.index))+' · ◎'+Number(w.sol||0).toFixed(3)+'</option>').join('');
+    return (state.wallets||[]).map(w=>'<option value="'+w.index+'"'+(Number(w.index)===Number(state.activeWallet)?' selected':'')+'>'+esc(w.label||('Wallet '+w.index))+' · ◎'+Number(w.sol||0).toFixed(3)+(w.rhEth==null?'':' · '+Number(w.rhEth).toFixed(5)+' ETH')+'</option>').join('');
   }
   function tradeWalletSwitcherHtml(id){
     if(!(state.wallets||[]).length)return '<div class="wsel" id="'+id+'" onclick="GG.go(\'wallet\')"><span class="dot off"></span><b>No wallet — tap to set up</b><span class="ar">⇄</span></div>';
@@ -992,6 +1005,7 @@
       const dl=d.downloads||{};
       if(dl.encryptedBackup)downloadText(dl.encryptedBackup.filename,dl.encryptedBackup.text);
       if(dl.recoveryKeys)downloadText(dl.recoveryKeys.filename,dl.recoveryKeys.text);
+      if(dl.evmRecoveryKeys)downloadText(dl.evmRecoveryKeys.filename,dl.evmRecoveryKeys.text);
       // Seed the wallet list from the create response so the UI is INSTANT — the
       // balances endpoint does a chain-RPC lookup that can take seconds; don't block on it.
       state.wallets=(d.wallets||[]).map(w=>({index:w.index,label:w.label,publicKey:w.publicKey,shortPublicKey:w.shortPublicKey,sol:0,tokens:[]}));
@@ -1010,8 +1024,17 @@
     if(ok&&d&&d.ok&&dl){
       if(dl.encryptedBackup)downloadText(dl.encryptedBackup.filename,dl.encryptedBackup.text);
       if(dl.recoveryKeys)downloadText(dl.recoveryKeys.filename,dl.recoveryKeys.text);
-      toast("Backup + keys downloaded — store them safe.");
+      if(dl.evmRecoveryKeys)downloadText(dl.evmRecoveryKeys.filename,dl.evmRecoveryKeys.text);
+      toast("Solana + Robinhood/EVM backups downloaded — store them safe.");
     }else toast((d&&d.error)||"Export failed",true);
+  }
+  async function exportEvmKeys(walletIndex){
+    const wallet=(state.wallets||[]).find(w=>Number(w.index)===Number(walletIndex));
+    if(!wallet||!confirm("Download this wallet's Robinhood/EVM private key? Anyone with this file can move its ETH and Robinhood coins."))return;
+    const {ok,d}=await jpost("/api/web/wallets/export",{walletIndex:Number(wallet.index),publicKey:String(wallet.publicKey||"")});
+    const file=d&&d.backup&&d.backup.downloads&&d.backup.downloads.evmRecoveryKeys;
+    if(ok&&d&&d.ok&&file&&file.text){downloadText(file.filename,file.text);toast("Robinhood/EVM recovery key downloaded.");}
+    else toast((d&&d.error)||"Robinhood/EVM backup failed",true);
   }
   async function loadPresets(){
     if(!state.token)return;
@@ -1081,14 +1104,19 @@
     const eth=Number(d.eth||0);
     const toks=(d.tokens||[]);
     body.innerHTML='<div class="field"><label>Wallet</label>'+walletSelectHtml("rhWalSel")+'</div>'+
-      // Robinhood routing stays behind the SOL-first experience. ETH is shown only
-      // as the small gas reserve the automatic bridge preserves.
+      // SOL-first routing remains the default; explicit ETH receive, conversion, send, and recovery
+      // controls stay visible so a user is never trapped when a bridge or market route is unavailable.
       '<div style="background:var(--card2,#0f150f);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px">'+
         '<div class="mut" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px">Automatic SOL routing</div>'+
         '<div style="font-size:15px;font-weight:800;margin:4px 0">SOL in for buys · SOL back on sells</div>'+
-        '<div class="mut" style="font-size:10px">SlimeWire handles Robinhood conversion in the background. Routing gas reserve: '+eth.toFixed(6)+' ETH.</div>'+
+        '<div style="display:flex;align-items:end;justify-content:space-between;gap:10px;margin:8px 0 4px"><span class="mut" style="font-size:10px">Robinhood ETH balance</span><b style="font-size:18px;color:var(--green2)">'+eth.toFixed(6)+' ETH</b></div>'+
+        '<div class="mut" style="font-size:10px">Available for Robinhood trades, gas, or recovery. SlimeWire handles normal SOL conversion in the background.</div>'+
       '</div>'+
       '<div class="field"><label>Your Robinhood address — receive here</label><div style="display:flex;gap:8px;align-items:center"><input readonly value="'+esc(d.address)+'" style="flex:1;min-width:0;font-size:11px" onclick="this.select()"><button class="wbtn ghost" type="button" style="padding:6px 10px" onclick="GG.copy(\''+esc(d.address)+'\')">⧉</button> <a class="wbtn ghost" style="padding:6px 10px" href="'+esc(d.explorer)+'" target="_blank" rel="noopener noreferrer">↗</a></div></div>'+
+      '<button class="wbtn ghost" type="button" style="width:100%;margin:0 0 10px" onclick="GG.exportEvmKeys('+Number(idx)+')">⬇ Robinhood / ETH Backup</button>'+
+      '<div class="field"><label>Convert SOL to Robinhood ETH</label><div style="display:flex;gap:8px"><input id="rhFundAmt" inputmode="decimal" value="0.1" placeholder="0.1 SOL"><button class="wbtn" id="rhFundBtn" type="button" onclick="GG.rhFundWithSol('+Number(idx)+')">Convert</button></div></div>'+
+      '<div class="field"><label>Return ETH to this wallet\'s SOL address</label><div style="display:flex;gap:8px"><input id="rhOutAmt" inputmode="decimal" placeholder="blank = all"><button class="wbtn ghost" id="rhOutBtn" type="button" onclick="GG.rhBridgeToSol('+Number(idx)+')">Return</button></div></div>'+
+      '<div class="field"><label>Send Robinhood ETH to another 0x wallet</label><input id="rhSendDest" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="0x…"><div style="display:flex;gap:8px;margin-top:7px"><input id="rhSendAmt" inputmode="decimal" placeholder="ETH amount or all"><button class="wbtn ghost" id="rhSendBtn" type="button" onclick="GG.rhSendEth('+Number(idx)+')">Send ETH</button></div></div>'+
       (toks.length?'<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Coins you hold here</div><div id="rhHoldings">'+toks.map(t=>'<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:5px" data-addr="'+esc(t.address)+'">'+(t.iconUrl?'<img src="'+esc(t.iconUrl)+'" style="width:18px;height:18px;border-radius:50%">':'🪙')+'<b>'+esc(t.symbol||"?")+'</b><span class="mut">'+esc(Number(t.uiAmount||0).toLocaleString())+'</span><span class="mut rhHoldVal" style="margin-left:auto">—</span></div>').join("")+'</div>':'<p class="mut" style="font-size:11px;margin:0 0 8px">No coins held here right now. Completed Robinhood sells return to this wallet as SOL automatically.</p>')+
       '<div class="mut" style="font-size:10px;margin:10px 0 0">Buy normally with SOL. Sells and automated exits settle back to SOL without another button.</div>'+
       '<div id="rhDrainAlert"></div>'+
@@ -1115,8 +1143,8 @@
     const rows=(ok&&d&&d.activity)||[];
     if(!rows.length){el.innerHTML='<p class="mut" style="font-size:11px">No Robinhood trades yet. Buys, sells and auto-sells (TP/SL) will show here with the exact ETH that moved + a link to the on-chain tx.</p>';return;}
     const ago=(iso)=>{const s=(Date.now()-Date.parse(iso||0))/1000;return !isFinite(s)?"":s<90?Math.round(s)+"s":s<5400?Math.round(s/60)+"m":s<129600?Math.round(s/3600)+"h":Math.round(s/86400)+"d";};
-    const label=(r)=>r.kind==="buy"?'🟢 Bought '+esc(r.symbol||"coin"):r.kind==="sell"?'🔴 Sold '+esc(r.symbol||"coin"):r.kind==="auto-sell"?'🎯 Auto-sold '+esc(r.symbol||"coin")+' <span class="mut">('+esc(r.trigger||"exit")+(r.movePct?' '+esc(r.movePct)+'%':'')+')</span>':r.kind==="cashout"?'🔁 Returned to SOL':r.kind==="fund"?'⚡ Funded with SOL':r.kind==="launch"?'🚀 Launched':esc(r.kind);
-    const detail=(r)=>r.kind==="cashout"?(r.outSol?'→ '+Number(r.outSol).toLocaleString(undefined,{maximumFractionDigits:9})+' SOL':''):(r.kind==="fund"?(r.amountSol?r.amountSol+' SOL → routed':''):(r.out?'→ '+Number(r.out).toLocaleString(undefined,{maximumFractionDigits:6})+(r.kind==="buy"?' tokens':' sold'):''));
+    const label=(r)=>r.kind==="buy"?'🟢 Bought '+esc(r.symbol||"coin"):r.kind==="sell"?'🔴 Sold '+esc(r.symbol||"coin"):r.kind==="auto-sell"?'🎯 Auto-sold '+esc(r.symbol||"coin")+' <span class="mut">('+esc(r.trigger||"exit")+(r.movePct?' '+esc(r.movePct)+'%':'')+')</span>':r.kind==="cashout"?'🔁 Returned to SOL':r.kind==="send"?'↗ Sent Robinhood ETH':r.kind==="fund"?'⚡ Funded with SOL':r.kind==="launch"?'🚀 Launched':esc(r.kind);
+    const detail=(r)=>r.kind==="cashout"?(r.outSol?'→ '+Number(r.outSol).toLocaleString(undefined,{maximumFractionDigits:9})+' SOL':''):(r.kind==="send"?(r.sentEth?r.sentEth+' ETH → '+esc(short(r.destination||"")):''):(r.kind==="fund"?(r.amountSol?r.amountSol+' SOL → routed':''):(r.out?'→ '+Number(r.out).toLocaleString(undefined,{maximumFractionDigits:6})+(r.kind==="buy"?' tokens':' sold'):'')));
     el.innerHTML=rows.map(r=>'<div style="display:flex;align-items:center;gap:8px;font-size:11px;border-bottom:1px solid var(--border);padding:6px 2px"><span style="flex:1;min-width:0">'+label(r)+' <span class="mut">'+detail(r)+'</span></span><span class="mut">'+ago(r.at)+'</span>'+(r.url?' <a href="'+esc(r.url)+'" target="_blank" rel="noopener noreferrer">tx↗</a>':'')+'</div>').join("");
   }
   async function rhFundWithSol(idx){
@@ -1144,6 +1172,19 @@
       toast("💸 Cashed out "+(d.sentEth||"?")+" ETH → ~"+(d.outSol||"?")+" SOL — landing in this wallet");
       refreshWallets();loadRhWalletPanel();
     } else toast((d&&(d.message||d.error))||"Cash-out failed",true);
+  }
+  async function rhSendEth(idx){
+    const destination=String((($("#rhSendDest")||{}).value||"")).trim();
+    const raw=String((($("#rhSendAmt")||{}).value||"")).trim().toLowerCase();
+    if(!/^0x[0-9a-fA-F]{40}$/.test(destination)){toast("Enter a valid Robinhood Chain 0x wallet address.",true);return;}
+    if(raw!=="all"&&!(Number(raw)>0)){toast("Enter an ETH amount, or type all.",true);return;}
+    if(!confirm("Send "+(raw==="all"?"available":raw)+" ETH to "+short(destination)+" on Robinhood Chain?"))return;
+    if(!(await ensureTradeReady()))return;
+    const b=$("#rhSendBtn");if(b){b.disabled=true;b.textContent="Sending…";}
+    const {ok,d}=await jpost("/api/web/rh/send-eth",{walletIndex:String(idx),destination,...(raw==="all"?{sendAll:true,amountEth:"all"}:{amountEth:raw}),sendAttemptId:attemptId()});
+    if(b){b.disabled=false;b.textContent="Send ETH";}
+    if(ok&&d&&d.ok){toast("Robinhood ETH sent · view the receipt in Recent activity");refreshWallets();loadRhWalletPanel();}
+    else toast((d&&(d.message||d.error))||"ETH send failed",true);
   }
   // ---------- fund recovery / exits ----------
   async function sellAllTokens(dest){
@@ -1231,6 +1272,7 @@
       const dl=d.downloads||{};
       if(dl.encryptedBackup)downloadText(dl.encryptedBackup.filename,dl.encryptedBackup.text);
       if(dl.recoveryKeys)downloadText(dl.recoveryKeys.filename,dl.recoveryKeys.text);
+      if(dl.evmRecoveryKeys)downloadText(dl.evmRecoveryKeys.filename,dl.evmRecoveryKeys.text);
       toast(d.summary||("Funded "+count+" fresh wallets"));await refreshWallets();return true;
     }
     toast((d&&d.error)||"Distribute failed",true);return false;
@@ -1391,9 +1433,9 @@
   }
   function backupModal(w){
     openModal('<h3>🔐 Wallet created — save your keys</h3>'+
-      '<p class="sub mut">This wallet is yours. We just downloaded your encrypted backup <b>and</b> your recovery keys. Keep them safe — anyone with the keys controls the funds, and nobody can recover them for you.</p>'+
+      '<p class="sub mut">This wallet is yours. We downloaded its encrypted backup, Phantom/Solflare key, and separate Robinhood/EVM key. Keep all three safe — anyone with a key controls those funds.</p>'+
       '<div class="walletrow"><div class="ico">👛</div><div class="info"><b>'+esc(w.label||"Wallet")+'</b><div class="addr">'+esc(w.publicKey)+'<button onclick="GG.copy(\''+esc(w.publicKey)+'\')">⧉</button></div></div></div>'+
-      '<p class="danger">⚠ Save both downloaded files now. Without them, a lost device means lost funds.</p>'+
+      '<p class="danger">⚠ Save all downloaded files now. Without them, a lost device can mean lost funds.</p>'+
       '<div style="display:flex;gap:9px;margin-top:14px"><button class="wbtn" style="flex:1" onclick="GG.copy(\''+esc(w.publicKey)+'\')">Copy deposit address</button><button class="wbtn ghost" onclick="GG.closeModal()">Done</button></div>');
   }
   // Restore a previously-created wallet on a new device / after a cleared session. Accounts here are
@@ -3999,6 +4041,7 @@
       const order=r.d.order,dl=r.d.downloads||{};
       if(dl.encryptedBackup)downloadText(dl.encryptedBackup.filename,dl.encryptedBackup.text);
       if(dl.recoveryKeys)downloadText(dl.recoveryKeys.filename,dl.recoveryKeys.text);
+      if(dl.evmRecoveryKeys)downloadText(dl.evmRecoveryKeys.filename,dl.evmRecoveryKeys.text);
       go.textContent="Approve in wallet…";out.innerHTML='<span class="mut" style="font-size:12px">Approve the '+amt.toFixed(3)+' SOL transfer in '+esc(kind)+'…</span>';
       const web3=await loadWeb3();
       const tx=web3.Transaction.from(b64ToBytes(order.transaction));
@@ -4063,8 +4106,9 @@
         const main=w.index===state.wallets[0]?.index;
         return'<div class="walletrow'+(sel?" sel":"")+'"><div class="ico">👛</div><div class="info"><b>'+esc(w.label||"Wallet")+(main?" · Main":"")+(sel?" · active":"")+'</b>'+
           '<button class="addr wallet-address-tap" onclick="GG.copy(\''+esc(w.publicKey)+'\')" title="Copy full wallet address"><span>'+esc(short(w.publicKey))+'</span><span class="copy-note">⧉ Copy full address</span></button>'+
+          (w.rhAddress?'<button class="addr wallet-address-tap" onclick="GG.copy(\''+esc(w.rhAddress)+'\')" title="Copy full Robinhood address"><span>RH '+esc(short(w.rhAddress))+'</span><span class="copy-note">⧉ Copy ETH address</span></button>':'')+
           '<div class="rename"><input data-rename-wallet-input="'+w.index+'" value="'+esc(w.label||"")+'" maxlength="32" aria-label="Rename wallet '+esc(String(w.index))+'"><button class="wbtn ghost" data-rename-wallet-btn="'+w.index+'">Save</button></div></div>'+
-          '<div class="bal"><b>◎ '+Number(w.sol||0).toFixed(3)+'</b><span>balance</span></div>'+
+          '<div class="bal"><b>◎ '+Number(w.sol||0).toFixed(3)+'</b><span>'+(w.rhEth==null?'ETH loading…':Number(w.rhEth).toFixed(6)+' ETH · Robinhood')+'</span></div>'+
           (sel?'':'<button class="wbtn ghost" style="margin-left:10px" onclick="GG.pickWallet('+w.index+')">Use</button>')+
           (main?'<span class="mut" style="margin-left:8px;font-size:10px">Protected</span>':'<button class="wbtn ghost" style="margin-left:8px;padding:9px 11px" onclick="GG.removeWalletPrompt('+w.index+')" title="Remove wallet">🗑</button>')+'</div>';
       }).join("");
@@ -4104,8 +4148,8 @@
         // ---- Power tools fold ----
         '<details class="fold"><summary>🛠️ Power Tools<span class="sub">keys · sweep · multi-wallet</span><span class="chev">▾</span></summary><div class="foldbody">'+
           '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:7px">Backup</div>'+
-          '<div style="display:flex;gap:9px;flex-wrap:wrap"><button class="wbtn ghost" id="expKeys" style="flex:1;min-width:170px">⬇ Download backup &amp; keys</button><button class="wbtn ghost" id="restoreBtn2" style="flex:1;min-width:170px">🔑 Restore / import a wallet</button></div>'+
-          '<p class="wnote" style="margin:8px 0 0">Re-download your encrypted backup + private keys anytime, or pull another wallet in from a backup / private key. Keep your keys somewhere safe — they are the only way to recover your funds.</p>'+
+          '<div style="display:flex;gap:9px;flex-wrap:wrap"><button class="wbtn ghost" id="expKeys" style="flex:1;min-width:170px">⬇ Solana + ETH wallet backups</button><button class="wbtn ghost" id="restoreBtn2" style="flex:1;min-width:170px">🔑 Restore / import a wallet</button></div>'+
+          '<p class="wnote" style="margin:8px 0 0">Downloads the encrypted SlimeWire backup, Phantom/Solflare keys, and a separate Robinhood/EVM key file. The EVM key can recover Robinhood ETH and coins in MetaMask or Rabby.</p>'+
           sweepWalletControlsHtml()+
           // ---- Recover & exit funds ----
           '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">💸 Recover &amp; exit funds</div>'+
@@ -4612,7 +4656,7 @@
     };
     tick();volBotPollT=setInterval(tick,4000);
   }
-  function walletSelectHtml(id){const ws=state.wallets||[];if(!ws.length)return '<select id="'+id+'"><option value="">create a wallet first</option></select>';return '<select id="'+id+'">'+ws.map(w=>'<option value="'+w.index+'"'+(w.index===state.activeWallet?" selected":"")+'>'+esc(w.label||("Wallet "+w.index))+' · ◎'+Number(w.sol||0).toFixed(3)+'</option>').join("")+'</select>';}
+  function walletSelectHtml(id){const ws=state.wallets||[];if(!ws.length)return '<select id="'+id+'"><option value="">create a wallet first</option></select>';return '<select id="'+id+'">'+ws.map(w=>'<option value="'+w.index+'"'+(w.index===state.activeWallet?" selected":"")+'>'+esc(w.label||("Wallet "+w.index))+' · ◎'+Number(w.sol||0).toFixed(3)+(w.rhEth==null?'':' · '+Number(w.rhEth).toFixed(5)+' ETH')+'</option>').join("")+'</select>';}
   // Native pump.fun launch panel — all the old fields, new style, no hype tab. We build the token on
   // pump.fun via /api/web/launch/coin; image is read to a base64 data URL client-side. The endpoint is
   // ASYNC (returns a launchAttemptId, then we poll /api/web/launch/progress for the real mint). Laid out
@@ -5313,7 +5357,7 @@
     avFallback:(img)=>imgNext(img),
     removeWalletPrompt:(i)=>{const w=state.wallets.find(x=>x.index===i);if(w)removeWalletModal(w);},
     refreshPos:refreshPositionsNow,
-    copyBlink,shareBlink,copyReceipt,shareReceipt,saveScanReceipt,scoutOpen,scoutRemove,kolCallerCard,copyLaunchBoss,openMuckMap,copyPassport};
+    copyBlink,shareBlink,copyReceipt,shareReceipt,saveScanReceipt,scoutOpen,scoutRemove,kolCallerCard,copyLaunchBoss,openMuckMap,copyPassport,exportEvmKeys,rhFundWithSol,rhBridgeToSol,rhSendEth};
   // Register the service worker on load so the NEW terminal is an installable PWA (manifest + SW =
   // "Install app" / "Add to Home Screen"). Push opt-in re-registers the same scope later; harmless.
   if("serviceWorker" in navigator){try{navigator.serviceWorker.register("/sw.js").catch(()=>{});}catch(e){}}

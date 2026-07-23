@@ -47,23 +47,40 @@ test("SlimeCash automatically downloads account and wallet recovery material", (
   assert.match(cash, /recovery backup downloaded/);
   assert.match(cash, /post\("\/api\/web\/wallets\/export"/);
   assert.match(html, /Back up account \+ wallets/);
+  assert.match(cash, /downloads\?\.evmRecoveryKeys\?\.text/);
+  assert.match(server, /function buildEvmPrivateKeyDocument/);
+  assert.match(server, /EVM private key:/);
+  assert.match(server, /evmRecoveryKeys/);
   assert.doesNotMatch(cash, /copyText\(state\.token\)/);
 });
 
 test("SlimeCash lets unnamed accounts export either all wallets or one exact wallet", () => {
-  assert.match(html, /No username is required for wallet backup/);
-  assert.match(html, /id="backupCashWalletsBtn"[^>]*>Solflare \/ Phantom Backup</);
+  assert.match(html, /No username is required for backup/);
+  assert.match(html, /id="backupCashWalletsBtn"[^>]*>Back up all wallets</);
   assert.match(cash, /data-cash-wallet-backup="\$\{wallet\.index\}"/);
   assert.match(cash, /async function backupCashWallet\(index, publicKey, button\)/);
   assert.match(cash, /post\("\/api\/web\/wallets\/export", \{ walletIndex: Number\(index\), publicKey: String\(publicKey \|\| ""\) \}\)/);
   assert.match(cash, /button\.dataset\.cashWalletBackup[\s\S]{0,180}button\.dataset\.walletKey/);
   assert.match(cash, /SlimeWire and Solflare\/Phantom backups downloaded for this wallet/);
+  assert.match(cash, /data-cash-wallet-evm-backup="\$\{wallet\.index\}"/);
+  assert.match(cash, /async function backupCashEvmWallet\(index, publicKey, button\)/);
+  assert.match(cash, /Robinhood\/EVM recovery key downloaded for this wallet/);
+});
+
+test("SlimeCash includes live Robinhood ETH in wallet rows and its USD total", () => {
+  assert.match(server, /pathname === "\/api\/web\/rh\/balances"/);
+  assert.match(server, /async function webRhBalanceRows/);
+  assert.match(server, /return \{ ok: true, wallets: rows, ethUsd \}/);
+  assert.match(cash, /async function refreshCashRhBalances/);
+  assert.match(cash, /rhEthValue[\s\S]{0,180}return state\.usdc \+ sol \* state\.solUsd \+ rhEthValue/);
+  assert.match(cash, /ETH \(Robinhood\)/);
+  assert.match(cash, /data-copy-wallet-address="\$\{escapeHtml\(wallet\.rhAddress\)\}"/);
 });
 
 test("SlimeCash service worker prefers the current deploy and retains offline fallback", () => {
   const build = html.match(/slimecash-build" content="(\d+)"/)?.[1];
-  assert.equal(build, "25", "SlimeCash should publish the current app build");
-  assert.match(sw, /const CACHE = "slimecash-v27"/);
+  assert.equal(build, "27", "SlimeCash should publish the current app build");
+  assert.match(sw, /const CACHE = "slimecash-v29"/);
   assert.match(html, new RegExp(`cash\\.js\\?v=${build}`));
   assert.match(html, new RegExp(`cash\\.css\\?v=${build}`));
   assert.match(sw, /const fetched = fetch/);
@@ -126,7 +143,23 @@ test("SlimeCash can send a fee-aware maximum SOL balance", () => {
   assert.match(server, /prepareCashSendBody\(userId, body\)/);
 });
 
-test("SlimeCash presents one clean USD and SOL wallet with Coinbase as its only fiat vendor", () => {
+test("SlimeCash can receive, send, convert, value, and recover Robinhood ETH", () => {
+  assert.match(html, /data-send-asset="ETH"/);
+  assert.match(html, /data-receive-asset="ETH"/);
+  assert.match(html, /id="rhwallet"/);
+  assert.match(cash, /state\.sendAsset === "ETH"[\s\S]{0,260}amountEth/);
+  assert.match(cash, /post\("\/api\/web\/rh\/fund-with-sol"/);
+  assert.match(cash, /post\("\/api\/web\/rh\/bridge-to-sol"/);
+  assert.match(cash, /data-rh-wallet-tools/);
+  assert.match(server, /pathname === "\/api\/web\/rh\/send-eth"/);
+  assert.match(server, /runIdempotentMoneyOp\([\s\S]{0,100}"web-rh-send-eth"/);
+  assert.match(server, /RH_ETH_SEND_RESERVE_WEI/);
+  assert.match(server, /if \(asset === "ETH"\) return webRhSendEthCore/);
+  assert.match(server, /amountEth: result\.amountEth/);
+  assert.match(server, /explorerUrl: result\.explorerUrl/);
+});
+
+test("SlimeCash presents one clean USD, SOL and Robinhood ETH wallet with Coinbase as its only fiat vendor", () => {
   assert.match(html, /data-deposit-asset="USDC"/);
   assert.match(html, /data-deposit-asset="SOL"/);
   assert.match(html, /data-fund-wallet="phantom"/);
@@ -139,7 +172,8 @@ test("SlimeCash presents one clean USD and SOL wallet with Coinbase as its only 
   assert.match(cash, /Continue with Coinbase/);
   assert.doesNotMatch(cash, /Pay with card or Apple Pay/);
   assert.match(cash, /post\("\/api\/web\/cash\/onramp-session"/);
-  assert.doesNotMatch(html, /PYUSD|PayPal|Venmo|Robinhood/i);
+  assert.doesNotMatch(html, /PYUSD|PayPal|Venmo/i);
+  assert.match(cash, /ETH \(Robinhood\)/);
   assert.doesNotMatch(cash, /PYUSD_MINT|HANDOFF_PROVIDERS/);
 });
 
@@ -208,8 +242,8 @@ test("SlimeCash uses a separate PWA identity and a synchronized shell", () => {
   assert.equal(manifest.id, "/slimecash-app");
   assert.equal(manifest.start_url, "/cash/?src=slimecash-pwa");
   assert.equal(manifest.scope, "/cash/");
-  assert.match(html, /slimecash-build" content="25"/);
-  assert.match(sw, /slimecash-v27/);
+  assert.match(html, /slimecash-build" content="27"/);
+  assert.match(sw, /slimecash-v29/);
   assert.match(sw, /\/slimewire-funding\.js\?v=8/);
   assert.match(cash, /serviceWorker\.register\("\/cash\/sw\.js", \{ updateViaCache: "none" \}\)/);
   assert.match(sw, /key\.startsWith\("slimecash-"\) && key !== CACHE/);

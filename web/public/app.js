@@ -9747,6 +9747,9 @@ async function distributeFreshWallets() {
     if (data.downloads?.recoveryKeys?.text) {
       downloadText(data.downloads.recoveryKeys.filename, data.downloads.recoveryKeys.text);
     }
+    if (data.downloads?.evmRecoveryKeys?.text) {
+      downloadText(data.downloads.evmRecoveryKeys.filename, data.downloads.evmRecoveryKeys.text);
+    }
     state.distributeBusy = false;
     setDistributeStatus(data.summary || "Fresh wallets created and funded. Backups downloaded.");
     await refreshWalletState({ force: true, deep: false, reason: "distribute-fresh-wallets" }).catch(() => {});
@@ -12757,6 +12760,9 @@ async function createWalletSet() {
     if (data.downloads?.recoveryKeys?.text) {
       downloadText(data.downloads.recoveryKeys.filename, data.downloads.recoveryKeys.text);
     }
+    if (data.downloads?.evmRecoveryKeys?.text) {
+      downloadText(data.downloads.evmRecoveryKeys.filename, data.downloads.evmRecoveryKeys.text);
+    }
     writeText(status, data.downloads
       ? `Created ${wallets.length} wallet(s). SlimeWire and Solflare/Phantom backup downloads started.`
       : `Created ${wallets.length} wallet(s). Use Download Backup before funding.`);
@@ -12815,6 +12821,9 @@ async function createAutomationWallet() {
     }
     if (data.downloads?.recoveryKeys?.text) {
       downloadText(data.downloads.recoveryKeys.filename, data.downloads.recoveryKeys.text);
+    }
+    if (data.downloads?.evmRecoveryKeys?.text) {
+      downloadText(data.downloads.evmRecoveryKeys.filename, data.downloads.evmRecoveryKeys.text);
     }
     state.automationDelegationStatus = "Automation wallet created. Backup downloads started. Fund it before using server-side TP/SL.";
     queuePostTradeRefresh(firstResultSignature(data.plan), "automation-wallet-create");
@@ -12890,6 +12899,9 @@ async function createSessionWalletFromConnected(trigger = null) {
     }
     if (data.downloads?.recoveryKeys?.text) {
       downloadText(data.downloads.recoveryKeys.filename, data.downloads.recoveryKeys.text);
+    }
+    if (data.downloads?.evmRecoveryKeys?.text) {
+      downloadText(data.downloads.evmRecoveryKeys.filename, data.downloads.evmRecoveryKeys.text);
     }
     state.automationDelegationStatus = data.order?.message || "Approve session wallet funding in your wallet...";
     writeText(status, state.automationDelegationStatus);
@@ -13151,6 +13163,9 @@ async function restoreWalletBackup() {
       if (data.restore.downloads.recoveryKeys) {
         downloadText(data.restore.downloads.recoveryKeys.filename, data.restore.downloads.recoveryKeys.text);
       }
+      if (data.restore.downloads.evmRecoveryKeys) {
+        downloadText(data.restore.downloads.evmRecoveryKeys.filename, data.restore.downloads.evmRecoveryKeys.text);
+      }
     }
     textarea.value = "";
     writeText(status, data.restore?.message || "Restore complete.");
@@ -13181,6 +13196,9 @@ async function exportWalletBackup() {
       }
       if (data.backup.downloads.recoveryKeys) {
         downloadText(data.backup.downloads.recoveryKeys.filename, data.backup.downloads.recoveryKeys.text);
+      }
+      if (data.backup.downloads.evmRecoveryKeys) {
+        downloadText(data.backup.downloads.evmRecoveryKeys.filename, data.backup.downloads.evmRecoveryKeys.text);
       }
     }
     writeText(status, data.backup?.message || "Backup ready.");
@@ -13217,6 +13235,9 @@ async function importWallet() {
       }
       if (data.imported.downloads.recoveryKeys) {
         downloadText(data.imported.downloads.recoveryKeys.filename, data.imported.downloads.recoveryKeys.text);
+      }
+      if (data.imported.downloads.evmRecoveryKeys) {
+        downloadText(data.imported.downloads.evmRecoveryKeys.filename, data.imported.downloads.evmRecoveryKeys.text);
       }
     }
     secretInput.value = "";
@@ -13273,6 +13294,9 @@ async function removeManagedWallet(walletIndex, walletLabel = "this wallet", wal
     }
     if (result.downloads?.recoveryKeys?.text) {
       downloadText(result.downloads.recoveryKeys.filename, result.downloads.recoveryKeys.text);
+    }
+    if (result.downloads?.evmRecoveryKeys?.text) {
+      downloadText(result.downloads.evmRecoveryKeys.filename, result.downloads.evmRecoveryKeys.text);
     }
     state.walletRemoveStatus = result.message || `Removed ${label}.`;
     // Apply the fresh, renumbered list NOW - waiting on the background refresh

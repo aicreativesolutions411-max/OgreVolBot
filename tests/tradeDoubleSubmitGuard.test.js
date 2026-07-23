@@ -691,12 +691,15 @@ test("Robinhood Chain: every user sell automatically returns to SOL through the 
   assert.match(trade, /side === "sell"[\s\S]*webRhBridgeToSolCore/);
   assert.match(trade, /toLowerCase\(\) !== "rh_volume"/);
   assert.match(trade, /solCashoutError/);
-  // Client: chain conversion is not exposed as a second user action.
+  // Client: ordinary trades remain automatic, while explicit recovery controls stay available.
   for (const src of [ggSource, indexSource]) {
     assert.match(src, /SOL in for buys · SOL back on sells/);
     assert.match(src, /settle back to SOL without another button/);
-    assert.doesNotMatch(src, /id="rhOutBtn"/);
-    assert.doesNotMatch(src, /id="rhFundBtn"/);
+    assert.match(src, /id="rhOutBtn"/);
+    assert.match(src, /id="rhFundBtn"/);
+    assert.match(src, /id="rhSendBtn"/);
+    assert.match(src, /function rhSendEth/);
+    assert.match(src, /\/api\/web\/rh\/send-eth/);
   }
 });
 
@@ -728,6 +731,25 @@ test("Robinhood coins are tradeable in-app with SOL-first automatic network conv
     // Confident launch copy — no "first"/"no launchpad exists" framing.
     assert.doesNotMatch(src, /no launchpad exists (on it|here)/i);
     assert.doesNotMatch(src, /one of the first devs|You'd be one of the first/i);
+  }
+});
+
+test("Robinhood ETH sends are wallet-scoped, idempotent, recoverable, and leave network gas", () => {
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/send-eth"/);
+  assert.match(functionBody(serverSource, "webRhSendEth"), /runIdempotentMoneyOp\([\s\S]*"web-rh-send-eth"/);
+  const plan = functionBody(serverSource, "webRhSendEthPlan");
+  assert.match(plan, /assertFrozenManagedWallet/);
+  assert.match(plan, /sourceAddress\.toLowerCase\(\) === destination\.toLowerCase\(\)/);
+  assert.match(plan, /RH_ETH_SEND_RESERVE_WEI/);
+  assert.match(plan, /amountWei \+ RH_ETH_SEND_RESERVE_WEI > balanceWei/);
+  const send = functionBody(serverSource, "webRhSendEthCore");
+  assert.match(send, /rhTransferEth/);
+  assert.match(send, /audit\("web_rh_send_eth"/);
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /Robinhood \/ ETH Backup/);
+    assert.match(src, /Convert SOL to Robinhood ETH/);
+    assert.match(src, /Return ETH to this wallet/);
+    assert.match(src, /Send Robinhood ETH to another 0x wallet/);
   }
 });
 
@@ -862,7 +884,8 @@ test("SlimeCash has native multi-wallet coin positions, exact-wallet sells, and 
   assert.match(load, /\/api\/web\/rh\/wallets/);
   assert.match(load, /account\.walletPublicKey/);
   assert.match(load, /data-wallet-index/);
-  assert.match(load, /Robinhood launch funds/);
+  assert.match(load, /Robinhood ETH wallets/);
+  assert.match(load, /data-rh-wallet-tools/);
   const sell = functionBody(cash, "sellCashPosition");
   assert.match(sell, /walletIndex/);
   assert.match(sell, /\/api\/web\/rh\/trade/);
@@ -1792,6 +1815,18 @@ test("Buy bot keeps transaction price and market cap aligned on both chains", ()
   }), {
     priceUsd: 0.000014, marketCapUsd: 14_000, supply: 1_000_000_000, executionPriceUsd: 0
   });
+  // The websocket can attach its previous curve MC to a newer transaction. A gross conflict must
+  // follow the exact transaction price instead of allowing the stale event MC to win again.
+  assert.deepEqual(resolve({
+    eventPriceUsd: 0.000004,
+    eventMarketCapUsd: 35_000,
+    scanPriceUsd: 0.000035,
+    scanMarketCapUsd: 35_000,
+    supply: 1_000_000_000,
+    preferReportedSupply: true,
+  }), {
+    priceUsd: 0.000004, marketCapUsd: 4_000, supply: 1_000_000_000, executionPriceUsd: 0
+  });
   assert.deepEqual(resolve({
     nativeAmount: 0.01,
     nativeUsd: 2_000,
@@ -1847,6 +1882,8 @@ test("Buy bot derives Pump supply and websocket price without a guessed one-bill
   assert.match(supply, /fetchTokenSupplyUi\(key\)/);
   assert.match(supply, /pump\?\.supplyUi/);
   assert.match(socketTrade, /\(solAmount \* solUsd\) \/ tokenAmount/);
+  assert.match(socketTrade, /d\.priceUsd/);
+  assert.match(socketTrade, /d\.priceSol/);
   assert.match(socketTrade, /mcSol \* solUsd/);
   assert.doesNotMatch(socketTrade, /1_000_000_000/);
   const post = functionBody(serverSource, "postGroupBuy");
