@@ -1428,16 +1428,30 @@ export async function rhBridgeEthToSol({ solanaSecretKey, solRecipient, amountEt
     const e = new Error(`This wallet has ${ethers.formatEther(balanceWei)} ETH — after leaving ${gasReserveEth} ETH for gas that's not enough to bridge (need ~0.0005 ETH). Trade or fund more first.`);
     e.statusCode = 400; throw e;
   }
-  const data = await relayPostQuote({
+  const nativeSol = "11111111111111111111111111111111";
+  const solanaUsdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const quote = (destinationCurrency, label) => relayPostQuote({
     user: wallet.address,
     recipient: solRecipient,
     originChainId: RH_CHAIN_ID,
     destinationChainId: RELAY_SOLANA_CHAIN_ID,
     originCurrency: "0x0000000000000000000000000000000000000000",
-    destinationCurrency: "11111111111111111111111111111111",
+    destinationCurrency,
     amount: sendWei.toString(),
     tradeType: "EXACT_INPUT"
-  }, "ETH to SOL quote");
+  }, label);
+  let settlementAsset = "SOL";
+  let data;
+  try {
+    data = await quote(nativeSol, "ETH to SOL quote");
+  } catch (error) {
+    // A newly supported EVM chain can temporarily lack a native-SOL solver while its
+    // ETH -> Solana USDC route remains executable. The server converts that exact USDC
+    // delivery to SOL in the same managed wallet.
+    if (String(error?.relayErrorCode || "").toUpperCase() !== "NO_SWAP_ROUTES_FOUND") throw error;
+    settlementAsset = "USDC";
+    data = await quote(solanaUsdc, "ETH to Solana USDC fallback quote");
+  }
   const txs = [];
   for (const step of data.steps || []) {
     for (const item of step.items || []) {
@@ -1452,8 +1466,11 @@ export async function rhBridgeEthToSol({ solanaSecretKey, solRecipient, amountEt
     hashes,
     evmAddress: wallet.address,
     sentEth: ethers.formatEther(sendWei),
-    outSol: data.details?.currencyOut?.amountFormatted || "",
+    settlementAsset,
+    outSol: settlementAsset === "SOL" ? (data.details?.currencyOut?.amountFormatted || "") : "",
+    outUsdc: settlementAsset === "USDC" ? (data.details?.currencyOut?.amountFormatted || "") : "",
     requestId: data.steps?.[0]?.requestId || data.requestId || "",
+    checkEndpoint: data.steps?.flatMap((step) => step.items || []).find((item) => item?.check?.endpoint)?.check?.endpoint || "",
     impactPercent: data.details?.totalImpact?.percent || ""
   };
 }

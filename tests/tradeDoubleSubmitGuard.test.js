@@ -674,6 +674,10 @@ test("Robinhood Chain: every user sell automatically returns to SOL through the 
   const out = functionBody(serverSource, "webRhBridgeToSolCore");
   assert.match(out, /rhBridgeEthToSol/);
   assert.match(out, /keypair\.publicKey\.toBase58\(\)/);        // recipient = the wallet's OWN SOL address
+  assert.match(out, /SOLANA_USDC_MINT/);                         // fallback when native SOL has no solver
+  assert.match(out, /usdcReceivedRaw/);                          // converts only the exact delivered delta
+  assert.match(out, /executeJupiterSwap/);                       // fallback still finishes as native SOL
+  assert.match(out, /settlementPending/);                        // honest if cross-chain delivery is still pending
   // Lib: the reverse Relay route (RH 4663 -> Solana, native ETH -> native SOL) with a gas reserve left behind.
   const rhLib = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
   const bridge = functionBody(rhLib, "rhBridgeEthToSol");
@@ -681,6 +685,8 @@ test("Robinhood Chain: every user sell automatically returns to SOL through the 
   assert.match(bridge, /destinationChainId: RELAY_SOLANA_CHAIN_ID/);
   assert.match(bridge, /gasReserveEth/);                        // never drains the wallet's gas
   assert.match(bridge, /rhExecuteEvmSteps/);
+  assert.match(bridge, /NO_SWAP_ROUTES_FOUND/);
+  assert.match(bridge, /solanaUsdc/);
   const trade = functionBody(serverSource, "webRhTradeCore");
   assert.match(trade, /side === "sell"[\s\S]*webRhBridgeToSolCore/);
   assert.match(trade, /toLowerCase\(\) !== "rh_volume"/);
@@ -865,6 +871,8 @@ test("SlimeCash has native multi-wallet coin positions, exact-wallet sells, and 
   const recover = functionBody(cash, "cashOutRhWallet");
   assert.match(recover, /\/api\/web\/rh\/bridge-to-sol/);
   assert.match(recover, /amountEth: "all"/);
+  assert.match(recover, /rhCashoutAttempt/);                     // retry reuses the same money operation id
+  assert.match(recover, /settlementPending/);
 });
 
 test("Telegram balances and Positions include Robinhood bags from the managed wallet's derived account", () => {

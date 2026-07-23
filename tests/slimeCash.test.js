@@ -62,8 +62,8 @@ test("SlimeCash lets unnamed accounts export either all wallets or one exact wal
 
 test("SlimeCash service worker prefers the current deploy and retains offline fallback", () => {
   const build = html.match(/slimecash-build" content="(\d+)"/)?.[1];
-  assert.equal(build, "24", "SlimeCash should publish the current app build");
-  assert.match(sw, /const CACHE = "slimecash-v26"/);
+  assert.equal(build, "25", "SlimeCash should publish the current app build");
+  assert.match(sw, /const CACHE = "slimecash-v27"/);
   assert.match(html, new RegExp(`cash\\.js\\?v=${build}`));
   assert.match(html, new RegExp(`cash\\.css\\?v=${build}`));
   assert.match(sw, /const fetched = fetch/);
@@ -208,8 +208,8 @@ test("SlimeCash uses a separate PWA identity and a synchronized shell", () => {
   assert.equal(manifest.id, "/slimecash-app");
   assert.equal(manifest.start_url, "/cash/?src=slimecash-pwa");
   assert.equal(manifest.scope, "/cash/");
-  assert.match(html, /slimecash-build" content="24"/);
-  assert.match(sw, /slimecash-v26/);
+  assert.match(html, /slimecash-build" content="25"/);
+  assert.match(sw, /slimecash-v27/);
   assert.match(sw, /\/slimewire-funding\.js\?v=8/);
   assert.match(cash, /serviceWorker\.register\("\/cash\/sw\.js", \{ updateViaCache: "none" \}\)/);
   assert.match(sw, /key\.startsWith\("slimecash-"\) && key !== CACHE/);

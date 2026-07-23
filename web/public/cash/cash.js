@@ -210,7 +210,7 @@
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
     try {
       const controller = new AbortController();
-      const moneyTimeout = /\/(?:wallet-funding\/execute|cash\/(?:send|convert))$/.test(path) ? 75_000 : 35_000;
+      const moneyTimeout = /\/(?:wallet-funding\/execute|cash\/(?:send|convert)|rh\/bridge-to-sol)$/.test(path) ? 120_000 : 35_000;
       const timer = setTimeout(() => controller.abort(), method === "GET" ? 12_000 : moneyTimeout);
       const response = await fetch(`${API_BASE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: controller.signal }).finally(() => clearTimeout(timer));
       const isJson = /application\/json/i.test(response.headers.get("content-type") || "");
@@ -1613,9 +1613,15 @@
     const walletIndex = Number(button.dataset.rhCashout || 0);
     if (!walletIndex || !confirm(`Return the available Robinhood ETH in wallet ${walletIndex} to that wallet's SOL address?`)) return;
     const old = button.textContent; button.disabled = true; button.textContent = "Returningâ€¦";
-    const result = await post("/api/web/rh/bridge-to-sol", { walletIndex, amountEth: "all", tradeAttemptId: `cash-rh-return-${Date.now()}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}` });
+    const tradeAttemptId = button.dataset.rhCashoutAttempt || `cash-rh-return-${Date.now()}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`;
+    button.dataset.rhCashoutAttempt = tradeAttemptId;
+    const result = await post("/api/web/rh/bridge-to-sol", { walletIndex, amountEth: "all", tradeAttemptId });
     button.disabled = false; button.textContent = old;
-    if (result.ok && result.data?.ok) { toast(`${result.data.outSol || "SOL"} returned`); setTimeout(() => loadCashPositions({ force: true }), 1600); }
+    if (result.ok && result.data?.ok) {
+      delete button.dataset.rhCashoutAttempt;
+      toast(result.data.settlementPending ? "ETH recovered as USD. SOL conversion is still settling; if USD remains, tap Convert." : `${result.data.outSol || "SOL"} returned`);
+      setTimeout(() => loadCashPositions({ force: true }), 1600);
+    }
     else toast(result.data?.message || result.data?.error || "Could not return these funds", true);
   }
 
