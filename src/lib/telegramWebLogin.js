@@ -66,6 +66,56 @@ export function verifyTelegramWebLogin(input, botToken, options = {}) {
   };
 }
 
+// Telegram Mini Apps use a different HMAC key derivation from LoginUrl. Validate raw initData on
+// the server; initDataUnsafe from the browser is never trusted.
+export function verifyTelegramMiniAppInitData(input, botToken, options = {}) {
+  const params = searchParams(input);
+  const suppliedHash = String(params.get("hash") || "").trim();
+  if (!suppliedHash) return { ok: false, reason: "authorization_declined" };
+  if (!String(botToken || "")) return { ok: false, reason: "bot_token_missing" };
+
+  const signed = [];
+  const seen = new Set();
+  for (const [key, value] of params.entries()) {
+    if (key === "hash") continue;
+    if (seen.has(key)) return { ok: false, reason: "duplicate_field" };
+    seen.add(key);
+    signed.push([key, value]);
+  }
+  signed.sort(([left], [right]) => left.localeCompare(right));
+  const values = Object.fromEntries(signed);
+  if (!/^\d+$/.test(String(values.auth_date || "")) || !String(values.user || "")) {
+    return { ok: false, reason: "missing_identity" };
+  }
+
+  const secret = crypto.createHmac("sha256", "WebAppData").update(String(botToken)).digest();
+  const dataCheckString = signed.map(([key, value]) => `${key}=${value}`).join("\n");
+  const expectedHash = crypto.createHmac("sha256", secret).update(dataCheckString).digest("hex");
+  if (!safeEqualHex(suppliedHash, expectedHash)) return { ok: false, reason: "invalid_signature" };
+
+  let user;
+  try { user = JSON.parse(values.user); } catch { return { ok: false, reason: "missing_identity" }; }
+  if (!/^\d+$/.test(String(user?.id || ""))) return { ok: false, reason: "missing_identity" };
+
+  const nowSeconds = Math.floor((Number(options.now) || Date.now()) / 1000);
+  const authSeconds = Number(values.auth_date);
+  const maxAgeSeconds = Math.max(30, Number(options.maxAgeSeconds) || TELEGRAM_WEB_LOGIN_MAX_AGE_SECONDS);
+  if (authSeconds > nowSeconds + 60) return { ok: false, reason: "future_authorization" };
+  if (nowSeconds - authSeconds > maxAgeSeconds) return { ok: false, reason: "expired_authorization" };
+
+  return {
+    ok: true,
+    authDate: authSeconds,
+    user: {
+      id: String(user.id),
+      first_name: String(user.first_name || "").slice(0, 128),
+      last_name: String(user.last_name || "").slice(0, 128),
+      username: String(user.username || "").replace(/^@+/, "").slice(0, 64),
+      photo_url: String(user.photo_url || "").slice(0, 2_048)
+    }
+  };
+}
+
 export function telegramWebLoginDestination(input) {
   const params = searchParams(input);
   const mint = String(params.get("sw_ca") || "").trim();

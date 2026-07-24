@@ -2406,6 +2406,8 @@ test("verify portal: signed token + holdings check + submit route (read-only, no
   assert.match(serverSource, /async function walletTokenUiBalance\(/);
   assert.match(serverSource, /async function handleTgVerifySubmit\(/);
   const sub = functionBody(serverSource, "handleTgVerifySubmit");
+  assert.match(sub, /verifyTelegramMiniAppInitData/);         // Telegram identity, not a shareable browser click
+  assert.match(sub, /approveChatJoinRequest/);                // pre-entry request is approved only after passing
   assert.match(sub, /nacl\.sign\.detached\.verify/);          // wallet ownership proof
   assert.match(sub, /walletTokenUiBalance/);                  // holdings gate
   assert.match(sub, /restrictChatMember.*ROSE_UNMUTE_PERMS/); // unmute on success
@@ -2416,7 +2418,25 @@ test("verify portal: signed token + holdings check + submit route (read-only, no
   // page posts to the endpoint + signs a message (not a tx)
   assert.match(verifyHtml, /\/api\/tg\/verify\/submit/);
   assert.match(verifyHtml, /signMessage/);
+  assert.match(verifyHtml, /telegram-web-app\.js/);
+  assert.match(verifyHtml, /Telegram\.WebApp\.initData/);
+  assert.match(verifyHtml, /Telegram\.WebApp\.close/);
   assert.doesNotMatch(verifyHtml, /signTransaction|sendTransaction/);
+});
+
+test("Rose captcha offers a quiet pre-entry Telegram verification portal", () => {
+  assert.match(serverSource, /allowed_updates:[^\]]*"chat_join_request"/);
+  assert.match(functionBody(serverSource, "handleUpdate"), /update\.chat_join_request[\s\S]*handleChatJoinRequest/);
+  const invite = functionBody(serverSource, "ensureRosePortalInviteLink");
+  assert.match(invite, /createChatInviteLink/);
+  assert.match(invite, /creates_join_request:\s*true/);
+  const request = functionBody(serverSource, "handleChatJoinRequest");
+  assert.match(request, /user_chat_id/);
+  assert.match(request, /web_app:\s*\{\s*url:/);
+  assert.match(request, /slimewire\.org/);
+  assert.match(request, /joinRequest:\s*true/);
+  assert.doesNotMatch(request, /approveChatJoinRequest/);
+  assert.match(functionBody(serverSource, "handleGroupRose"), /cfg\.captcha/); // old/public links remain safely muted
 });
 
 test("whales / web verify gate new members (mute until verified)", () => {

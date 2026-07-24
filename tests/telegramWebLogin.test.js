@@ -5,6 +5,7 @@ import fs from "node:fs";
 import {
   buildTelegramWebLoginUrl,
   telegramWebLoginDestination,
+  verifyTelegramMiniAppInitData,
   verifyTelegramWebLogin
 } from "../src/lib/telegramWebLogin.js";
 
@@ -20,6 +21,17 @@ function signedTelegramParams(botToken, values, route = {}) {
   for (const [key, value] of data) params.set(key, String(value));
   params.set("hash", hash);
   return params;
+}
+
+function signedTelegramMiniAppData(botToken, values) {
+  const params = new URLSearchParams();
+  const data = Object.entries(values).sort(([left], [right]) => left.localeCompare(right));
+  const check = data.map(([key, value]) => `${key}=${value}`).join("\n");
+  const secret = crypto.createHmac("sha256", "WebAppData").update(botToken).digest();
+  const hash = crypto.createHmac("sha256", secret).update(check).digest("hex");
+  for (const [key, value] of data) params.set(key, String(value));
+  params.set("hash", hash);
+  return params.toString();
 }
 
 test("Telegram card login verifies the clicking user while keeping the coin route separate", () => {
@@ -66,6 +78,26 @@ test("Telegram card login rejects forged, stale, and ambiguous identities", () =
   duplicate.append("id", "99887766");
   assert.equal(verifyTelegramWebLogin(duplicate, botToken, { now }).reason, "duplicate_field");
   assert.equal(verifyTelegramWebLogin(new URLSearchParams(), botToken, { now }).reason, "authorization_declined");
+});
+
+test("Telegram Mini App verification authenticates a fresh portal user and rejects tampering", () => {
+  const botToken = "123456:test-token";
+  const now = Date.parse("2026-07-23T12:00:00.000Z");
+  const raw = signedTelegramMiniAppData(botToken, {
+    auth_date: Math.floor(now / 1000),
+    query_id: "AAHdF6IQAAAAAN0XohDhrOrc",
+    user: JSON.stringify({ id: 99887766, first_name: "Slime", username: "slimetrader" })
+  });
+  assert.deepEqual(verifyTelegramMiniAppInitData(raw, botToken, { now }), {
+    ok: true,
+    authDate: Math.floor(now / 1000),
+    user: { id: "99887766", first_name: "Slime", last_name: "", username: "slimetrader", photo_url: "" }
+  });
+
+  const forged = new URLSearchParams(raw);
+  forged.set("user", JSON.stringify({ id: 11223344, first_name: "Other" }));
+  assert.equal(verifyTelegramMiniAppInitData(forged.toString(), botToken, { now }).reason, "invalid_signature");
+  assert.equal(verifyTelegramMiniAppInitData("", botToken, { now }).reason, "authorization_declined");
 });
 
 test("Telegram login URLs stay on the configured SlimeWire domain and only allow coin routes", () => {

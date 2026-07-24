@@ -6,6 +6,7 @@
 <meta name="robots" content="noindex">
 <meta http-equiv="Cache-Control" content="no-store">
 <title>SlimeWire — Verify to Chat</title>
+<script src="https://telegram.org/js/telegram-web-app.js?63"></script>
 <link rel="icon" type="image/png" href="/assets/slimewire/png/slimewire-mark.png?v=logo4">
 <style>
   :root{ --bg:#050705; --panel:#0a0f0b; --green:#72ff23; --green2:#bbff63; --red:#ff5d5d;
@@ -34,6 +35,7 @@
   .done{text-align:center;padding:14px 0}
   .done .big{font-size:42px}
   .mut{color:var(--muted);font-size:12px;text-align:center;margin-top:16px}
+  .mut a{color:var(--green2);text-decoration:none;font-weight:700}
   code{font-family:var(--mono);color:var(--green2)}
 </style>
 </head>
@@ -41,10 +43,13 @@
 <div class="card" id="card">
   <div class="brand"><img src="/assets/slimewire/png/slimewire-mark.png?v=logo4" alt=""><b>SLIMEWIRE</b></div>
   <div id="body"><p>Loading…</p></div>
-  <div class="mut">Read-only verification. SlimeWire never moves your funds or asks for your seed phrase.</div>
+  <div class="mut">Protected by <a href="https://www.slimewire.org" target="_blank" rel="noopener">slimewire.org</a><br>Read-only verification. SlimeWire never moves your funds or asks for your seed phrase.</div>
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
+const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+const telegramInitData = tg ? Telegram.WebApp.initData : "";
+if(tg){ tg.ready(); tg.expand(); }
 // The verify page is served from the static site (www), but /api/ only lives on the
 // backend — so calls go to the absolute API origin (same pattern as raids.html).
 const API = (location.hostname.includes("onrender.com") || location.hostname === "localhost" || location.hostname === "127.0.0.1") ? "" : "https://app.slimewire.org";
@@ -53,6 +58,7 @@ const token = params.get("t") || "";
 function decodeToken(t){ try{ const b=t.split(".")[0]; return JSON.parse(atob(b.replace(/-/g,"+").replace(/_/g,"/"))); }catch{ return null; } }
 const payload = decodeToken(token);
 const state = { human:false, humanNeeded:false, whalesNeeded:false, wallet:null, signature:null, fingerprint:null };
+const esc = (value) => String(value == null ? "" : value).replace(/[&<>"']/g, (c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
 async function fingerprint(){
   try{
@@ -81,19 +87,24 @@ function render(){
   const kinds = (payload && payload.kinds) || [];
   state.humanNeeded = kinds.includes("human");
   state.whalesNeeded = kinds.includes("whales");
-  let html = "<h1>Verify to chat</h1><p>Finish the step(s) below to unlock chatting in the group.</p>";
+  const preEntry = Boolean(payload && payload.joinRequest);
+  let html = `<h1>${preEntry?'Verify before entering':'Verify to chat'}</h1><p>${preEntry?'Complete this private check and SlimeWire will approve your Telegram join request automatically.':'Finish the step(s) below to unlock chatting in the group.'}</p>`;
+  if(preEntry && !telegramInitData){
+    html += '<div class="step"><h3 class="bad">Open inside Telegram</h3><div class="s">Return to the bot\'s join-request message and tap <b>Open Verify Portal</b>. Forwarded browser links cannot approve entry.</div></div>';
+  }
   if(state.humanNeeded){
     html += `<div class="step"><h3>🌐 Human check ${state.human?'<span class="ok">✓</span>':''}</h3>
       <div class="s">Confirm you're a real person.</div>
       <button id="btnHuman" ${state.human?'disabled':''}>${state.human?'Verified':"I'm human"}</button></div>`;
   }
   if(state.whalesNeeded){
-    const min = payload.minHold||0, sym = payload.symbol||"token";
+    const min = esc(payload.minHold||0), sym = esc(payload.symbol||"token");
     html += `<div class="step"><h3>🐋 Holder check ${state.wallet?'<span class="ok">✓</span>':''}</h3>
       <div class="s">Hold at least <code>${min}</code> $${sym}. Connect your wallet and sign (read-only — no transaction).</div>
       <button id="btnWallet" ${state.wallet?'disabled':''}>${state.wallet?('Connected '+state.wallet.slice(0,4)+'…'+state.wallet.slice(-4)):'Connect wallet & sign'}</button></div>`;
   }
-  const ready = (!state.humanNeeded || state.human) && (!state.whalesNeeded || (state.wallet && state.signature));
+  const telegramReady = !preEntry || Boolean(telegramInitData);
+  const ready = telegramReady && (!state.humanNeeded || state.human) && (!state.whalesNeeded || (state.wallet && state.signature));
   html += `<button id="btnSubmit" ${ready?'':'disabled'}>🔓 Complete verification</button><div class="msg" id="msg"></div>`;
   $("body").innerHTML = html;
   if($("btnHuman")) $("btnHuman").onclick = async ()=>{ $("btnHuman").disabled=true; state.fingerprint=await fingerprint(); state.human=true; render(); };
@@ -108,9 +119,12 @@ async function submit(){
   if(state.humanNeeded && !state.fingerprint) state.fingerprint = await fingerprint();
   try{
     const r = await fetch(API + "/api/tg/verify/submit", { method:"POST", headers:{"content-type":"application/json"},
-      body: JSON.stringify({ token, fingerprint: state.fingerprint||"", wallet: state.wallet||"", signature: state.signature||"" }) });
+      body: JSON.stringify({ token, telegramInitData, fingerprint: state.fingerprint||"", wallet: state.wallet||"", signature: state.signature||"" }) });
     const j = await r.json();
-    if(j.ok){ $("body").innerHTML = '<div class="done"><div class="big">✅</div><h1>You\'re verified!</h1><p>Head back to the group — you can chat now.</p></div>'; }
+    if(j.ok){
+      $("body").innerHTML = `<div class="done"><div class="big">✅</div><h1>${payload.joinRequest?'Entry approved!':'You\'re verified!'}</h1><p>${payload.joinRequest?'You are now inside the group.':'Head back to the group — you can chat now.'}</p><button id="btnClose">Back to Telegram</button></div>`;
+      $("btnClose").onclick=()=>{ if(tg) Telegram.WebApp.close(); else history.back(); };
+    }
     else { $("msg").innerHTML='<span class="bad">'+(j.error||"Verification failed")+'</span>'; btn.disabled=false; }
   }catch(e){ $("msg").innerHTML='<span class="bad">Network error — try again.</span>'; btn.disabled=false; }
 }
