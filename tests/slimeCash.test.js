@@ -79,8 +79,8 @@ test("SlimeCash includes live Robinhood ETH in wallet rows and its USD total", (
 
 test("SlimeCash service worker prefers the current deploy and retains offline fallback", () => {
   const build = html.match(/slimecash-build" content="(\d+)"/)?.[1];
-  assert.equal(build, "28", "SlimeCash should publish the current app build");
-  assert.match(sw, /const CACHE = "slimecash-v30"/);
+  assert.equal(build, "29", "SlimeCash should publish the current app build");
+  assert.match(sw, /const CACHE = "slimecash-v31"/);
   assert.match(html, new RegExp(`cash\\.js\\?v=${build}`));
   assert.match(html, new RegExp(`cash\\.css\\?v=${build}`));
   assert.match(sw, /const fetched = fetch/);
@@ -191,13 +191,16 @@ test("Coinbase Onramp sessions are authenticated and CORS-limited to SlimeWire o
 });
 
 test("Cash and Fun share one account login, recovery, wallet import, and navigation", () => {
-  assert.match(html, /Create account/);
-  assert.match(html, /Log in/);
+  assert.match(html, /Create new account/);
+  assert.match(html, /Log in to existing account &amp; restore wallets/);
+  assert.match(cash, /Log in to existing account & restore wallets/);
   assert.match(html, /Restore account backup/);
   assert.match(html, /Import wallet backup/);
   assert.match(html, /href="\/fun\?from=cash"/);
   assert.match(cash, /post\("\/api\/web\/password-login"/);
   assert.match(cash, /post\("\/api\/web\/profile\/credentials"/);
+  assert.match(cash, /localStorage\.removeItem\(BALANCE_CACHE_KEY\)/);
+  assert.match(cash, /state\.wallets = \[\]/);
   assert.match(cash, /post\("\/api\/web\/wallets\/restore"/);
   assert.match(cash, /post\("\/api\/web\/wallet-funding\/create"/);
   assert.match(cash, /post\("\/api\/web\/wallet-funding\/execute"/);
@@ -247,8 +250,8 @@ test("SlimeCash uses a separate PWA identity and a synchronized shell", () => {
   assert.equal(manifest.id, "/slimecash-app");
   assert.equal(manifest.start_url, "/cash/?src=slimecash-pwa");
   assert.equal(manifest.scope, "/cash/");
-  assert.match(html, /slimecash-build" content="28"/);
-  assert.match(sw, /slimecash-v30/);
+  assert.match(html, /slimecash-build" content="29"/);
+  assert.match(sw, /slimecash-v31/);
   assert.match(sw, /\/slimewire-funding\.js\?v=8/);
   assert.match(cash, /serviceWorker\.register\("\/cash\/sw\.js", \{ updateViaCache: "none" \}\)/);
   assert.match(sw, /key\.startsWith\("slimecash-"\) && key !== CACHE/);

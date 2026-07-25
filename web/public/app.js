@@ -6841,6 +6841,7 @@ function loginSecuritySection() {
         <input data-profile-password type="password" autocomplete="new-password" placeholder="${state.user?.hasPasswordLogin ? "New password" : "8+ characters"}">
       </label>
       <button type="button" class="primary" data-save-login-credentials>${username ? "Update Login" : "Save Login"}</button>
+      <button type="button" data-open-login>Log in / switch account</button>
       <small data-login-security-status>${state.user?.hasPasswordLogin ? "Password login is active for this profile." : "Password is stored as a salted hash. Private keys are not shown or emailed."}</small>
     </section>
   `;

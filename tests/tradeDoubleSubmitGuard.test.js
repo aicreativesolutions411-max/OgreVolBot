@@ -1526,12 +1526,17 @@ test("Fun profile clearly exposes naming, creation, and login recovery", () => {
   assert.match(fun, /Create a profile or log in/);
   assert.match(fun, /data-save-social-profile>Create profile/);
   assert.match(fun, /data-fun-account="login">Log in/);
+  assert.match(fun, /Log in \/ switch account/);
+  assert.match(fun, /restore that account's wallets, positions, presets, and profile/);
+  assert.match(fun, /state\.portfolioPromise = null/);
+  assert.match(fun, /loadWallets\(true\)/);
   assert.match(fun, /data-fun-account="create"/);
   assert.match(fun, /data-fun-account="login"/);
   assert.match(fun, /\/api\/web\/profile\/credentials/);
   assert.match(fun, /\/api\/web\/password-login/);
   assert.match(fun, /Could not reach SlimeWire/);
   assert.match(fun, /location\.origin/);
+  assert.match(appSource, /data-open-login>Log in \/ switch account/);
 });
 
 test("shared web profiles accept two-character usernames on every account surface", () => {

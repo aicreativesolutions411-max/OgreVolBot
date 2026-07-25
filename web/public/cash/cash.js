@@ -235,8 +235,23 @@
   const post = (path, body) => api("POST", path, body || {});
 
   function setToken(token) {
-    state.token = token || "";
-    if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY);
+    const next = token || "";
+    if (next !== state.token) {
+      localStorage.removeItem(BALANCE_CACHE_KEY);
+      localStorage.removeItem(ACTIVE_WALLET_KEY);
+      state.account = null;
+      state.wallet = null;
+      state.wallets = [];
+      state.lamports = null;
+      state.usdcRaw = null;
+      state.usdc = 0;
+      state.rhEth = null;
+      state.rhAddress = "";
+      state.rhWalletRows = [];
+      state.tokens = [];
+    }
+    state.token = next;
+    if (next) localStorage.setItem(TOKEN_KEY, next); else localStorage.removeItem(TOKEN_KEY);
   }
 
   function downloadText(filename, text) {
@@ -426,7 +441,7 @@
       : await post("/api/web/signup", body);
     button.disabled = false;
     if (!result.ok || (!state.token && !result.data.token)) {
-      button.textContent = state.token ? "Secure account" : "Create account";
+      button.textContent = state.token ? "Save this device account" : "Create new account";
       status.textContent = result.data.error || result.data.message || "Could not save this account.";
       status.className = "status bad";
       return;
@@ -452,7 +467,7 @@
     const button = $("loginAccountBtn");
     button.disabled = true; button.textContent = "Logging in…";
     const result = await post("/api/web/password-login", { username, password });
-    button.disabled = false; button.textContent = "Log in";
+    button.disabled = false; button.textContent = "Log in to existing account & restore wallets";
     if (!result.ok || !result.data.token) {
       status.textContent = result.data.error || result.data.message || "Username or password was not accepted.";
       status.className = "status bad";
@@ -928,8 +943,9 @@
     $("accountSummaryText").textContent = username
       ? `@${username} · shared with SlimeWire Go`
       : (state.token ? "Guest session · add a username and password" : "Create an account or log in");
-    $("accountAccessBtn").textContent = username ? `Account: @${username}` : (state.token ? "Secure this account" : "Create account or log in");
-    $("createAccountBtn").textContent = state.token ? "Secure account" : "Create account";
+    $("accountAccessBtn").textContent = username ? "Log in / switch account" : "Create account or log in";
+    $("createAccountBtn").textContent = state.token ? "Save this device account" : "Create new account";
+    $("loginAccountBtn").textContent = "Log in to existing account & restore wallets";
     $("signOutBtn").hidden = !state.token;
   }
 
@@ -1885,7 +1901,8 @@
       : "Create a new account or log in to the same one you use on SlimeWire Go.";
     $("accountStatus").className = "status";
     if (state.account?.username) $("accountUsername").value = state.account.username;
-    $("createAccountBtn").textContent = state.token ? "Secure account" : "Create account";
+    $("createAccountBtn").textContent = state.token ? "Save this device account" : "Create new account";
+    $("loginAccountBtn").textContent = "Log in to existing account & restore wallets";
     openSheet("onboard");
   }
 
