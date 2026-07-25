@@ -17,6 +17,18 @@ test("SlimeCash calls the branded API origin instead of exposing the hosting pro
   assert.doesNotMatch(cash, /onrender\.com/i);
   assert.match(cash, /fetch\(`\$\{API_BASE\}\$\{path\}`/);
   assert.match(cash, /application\\\/json/);
+  assert.match(cash, /credentials: "include"/);
+});
+
+test("SlimeCash restores the shared SlimeWire session before loading account wallets", () => {
+  assert.match(cash, /const COOKIE_SESSION = "__slimewire_shared_cookie__"/);
+  assert.match(cash, /async function restoreSharedSession/);
+  assert.match(cash, /setToken\(COOKIE_SESSION\)/);
+  const boot = cash.slice(cash.indexOf("async function boot"), cash.indexOf("/* ---------------- events ---------------- */"));
+  assert.ok(boot.indexOf("await restoreSharedSession()") < boot.indexOf("const initialBalanceRefresh"));
+  assert.match(server, /webSessionCookie\(request, result\.token, result\.expiresAt\)/);
+  assert.match(server, /webSessionCookie\(request, recovered\.token, recovered\.expiresAt\)/);
+  assert.match(server, /clearWebSessionCookie\(request\)/);
 });
 
 test("the generated portal config rewrites a Render environment URL to the branded API", () => {
@@ -79,13 +91,30 @@ test("SlimeCash includes live Robinhood ETH in wallet rows and its USD total", (
 
 test("SlimeCash service worker prefers the current deploy and retains offline fallback", () => {
   const build = html.match(/slimecash-build" content="(\d+)"/)?.[1];
-  assert.equal(build, "29", "SlimeCash should publish the current app build");
-  assert.match(sw, /const CACHE = "slimecash-v31"/);
+  assert.equal(build, "30", "SlimeCash should publish the current app build");
+  assert.match(sw, /const CACHE = "slimecash-v32"/);
   assert.match(html, new RegExp(`cash\\.js\\?v=${build}`));
   assert.match(html, new RegExp(`cash\\.css\\?v=${build}`));
   assert.match(sw, /const fetched = fetch/);
   assert.match(sw, /return fetched/);
   assert.match(sw, /catch\(\(\) => cached\)/);
+});
+
+test("SlimeCash paints SOL and USD without waiting for Robinhood ETH", () => {
+  const refresh = cash.slice(cash.indexOf("async function refreshBalance"), cash.indexOf("function totalUsd"));
+  assert.match(refresh, /get\("\/api\/web\/balances\?fast=true"\)/);
+  assert.match(refresh, /Promise\.race\(\[[\s\S]{0,180}1_800/);
+  assert.ok(refresh.indexOf("await balanceRequest") < refresh.indexOf("await rhRequest"));
+  assert.match(refresh, /applyCashBalanceSnapshot\(balanceData, earlyRhData/);
+  assert.match(refresh, /Robinhood RPC\/bridge reads can be much slower than Solana/);
+  const boot = cash.slice(cash.indexOf("async function boot"), cash.indexOf("\/\* ---------------- events ---------------- \*\/"));
+  assert.match(boot, /const initialBalanceRefresh = state\.token \? refreshBalance\(\{ silent: true \}\)\.catch\(\(\) => null\) : null/);
+  assert.ok(boot.indexOf("initialBalanceRefresh") < boot.indexOf("loadAccount()"));
+  const login = cash.slice(cash.indexOf("async function loginCashAccount"), cash.indexOf("async function ensureAccount"));
+  assert.ok(login.indexOf("refreshBalance({ silent: true })") < login.indexOf("loadAccount()"));
+  assert.match(server, /fast \? webFastBalanceRows\(auth\.userId/);
+  assert.match(server, /async function webFastBalanceRows/);
+  assert.match(server, /primeSolBalancesBatch/);
 });
 
 test("SlimeCash Send has an obvious close control that returns to Cash", () => {
@@ -250,8 +279,8 @@ test("SlimeCash uses a separate PWA identity and a synchronized shell", () => {
   assert.equal(manifest.id, "/slimecash-app");
   assert.equal(manifest.start_url, "/cash/?src=slimecash-pwa");
   assert.equal(manifest.scope, "/cash/");
-  assert.match(html, /slimecash-build" content="29"/);
-  assert.match(sw, /slimecash-v31/);
+  assert.match(html, /slimecash-build" content="30"/);
+  assert.match(sw, /slimecash-v32/);
   assert.match(sw, /\/slimewire-funding\.js\?v=8/);
   assert.match(cash, /serviceWorker\.register\("\/cash\/sw\.js", \{ updateViaCache: "none" \}\)/);
   assert.match(sw, /key\.startsWith\("slimecash-"\) && key !== CACHE/);

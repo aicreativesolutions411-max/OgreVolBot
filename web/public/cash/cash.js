@@ -1,10 +1,11 @@
 /* SlimeCash — installable PWA on SlimeWire wallet rails.
-   Shares localStorage ogreWebToken with /fun and the rest of the site,
-   so one SlimeWire account works everywhere. */
+   Shares the secure SlimeWire session cookie across the main site and app
+   subdomain, while keeping a local token fallback for older sessions. */
 (() => {
   "use strict";
 
   const TOKEN_KEY = "ogreWebToken";
+  const COOKIE_SESSION = "__slimewire_shared_cookie__";
   const ACTIVITY_KEY = "slimecashActivity";
   const PENDING_FUND_KEY = "slimecashPendingFund";
   const CONTACTS_KEY = "slimecashContacts";
@@ -214,22 +215,28 @@
 
   /* ---------------- api ---------------- */
   async function api(method, path, body) {
-    const headers = { "Content-Type": "application/json" };
-    if (state.token) headers.Authorization = `Bearer ${state.token}`;
-    try {
-      const controller = new AbortController();
-      const moneyTimeout = /\/(?:wallet-funding\/execute|cash\/(?:send|convert)|rh\/bridge-to-sol)$/.test(path) ? 120_000 : 35_000;
-      const timer = setTimeout(() => controller.abort(), method === "GET" ? 12_000 : moneyTimeout);
-      const response = await fetch(`${API_BASE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: controller.signal }).finally(() => clearTimeout(timer));
-      const isJson = /application\/json/i.test(response.headers.get("content-type") || "");
-      if (!isJson) {
-        return { ok: false, status: response.status, data: { error: "SlimeCash could not reach the account service. Try again." } };
+    const execute = async (cookieOnly = false) => {
+      const headers = { "Content-Type": "application/json" };
+      if (state.token && state.token !== COOKIE_SESSION && !cookieOnly) headers.Authorization = `Bearer ${state.token}`;
+      try {
+        const controller = new AbortController();
+        const moneyTimeout = /\/(?:wallet-funding\/execute|cash\/(?:send|convert)|rh\/bridge-to-sol)$/.test(path) ? 120_000 : 35_000;
+        const timer = setTimeout(() => controller.abort(), method === "GET" ? 12_000 : moneyTimeout);
+        const response = await fetch(`${API_BASE}${path}`, { method, credentials: "include", headers, body: body ? JSON.stringify(body) : undefined, signal: controller.signal }).finally(() => clearTimeout(timer));
+        const isJson = /application\/json/i.test(response.headers.get("content-type") || "");
+        if (!isJson) return { ok: false, status: response.status, data: { error: "SlimeCash could not reach the account service. Try again." } };
+        const data = await response.json().catch(() => ({}));
+        return { ok: response.ok && data.ok !== false, status: response.status, data };
+      } catch {
+        return { ok: false, status: 0, data: { error: "Network error. Check your connection." } };
       }
-      const data = await response.json().catch(() => ({}));
-      return { ok: response.ok && data.ok !== false, status: response.status, data };
-    } catch {
-      return { ok: false, status: 0, data: { error: "Network error. Check your connection." } };
+    };
+    let result = await execute();
+    if ([401, 403].includes(result.status) && state.token && state.token !== COOKIE_SESSION) {
+      result = await execute(true);
+      if (result.ok) setToken(COOKIE_SESSION);
     }
+    return result;
   }
   const get = (path) => api("GET", path);
   const post = (path, body) => api("POST", path, body || {});
@@ -251,7 +258,16 @@
       state.tokens = [];
     }
     state.token = next;
-    if (next) localStorage.setItem(TOKEN_KEY, next); else localStorage.removeItem(TOKEN_KEY);
+    if (next && next !== COOKIE_SESSION) localStorage.setItem(TOKEN_KEY, next); else localStorage.removeItem(TOKEN_KEY);
+  }
+
+  async function restoreSharedSession() {
+    if (state.token) return false;
+    const result = await api("GET", "/api/web/me");
+    if (!result.ok || !result.data?.user) return false;
+    setToken(COOKIE_SESSION);
+    state.account = result.data.user;
+    return true;
   }
 
   function downloadText(filename, text) {
@@ -476,11 +492,11 @@
     setToken(result.data.token);
     state.account = result.data.user || null;
     localStorage.removeItem(ACTIVE_WALLET_KEY);
-    await loadAccount();
-    await ensureWallet({ create: false });
+    const balanceRefresh = refreshBalance({ silent: true });
+    await Promise.all([loadAccount(), ensureWallet({ create: false })]);
     closeSheet("onboard");
     refreshProfile();
-    refreshBalance();
+    void balanceRefresh.catch(() => {});
     loadCashHistory();
     toast(`Welcome back${state.account?.username ? `, @${state.account.username}` : ""}`);
   }
@@ -747,18 +763,23 @@
   function applyCashBalanceSnapshot(balanceData = {}, rhData = {}, options = {}) {
     const snapshotWallets = (balanceData.balances || []).filter((row) => !row.volumeBot);
     if (!snapshotWallets.length && !state.wallets.length) return false;
+    const partial = Boolean(options.partial || balanceData.fast);
+    const previousByIndex = new Map(state.wallets.map((wallet) => [Number(wallet.index), wallet]));
     state.solUsd = Number(balanceData.solUsd || state.solUsd || 0);
     state.rhEthUsd = Number(rhData.ethUsd || state.rhEthUsd || 0);
     const rhByIndex = new Map((rhData.wallets || []).map((row) => [Number(row.walletIndex), row]));
     state.wallets = (snapshotWallets.length ? snapshotWallets : state.wallets).map((wallet) => {
+      const merged = partial ? { ...(previousByIndex.get(Number(wallet.index)) || {}), ...wallet } : wallet;
       const row = rhByIndex.get(Number(wallet.index));
-      return row ? { ...wallet, rhAddress: row.address || "", rhEth: row.available ? Number(row.eth || 0) : null, rhAvailable: Boolean(row.available), rhExplorer: row.explorer || "" } : wallet;
+      return row ? { ...merged, rhAddress: row.address || "", rhEth: row.available ? Number(row.eth || 0) : null, rhAvailable: Boolean(row.available), rhExplorer: row.explorer || "" } : merged;
     });
     const active = state.wallets.find((row) => Number(row.index) === Number(state.wallet?.index)) || state.wallets[0];
     const assets = active?.cashAssets || {};
     state.lamports = Number(assets.SOL?.rawAmount || active?.lamports || 0);
-    state.usdcRaw = Number(assets.USDC?.rawAmount || 0);
-    state.usdc = Number(assets.USDC?.uiAmount || 0);
+    if (!partial || assets.USDC) {
+      state.usdcRaw = Number(assets.USDC?.rawAmount || 0);
+      state.usdc = Number(assets.USDC?.uiAmount || 0);
+    }
     if (active?.publicKey) state.wallet = { index: active.index, publicKey: active.publicKey, label: active.label || "" };
     const activeRh = rhByIndex.get(Number(state.wallet?.index));
     if (activeRh) {
@@ -777,22 +798,33 @@
     const previousSol = state.lamports;
     const previousUsdc = state.usdcRaw;
     const cached = readCashBalanceCache();
-    const [balanceResult, rhResult] = await Promise.all([
-      get("/api/web/balances"),
-      get("/api/web/rh/balances")
+    const fastRequest = get("/api/web/balances?fast=true");
+    const balanceRequest = get("/api/web/balances");
+    const rhRequest = get("/api/web/rh/balances");
+    const fastResult = await Promise.race([
+      fastRequest,
+      new Promise((resolve) => setTimeout(() => resolve(null), 1_800))
     ]);
-    if (balanceResult.status === 401 || rhResult.status === 401) { setToken(""); showOnboard(); return; }
+    if (fastResult?.status === 401) { setToken(""); showOnboard(); return; }
+    if (fastResult?.ok && fastResult.data?.ok) {
+      applyCashBalanceSnapshot(fastResult.data, cached?.rhBalances || {}, {
+        partial: true,
+        refreshing: true,
+        updatedAt: cached?.savedAt ? new Date(cached.savedAt).toISOString() : ""
+      });
+    }
+    const balanceResult = await balanceRequest;
+    if (balanceResult.status === 401) { setToken(""); showOnboard(); return; }
     const balanceData = balanceResult.ok ? balanceResult.data : cached;
-    const rhData = rhResult.ok ? rhResult.data : (cached?.rhBalances || {});
-    if (!balanceData || !applyCashBalanceSnapshot(balanceData, rhData, {
-      refreshing: !balanceResult.ok || !rhResult.ok || balanceData.stale || balanceData.backgroundRefreshing,
+    const earlyRhData = cached?.rhBalances || {};
+    if (!balanceData || !applyCashBalanceSnapshot(balanceData, earlyRhData, {
+      refreshing: true,
       updatedAt: balanceData.lastUpdatedAt || (cached?.savedAt ? new Date(cached.savedAt).toISOString() : "")
     })) {
-      if (!silent) toast(balanceResult.data?.error || rhResult.data?.error || "Could not load balances. Try again.", true);
+      if (!silent) toast(balanceResult.data?.error || "Could not load balances. Try again.", true);
       return;
     }
-    if (balanceResult.ok) saveCashBalanceCache(balanceResult.data, rhData);
-    if ((!balanceResult.ok || !rhResult.ok) && !silent) toast("Live balances are still syncing. Showing the last confirmed values.");
+    if (balanceResult.ok) saveCashBalanceCache(balanceResult.data, earlyRhData);
     if (previousUsdc !== null && state.usdcRaw > previousUsdc) {
       const gainedUsdc = (state.usdcRaw - previousUsdc) / 1e6;
       addActivity({ type: "in", title: "USDC arrived", sub: "Digital dollars landed on Solana", amountUsd: gainedUsdc, at: Date.now() });
@@ -828,6 +860,17 @@
       renderActivity();
       if (!pendingSol?.reference) pendingFundArrived("SOL");
     }
+    // Robinhood RPC/bridge reads can be much slower than Solana. Paint Cash as
+    // soon as SOL/USDC returns, then merge ETH without delaying the total.
+    const rhResult = await rhRequest;
+    if (rhResult.status === 401) { setToken(""); showOnboard(); return; }
+    const rhData = rhResult.ok ? rhResult.data : earlyRhData;
+    applyCashBalanceSnapshot(balanceData, rhData, {
+      refreshing: !balanceResult.ok || !rhResult.ok || balanceData.stale || balanceData.backgroundRefreshing,
+      updatedAt: balanceData.lastUpdatedAt || (cached?.savedAt ? new Date(cached.savedAt).toISOString() : "")
+    });
+    if (balanceResult.ok) saveCashBalanceCache(balanceResult.data, rhData);
+    if ((!balanceResult.ok || !rhResult.ok) && !silent) toast("Live balances are still syncing. Showing the last confirmed values.");
   }
 
   function totalUsd() {
@@ -1932,6 +1975,7 @@
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/cash/sw.js", { updateViaCache: "none" }).catch(() => {});
     }
+    await restoreSharedSession();
     const paintOnlineState = () => {
       let banner = document.getElementById("offlineBanner");
       if (navigator.onLine) { banner?.remove(); return; }
@@ -1980,6 +2024,7 @@
       });
     }
 
+    const initialBalanceRefresh = state.token ? refreshBalance({ silent: true }).catch(() => null) : null;
     let signedIn = false;
     if (state.token) {
       const [account] = await Promise.all([
@@ -2005,7 +2050,7 @@
       showOnboard();
     } else {
       refreshProfile();
-      refreshBalance();
+      if (!initialBalanceRefresh) refreshBalance();
       loadCashHistory();
     }
     selectSendAsset(params.get("asset") === "SOL" ? "SOL" : "USDC");

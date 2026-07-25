@@ -186,10 +186,13 @@ test("interactive wallet reads use a cached unified snapshot on a reserved RPC l
   assert.match(functionBody("primeSolBalancesBatch", serverSource), /priority: Boolean\(options\.priority\)/);
   assert.match(functionBody("loadWalletCore"), /\/api\/web\/portfolio\/snapshot/);
   assert.match(functionBody("loadWalletView", funSource), /loadPortfolioSnapshot/);
-  assert.match(functionBody("refreshBalance", cashSource), /Promise\.all/);
-  assert.match(functionBody("refreshBalance", cashSource), /\/api\/web\/balances/);
-  assert.match(functionBody("refreshBalance", cashSource), /\/api\/web\/rh\/balances/);
-  assert.doesNotMatch(functionBody("refreshBalance", cashSource), /\/api\/web\/portfolio\/snapshot/);
+  const cashRefresh = functionBody("refreshBalance", cashSource);
+  assert.match(cashRefresh, /Promise\.race/);
+  assert.match(cashRefresh, /\/api\/web\/balances\?fast=true/);
+  assert.match(cashRefresh, /\/api\/web\/balances/);
+  assert.match(cashRefresh, /\/api\/web\/rh\/balances/);
+  assert.ok(cashRefresh.indexOf('const rhRequest = get("/api/web/rh/balances")') < cashRefresh.indexOf("await Promise.race"));
+  assert.doesNotMatch(cashRefresh, /\/api\/web\/portfolio\/snapshot/);
 });
 
 test("wallet surfaces do not issue immediate fast then forced full position cascades", () => {

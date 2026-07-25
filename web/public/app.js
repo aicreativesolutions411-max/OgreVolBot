@@ -1918,20 +1918,20 @@ async function api(path, options = {}) {
   let response;
   let lastError = null;
   try {
-    response = await fetchWithTimeout(apiUrl(path), { ...fetchOptions, headers, cache: "no-store" }, timeoutMs);
+    response = await fetchWithTimeout(apiUrl(path), { ...fetchOptions, credentials: "include", headers, cache: "no-store" }, timeoutMs);
   } catch (error) {
     lastError = error;
     await wakeApi(apiBase);
     await sleep(900);
     try {
-      response = await fetchWithTimeout(apiUrl(path), { ...fetchOptions, headers, cache: "no-store" }, timeoutMs);
+      response = await fetchWithTimeout(apiUrl(path), { ...fetchOptions, credentials: "include", headers, cache: "no-store" }, timeoutMs);
     } catch (retryError) {
       lastError = retryError;
       for (const fallbackBase of apiCandidates) {
         if (fallbackBase === apiBase) continue;
         try {
           await wakeApi(fallbackBase);
-          response = await fetchWithTimeout(`${fallbackBase}${path}`, { ...fetchOptions, headers, cache: "no-store" }, timeoutMs);
+          response = await fetchWithTimeout(`${fallbackBase}${path}`, { ...fetchOptions, credentials: "include", headers, cache: "no-store" }, timeoutMs);
           apiBase = fallbackBase;
           break;
         } catch (fallbackError) {

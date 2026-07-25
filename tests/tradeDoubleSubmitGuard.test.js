@@ -1529,7 +1529,8 @@ test("Fun profile clearly exposes naming, creation, and login recovery", () => {
   assert.match(fun, /Log in \/ switch account/);
   assert.match(fun, /restore that account's wallets, positions, presets, and profile/);
   assert.match(fun, /state\.portfolioPromise = null/);
-  assert.match(fun, /loadWallets\(true\)/);
+  assert.match(fun, /loadWalletBalancePreview\(\)/);
+  assert.match(fun, /loadPortfolioSnapshot\(\{ force: true \}\)/);
   assert.match(fun, /data-fun-account="create"/);
   assert.match(fun, /data-fun-account="login"/);
   assert.match(fun, /\/api\/web\/profile\/credentials/);

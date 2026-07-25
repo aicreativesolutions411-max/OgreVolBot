@@ -5,6 +5,7 @@
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const API_BASE = window.OGRE_PORTAL_CONFIG?.apiBase || location.origin;
   const TOKEN_KEY = "ogreWebToken";
+  const COOKIE_SESSION = "__slimewire_shared_cookie__";
   const RECENTS_KEY = "slimewireFunRecents";
   const ACTIVE_PRESET_KEY = "slimewireFunTradePreset";
   const ACTIVE_WALLET_KEY = "slimecashActiveWalletIndex";
@@ -38,6 +39,7 @@
     solUsd: 0,
     rhEthUsd: 0,
     rhBalancePromise: null,
+    walletBalancePromise: null,
     portfolioPromise: null,
     portfolioPromiseForced: false,
     portfolioForceRequested: false,
@@ -278,22 +280,22 @@
   function toast(message, error = false) { const node = $("[data-toast]"); node.textContent = message; node.className = `toast show${error ? " error" : ""}`; clearTimeout(node._timer); node._timer = setTimeout(() => node.className = "toast", 3600); }
 
   async function request(path, options = {}) {
-    const execute = async () => {
+    const execute = async (cookieOnly = false) => {
       const headers = { ...(options.headers || {}) };
-      if (state.token) headers.Authorization = `Bearer ${state.token}`;
+      if (state.token && state.token !== COOKIE_SESSION && !cookieOnly) headers.Authorization = `Bearer ${state.token}`;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), options.timeout || 20_000);
       try {
-        const response = await fetch(`${API_BASE}${path}`, { ...options, headers, signal: options.signal || controller.signal });
+        const response = await fetch(`${API_BASE}${path}`, { ...options, credentials: "include", headers, signal: options.signal || controller.signal });
         let data = null; try { data = await response.json(); } catch {}
         return { ok: response.ok, status: response.status, data };
       } catch (error) { return { ok: false, status: 0, data: null, error }; }
       finally { clearTimeout(timer); }
     };
     let result = await execute();
-    if ([401, 403].includes(result.status) && state.token && !options.noRetry) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      result = await execute();
+    if ([401, 403].includes(result.status) && state.token && state.token !== COOKIE_SESSION && (path === "/api/web/me" || !options.noRetry)) {
+      result = await execute(true);
+      if (result.ok) setToken(COOKIE_SESSION);
     }
     return result;
   }
@@ -308,18 +310,28 @@
       state.portfolioPromiseForced = false;
       state.portfolioForceRequested = false;
       state.rhBalancePromise = null;
+      state.walletBalancePromise = null;
       state.wallets = [];
       state.positions = [];
       state.rhWalletPosition = null;
       state.activeWallet = null;
     }
     state.token = next;
-    if (next) localStorage.setItem(TOKEN_KEY, next); else {
+    if (next && next !== COOKIE_SESSION) localStorage.setItem(TOKEN_KEY, next); else {
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(WALLET_PORTFOLIO_CACHE_KEY);
     }
   }
   async function loadMe() { if (!state.token) return null; const result = await request("/api/web/me", { noRetry: true }); if (result.ok) state.user = result.data?.user || null; return state.user; }
+
+  async function restoreSharedSession() {
+    if (state.token) return false;
+    const result = await request("/api/web/me", { noRetry: true, timeout: 8_000 });
+    if (!result.ok || !result.data?.user) return false;
+    setToken(COOKIE_SESSION);
+    state.user = result.data.user;
+    return true;
+  }
 
   function clearTelegramLoginTicketFromUrl() {
     const clean = new URL(location.href);
@@ -368,7 +380,10 @@
     saveLocal(WALLET_PORTFOLIO_CACHE_KEY, { savedAt: Date.now(), data });
   }
   function applyPortfolioSnapshot(data = {}, options = {}) {
-    state.wallets = (data.balances || []).filter((wallet) => !wallet.volumeBot);
+    const previousByIndex = new Map(state.wallets.map((wallet) => [Number(wallet.index), wallet]));
+    state.wallets = (data.balances || []).filter((wallet) => !wallet.volumeBot).map((wallet) => (
+      data.fast ? { ...(previousByIndex.get(Number(wallet.index)) || {}), ...wallet } : wallet
+    ));
     state.solUsd = Math.max(0, Number(data.solUsd) || state.solUsd || 0);
     const rh = data.rhBalances || {};
     state.rhEthUsd = Math.max(0, Number(rh.ethUsd) || state.rhEthUsd || 0);
@@ -417,6 +432,40 @@
     if (!state.token) return [];
     await loadPortfolioSnapshot({ force });
     return state.wallets;
+  }
+  function currentRhBalanceSnapshot() {
+    return {
+      ok: true,
+      ethUsd: state.rhEthUsd,
+      wallets: state.wallets.filter((wallet) => wallet.rhAddress).map((wallet) => ({
+        walletIndex: wallet.index,
+        address: wallet.rhAddress,
+        available: wallet.rhAvailable !== false,
+        eth: wallet.rhEth,
+        explorer: wallet.rhExplorer || ""
+      }))
+    };
+  }
+  async function loadWalletBalancePreview() {
+    if (!state.token) return null;
+    if (state.walletBalancePromise) return state.walletBalancePromise;
+    const authToken = state.token;
+    const refresh = (async () => {
+      const result = await request("/api/web/balances?fast=true", { timeout: 5_000 });
+      if (!result.ok || !result.data?.ok || authToken !== state.token) return null;
+      const snapshot = {
+        ...result.data,
+        positions: state.positions,
+        rhBalances: currentRhBalanceSnapshot()
+      };
+      applyPortfolioSnapshot(snapshot);
+      renderWalletHero();
+      if (state.view === "wallet" && state.profileTab === "positions") renderWalletPositions();
+      return snapshot;
+    })();
+    state.walletBalancePromise = refresh;
+    try { return await refresh; }
+    finally { if (state.walletBalancePromise === refresh) state.walletBalancePromise = null; }
   }
   async function hydrateFunRhBalances(render = true) {
     if (!state.token) return false;
@@ -1077,7 +1126,13 @@
 
   async function loadWalletView() {
     const panel = $("[data-profile-panel]");
-    if (state.token) await loadPortfolioSnapshot();
+    const initialRefresh = state.token ? loadWalletBalancePreview() : null;
+    // Paint the last confirmed wallet snapshot before any network wait. The
+    // balance-only request wins the first-load race; positions and RH hydrate
+    // afterward without holding the wallet total hostage.
+    renderWalletHero();
+    if (state.token && state.profileTab === "positions" && state.wallets.length) renderWalletPositions();
+    if (initialRefresh) await initialRefresh;
     renderWalletHero();
     if (!state.token && state.profileTab === "social") { renderSocialProfile(); return; }
     if (!state.token) {
@@ -1095,7 +1150,16 @@
     else if (state.profileTab === "activity") loadWalletActivity();
     else if (state.profileTab === "created") loadCreatedCoins();
     else renderSocialProfile();
-    if (!state.wallets.length && state.profileTab !== "social") panel.innerHTML = emptyState("Your mobile wallet starts here", "Create a managed SlimeWire wallet to trade and keep server-side exits working while the app is closed.");
+    if (!state.wallets.length && state.profileTab !== "social") panel.innerHTML = IS_WALLET_ROUTE
+      ? `<div class="wallet-assets-head"><h2>Wallets</h2></div><section class="wallet-route-assets"><div class="wallet-empty-assets"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><h3>Your account is connected</h3><p>Create a wallet or restore one from an encrypted SlimeWire, Phantom, Solflare, or private-key backup.</p><button type="button" data-create-wallet>Create new wallet</button><button type="button" data-restore-wallets>Restore / import wallet</button></div></section>`
+      : emptyState("Your mobile wallet starts here", "Create a managed SlimeWire wallet to trade and keep server-side exits working while the app is closed.");
+    if (state.token) {
+      void loadPortfolioSnapshot().then(() => {
+        if (state.view !== "wallet") return;
+        renderWalletHero();
+        if (state.profileTab === "positions") renderWalletPositions();
+      });
+    }
   }
   function syncWalletRouteNav() {
     if (!IS_WALLET_ROUTE) return;
@@ -1120,10 +1184,15 @@
   }
   function renderWalletHero() {
     const wallet = activeWallet(), hero = $("[data-wallet-hero]");
-    const accountAccess = IS_WALLET_ROUTE ? '<button class="wallet-account-login" type="button" data-fun-account="login">Log in / switch account</button>' : "";
+    const accountAccess = !IS_WALLET_ROUTE ? "" : state.token
+      ? `<div class="wallet-account-status"><span>✓ Signed in</span><b>${escapeHtml(state.user?.username ? `@${state.user.username}` : "SlimeWire account")}</b></div>`
+      : '<button class="wallet-account-login" type="button" data-fun-account="login">Log in to your account</button>';
     renderWalletPresetStrip();
     if (!wallet) {
-      hero.innerHTML = IS_WALLET_ROUTE ? `<button class="wallet-account-switcher" type="button" data-fun-account="create"><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>SLIMEWALLET</small><b>Set up wallet</b></span><i>›</i></button>${accountAccess}<div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>$0.00</h1><p>Ready when you are</p></div><div class="wallet-chain-cards"><button type="button" data-fun-account="create"><i class="solana-glyph">S</i><span><b>SOL</b><small>0.0000 SOL</small></span><em>Set up</em></button><button type="button" data-fun-account="create"><i class="eth-glyph">◆</i><span><b>ETH</b><small>0.000000 ETH</small></span><em>Set up</em></button></div>` : `<img class="wallet-pfp" src="${slimePfp("guest")}" alt=""><h1>Slime guest</h1><p>No wallet created yet</p><div class="wallet-total">Ready when you are</div>`;
+      hero.innerHTML = IS_WALLET_ROUTE ? state.token
+        ? `<button class="wallet-account-switcher" type="button" data-manage-wallets><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>SLIMEWALLET</small><b>Manage wallets</b></span><i>›</i></button>${accountAccess}<div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>$0.00</h1><p>Account connected · add or restore a wallet</p></div><div class="wallet-hero-tools"><button type="button" data-create-wallet>＋ Create wallet</button><button type="button" data-restore-wallets>↥ Restore wallet</button></div>`
+        : `<button class="wallet-account-switcher" type="button" data-fun-account="login"><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>SLIMEWALLET</small><b>Log in</b></span><i>›</i></button>${accountAccess}<div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>$0.00</h1><p>Log in once to load every wallet</p></div><div class="wallet-hero-tools"><button type="button" data-fun-account="login">Log in</button><button type="button" data-fun-account="create">Create profile</button></div>`
+        : `<img class="wallet-pfp" src="${slimePfp("guest")}" alt=""><h1>Slime guest</h1><p>No wallet created yet</p><div class="wallet-total">Ready when you are</div>`;
       return;
     }
     const sol = positionNumber(wallet.sol) ?? 0;
@@ -1131,7 +1200,7 @@
     if (IS_WALLET_ROUTE) {
       const total = walletRouteTotal();
       const totalLabel = total.totalUsd == null ? `${formatPositionSol(total.totalSol)} SOL` : formatWalletUsd(total.totalUsd);
-      hero.innerHTML = `<button class="wallet-account-switcher" type="button" data-manage-wallets><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>ACTIVE WALLET</small><b>${escapeHtml(wallet.label || "Main Slime")}</b></span><i>⌄</i></button>${accountAccess}<div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>${escapeHtml(totalLabel)}</h1><p>${escapeHtml(formatPositionSol(total.totalSol))} SOL equivalent</p></div><div class="wallet-chain-cards"><button type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><i class="solana-glyph">S</i><span><b>SOL</b><small>${sol.toFixed(4)} SOL</small></span><em>${state.solUsd > 0 ? escapeHtml(formatWalletUsd(sol * state.solUsd)) : "Copy"}</em></button><button type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress || "")}"><i class="eth-glyph">◆</i><span><b>ETH</b><small>${rhEth == null ? "Loading…" : `${rhEth.toFixed(6)} ETH`}</small></span><em>${rhEth != null && state.rhEthUsd > 0 ? escapeHtml(formatWalletUsd(rhEth * state.rhEthUsd)) : "Copy"}</em></button></div>`;
+      hero.innerHTML = `<button class="wallet-account-switcher" type="button" data-manage-wallets><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>ACTIVE WALLET</small><b>${escapeHtml(wallet.label || "Main Slime")}</b></span><i>⌄</i></button>${accountAccess}<div class="wallet-hero-tools"><button type="button" data-manage-wallets>Manage / restore</button><button type="button" data-export-wallets>Back up all wallets</button></div><div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>${escapeHtml(totalLabel)}</h1><p>${escapeHtml(formatPositionSol(total.totalSol))} SOL equivalent</p></div><div class="wallet-chain-cards"><button type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><i class="solana-glyph">S</i><span><b>SOL</b><small>${sol.toFixed(4)} SOL</small></span><em>${state.solUsd > 0 ? escapeHtml(formatWalletUsd(sol * state.solUsd)) : "Copy"}</em></button><button type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress || "")}"><i class="eth-glyph">◆</i><span><b>ETH</b><small>${rhEth == null ? "Loading…" : `${rhEth.toFixed(6)} ETH`}</small></span><em>${rhEth != null && state.rhEthUsd > 0 ? escapeHtml(formatWalletUsd(rhEth * state.rhEthUsd)) : "Copy"}</em></button></div>`;
       return;
     }
     const rhAddress = wallet.rhAddress ? `<button class="wallet-hero-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress)}" aria-label="Copy full Robinhood address"><b>RH ${escapeHtml(short(wallet.rhAddress))}</b><span>Tap to copy ETH address</span></button>` : "";
@@ -1367,8 +1436,12 @@
     if (!result.ok || !result.data?.ok || !result.data?.token) { status.textContent = result.status === 0 ? "Could not reach SlimeWire. Check your connection and try again." : apiMessage(result.data, mode === "create" ? "Could not create profile." : "Could not log in."); button.disabled = false; button.textContent = mode === "create" ? "Create profile" : "Log in"; return; }
     setToken(result.data.token); state.user = result.data.user || null; closeSheet();
     if (mode === "create") await downloadFunAccountBackup();
-    await Promise.all([loadMe(), loadWallets(true), loadPresets(), loadPositions()]);
+    await Promise.all([loadMe(), loadWalletBalancePreview(), loadPresets()]);
     renderWalletHero(); renderSocialProfile(); paintWalletPill(); toast(mode === "create" ? "Profile created" : "Welcome back");
+    void Promise.all([loadPortfolioSnapshot({ force: true }), loadPositions({ force: true })]).then(() => {
+      renderWalletHero();
+      if (state.view === "wallet" && state.profileTab === "positions") renderWalletPositions();
+    });
   }
   async function saveFunReferralCode(button) {
     const code = String($("[data-referral-code]")?.value || "").trim();
@@ -2431,24 +2504,34 @@
     const rhAddress = wallet.rhAddress ? `<button class="wallet-manager-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress)}"><span>RH ${escapeHtml(short(wallet.rhAddress))}</span><small>Copy ETH address · ${wallet.rhEth == null ? "loading" : `${Number(wallet.rhEth).toFixed(6)} ETH`}</small></button>` : "";
     return `<div class="wallet-manage-row" data-wallet-manager-row="${wallet.index}"><label class="wallet-batch-check" title="Select wallet"><input type="checkbox" data-wallet-batch-select="${wallet.index}" checked><span></span></label><div class="wallet-manage-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.index === state.activeWallet && String(wallet.label || "").trim().toLowerCase() !== "main" ? " · Main" : ""}</b><button class="wallet-manager-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><span>${escapeHtml(short(wallet.publicKey))}</span><small>Copy full address</small></button>${rhAddress}<div class="wallet-value-strip"><span><small>SOL</small><b>${escapeHtml(formatPositionSol(summary.liquidSol))}</b></span><span><small>RH ETH</small><b>${wallet.rhEth == null ? "…" : escapeHtml(Number(wallet.rhEth).toFixed(6))}</b></span><span><small>COINS</small><b>${escapeHtml(coinValue)}</b></span><span><small>TOTAL</small><b>${escapeHtml(totalLabel)}</b></span></div>${positionDetails}<span class="wallet-fund-amount"><input data-wallet-fund-amount="${wallet.index}" inputmode="decimal" placeholder="SOL for this wallet" aria-label="SOL amount for ${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}"></span><span class="wallet-rename"><input data-wallet-rename-input="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40"><button type="button" data-rename-wallet="${wallet.index}">Rename</button></span></div><div class="wallet-row-actions"><button type="button" data-select-wallet="${wallet.index}" ${wallet.index === state.activeWallet ? "disabled" : ""}>${wallet.index === state.activeWallet ? "Active" : "Main"}</button><button type="button" data-wallet-funds="${wallet.index}">Only</button><button type="button" data-rh-wallet-tools="${wallet.index}">Manage RH ETH</button><button type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Solflare / Phantom Backup</button><button type="button" data-backup-evm-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Robinhood / ETH Backup</button><button class="danger" type="button" data-remove-wallet="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button></div></div>`;
   }
-  async function openWalletManager() {
-    if (state.token) {
-      await Promise.all([loadWallets(), loadPositions()]);
-      await hydrateFunRhBalances(false);
-      await loadValuedPositions(state.positionLoadVersion);
-    }
+  async function openWalletManager(options = {}) {
+    if (!state.token) { openFunAccount("login"); return; }
     state.pendingWalletManagerAction = null;
     const rows = state.wallets.length ? state.wallets.map(walletManagerRowHtml).join("") : '<div class="read-card"><h3>No wallet loaded</h3><p>Create a new wallet or restore one from a saved backup. Backup files download automatically.</p></div>';
     const walletOptions = state.wallets.map((wallet) => `<option value="${wallet.index}" ${wallet.index === state.activeWallet ? "selected" : ""}>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)} · ${Number(wallet.sol || 0).toFixed(4)} SOL</option>`).join("");
-    openSheet(`<div class="sheet-title"><img src="${slimePfp(activeWallet()?.publicKey || "wallet-manager")}" alt=""><div><h2>Wallet manager</h2><p>See SOL and coin value per wallet, then fund or consolidate the wallets you select.</p></div></div>
+    openSheet(`<div data-wallet-manager-sheet><div class="sheet-title"><img src="${slimePfp(activeWallet()?.publicKey || "wallet-manager")}" alt=""><div><h2>Wallet manager</h2><p>Create, restore, back up, rename, switch, fund, or remove wallets without leaving the app.</p></div></div>
       <div class="wallet-select-bar"><button type="button" data-wallet-select-all>All</button><button type="button" data-wallet-select-none>None</button><span data-wallet-selected-count>${state.wallets.length} selected</span></div>
       <div class="wallet-manager-list">${rows}</div>
       <div class="wallet-manager-actions"><button type="button" data-create-wallet>+ Add one wallet</button><button type="button" data-export-wallets ${state.wallets.length ? "" : "disabled"}>Download all backups</button></div>
       ${state.wallets.length > 1 ? `<section class="wallet-batch-card" data-wallet-funding-card><div class="wallet-batch-heading"><div><h3>Fund selected wallets</h3><p>One review, one transaction.</p></div></div><div class="field"><label>Fund from</label><select data-wallet-fund-source>${walletOptions}</select></div><div class="wallet-mode-toggle"><button class="active" type="button" data-wallet-fund-mode="equal">Same amount each</button><button type="button" data-wallet-fund-mode="custom">Different amounts</button></div><div class="field" data-wallet-equal-funding><label>SOL per wallet</label><input data-wallet-fund-equal inputmode="decimal" value="0.1" placeholder="0.1"></div><button class="submit-trade" type="button" data-review-wallet-fund>Review funding</button><p class="fineprint">The Main/source wallet is never funded into itself. Network fees are shown by Solana when submitted.</p></section>` : ""}
       ${state.wallets.length ? `<section class="wallet-batch-card" data-wallet-consolidate-card><div class="wallet-batch-heading"><div><h3>Sell &amp; consolidate</h3><p>Use the selected wallets, or tap Only on a wallet above.</p></div></div><div class="field"><label>Sweep SOL into</label><select data-wallet-consolidate-destination>${walletOptions}</select></div><div class="wallet-consolidate-actions"><button type="button" data-review-wallet-action="sell">Sell all tokens</button><button type="button" data-review-wallet-action="sweep">Sweep SOL</button><button class="primary" type="button" data-review-wallet-action="sell-sweep">Sell tokens + sweep</button></div><p class="fineprint">Selling swaps every sellable token to SOL. Sweeping drains transferable SOL into the wallet above and keeps network fees covered.</p></section>` : ""}
-      <details class="wallet-restore-box"><summary>Restore or import a wallet</summary><label class="file-button">Choose backup file<input type="file" data-wallet-backup-file accept=".txt,.json,application/json,text/plain" hidden></label><textarea data-wallet-backup-text placeholder="Or paste an encrypted backup, recovery file, or private key"></textarea><button class="submit-trade" type="button" data-restore-wallet>Restore / import wallet</button></details><div class="external-wallet-links"><a href="https://phantom.app/download" target="_blank" rel="noreferrer">Open Phantom to load</a><a href="https://solflare.com/download" target="_blank" rel="noreferrer">Open Solflare to load</a></div><p class="wallet-manager-status" data-wallet-manager-status></p><p class="fineprint">No username or named profile is required. New wallets automatically download the encrypted SlimeWire backup, Solflare/Phantom recovery file, and a separate Robinhood/EVM key file. Keep all files private.</p>`);
+      <details class="wallet-restore-box" ${options.restore ? "open" : ""}><summary>Restore or import a wallet</summary><label class="file-button">Choose backup file<input type="file" data-wallet-backup-file accept=".txt,.json,application/json,text/plain" hidden></label><textarea data-wallet-backup-text placeholder="Or paste an encrypted backup, recovery file, Phantom/Solflare private key, or Robinhood/EVM key"></textarea><button class="submit-trade" type="button" data-restore-wallet>Restore / import wallet</button></details><div class="external-wallet-links"><a href="https://phantom.app/download" target="_blank" rel="noreferrer">Open Phantom to load</a><a href="https://solflare.com/download" target="_blank" rel="noreferrer">Open Solflare to load</a></div><p class="wallet-manager-status" data-wallet-manager-status></p><p class="fineprint">No username or named profile is required. New wallets automatically download the encrypted SlimeWire backup, Solflare/Phantom recovery file, and a separate Robinhood/EVM key file. Keep all files private.</p></div>`);
     updateWalletManagerSelection();
     updateWalletFundingSource();
+    if (!options.skipRefresh) {
+      void loadWalletBalancePreview().then(() => {
+        if ($("[data-wallet-manager-sheet]")) void openWalletManager({ ...options, skipRefresh: true, restore: Boolean($(".wallet-restore-box")?.open || options.restore) });
+        void loadPortfolioSnapshot().then(async () => {
+          await loadValuedPositions(state.positionLoadVersion);
+          renderWalletHero();
+          if (state.view === "wallet") renderWalletPositions();
+          const manager = $("[data-wallet-manager-sheet]");
+          if (manager && !manager.querySelector("input:focus, textarea:focus, select:focus")) {
+            void openWalletManager({ ...options, skipRefresh: true, restore: Boolean($(".wallet-restore-box")?.open || options.restore) });
+          }
+        });
+      });
+    }
   }
   function selectedManagerWalletIndexes() {
     return $$('[data-wallet-batch-select]:checked').map((input) => Number(input.dataset.walletBatchSelect)).filter(Number.isInteger);
@@ -3255,6 +3338,7 @@
     const linkTool = event.target.closest("[data-link-tool]"); if (linkTool) { handleTool(linkTool.dataset.linkTool); return; }
     const quickChain = event.target.closest("[data-search-chain]"); if (quickChain) { closeSearch(); state.chain = quickChain.dataset.searchChain; $$("[data-chain]").forEach((button) => button.classList.toggle("active", button.dataset.chain === state.chain)); setView("home"); loadFeed(true); return; }
     if (event.target.closest("[data-open-cash]")) { location.assign("/cash?sheet=addcash"); return; }
+    if (event.target.closest("[data-restore-wallets]")) { await openWalletManager({ restore: true }); return; }
     if (event.target.closest("[data-manage-wallets]")) { await openWalletManager(); return; }
     const quickPanel = event.target.closest("[data-quick-panel]"); if (quickPanel) { state.quickPanel = quickPanel.dataset.quickPanel || "trade"; renderQuickRoute(); return; }
     const quickAmount = event.target.closest("[data-quick-select-amount]"); if (quickAmount) { state.quickAmount = quickAmount.dataset.quickSelectAmount || "0.1"; renderQuickRoute(); return; }
@@ -3266,7 +3350,7 @@
     const submitAccount = event.target.closest("[data-submit-fun-account]"); if (submitAccount) { await submitFunAccount(submitAccount, submitAccount.dataset.submitFunAccount || "login"); return; }
     const saveReferral = event.target.closest("[data-save-referral-code]"); if (saveReferral) { await saveFunReferralCode(saveReferral); return; }
     const savePayout = event.target.closest("[data-save-referral-payout]"); if (savePayout) { await saveFunReferralPayout(savePayout); return; }
-    if (event.target.closest("[data-fun-sign-out]")) { if (confirm("Sign out on this device? Your wallets stay on your account.")) { setToken(""); state.user = null; state.wallets = []; state.positions = []; state.activeWallet = null; paintWalletPill(); renderWalletHero(); renderSocialProfile(); toast("Signed out"); } return; }
+    if (event.target.closest("[data-fun-sign-out]")) { if (confirm("Sign out on this device? Your wallets stay on your account.")) { await post("/api/web/logout", {}).catch(() => null); setToken(""); state.user = null; state.wallets = []; state.positions = []; state.activeWallet = null; paintWalletPill(); renderWalletHero(); renderSocialProfile(); toast("Signed out"); } return; }
     const copyInvite = event.target.closest("[data-copy-invite]"); if (copyInvite) { const link = state.user?.referralLink || location.origin; if (navigator.share) { try { await navigator.share({ title: "SlimeWire", text: "Trade coins with me on SlimeWire", url: link }); return; } catch { /* fell through to copy */ } } navigator.clipboard?.writeText(link).then(() => toast("Invite link copied"), () => toast("Could not copy", true)); return; }
     const saveProfile = event.target.closest("[data-save-social-profile]"); if (saveProfile) { await saveSocialProfile(saveProfile); return; }
     const enablePush = event.target.closest("[data-enable-push]"); if (enablePush) { await enableFunPush(enablePush); return; }
@@ -3413,20 +3497,26 @@
 
   async function init() {
     applyWalletRouteShell();
+    initWalletSecurity();
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/fun-sw.js", { scope: IS_WALLET_ROUTE ? "/wallet/" : "/fun/", updateViaCache: "none" }).catch(() => {});
+    await consumeTelegramLoginTicket();
+    await restoreSharedSession();
     if (IS_WALLET_ROUTE && state.token) {
       const cachedPortfolio = readWalletPortfolioCache();
       if (cachedPortfolio) applyPortfolioSnapshot(cachedPortfolio, { saveCache: false });
     }
-    initWalletSecurity();
-    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/fun-sw.js", { scope: IS_WALLET_ROUTE ? "/wallet/" : "/fun/", updateViaCache: "none" }).catch(() => {});
-    await consumeTelegramLoginTicket();
     paintWalletPill();
     renderCashHandoff();
     renderHomeReadiness();
     $$('[data-chain]').forEach((button) => button.classList.toggle("active", button.dataset.chain === state.chain));
     $$('[data-feed]').forEach((button) => button.classList.toggle("active", button.dataset.feed === state.feed));
     if (!IS_QUICK_ROUTE && !IS_WALLET_ROUTE) loadFeed();
-    if (state.token) Promise.all(IS_WALLET_ROUTE ? [loadMe(), loadPresets()] : [loadMe(), loadWallets(), loadPositions(), loadPresets(), loadCreatedCoinsSilently()]).then(() => {
+    if (state.token) Promise.all([
+      loadMe(),
+      loadWalletBalancePreview(),
+      loadPresets(),
+      IS_WALLET_ROUTE ? Promise.resolve([]) : loadCreatedCoinsSilently()
+    ]).then(() => {
       renderCashHandoff(); renderHomeReadiness(); resumePendingFunFunding();
       const firstWallet = state.wallets[0];
       if (firstWallet && !walletBackedUp(firstWallet)) {
@@ -3438,6 +3528,14 @@
         } catch {}
       }
       if (state.view === "coin") renderQuickTrade(); if (state.view === "quick") renderQuickRoute();
+      void loadPortfolioSnapshot().then(() => {
+        renderWalletHero();
+        renderCashHandoff();
+        renderHomeReadiness();
+        if (state.view === "wallet" && state.profileTab === "positions") renderWalletPositions();
+        if (state.view === "coin") renderQuickTrade();
+        if (state.view === "quick") renderQuickRoute();
+      });
     }).catch(() => {});
     const routeParams = new URLSearchParams(location.search);
     resumePendingFunFunding();
