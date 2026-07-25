@@ -44,11 +44,18 @@ function percentileMs(events, quantile = 0.95) {
   return values[index];
 }
 
-const [appSource, cssSource, perfStore] = await Promise.all([
-  readText("web/public/app.js"),
-  readText("web/public/slimewire-final-overrides.css"),
+const [terminalHtml, terminalProSource, indicatorSource, terminalProCss, perfStore] = await Promise.all([
+  readText("web/public/index.html"),
+  readText("web/public/terminal-pro.js"),
+  readText("web/public/fun-indicators.js"),
+  readText("web/public/terminal-pro.css"),
   readJsonIfExists("performance-events.json", { events: [] })
 ]);
+const inlineAppSource = terminalHtml.match(/<script>\s*("use strict";[\s\S]*?\}\)\(\);)\s*<\/script>(?=\s*<script src="\/terminal-pro\.js)/)?.[1] || "";
+const inlineShellCss = terminalHtml.match(/<style>\s*(:root\{[\s\S]*?)<\/style>/)?.[1] || "";
+if (!inlineAppSource || !inlineShellCss) throw new Error("Could not identify the active Terminal source blocks in web/public/index.html");
+const appSource = `${inlineAppSource}\n${terminalProSource}\n${indicatorSource}`;
+const cssSource = `${inlineShellCss}\n${terminalProCss}`;
 
 const events = Array.isArray(perfStore.events) ? perfStore.events : [];
 const longTasks = events.filter((event) => event.action === "long-task" && Number(event.durationMs || 0) >= 50).slice(-30);
@@ -66,22 +73,22 @@ const report = {
   webApiP95Ms: percentileMs(events.filter((event) => event.component === "api" || /api|refresh|load-all/.test(event.action || ""))),
   excessiveRenders: groupCounts(renderEvents, (event) => event.details || event.component || "render"),
   duplicateIntervals: {
-    terminalFeedTimerSingleton: bool(appSource, /let terminalFeedTimer = null/) && bool(appSource, /clearTimeout\(terminalFeedTimer\)/),
-    livePairsTimerSingleton: bool(appSource, /let livePairsTimer = null/) && bool(appSource, /clearTimeout\(livePairsTimer\)/),
-    scannerTimerSingleton: bool(appSource, /let scanTimer = null/) && bool(appSource, /clearTimeout\(scanTimer\)/),
-    kolTimerSingleton: bool(appSource, /let kolTimer = null/) && bool(appSource, /clearTimeout\(kolTimer\)/),
-    watchlistTimerSingleton: bool(appSource, /let watchlistTimer = null/) && bool(appSource, /clearTimeout\(watchlistTimer\)/)
+    routeFeedTimerSingleton: bool(appSource, /pollT:null/) && bool(appSource, /clearTimeout\(state\.pollT\)/),
+    transactionTimerSingleton: bool(appSource, /txPollT:null/) && bool(appSource, /clearTimeout\(state\.txPollT\)/),
+    chartStatsTimerSingleton: bool(appSource, /let statPollT=null/) && bool(appSource, /clearTimeout\(statPollT\)/),
+    chatTimerSingleton: bool(appSource, /let chatPollT=null/) && bool(appSource, /clearTimeout\(chatPollT\)/),
+    portfolioTimerSingleton: bool(appSource, /let portfolioPollT=null/) && bool(appSource, /clearTimeout\(portfolioPollT\)/)
   },
   hiddenPolling: {
     documentHiddenGuard: bool(appSource, /document\.hidden/),
-    activeHeavyFeedOnly: bool(appSource, /state\.activeTab/) && bool(appSource, /scheduleActiveTerminalFeedRefresh/),
-    hiddenTabsPausedOrSlowed: bool(appSource, /document\.hidden/) && bool(appSource, /return/),
-    hiddenLivePairBucketsNotWarmedByDefault: bool(appSource, /warmAll = false/) && !bool(appSource, /livePairsBackgroundWarmupTick/)
+    activeRouteOnly: bool(appSource, /if\(state\.route===/) && bool(appSource, /state\.pollT=setTimeout/),
+    walletBalancePausedWhenHidden: bool(appSource, /state\.token&&!document\.hidden\)refreshWallets/),
+    portfolioPausedWhenHidden: bool(appSource, /state\.route==="portfolio"[\s\S]{0,120}!document\.hidden/)
   },
   liveRendering: {
-    batchedLivePairRender: bool(appSource, /function scheduleLivePairsRender/) && bool(appSource, /batched-live-render/),
-    activeBucketOnlyRefresh: bool(appSource, /async function refreshLivePairBuckets\(\{ silent = false, force = false, warmAll = false \}/),
-    visibilityResumeSingleOwner: bool(appSource, /visibility-focus-return/) && !bool(appSource, /resumeLiveFeeds\(\)[\s\S]*refreshLivePairBuckets\(/)
+    cachedPositionsPaintFirst: bool(appSource, /Seed positions from the last session/) && bool(appSource, /paint from whatever we already have/),
+    activeRouteOnlyRefresh: bool(appSource, /if\(state\.route==="trending"\)renderTrending\(\)/),
+    visibilityResumeSingleOwner: bool(appSource, /document\.addEventListener\("visibilitychange"/) && bool(appSource, /clearTimeout\(state\.pollT\)/)
   },
   slowComponents: [...events]
     .sort((a, b) => Number(b.durationMs || 0) - Number(a.durationMs || 0))
@@ -99,8 +106,8 @@ const report = {
   dedupe: {
     apiDedupeEvents: apiDedupeEvents.length,
     walletRefreshDedupeEvents: walletDedupeEvents.length,
-    requestDedupeImplemented: bool(appSource, /const apiInFlight = new Map\(\)/) && bool(appSource, /apiInFlight\.has\(dedupeKey\)/),
-    walletDedupeImplemented: bool(appSource, /let walletRefreshPromise = null/) && bool(appSource, /wallet-refresh-dedupe/)
+    requestDedupeImplemented: bool(appSource, /apiInFlight|requestInFlight|dedupeKey/),
+    walletDedupeImplemented: bool(appSource, /walletRefreshPromise|wallet-refresh-dedupe/)
   },
   mobilePaintCost: {
     contentVisibility: bool(cssSource, /content-visibility:\s*auto/),
@@ -112,6 +119,7 @@ const report = {
     capturedByCommand: false,
     note: "This command reports stored frontend performance events and static risk checks. Use browser console for live warnings."
   },
+  sourceAudited: "web/public/index.html + terminal-pro.js + fun-indicators.js",
   secretsPrinted: false
 };
 

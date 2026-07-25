@@ -30,6 +30,7 @@
     "debug:pnl": "node scripts/debug-pnl.js",
     "debug:perf": "node scripts/debug-perf.js",
     "profile:terminal": "node scripts/profile-terminal.js",
+    "check:terminal-budget": "npm run build:web && node scripts/profile-terminal.js --check",
     "debug:wallet-refresh": "node scripts/debug-wallet-refresh.js",
     "debug:positions-refresh": "node scripts/debug-positions-refresh.js",
     "debug:position-refresh": "node scripts/debug-position-refresh.js",

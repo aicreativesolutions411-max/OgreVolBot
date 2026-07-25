@@ -1,17 +1,13 @@
 /* SlimeCash service worker — fresh-first app shell, network-only for APIs. */
-const CACHE = "slimecash-v32";
+const CACHE = "slimecash-v34";
 const SHELL = [
   "/cash/",
   "/cash/index.html",
-  "/cash/cash.css?v=30",
+  "/cash/cash.css?v=31",
   "/slimewire-funding.js?v=8",
-  "/cash/cash.js?v=30",
+  "/cash/cash.js?v=31",
   "/cash/manifest.webmanifest?v=11",
-  "/assets/slimewire/fun-app-icon-192.png",
   "/cash/img/splash.webp",
-  "/cash/img/card.webp",
-  "/cash/img/ogre.webp",
-  "/cash/img/coin.webp",
   "/cash/icons/icon-192.png"
 ];
 
@@ -33,12 +29,15 @@ self.addEventListener("fetch", (event) => {
   // Money/data endpoints must never come from cache.
   if (url.pathname.startsWith("/api/") || url.origin !== self.location.origin) return;
   if (!url.pathname.startsWith("/cash") && url.pathname !== "/slimewire-funding.js") return;
+  // Never persist one-time login tickets or request tokens as Cache Storage
+  // keys. Cash navigation responses are the same public shell for every user.
+  const cacheKey = event.request.mode === "navigate" ? "/cash/" : event.request;
   event.respondWith(
-    caches.match(event.request, { ignoreSearch: url.pathname === "/cash/" || url.pathname === "/cash/index.html" }).then((cached) => {
+    caches.match(cacheKey).then((cached) => {
       const fetched = fetch(event.request).then((response) => {
         if (response.ok) {
           const copy = response.clone();
-          caches.open(CACHE).then((cache) => cache.put(event.request, copy)).catch(() => {});
+          caches.open(CACHE).then((cache) => cache.put(cacheKey, copy)).catch(() => {});
         }
         return response;
       }).catch(() => cached);

@@ -129,8 +129,12 @@
 (function(){
   var el=document.getElementById('chart'); if(!el||!window.LightweightCharts) return;
   var QP=new URLSearchParams(location.search),CA=(QP.get('ca')||'').trim(),EMBED=QP.get('embed')==='1',TF=QP.get('tf')||'5m';
-  var POOL=(QP.get('pool')||'').trim(); if(!/^0x[0-9a-f]{40}$/i.test(POOL))POOL='';
   var NETWORK=/^0x[0-9a-f]{40}$/i.test(CA)?'robinhood':'solana';
+  var POOL=(QP.get('pool')||'').trim(),VALID_POOL=NETWORK==='robinhood'?/^0x[0-9a-f]{40}$/i.test(POOL):/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(POOL);
+  if(!VALID_POOL||(NETWORK==='robinhood'?POOL.toLowerCase()===CA.toLowerCase():POOL===CA))POOL='';
+  // A pool supplied by the terminal is an exact, caller-pinned market. Discovery may
+  // fill a missing pool, but it must never replace this value after the chart starts.
+  var PINNED_POOL=POOL||'';
   var SYMP=(QP.get('sym')||'').trim();
   // INSTANT HEADER — kill the "$OGRE flash". The demo coin ($OGRE · Swamp Ogre) is hardcoded in the
   // markup and used to show until the live stats fetch finished (seconds), so when a real coin is
@@ -152,7 +156,7 @@
     return location.hostname.indexOf('onrender.com')>=0 ? '' : 'https://app.slimewire.org'; })();
   if(EMBED&&document.body)document.body.classList.add('embed');
   var LWC=window.LightweightCharts;
-  var mcScale=0, dexStats=null, dexPair=POOL||null, dexTokenSide='base', realPrice=null, chg24=null, haveCandles=false;
+  var mcScale=0, dexStats=null, dexPair=PINNED_POOL||null, dexTokenSide='base', realPrice=null, chg24=null, haveCandles=false;
   var gtFallbackBusy=false,gtFallbackAt=0;
   // ---- formatters ----
   function fmtUsd(p){p=Number(p)||0;if(p<=0)return '$0';if(p>=1)return '$'+p.toLocaleString(undefined,{maximumFractionDigits:3});if(p>=0.001)return '$'+p.toFixed(5);return '$'+p.toPrecision(3);}
@@ -387,15 +391,17 @@
     if(!CA)return Promise.resolve(null);
     return json('https://api.dexscreener.com/latest/dex/tokens/'+encodeURIComponent(CA)).then(function(j){
       var pairs=(j&&j.pairs)||[];
-      var best=pairs.filter(function(p){return String(p.chainId||'').toLowerCase()===NETWORK;}).filter(function(p){return String((p.baseToken&&p.baseToken.address)||'').toLowerCase()===CA.toLowerCase()||String((p.quoteToken&&p.quoteToken.address)||'').toLowerCase()===CA.toLowerCase();}).sort(function(a,b){return ((b.liquidity&&b.liquidity.usd)||0)-((a.liquidity&&a.liquidity.usd)||0);})[0];
-      if(!best)return null; dexPair=best.pairAddress||dexPair; var baseMatches=String((best.baseToken&&best.baseToken.address)||'').toLowerCase()===CA.toLowerCase(); dexTokenSide=baseMatches?'base':'quote'; var base=baseMatches?(best.baseToken||{}):(best.quoteToken||best.baseToken||{});
+      var matching=pairs.filter(function(p){return String(p.chainId||'').toLowerCase()===NETWORK;}).filter(function(p){return String((p.baseToken&&p.baseToken.address)||'').toLowerCase()===CA.toLowerCase()||String((p.quoteToken&&p.quoteToken.address)||'').toLowerCase()===CA.toLowerCase();});
+      var exact=PINNED_POOL&&matching.filter(function(p){return String(p.pairAddress||'').toLowerCase()===PINNED_POOL.toLowerCase();})[0];
+      var best=exact||matching.sort(function(a,b){return ((b.liquidity&&b.liquidity.usd)||0)-((a.liquidity&&a.liquidity.usd)||0);})[0];
+      if(!best)return null; if(!PINNED_POOL&&best.pairAddress)dexPair=best.pairAddress; var baseMatches=String((best.baseToken&&best.baseToken.address)||'').toLowerCase()===CA.toLowerCase(); dexTokenSide=baseMatches?'base':'quote'; var base=baseMatches?(best.baseToken||{}):(best.quoteToken||best.baseToken||{});
       var s={symbol:base.symbol||'',name:base.name||'',priceUsd:+best.priceUsd||0,mc:+best.marketCap||+best.fdv||0,liq:+(best.liquidity&&best.liquidity.usd)||0,vol24:+(best.volume&&best.volume.h24)||0,change24:+(best.priceChange&&best.priceChange.h24)||0,buys24:+(best.txns&&best.txns.h24&&best.txns.h24.buys)||0,sells24:+(best.txns&&best.txns.h24&&best.txns.h24.sells)||0};
       applyDexStats(s); if(bars.length<3)loadGeckoFallback(); return s;
     });
   }
   function applyChartData(d){
     if(!d||!d.candles||!d.candles.length)return false;
-    if(d.pairAddress)dexPair=d.pairAddress;
+    if(!PINNED_POOL&&d.pairAddress)dexPair=d.pairAddress;
     applyStats(d,false);
     if(!(mcScale>0)&&d.mc>0&&d.priceUsd>0)mcScale=d.mc/d.priceUsd;       // fallback anchor so the axis shows MC even before DexScreener lands
     var micro=tfSec()<60?candlesFromApiTrades(d.trades):[],cs=micro.length?micro:d.candles, seen={}, candles=[], vols=[];
@@ -413,7 +419,7 @@
   }
   function loadServer(){ if(!CA)return; fetch(API+'/api/chart?ca='+encodeURIComponent(CA)+'&tf='+encodeURIComponent(TF)+(dexPair?'&pool='+encodeURIComponent(dexPair):'')).then(function(r){return r.json();}).then(function(d){ if(d&&d.candles){applyChartData(d);if(bars.length<3)loadGeckoFallback();} }).catch(function(){loadGeckoFallback();}); }
   function loadBootstrap(){ if(!CA)return; json(API+'/api/web/chart/bootstrap?token='+encodeURIComponent(CA)).then(function(j){
-    var c=j&&j.chart;if(!c)return;if(c.pairAddress)dexPair=c.pairAddress;
+    var c=j&&j.chart;if(!c)return;if(!PINNED_POOL&&c.pairAddress)dexPair=c.pairAddress;
     applyStats({symbol:c.symbol,name:c.name,imageUrl:c.imageUrl,priceUsd:c.priceUsd,mc:c.marketCap||c.fdv,liq:c.liquidityUsd,vol24:c.volumeH24,buys24:c.txns&&c.txns.h24&&c.txns.h24.buys,sells24:c.txns&&c.txns.h24&&c.txns.h24.sells},false);
   }); }
 

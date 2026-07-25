@@ -35,12 +35,6 @@ function normalizeAddress(value) {
   return EVM_ADDRESS_RE.test(address) ? address : "";
 }
 
-function addressFromGeckoId(value) {
-  const id = String(value || "").trim();
-  const address = id.includes("_") ? id.slice(id.lastIndexOf("_") + 1) : id;
-  return normalizeAddress(address);
-}
-
 export function chooseRhPoolToken(baseAddress, quoteAddress, quoteTokens = RH_POOL_QUOTE_TOKENS) {
   const base = normalizeAddress(baseAddress);
   const quote = normalizeAddress(quoteAddress);
@@ -63,15 +57,6 @@ function dexPairToken(data, poolAddress) {
   const token = chooseRhPoolToken(exact?.baseToken?.address, exact?.quoteToken?.address);
   if (token) rememberResolvedPoolHint(token, poolAddress, exact);
   return token;
-}
-
-function geckoPoolToken(data, poolAddress) {
-  const row = data?.data;
-  const exactAddress = normalizeAddress(row?.attributes?.address) || addressFromGeckoId(row?.id);
-  if (!exactAddress || exactAddress.toLowerCase() !== poolAddress.toLowerCase()) return "";
-  const base = addressFromGeckoId(row?.relationships?.base_token?.data?.id);
-  const quote = addressFromGeckoId(row?.relationships?.quote_token?.data?.id);
-  return chooseRhPoolToken(base, quote);
 }
 
 async function fetchJsonWithin(fetchImpl, url, timeoutMs) {
@@ -167,10 +152,12 @@ export async function resolveRhPoolToken(address, options = {}) {
   // keeps the search fallback safe from same-symbol clone mistakes.
   const dexSearchTask = fetchJsonWithin(fetchImpl, `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(key)}`, timeoutMs)
     .then((data) => dexPairToken(data, input));
-  const geckoTask = fetchJsonWithin(fetchImpl, `https://api.geckoterminal.com/api/v2/networks/robinhood/pools/${key}`, timeoutMs)
-    .then((data) => geckoPoolToken(data, input));
+  // The public Robinhood RPC is the only server-side fallback. GeckoTerminal is
+  // intentionally browser-only in this project because Render's shared IP is
+  // hard-rate-limited. token0/token1 resolution remains conservative: the RPC
+  // result is accepted only when exactly one side is a known quote asset.
   const rpcTask = rpcPoolToken(fetchImpl, String(options.rpcUrl || RH_PUBLIC_RPC), input, timeoutMs);
-  const token = await firstResolved([dexTask, dexSearchTask, geckoTask, rpcTask]);
+  const token = await firstResolved([dexTask, dexSearchTask, rpcTask]);
   const result = token || input;
   if (token && token.toLowerCase() !== key) rememberResolvedPoolHint(token, input);
   poolResolutionCache.set(key, { at: now, token: result, resolved: Boolean(token && token.toLowerCase() !== key) });

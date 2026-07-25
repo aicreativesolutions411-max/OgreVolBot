@@ -1,99 +1,148 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const dataDir = path.resolve(process.env.DATA_DIR || path.join(rootDir, "data"));
+const publicDir = path.join(rootDir, "web", "public");
+const distDir = path.join(rootDir, "web", "dist");
 
-async function readText(file) {
-  return fs.readFile(path.join(rootDir, file), "utf8");
-}
+const ACTIVE_TERMINAL_BUDGETS = Object.freeze({
+  htmlBytes: 32 * 1024,
+  entryJsBytes: 420 * 1024,
+  shellCssBytes: 56 * 1024,
+  initialJsBytes: 700 * 1024
+});
 
-async function readJsonIfExists(fileName, fallback) {
+async function readText(filePath, fallback = "") {
   try {
-    return JSON.parse(await fs.readFile(path.join(dataDir, fileName), "utf8"));
+    return await fs.readFile(filePath, "utf8");
   } catch (error) {
     if (error?.code === "ENOENT") return fallback;
     throw error;
   }
 }
 
-function parseNumberLiteral(value = "0") {
-  const parsed = Number(String(value).replaceAll("_", ""));
-  return Number.isFinite(parsed) ? parsed : 0;
+function bytes(value = "") {
+  return Buffer.byteLength(String(value), "utf8");
 }
 
-function parseTerminalFeeds(appSource = "") {
-  const start = appSource.indexOf("const TERMINAL_FEEDS = [");
-  if (start < 0) return [];
-  const end = appSource.indexOf("];", start);
-  if (end < 0) return [];
-  const block = appSource.slice(start, end);
-  const feeds = [];
-  const pattern = /\{[^\n]*tabKey:\s*"([^"]+)"[^\n]*\}/g;
-  for (const match of block.matchAll(pattern)) {
-    const item = match[0];
-    const value = (field) => item.match(new RegExp(`${field}:\\s*"([^"]*)"`))?.[1] || "";
-    const number = (field) => parseNumberLiteral(item.match(new RegExp(`${field}:\\s*([0-9_]+)`))?.[1] || "0");
-    feeds.push({
-      tabKey: match[1],
-      label: value("label"),
-      endpoint: value("endpoint"),
-      category: value("category"),
-      cacheKey: value("cacheKey"),
-      pageSize: number("pageSize"),
-      maxPageSize: number("maxPageSize"),
-      refreshMs: number("refreshMs"),
-      staleMs: number("staleMs"),
-      supportsPagination: /supportsPagination:\s*true/.test(item)
+function count(source, pattern) {
+  return [...String(source || "").matchAll(pattern)].length;
+}
+
+function localAssetUrls(html, pattern) {
+  return [...String(html || "").matchAll(pattern)].map((match) => match[1]);
+}
+
+function localPathForUrl(baseDir, url) {
+  const pathname = String(url || "").split(/[?#]/, 1)[0].replace(/^\/+/, "");
+  return path.join(baseDir, ...pathname.split("/"));
+}
+
+async function assetMetrics(baseDir, urls) {
+  const items = [];
+  for (const url of urls) {
+    const source = await readText(localPathForUrl(baseDir, url));
+    if (!source) continue;
+    const raw = Buffer.from(source, "utf8");
+    items.push({
+      url,
+      bytes: raw.length,
+      brotliBytes: zlib.brotliCompressSync(raw, {
+        params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 6 }
+      }).length
     });
   }
-  return feeds;
+  return items;
 }
 
-function bool(text, pattern) {
-  return pattern.test(text);
+function budget(actual, maximum) {
+  return { actual, maximum, pass: Number.isFinite(actual) && actual <= maximum };
 }
 
-const [appSource, cssSource, perfStore, feedStore] = await Promise.all([
-  readText("web/public/app.js"),
-  readText("web/public/slimewire-final-overrides.css"),
-  readJsonIfExists("performance-events.json", { events: [] }),
-  readJsonIfExists("terminal-feed-events.json", { events: [] })
-]);
+const sourceHtml = await readText(path.join(publicDir, "index.html"));
+if (!sourceHtml) throw new Error("web/public/index.html is missing");
+const sourceShellCss = sourceHtml.match(/<style>\s*(:root\{[\s\S]*?)<\/style>/)?.[1] || "";
+const sourceEntryJs = sourceHtml.match(/<script>\s*("use strict";[\s\S]*?\}\)\(\);)\s*<\/script>(?=\s*<script src="\/terminal-pro\.js)/)?.[1] || "";
+if (!sourceShellCss || !sourceEntryJs) throw new Error("Could not identify the active Terminal source blocks in web/public/index.html");
 
-const feeds = parseTerminalFeeds(appSource);
-const perfEvents = Array.isArray(perfStore.events) ? perfStore.events : [];
-const feedEvents = Array.isArray(feedStore.events) ? feedStore.events : [];
-const latestFeedByTab = new Map();
-for (const event of feedEvents) {
-  if (event?.tabKey) latestFeedByTab.set(event.tabKey, event);
-}
+const builtHtml = await readText(path.join(distDir, "index.html"));
+const built = Boolean(builtHtml && /data-terminal-entry/.test(builtHtml));
+const builtJsUrls = built ? localAssetUrls(builtHtml, /<script[^>]+src="([^"]+\.js(?:\?[^"#]*)?)"[^>]*>/g) : [];
+const builtCssUrls = built ? localAssetUrls(builtHtml, /<link[^>]+(?:rel="stylesheet"[^>]+href|href)="([^"]+\.css(?:\?[^"#]*)?)"[^>]*>/g) : [];
+const [builtJs, builtCss] = built
+  ? await Promise.all([assetMetrics(distDir, builtJsUrls), assetMetrics(distDir, builtCssUrls)])
+  : [[], []];
+const entry = builtJs.find((item) => /\/terminal-app\.[a-f0-9]{12}\.js$/.test(item.url));
+const shell = builtCss.find((item) => /\/terminal-shell\.[a-f0-9]{12}\.css$/.test(item.url));
+const initialJsBytes = builtJs.reduce((sum, item) => sum + item.bytes, 0);
+const checks = built ? {
+  html: budget(bytes(builtHtml), ACTIVE_TERMINAL_BUDGETS.htmlBytes),
+  entryJs: budget(entry?.bytes ?? Number.POSITIVE_INFINITY, ACTIVE_TERMINAL_BUDGETS.entryJsBytes),
+  shellCss: budget(shell?.bytes ?? Number.POSITIVE_INFINITY, ACTIVE_TERMINAL_BUDGETS.shellCssBytes),
+  initialJs: budget(initialJsBytes, ACTIVE_TERMINAL_BUDGETS.initialJsBytes)
+} : null;
 
 const report = {
-  terminalFeeds: feeds.map((feed) => ({
-    ...feed,
-    latestStatus: latestFeedByTab.get(feed.tabKey)?.status || null,
-    latestResultCount: latestFeedByTab.get(feed.tabKey)?.resultCount ?? null,
-    latestRenderedCount: latestFeedByTab.get(feed.tabKey)?.renderedCount ?? null,
-    hasMore: latestFeedByTab.get(feed.tabKey)?.hasMore ?? null
-  })),
-  tabSwitchPerformance: perfEvents
-    .filter((event) => event.action === "tab-switch" || event.action === "feed-refresh")
-    .slice(-25),
-  mainThreadWork: {
-    longTasksOver50ms: perfEvents.filter((event) => event.action === "long-task" && Number(event.durationMs || 0) >= 50).slice(-20),
-    terminalRenderEvents: perfEvents.filter((event) => event.action === "render" && String(event.details || "").startsWith("terminal")).slice(-20)
+  activeEntry: "web/public/index.html",
+  source: {
+    htmlBytes: bytes(sourceHtml),
+    inlineShellCssBytes: bytes(sourceShellCss),
+    inlineEntryJsBytes: bytes(sourceEntryJs),
+    templateElementLiterals: count(sourceHtml, /<[a-z][^!?/][^>]*>/gi),
+    buttonLiterals: count(sourceHtml, /<button\b/gi),
+    inputLiterals: count(sourceHtml, /<input\b/gi),
+    fetchCallSites: count(sourceEntryJs, /\bfetch\s*\(/g),
+    intervalCallSites: count(sourceEntryJs, /\bsetInterval\s*\(/g),
+    timeoutCallSites: count(sourceEntryJs, /\bsetTimeout\s*\(/g)
   },
-  smoothnessGuards: {
-    cachedTabRenderBeforeRefresh: bool(appSource, /const hasCachedTabData = terminalFeedHasData\(state\.activeTab\)/) && bool(appSource, /if \(!hasCachedTabData\) await refreshPromise/),
-    getRequestDedupe: bool(appSource, /const apiInFlight = new Map\(\)/),
-    windowedFeedRows: bool(appSource, /terminalFeedRowsWindow/) && bool(appSource, /data-terminal-load-more/),
-    cssContentVisibility: bool(cssSource, /content-visibility:\s*auto/),
-    hiddenHeavyPollingPaused: bool(appSource, /\["terminal", "live", "slimeScope", "kol", "watchlist", "sniper"\]\.includes\(state\.activeTab\)/),
-    mobileReducedEffects: bool(cssSource, /@media \(max-width: 760px\), \(prefers-reduced-motion: reduce\)/) || bool(cssSource, /prefers-reduced-motion/)
-  }
+  delivery: {
+    built,
+    htmlBytes: built ? bytes(builtHtml) : null,
+    largeInlineBlocksRemoved: built
+      ? !/<style>\s*:root\{/.test(builtHtml) && !/<script>\s*"use strict";/.test(builtHtml)
+      : null,
+    hashedEntry: entry?.url || null,
+    hashedShell: shell?.url || null,
+    subresourceIntegrity: built
+      ? /integrity="sha384-[^"]+"[^>]*data-terminal-entry/.test(builtHtml)
+        && /integrity="sha384-[^"]+"[^>]*data-terminal-shell/.test(builtHtml)
+      : null,
+    executionOrderPreserved: built
+      ? builtHtml.indexOf("data-terminal-entry") < builtHtml.indexOf("/terminal-pro.js")
+        && !/<script[^>]+data-terminal-entry[^>]+(?:async|defer)/.test(builtHtml)
+      : null,
+    entryPreloadedFromHead: built
+      ? /<link[^>]+rel="preload"[^>]+terminal-app\.[a-f0-9]{12}\.js[^>]+data-terminal-preload/.test(builtHtml)
+        && builtHtml.indexOf("data-terminal-preload") < builtHtml.indexOf("</head>")
+      : null,
+    javascript: builtJs,
+    stylesheets: builtCss,
+    initialJsBytes,
+    initialJsBrotliBytes: builtJs.reduce((sum, item) => sum + item.brotliBytes, 0)
+  },
+  runtimeGuards: {
+    earlyPhoneRedirectStaysInline: sourceHtml.indexOf("swPreferDesktop") < sourceHtml.indexOf("<style>"),
+    serviceWorkerRegistered: /navigator\.serviceWorker\.register\("\/sw\.js"\)/.test(sourceEntryJs),
+    walletPollingPausesWhenHidden: /state\.token\s*&&\s*!document\.hidden\)refreshWallets/.test(sourceEntryJs),
+    routePollsAreOwnedByTimeouts: /state\.pollT=setTimeout/.test(sourceEntryJs) && /clearTimeout\(state\.pollT\)/.test(sourceEntryJs),
+    chartLibraryStillEager: /<script defer src="\/vendor\/lightweight-charts/.test(sourceHtml),
+    indicatorsStillEager: /<script src="\/fun-indicators\.js/.test(sourceHtml)
+  },
+  budgets: checks,
+  budgetsPass: checks ? Object.values(checks).every((item) => item.pass) : null
 };
 
 console.log("TERMINAL PROFILE");
 console.log(JSON.stringify(report, null, 2));
+
+if (process.argv.includes("--check")) {
+  if (!built) {
+    console.error("Build the web portal before enforcing active Terminal budgets: npm run build:web");
+    process.exitCode = 1;
+  } else if (!report.budgetsPass) {
+    console.error("Active Terminal delivery exceeds its performance budget");
+    process.exitCode = 1;
+  }
+}

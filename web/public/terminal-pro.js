@@ -35,7 +35,11 @@
     const interval = ({ "1m": "1", "15m": "15", "1h": "60", "4h": "240", "12h": "720", "1d": "1D" })[timeframe] || "15";
     const existingUrl = String(existing || "").trim();
     const resolvedExternal = /^https?:\/\//i.test(existingUrl) && !/\/chart-lab/i.test(existingUrl);
-    const address = String(pool || "").trim();
+    const poolCandidate = String(pool || "").trim();
+    const validPool = context.rh
+      ? /^0x[0-9a-f]{40}$/i.test(poolCandidate) && poolCandidate.toLowerCase() !== String(context.token || "").toLowerCase()
+      : /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(poolCandidate) && poolCandidate !== String(context.token || "");
+    const address = validPool ? poolCandidate : "";
     // External charts require a real pool address. Never send a token mint through
     // a provider's pool route: that produces misleading one-candle/404 frames. The
     // native Slime chart remains visible until the exact-pool resolver completes.
@@ -285,6 +289,9 @@
   async function resolveStandardPool(trade, context, timeframe) {
     const chart = one(".chartwrap", trade);
     if (!chart || chart.dataset.proPoolResolving === "1") return;
+    // A pair already present in the chart URL came from the terminal's exact market
+    // resolution. Keep it immutable; discovery is only allowed to fill a missing pair.
+    if (chart.dataset.proPoolPinned === "1" && chart.dataset.poolAddress) return;
     chart.dataset.proPoolResolving = "1";
     try {
       const result = await request(`/api/web/chart/bootstrap?token=${encodeURIComponent(context.token)}`);
@@ -344,6 +351,7 @@
       }
       if (!pair || !document.documentElement.contains(trade)) return;
       chart.dataset.poolAddress = pair;
+      chart.dataset.proPoolPinned = "1";
       chart.dataset.proStandardSrc = standardChartUrl(context, timeframe, pair, "");
       const activeTimeframe = trade.dataset.proTf || timeframe;
       if (trade.dataset.proChartMode !== "slime" && !MICRO.has(activeTimeframe)) setTimeframe(trade, activeTimeframe);
@@ -357,11 +365,13 @@
     const main = one(".tradeMain", trade), chart = one(".chartwrap", trade), side = one(".tradeSide .sidepad", trade), frame = chart && one("iframe", chart);
     if (!main || !chart || !frame) return;
     const context = currentContext(trade), stored = localStorage.getItem(context.rh ? "ggRhChartTf" : "ggSolChartTf"), inferred = inferTimeframe(frame), active = TIMEFRAMES.some(([value]) => value === stored) ? stored : (TIMEFRAMES.some(([value]) => value === inferred) ? inferred : "15m");
+    const initialPool = poolFromUrl(frame.src);
     trade.dataset.proReady = "1";
-    chart.dataset.proStandardSrc = /\/chart-lab/i.test(frame.src) ? standardChartUrl(context, active, poolFromUrl(frame.src), "") : frame.src;
+    chart.dataset.proStandardSrc = /\/chart-lab/i.test(frame.src) ? standardChartUrl(context, active, initialPool, "") : frame.src;
     chart.classList.add("proIndicatorFrame");
     chart.setAttribute("data-chart-frame", "");
-    chart.dataset.poolAddress = poolFromUrl(frame.src);
+    chart.dataset.poolAddress = initialPool;
+    chart.dataset.proPoolPinned = initialPool ? "1" : "0";
     chart.insertAdjacentHTML("beforebegin", toolbarHtml(active));
     chart.insertAdjacentHTML("afterend", indicatorDrawerHtml());
     main.insertAdjacentHTML("beforeend", quickPanelHtml(context));

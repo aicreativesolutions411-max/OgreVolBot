@@ -41,19 +41,22 @@ test("handles a reversed pool by excluding the known quote asset", () => {
   assert.equal(chooseRhPoolToken(PHOOD, VIRTUAL), PHOOD);
 });
 
-test("uses GeckoTerminal when DexScreener has not indexed the exact pool", async () => {
-  const fetchImpl = async (url) => {
-    if (url.includes("dexscreener")) return response({ pairs: null });
-    return response({ data: {
-      id: `robinhood_${POOL}`,
-      attributes: { address: POOL },
-      relationships: {
-        base_token: { data: { id: `robinhood_${PHOOD}` } },
-        quote_token: { data: { id: `robinhood_${WETH}` } },
-      },
-    } });
+test("uses the safe RPC fallback without making a server-side GeckoTerminal request", async () => {
+  const calls = [];
+  const word = (address) => `0x${"0".repeat(24)}${address.slice(2).toLowerCase()}`;
+  const fetchImpl = async (url, options = {}) => {
+    calls.push(String(url));
+    if (String(url).includes("dexscreener")) return response({ pairs: null });
+    if (options.method === "POST") {
+      return response([
+        { jsonrpc: "2.0", id: 1, result: word(PHOOD) },
+        { jsonrpc: "2.0", id: 2, result: word(WETH) },
+      ]);
+    }
+    return response({}, false);
   };
-  assert.equal(await resolveRhPoolToken(POOL, { fetchImpl }), PHOOD);
+  assert.equal(await resolveRhPoolToken(POOL, { fetchImpl }), PHOOD.toLowerCase());
+  assert.equal(calls.some((url) => url.includes("api.geckoterminal.com")), false);
 });
 
 test("uses DexScreener's independent search index only for an exact pool address", async () => {
@@ -88,14 +91,23 @@ test("decodes token0/token1 on-chain when both market indexes are unavailable", 
 
 test("never substitutes a token from an unrelated pair result", async () => {
   const unrelatedPool = "0x1111111111111111111111111111111111111111";
-  const fetchImpl = async (url) => {
-    if (url.includes("dexscreener")) {
+  const fetchImpl = async (url, options = {}) => {
+    if (String(url).includes("dexscreener")) {
       return response({ pairs: [{
         chainId: "robinhood",
         pairAddress: unrelatedPool,
         baseToken: { address: PHOOD },
         quoteToken: { address: VIRTUAL },
       }] });
+    }
+    if (options.method === "POST") {
+      const word = (address) => `0x${"0".repeat(24)}${address.slice(2).toLowerCase()}`;
+      // Two ordinary assets are intentionally ambiguous on-chain. The resolver
+      // must not guess a token from numerical token0/token1 ordering.
+      return response([
+        { jsonrpc: "2.0", id: 1, result: word(PHOOD) },
+        { jsonrpc: "2.0", id: 2, result: word(unrelatedPool) },
+      ]);
     }
     return response({}, false);
   };

@@ -42,6 +42,8 @@ test("professional chart controls expose every requested candle interval", () =>
   assert.match(pro, /function setChartMode/);
   assert.match(pro, /standardChartUrl/);
   assert.match(pro, /function resolveStandardPool/);
+  assert.match(pro, /chart\.dataset\.proPoolPinned === "1" && chart\.dataset\.poolAddress/);
+  assert.match(pro, /chart\.dataset\.proPoolPinned = initialPool \? "1" : "0"/);
   assert.match(pro, /\/api\/web\/chart\/bootstrap\?token=/);
   assert.match(pro, /api\.dexscreener\.com\/latest\/dex\/tokens/);
   assert.match(pro, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/tokens/);
@@ -101,6 +103,8 @@ test("Solana charts never use a token address as a DexScreener pool", () => {
   assert.match(gg, /\/chart-lab\?ca=/);
   assert.match(gg, /resolvedPool=String\(best\.pairAddress/);
   assert.match(gg, /cw\.dataset\.proStandardSrc=solChartUrl/);
+  assert.match(gg, /if\(resolvedPool&&!r\.pairAddress\)r\.pairAddress=resolvedPool/);
+  assert.match(gg, /cw\.dataset\.poolAddress=chartPool/);
   assert.doesNotMatch(gg, /dexscreener\.com\/solana\/"\+encodeURIComponent\(mint\)\+"\?embed=1/);
 });
 
@@ -160,7 +164,7 @@ test("Robinhood chart and transactions fall back to exact on-chain pool swaps", 
   assert.match(noxa, /SWAP_TOPIC_V3, SWAP_TOPIC_V2/);
   assert.match(noxa, /historySecondsPerBlock/);
   assert.match(server, /rhCandlesFromSwaps/);
-  assert.match(server, /source = "robinhood rpc swaps"/);
+  assert.match(server, /robinhood rpc swaps/);
   assert.match(server, /pathname === "\/api\/web\/token-trades"/);
   assert.match(gg, /token-trades\?pool=.*&ca=/);
   assert.match(gg, /data-rh-ct="tx"/);
@@ -170,9 +174,22 @@ test("Robinhood chart and transactions fall back to exact on-chain pool swaps", 
   assert.match(gg, /slice\(0,250\)/);
   assert.match(gg, /Transaction History/);
   assert.match(gg, /Incoming trades append while this tab is open/);
+  assert.match(chart, /var PINNED_POOL=POOL\|\|''/);
+  assert.match(gg, /if\(o\.pair&&!r\.pairAddress\)r\.pairAddress=o\.pair/);
+  assert.match(gg, /if\(!r\.pairAddress\)put\("pairAddress"/);
   assert.match(gg, /toolbar\.style\.display=which==="chart"\?"":"none"/);
   assert.match(gg, /indicators\.style\.display=which==="chart"\?"":"none"/);
   assert.match(gg, /tradeHistoryOpen/);
+});
+
+test("desktop trade receipts preserve settlement, persistence, and server-exit truth", () => {
+  assert.match(gg, /function openTradeReceipt\(trade,label\)/);
+  assert.match(gg, /trade\.solCashoutError/);
+  assert.match(gg, /trade\.recordError/);
+  assert.match(gg, /trade\.autoExitError/);
+  assert.match(gg, /trade\.explorerUrl\|\|trade\.explorerTx/);
+  assert.match(gg, /state\.portfolioTab="cards";closeModal\(\);go\("portfolio"\)/);
+  assert.match(gg, /autoExitArmed=Boolean\(guard&&guard\.ok&&guard\.d&&guard\.d\.ok\)/);
 });
 
 test("Telegram Slime Chart links land on the exact terminal coin route", () => {

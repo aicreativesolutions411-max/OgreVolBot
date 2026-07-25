@@ -64,6 +64,18 @@ a { color: var(--mint); text-decoration: none; }
 .balance-label { font-size: 10px; letter-spacing: 1.5px; color: var(--muted); }
 .balance-usd { font-size: 42px; font-weight: 650; letter-spacing: -0.5px; margin-top: 4px; }
 .balance-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.cash-sync-status {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: fit-content; max-width: 100%; min-height: 27px; margin: -9px auto 13px; padding: 5px 9px;
+  border: 1px solid var(--line-soft); border-radius: 999px; background: rgba(10, 15, 11, .86);
+  color: var(--muted); font-size: 10px; text-align: center;
+}
+.cash-sync-status.ok { color: var(--mint); border-color: rgba(114, 255, 35, .18); }
+.cash-sync-status.stale { color: #ffd17a; border-color: rgba(255, 190, 74, .25); }
+.cash-sync-status.bad { color: #ffb0a9; border-color: rgba(255, 107, 107, .3); border-radius: 12px; }
+.cash-sync-status.working span::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px rgba(114,255,35,.8); animation: cashPulse 1.2s ease-in-out infinite; }
+.cash-sync-status button { flex: none; padding: 3px 7px; border: 1px solid currentColor; border-radius: 999px; color: inherit; font-weight: 750; font-size: 9px; }
+@keyframes cashPulse { 50% { opacity: .35; transform: scale(.75); } }
 
 .action-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
 .btn {
@@ -82,6 +94,10 @@ a { color: var(--mint); text-decoration: none; }
 .recovery-file input { display: none; }
 .recovery-text { min-height: 112px; resize: vertical; padding: 12px 14px; line-height: 1.45; }
 .install-app-icon { display: block; width: 88px; height: 88px; margin: 2px auto 14px; border-radius: 22px; box-shadow: 0 12px 34px rgba(84, 224, 0, 0.22); }
+.wallet-safety-link { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 0 10px; width: 100%; margin-top: 9px; padding: 9px 11px; border: 1px solid var(--line-soft); border-radius: 12px; background: linear-gradient(135deg, rgba(114,255,35,.06), transparent); text-align: left; }
+.wallet-safety-link span { color: var(--mint); font-size: 11px; font-weight: 750; }
+.wallet-safety-link small { grid-column: 1; color: var(--muted); font-size: 9px; }
+.wallet-safety-link em { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: var(--green); font-size: 10px; font-style: normal; font-weight: 750; }
 
 /* Pay card */
 .cash-card {
@@ -102,6 +118,8 @@ a { color: var(--mint); text-decoration: none; }
 .section-label { font-size: 10px; letter-spacing: 1.5px; color: var(--muted); margin: 20px 0 6px; }
 .section-head { display: flex; align-items: flex-end; justify-content: space-between; }
 .section-head .section-label { margin-bottom: 6px; }
+.activity-freshness { min-height: 12px; margin-top: -6px; color: var(--dim); font-size: 9px; }
+.activity-freshness.bad { color: #ff9a92; }
 .text-action { color: var(--mint); font-size: 12px; padding: 8px 0 5px 12px; }
 .activity-row {
   display: flex; align-items: center; gap: 10px;
@@ -118,6 +136,10 @@ a { color: var(--mint); text-decoration: none; }
 .activity-amt { font-weight: 650; font-size: 13px; }
 .activity-amt.in { color: var(--green); }
 .activity-empty { color: var(--dim); font-size: 12px; padding: 14px 0; text-align: center; }
+.recoverable-state { display: grid; gap: 5px; padding: 13px; border: 1px solid rgba(255,107,107,.26); border-radius: 13px; background: rgba(255,107,107,.06); color: var(--muted); font-size: 11px; }
+.recoverable-state b { color: var(--ink); font-size: 12px; }
+.recoverable-state button { justify-self: start; margin-top: 2px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 9px; color: var(--green); font-size: 10px; font-weight: 750; }
+.recoverable-state.compact { margin-bottom: 10px; padding: 9px 10px; }
 
 /* Fields */
 .section-title { font-size: 20px; font-weight: 650; margin: 8px 0 14px; }

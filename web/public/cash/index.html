@@ -6,7 +6,7 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="30">
+<meta name="slimecash-build" content="31">
 <link rel="manifest" href="/cash/manifest.webmanifest?v=11">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
@@ -17,7 +17,10 @@
 <meta property="og:title" content="SlimeCash">
 <meta property="og:description" content="Money for the trenches. Send, receive, and swap coins with your $handle.">
 <meta property="og:image" content="https://www.slimewire.org/cash/icons/icon-512.png">
-<link rel="stylesheet" href="/cash/cash.css?v=30">
+<link rel="preconnect" href="https://app.slimewire.org" crossorigin>
+<link rel="dns-prefetch" href="//app.slimewire.org">
+<link rel="preconnect" href="https://api.dexscreener.com" crossorigin>
+<link rel="stylesheet" href="/cash/cash.css?v=31">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -36,8 +39,12 @@
   <section id="view-home" class="view">
     <div class="balance-block">
       <div class="balance-label">CASH BALANCE</div>
-      <div id="balanceUsd" class="balance-usd">$0.00</div>
+      <div id="balanceUsd" class="balance-usd">--</div>
       <div id="balanceSub" class="balance-sub">loading…</div>
+    </div>
+    <div id="cashSyncStatus" class="cash-sync-status working" role="status">
+      <span id="cashSyncText">Restoring your shared SlimeWire session...</span>
+      <button id="balanceRetryBtn" type="button" hidden>Retry</button>
     </div>
     <div class="action-row action-row-4">
       <button id="addCashBtn" class="btn primary" type="button">Add cash</button>
@@ -45,8 +52,9 @@
       <button id="receiveBtn" class="btn ghost" type="button">Receive</button>
       <button id="convertBtn" class="btn ghost" type="button">Convert</button>
     </div>
+    <button id="homeWalletsBtn" class="wallet-safety-link" type="button"><span>Wallets &amp; backups</span><small>Manage, create, import, or recover</small><em>Open</em></button>
     <a class="suite-handoff" href="/fun?from=cash">
-      <img src="/assets/slimewire/png/slimewire-mark.png" alt="">
+      <img src="/assets/slimewire/png/slimewire-mark.png" alt="" loading="lazy" decoding="async">
       <span><b>Trade with this wallet</b><small>Open SlimeWire Go without signing in again</small></span>
       <em>Open →</em>
     </a>
@@ -60,13 +68,13 @@
       <button id="pendingFundClose" class="pending-close" type="button" aria-label="Dismiss">×</button>
     </div>
     <div class="cash-card" id="payCard">
-      <img src="/cash/img/card.webp" alt="" class="cash-card-art">
+      <img src="/cash/img/card.webp" alt="" class="cash-card-art" loading="lazy" decoding="async">
       <div class="cash-card-meta">
         <div id="cardHandle" class="cash-card-handle">claim your $handle</div>
         <div id="cardLink" class="cash-card-link">tap to set up your pay page</div>
       </div>
     </div>
-    <div class="section-head"><div class="section-label">ACTIVITY</div><button id="activityAllBtn" class="text-action" type="button">View all</button></div>
+    <div class="section-head"><div><div class="section-label">ACTIVITY</div><div id="activityFreshness" class="activity-freshness"></div></div><button id="activityAllBtn" class="text-action" type="button">View all</button></div>
     <div id="activityList" class="activity"></div>
   </section>
 
@@ -108,7 +116,7 @@
     <div id="cashPositionsStatus" class="status"></div>
     <div id="cashPositions" class="cash-positions"><div class="activity-empty">Open this tab to load your coins.</div></div>
     <a class="suite-handoff" href="/fun?from=cash">
-      <img src="/assets/slimewire/png/slimewire-mark.png" alt="">
+      <img src="/assets/slimewire/png/slimewire-mark.png" alt="" loading="lazy" decoding="async">
       <span><b>Open the full terminal</b><small>Charts, buys, TP/SL and advanced orders</small></span>
       <em>Open →</em>
     </a>
@@ -118,7 +126,7 @@
   <section id="view-more" class="view" hidden>
     <div class="section-title">Profile</div>
     <div class="profile-head">
-      <img src="/cash/img/ogre.webp" alt="" class="profile-pic">
+      <img src="/cash/img/ogre.webp" alt="" class="profile-pic" loading="lazy" decoding="async">
       <div>
         <div id="moreHandle" class="profile-handle">no $handle yet</div>
         <div id="moreAddress" class="profile-address"></div>
@@ -398,7 +406,7 @@
 <div id="paypage" class="sheet-backdrop" hidden>
   <div class="sheet">
     <button class="sheet-close" data-close="paypage" type="button" aria-label="Close">×</button>
-    <img src="/cash/img/ogre.webp" alt="" class="profile-pic center">
+    <img src="/cash/img/ogre.webp" alt="" class="profile-pic center" loading="lazy" decoding="async">
     <div id="payHandle" class="sheet-title center">$…</div>
     <p class="sheet-copy center">Pay them on SlimeCash</p>
     <div class="qr-wrap"><canvas id="payQr" width="220" height="220"></canvas></div>
@@ -427,7 +435,7 @@
 <div id="installguide" class="sheet-backdrop" hidden>
   <div class="sheet">
     <button class="sheet-close" data-close="installguide" type="button" aria-label="Close">×</button>
-    <img src="/cash/icons/icon-192.png" alt="SlimeCash app icon" class="install-app-icon">
+    <img src="/cash/icons/icon-192.png" alt="SlimeCash app icon" class="install-app-icon" loading="lazy" decoding="async">
     <div class="sheet-title center">Install SlimeCash</div>
     <p class="sheet-copy center">SlimeCash installs as its own app with its own green dollar icon. It stays separate from SlimeWire on your home screen while securely sharing the same account and wallets.</p>
     <div id="installSteps" class="guide-steps"></div>
@@ -471,7 +479,7 @@
     <div class="sheet-title">Invite &amp; earn</div>
     <p class="sheet-copy">Share your link. When friends you invite trade, <b>you earn a cut of their fees</b> — paid straight to your wallet, automatically, forever. No setup.</p>
     <div class="funding-preview" style="margin-bottom:12px">
-      <img src="/cash/img/coin.webp" alt="">
+      <img src="/cash/img/coin.webp" alt="" loading="lazy" decoding="async">
       <div><span>Invites earning for you</span><b id="inviteCount">0 friends</b><small id="inviteEarned">Earnings land in your wallet</small></div>
     </div>
     <div class="qr-wrap"><canvas id="inviteQr" width="200" height="200"></canvas></div>
@@ -507,6 +515,6 @@
 <div id="toast" class="toast" hidden></div>
 <script src="/config.js"></script>
 <script src="/slimewire-funding.js?v=8"></script>
-<script src="/cash/cash.js?v=30"></script>
+<script src="/cash/cash.js?v=31"></script>
 </body>
 </html>

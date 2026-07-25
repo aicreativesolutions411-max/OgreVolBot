@@ -294,7 +294,7 @@ export async function fetchPoolSwaps(pool, tokenAddress, {
 } = {}) {
   const poolAddr = ethers.getAddress(pool);
   const token = ethers.getAddress(tokenAddress);
-  const cacheKey = `${poolAddr.toLowerCase()}:${token.toLowerCase()}:${Math.round(Number(lookbackSeconds) || 0)}`;
+  const cacheKey = `${poolAddr.toLowerCase()}:${token.toLowerCase()}:${Math.round(Number(lookbackSeconds) || 0)}:${Math.max(1, Math.round(Number(maxLogs) || 0))}`;
   const cached = poolSwapHistoryCache.get(cacheKey);
   if (cached && Date.now() - cached.at < ttlMs) return cached.value;
 
@@ -315,8 +315,13 @@ export async function fetchPoolSwaps(pool, tokenAddress, {
   const settled = await Promise.allSettled(ranges.map(([fromBlock, toBlock]) =>
     provider.getLogs({ address: poolAddr, topics: [[SWAP_TOPIC_V3, SWAP_TOPIC_V2]], fromBlock, toBlock })
   ));
+  const incompleteRanges = settled.some((row) => row.status === "rejected");
+  const cappedLookback = requestedSpan > 14_400_000;
   let logs = settled.flatMap((row) => row.status === "fulfilled" ? row.value : []);
   logs.sort((a, b) => Number(b.blockNumber) - Number(a.blockNumber) || Number(b.index ?? b.logIndex ?? 0) - Number(a.index ?? a.logIndex ?? 0));
+  // Consumers such as 24h volume must never present a partial RPC window as a
+  // complete total. Tape/chart callers may still render the returned swaps.
+  const truncated = incompleteRanges || cappedLookback || logs.length > maxLogs;
   if (logs.length > maxLogs) logs = logs.slice(0, maxLogs);
   const oldestBlock = logs.length ? Math.min(...logs.map((log) => Number(log.blockNumber))) : latest;
   const oldestInfo = oldestBlock < latest ? await provider.getBlock(oldestBlock).catch(() => null) : latestInfo;
@@ -376,7 +381,7 @@ export async function fetchPoolSwaps(pool, tokenAddress, {
   if (ratioUsd > 0) {
     for (const swap of swaps) { swap.price = swap.priceQuote * ratioUsd; swap.usd = swap.tokens * swap.price; }
   }
-  const value = { toBlock: latest, swaps, tokenDecimals, quoteDecimals, quoteAddress, quoteSymbol };
+  const value = { toBlock: latest, swaps, tokenDecimals, quoteDecimals, quoteAddress, quoteSymbol, truncated };
   poolSwapHistoryCache.set(cacheKey, { at: Date.now(), value });
   if (poolSwapHistoryCache.size > 80) {
     const oldest = [...poolSwapHistoryCache.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 30);

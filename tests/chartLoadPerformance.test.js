@@ -87,6 +87,46 @@ test("native chart uses our server first and a pool-scoped browser fallback only
   assert.match(functionBody(terminalSource, "loadInlineTape"), /postMessage\(\{type:"slimewire:rh-pool-trades"/);
 });
 
+test("native chart keeps an exact caller-supplied pool immutable", () => {
+  assert.match(chartLabSource, /VALID_POOL=NETWORK==='robinhood'\?\/\^0x/);
+  assert.match(chartLabSource, /\[1-9A-HJ-NP-Za-km-z\]\{32,44\}/);
+  assert.match(chartLabSource, /POOL===CA\)\)POOL=''/);
+  assert.match(chartLabSource, /var PINNED_POOL=POOL\|\|''/);
+  assert.match(functionBody(chartLabSource, "loadDex"), /exact=PINNED_POOL/);
+  assert.match(functionBody(chartLabSource, "loadDex"), /if\(!PINNED_POOL&&best\.pairAddress\)dexPair=best\.pairAddress/);
+  assert.match(functionBody(chartLabSource, "applyChartData"), /if\(!PINNED_POOL&&d\.pairAddress\)dexPair=d\.pairAddress/);
+  assert.match(functionBody(chartLabSource, "loadBootstrap"), /if\(!PINNED_POOL&&c\.pairAddress\)dexPair=c\.pairAddress/);
+  const walletFrame = functionBody(appSource, "smartChartFrameUrl");
+  assert.match(walletFrame, /pinnedPool = smartChartTapePool\(token\)/);
+  assert.match(walletFrame, /&pool=\$\{encodeURIComponent\(pinnedPool\)\}/);
+  assert.match(walletFrame, /callerPinnedPool/);
+  assert.match(walletFrame, /smartChartPoolAddress/);
+  assert.match(walletFrame, /dexChartEmbedUrl\(\{ \.\.\.token, pairAddress: callerPinnedPool \}/);
+  const resolutionStore = functionBody(appSource, "rememberSmartChartDexResolution");
+  assert.match(resolutionStore, /previous\.pairPinned/);
+  assert.match(resolutionStore, /pairPinned: Boolean\(previous\.pairPinned \|\| incomingPairPinned\)/);
+});
+
+test("chart API never echoes a token CA back as a pool", () => {
+  const body = functionBody(serverSource, "fetchGeckoOhlcv");
+  assert.match(body, /const poolIsToken = network === "robinhood"/);
+  assert.match(body, /const requestedPool = poolIsToken \? "" : poolCandidate/);
+  assert.match(body, /poolAddress: firstString\(requestedPool, chart\?\.pairAddress\)/);
+  const professional = functionBody(fs.readFileSync(new URL("../web/public/terminal-pro.js", import.meta.url), "utf8"), "standardChartUrl");
+  assert.match(professional, /poolCandidate\.toLowerCase\(\) !== String\(context\.token \|\| ""\)\.toLowerCase\(\)/);
+  assert.match(professional, /poolCandidate !== String\(context\.token \|\| ""\)/);
+  assert.match(professional, /const address = validPool \? poolCandidate : ""/);
+  assert.match(serverSource, /const pool = poolValid && !poolIsToken \? poolCandidate : ""/);
+  const terminalGuard = functionBody(terminalSource, "marketPoolAddress");
+  assert.match(terminalGuard, /const same=rh\?pool\.toLowerCase\(\)===mint\.toLowerCase\(\):pool===mint/);
+  assert.match(terminalGuard, /return valid&&!same\?pool:""/);
+  assert.match(functionBody(terminalSource, "loadInlineTape"), /marketPoolAddress/);
+  assert.match(functionBody(terminalSource, "loadRhTxPane"), /marketPoolAddress/);
+  assert.match(functionBody(terminalSource, "loadTxPane"), /marketPoolAddress/);
+  assert.match(functionBody(appSource, "smartChartPoolAddress"), /return valid && !same \? pool : ""/);
+  assert.match(functionBody(appSource, "smartChartTapePool"), /smartChartPoolAddress/);
+});
+
 test("native chart never hides real candles behind the optional slime texture", () => {
   assert.match(chartLabSource, /upColor:'#33e08a'/);
   assert.match(chartLabSource, /downColor:'#ff445c'/);
@@ -104,6 +144,7 @@ test("Robinhood chart keeps one market-cap scale after Dex stats land", () => {
 
 test("native chart API uses Solana Tracker primary with swap-api fallback", () => {
   const body = functionBody(serverSource, "buildChartData");
+  assert.match(body, /requestedPoolCandidate !== String\(mint \|\| ""\)\.trim\(\)/);
   assert.match(body, /solanaTrackerJson\(`\/chart\/\$\{mint\}\?type=\$\{encodeURIComponent\(tf\)\}&currency=usd`/);
   assert.match(body, /Array\.isArray\(st\.oclhv\)/);
   assert.match(body, /swap-api\.pump\.fun\/v1\/coins\/\$\{mint\}\/candles/);
@@ -120,11 +161,14 @@ test("native chart accepts Robinhood CAs and uses the saved Sushi pool before pu
   assert.match(serverSource, /await buildRhChartData\(rhMint/);
   assert.match(serverSource, /poolAddress: requestUrl\.searchParams\.get\("pool"\)/);
   const body = functionBody(serverSource, "buildRhChartData");
-  assert.match(body, /requestedPool = normalizeRobinhoodTokenAddress\(options\.poolAddress\)/);
+  assert.match(body, /requestedPoolCandidate = normalizeRobinhoodTokenAddress\(options\.poolAddress\)/);
+  assert.match(body, /requestedPoolCandidate\.toLowerCase\(\) !== address\.toLowerCase\(\)/);
   assert.match(body, /rhLaunchMetaByAddress/);
   assert.match(body, /launch\?\.pairAddress/);
-  assert.match(body, /webOhlcvPayload\(address, tf, \{ network: "robinhood", poolAddress: launchPool/);
-  assert.match(body, /fetchGeckoPoolTrades\(poolAddress, \{ network: "robinhood"/);
+  assert.match(body, /poolAddress = firstString\(requestedPool, launch\?\.pairAddress, best\?\.pairAddress, scan\?\.pairAddress\)/);
+  assert.match(body, /fetchPoolSwaps\(poolAddress, address/);
+  assert.match(body, /rhCandlesFromSwaps\(onchain\?\.swaps, tf\)/);
+  assert.doesNotMatch(body, /api\.geckoterminal\.com/);
   assert.match(body, /source = "current-price-anchor"/);
   assert.match(body, /pairAddress: poolAddress/);
 });

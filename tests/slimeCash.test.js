@@ -23,12 +23,82 @@ test("SlimeCash calls the branded API origin instead of exposing the hosting pro
 test("SlimeCash restores the shared SlimeWire session before loading account wallets", () => {
   assert.match(cash, /const COOKIE_SESSION = "__slimewire_shared_cookie__"/);
   assert.match(cash, /async function restoreSharedSession/);
-  assert.match(cash, /setToken\(COOKIE_SESSION\)/);
+  assert.match(cash, /setToken\(COOKIE_SESSION, \{ preserveLocalState: true \}\)/);
+  const restore = cash.slice(cash.indexOf("async function restoreSharedSession"), cash.indexOf("function downloadText"));
+  assert.doesNotMatch(restore, /if \(state\.token\) return/, "a saved token must still have its account identity confirmed");
   const boot = cash.slice(cash.indexOf("async function boot"), cash.indexOf("/* ---------------- events ---------------- */"));
   assert.ok(boot.indexOf("await restoreSharedSession()") < boot.indexOf("const initialBalanceRefresh"));
+  assert.ok(boot.indexOf('$("app").hidden = false') < boot.indexOf("await restoreSharedSession()"), "the saved shell must paint before cookie validation");
+  assert.ok(boot.indexOf("await restoreSharedSession()") < boot.indexOf("hydrateConfirmedCashSnapshots()"), "saved account data must wait for identity confirmation");
+  assert.ok(boot.indexOf("hydrateConfirmedCashSnapshots()") < boot.indexOf("const initialBalanceRefresh"), "confirmed snapshots should paint before live RPC refreshes");
+  const beforeIdentity = boot.slice(0, boot.indexOf("await restoreSharedSession()"));
+  assert.doesNotMatch(beforeIdentity, /readCashBalanceCache\(|readCashHistoryCache\(/);
   assert.match(server, /webSessionCookie\(request, result\.token, result\.expiresAt\)/);
   assert.match(server, /webSessionCookie\(request, recovered\.token, recovered\.expiresAt\)/);
   assert.match(server, /clearWebSessionCookie\(request\)/);
+});
+
+test("SlimeCash account caches are scoped to the identity confirmed by the server", () => {
+  const balanceCache = cash.slice(cash.indexOf("function readCashBalanceCache"), cash.indexOf("function applyCashBalanceSnapshot"));
+  assert.match(balanceCache, /scopedCashStorageKey\(BALANCE_CACHE_PREFIX, ref\)/);
+  assert.match(balanceCache, /String\(cached\.accountRef \|\| ""\) !== ref/);
+  assert.match(balanceCache, /accountRef,\s*balances:/);
+
+  const activityCache = cash.slice(cash.indexOf("function readActivity"), cash.indexOf("function normalizedActivity"));
+  assert.match(activityCache, /scopedCashStorageKey\(ACTIVITY_CACHE_PREFIX, accountRef\)/);
+  assert.match(activityCache, /scopedCashStorageKey\(HISTORY_CACHE_PREFIX, ref\)/);
+  assert.match(activityCache, /String\(cached\.accountRef \|\| ""\) === accountRef/);
+  assert.match(activityCache, /String\(cached\.accountRef \|\| ""\) !== ref/);
+  assert.match(activityCache, /JSON\.stringify\(\{ accountRef, rows:/);
+
+  const boot = cash.slice(cash.indexOf("async function boot"), cash.indexOf("/* ---------------- events ---------------- */"));
+  const beforeIdentity = boot.slice(0, boot.indexOf("await restoreSharedSession()"));
+  assert.doesNotMatch(beforeIdentity, /readCashBalanceCache\(|readCashHistoryCache\(/);
+  assert.match(boot, /if \(sessionRestore\.ok\) \{\s*hydrateConfirmedCashSnapshots\(\)/);
+});
+
+test("SlimeCash clears old-account state and rejects late responses during an account switch", () => {
+  const api = cash.slice(cash.indexOf("async function api"), cash.indexOf("const get ="));
+  assert.match(api, /if \(result\.status === 401/);
+  assert.doesNotMatch(api, /\[401, 403\]\.includes\(result\.status\)/);
+  assert.ok(api.indexOf("await verifyCookieAccountIdentity()") < api.indexOf("const cookieResult = await execute(true)"));
+  assert.ok(api.indexOf("confirmation.mismatch && path !== \"\/api\/web\/me\"") < api.indexOf("const cookieResult = await execute(true)"));
+  const confirmation = cash.slice(cash.indexOf("function confirmCashAccountIdentity"), cash.indexOf("function clearAnonymousCashState"));
+  assert.match(confirmation, /previousRef && previousRef !== nextRef/);
+  assert.match(confirmation, /sessionEpoch \+= 1/);
+  assert.match(confirmation, /removeCashCacheForAccount\(previousRef\)/);
+  assert.ok(confirmation.indexOf("clearCashSnapshotState()") < confirmation.indexOf("state.account = user"));
+
+  const restore = cash.slice(cash.indexOf("async function restoreSharedSession"), cash.indexOf("function downloadText"));
+  assert.match(restore, /const restoreEpoch = sessionEpoch/);
+  assert.match(restore, /sessionEpoch !== restoreEpoch && !result\.usedCookieSession/);
+  const accountLoad = cash.slice(cash.indexOf("async function loadAccount"), cash.indexOf("function accountCredentials"));
+  assert.match(accountLoad, /const accountRequestEpoch = sessionEpoch/);
+  assert.match(accountLoad, /sessionEpoch !== accountRequestEpoch && !result\.usedCookieSession/);
+
+  const balances = cash.slice(cash.indexOf("async function refreshBalance"), cash.indexOf("function totalUsd"));
+  assert.match(balances, /const refreshAccountRef = String\(state\.confirmedAccountRef \|\| ""\)/);
+  assert.ok((balances.match(/state\.confirmedAccountRef !== refreshAccountRef/g) || []).length >= 3);
+  assert.match(balances, /accountChanged[\s\S]{0,260}refreshBalance\(\{ silent: true \}\)/);
+
+  const history = cash.slice(cash.indexOf("async function loadCashHistory"), cash.indexOf("function openReceipt"));
+  assert.match(history, /const historyAccountRef = String\(state\.confirmedAccountRef \|\| ""\)/);
+  assert.match(history, /state\.confirmedAccountRef !== historyAccountRef/);
+  assert.ok(history.indexOf("state.confirmedAccountRef !== historyAccountRef") < history.indexOf("const merged ="));
+});
+
+test("SlimeCash anonymous startup never paints a previous account snapshot", () => {
+  const anonymous = cash.slice(cash.indexOf("function clearAnonymousCashState"), cash.indexOf("async function verifyCookieAccountIdentity"));
+  assert.match(anonymous, /removeCashCacheForAccount\(previousRef\)/);
+  assert.match(anonymous, /localStorage\.removeItem\(LAST_CONFIRMED_ACCOUNT_KEY\)/);
+  assert.match(anonymous, /clearCashSnapshotState\(\)/);
+  const restore = cash.slice(cash.indexOf("async function restoreSharedSession"), cash.indexOf("function downloadText"));
+  assert.match(restore, /if \(unauthenticated\) setToken\(""\)/);
+  const activity = cash.slice(cash.indexOf("function readActivity"), cash.indexOf("function readCashHistoryCache"));
+  assert.match(activity, /if \(!accountRef \|\| !key\) return \[\]/);
+  const pending = cash.slice(cash.indexOf("function readPendingFund"), cash.indexOf("function pendingFundArrived"));
+  assert.match(pending, /if \(!accountRef\) return null/);
+  assert.match(pending, /String\(row\.accountRef \|\| ""\) !== accountRef/);
 });
 
 test("the generated portal config rewrites a Render environment URL to the branded API", () => {
@@ -91,8 +161,8 @@ test("SlimeCash includes live Robinhood ETH in wallet rows and its USD total", (
 
 test("SlimeCash service worker prefers the current deploy and retains offline fallback", () => {
   const build = html.match(/slimecash-build" content="(\d+)"/)?.[1];
-  assert.equal(build, "30", "SlimeCash should publish the current app build");
-  assert.match(sw, /const CACHE = "slimecash-v32"/);
+  assert.equal(build, "31", "SlimeCash should publish the current app build");
+  assert.match(sw, /const CACHE = "slimecash-v34"/);
   assert.match(html, new RegExp(`cash\\.js\\?v=${build}`));
   assert.match(html, new RegExp(`cash\\.css\\?v=${build}`));
   assert.match(sw, /const fetched = fetch/);
@@ -102,19 +172,40 @@ test("SlimeCash service worker prefers the current deploy and retains offline fa
 
 test("SlimeCash paints SOL and USD without waiting for Robinhood ETH", () => {
   const refresh = cash.slice(cash.indexOf("async function refreshBalance"), cash.indexOf("function totalUsd"));
-  assert.match(refresh, /get\("\/api\/web\/balances\?fast=true"\)/);
+  assert.match(refresh, /get\("\/api\/web\/balances\?fast=true", \{ timeoutMs: 5_000 \}\)/);
   assert.match(refresh, /Promise\.race\(\[[\s\S]{0,180}1_800/);
   assert.ok(refresh.indexOf("await balanceRequest") < refresh.indexOf("await rhRequest"));
   assert.match(refresh, /applyCashBalanceSnapshot\(balanceData, earlyRhData/);
   assert.match(refresh, /Robinhood RPC\/bridge reads can be much slower than Solana/);
   const boot = cash.slice(cash.indexOf("async function boot"), cash.indexOf("\/\* ---------------- events ---------------- \*\/"));
-  assert.match(boot, /const initialBalanceRefresh = state\.token \? refreshBalance\(\{ silent: true \}\)\.catch\(\(\) => null\) : null/);
-  assert.ok(boot.indexOf("initialBalanceRefresh") < boot.indexOf("loadAccount()"));
+  assert.match(boot, /const initialBalanceRefresh = sessionRestore\.ok && state\.confirmedAccountRef[\s\S]{0,120}refreshBalance\(\{ silent: true \}\)\.catch\(\(\) => null\)/);
+  assert.ok(boot.indexOf("initialBalanceRefresh") < boot.indexOf("ensureWallet({ create: false })"));
   const login = cash.slice(cash.indexOf("async function loginCashAccount"), cash.indexOf("async function ensureAccount"));
   assert.ok(login.indexOf("refreshBalance({ silent: true })") < login.indexOf("loadAccount()"));
   assert.match(server, /fast \? webFastBalanceRows\(auth\.userId/);
   assert.match(server, /async function webFastBalanceRows/);
   assert.match(server, /primeSolBalancesBatch/);
+});
+
+test("SlimeCash startup is cached, deduplicated, time-bounded, and recoverable", () => {
+  assert.match(cash, /const inFlightReads = new Map\(\)/);
+  assert.match(cash, /if \(inFlightReads\.has\(key\)\) return inFlightReads\.get\(key\)/);
+  assert.match(cash, /const timeoutMs = Math\.max\(1_000/);
+  assert.match(cash, /const BALANCE_CACHE_MAX_AGE_MS = 24 \* 60 \* 60 \* 1000/);
+  assert.match(cash, /const HISTORY_CACHE_PREFIX = "slimecashHistorySnapshotV2:"/);
+  assert.match(cash, /const BALANCE_CACHE_PREFIX = "slimecashBalanceSnapshotV3:"/);
+  assert.match(cash, /const ACTIVITY_CACHE_PREFIX = "slimecashActivityV2:"/);
+  assert.match(cash, /function scopedCashStorageKey/);
+  assert.match(cash, /function compactCashBalanceRows/);
+  assert.match(cash, /function cacheableActivity/);
+  assert.match(cash, /if \(state\.balanceRefreshPromise\) return state\.balanceRefreshPromise/);
+  assert.match(cash, /async function retryCashStartup/);
+  assert.match(html, /id="cashSyncStatus"/);
+  assert.match(html, /id="balanceRetryBtn"/);
+  assert.match(html, /id="homeWalletsBtn"[^>]*>[\s\S]*Wallets &amp; backups/);
+  assert.match(html, /cash-card-art" loading="lazy" decoding="async"/);
+  assert.doesNotMatch(sw, /\/cash\/img\/(?:card|ogre|coin)\.webp/);
+  assert.doesNotMatch(cash.slice(cash.indexOf("function compactCashBalanceRows"), cash.indexOf("function saveCashBalanceCache")), /secretKey|privateKey|mnemonic/i);
 });
 
 test("SlimeCash Send has an obvious close control that returns to Cash", () => {
@@ -156,9 +247,9 @@ test("SlimeCash exposes explicit cash assets and routes sends through the idempo
 });
 
 test("USDC funding and sending stay explicit in the SlimeCash client", () => {
-  assert.match(cash, /get\("\/api\/web\/balances"\)/);
-  assert.match(cash, /get\("\/api\/web\/rh\/balances"\)/);
-  assert.match(cash, /const BALANCE_CACHE_KEY = "slimecashBalanceSnapshotV2"/);
+  assert.match(cash, /get\("\/api\/web\/balances", \{ timeoutMs: 9_000 \}\)/);
+  assert.match(cash, /get\("\/api\/web\/rh\/balances", \{ timeoutMs: 9_000 \}\)/);
+  assert.match(cash, /const BALANCE_CACHE_PREFIX = "slimecashBalanceSnapshotV3:"/);
   assert.match(cash, /function applyCashBalanceSnapshot/);
   assert.match(cash, /active\?\.cashAssets/);
   assert.match(cash, /assets\.USDC\?\.rawAmount/);
@@ -228,7 +319,8 @@ test("Cash and Fun share one account login, recovery, wallet import, and navigat
   assert.match(html, /href="\/fun\?from=cash"/);
   assert.match(cash, /post\("\/api\/web\/password-login"/);
   assert.match(cash, /post\("\/api\/web\/profile\/credentials"/);
-  assert.match(cash, /localStorage\.removeItem\(BALANCE_CACHE_KEY\)/);
+  assert.match(cash, /function removeCashCacheForAccount/);
+  assert.match(cash, /function clearAnonymousCashState/);
   assert.match(cash, /state\.wallets = \[\]/);
   assert.match(cash, /post\("\/api\/web\/wallets\/restore"/);
   assert.match(cash, /post\("\/api\/web\/wallet-funding\/create"/);
@@ -279,8 +371,8 @@ test("SlimeCash uses a separate PWA identity and a synchronized shell", () => {
   assert.equal(manifest.id, "/slimecash-app");
   assert.equal(manifest.start_url, "/cash/?src=slimecash-pwa");
   assert.equal(manifest.scope, "/cash/");
-  assert.match(html, /slimecash-build" content="30"/);
-  assert.match(sw, /slimecash-v32/);
+  assert.match(html, /slimecash-build" content="31"/);
+  assert.match(sw, /slimecash-v34/);
   assert.match(sw, /\/slimewire-funding\.js\?v=8/);
   assert.match(cash, /serviceWorker\.register\("\/cash\/sw\.js", \{ updateViaCache: "none" \}\)/);
   assert.match(sw, /key\.startsWith\("slimecash-"\) && key !== CACHE/);

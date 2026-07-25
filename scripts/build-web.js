@@ -48,6 +48,107 @@ function envList(name, fallback) {
   return items.length ? items : fallback;
 }
 
+// These are identification guards, not performance floors: legitimate future
+// modularization must be allowed to make the source blocks much smaller.
+const ACTIVE_TERMINAL_STYLE_MIN_BYTES = 10_000;
+const ACTIVE_TERMINAL_SCRIPT_MIN_BYTES = 100_000;
+
+function contentHash(source) {
+  return createHash("sha256").update(source).digest("hex").slice(0, 12);
+}
+
+function contentIntegrity(source) {
+  return `sha384-${createHash("sha384").update(source).digest("base64")}`;
+}
+
+async function extractActiveTerminalBundles(html) {
+  // index.html is the live desktop terminal. Keep the tiny redirect/body-class
+  // scripts inline because they must run before first paint, but move the large
+  // shell stylesheet and app IIFE into independently cacheable assets. Plain
+  // (non-defer/non-async) script loading at the original body position preserves
+  // the exact execution order ahead of terminal-pro.js and fun-indicators.js.
+  const stylePattern = /<style>\s*(:root\{[\s\S]*?)<\/style>/;
+  const scriptPattern = /<script>\s*("use strict";[\s\S]*?\}\)\(\);)\s*<\/script>(?=\s*<script src="\/terminal-pro\.js)/;
+  const styleMatch = html.match(stylePattern);
+  const scriptMatch = html.match(scriptPattern);
+  const styleSource = styleMatch?.[1] || "";
+  const scriptSource = scriptMatch?.[1] || "";
+  const styleBytes = Buffer.byteLength(styleSource);
+  const scriptBytes = Buffer.byteLength(scriptSource);
+
+  if (styleBytes < ACTIVE_TERMINAL_STYLE_MIN_BYTES) {
+    throw new Error(`Active terminal stylesheet was not found or is unexpectedly small (${styleBytes} bytes)`);
+  }
+  if (scriptBytes < ACTIVE_TERMINAL_SCRIPT_MIN_BYTES) {
+    throw new Error(`Active terminal script was not found or is unexpectedly small (${scriptBytes} bytes)`);
+  }
+
+  const [styleBuild, scriptBuild] = await Promise.all([
+    transform(styleSource, {
+      loader: "css",
+      minify: true,
+      target: "es2020",
+      charset: "utf8",
+      legalComments: "none"
+    }),
+    transform(scriptSource, {
+      loader: "js",
+      minify: true,
+      target: "es2020",
+      charset: "utf8",
+      legalComments: "none"
+    })
+  ]);
+  const styleOutput = Buffer.from(styleBuild.code || "", "utf8");
+  const scriptOutput = Buffer.from(`${scriptBuild.code || ""}\n;window.__terminalAssetReady&&window.__terminalAssetReady();`, "utf8");
+  if (styleOutput.length < 1_000 || scriptOutput.length < 10_000) {
+    throw new Error("Active terminal minification produced an unexpectedly small bundle");
+  }
+
+  const assetDir = path.join(distDir, "assets");
+  await fs.mkdir(assetDir, { recursive: true });
+  const styleFile = `terminal-shell.${contentHash(styleOutput)}.css`;
+  const scriptFile = `terminal-app.${contentHash(scriptOutput)}.js`;
+  await Promise.all([
+    fs.writeFile(path.join(assetDir, styleFile), styleOutput),
+    fs.writeFile(path.join(assetDir, scriptFile), scriptOutput)
+  ]);
+
+  const styleIntegrity = contentIntegrity(styleOutput);
+  const scriptIntegrity = contentIntegrity(scriptOutput);
+  const retryBootstrap = `<script data-terminal-asset-retry>
+(function(){
+  var timer=0,failed=false,key="slimewire-terminal-asset-retries";
+  window.__terminalAssetRetry=function(kind){
+    if(timer)return;failed=true;
+    var attempts=1;try{attempts=(Number(sessionStorage.getItem(key))||0)+1;sessionStorage.setItem(key,String(attempts));}catch(e){}
+    document.documentElement.setAttribute("data-terminal-updating",kind||"asset");
+    if(attempts<=30)timer=setTimeout(function(){location.reload();},Math.min(4000,500+(attempts*250)));
+    else document.title="SlimeWire update ready — refresh";
+  };
+  window.__terminalAssetReady=function(){
+    if(failed)return;try{sessionStorage.removeItem(key);}catch(e){}
+    document.documentElement.removeAttribute("data-terminal-updating");
+  };
+})();
+</script>`;
+  const styleTag = `${retryBootstrap}\n<link rel="stylesheet" href="/assets/${styleFile}" integrity="${styleIntegrity}" crossorigin="anonymous" data-terminal-shell onerror="window.__terminalAssetRetry('shell')">\n<link rel="preload" href="/assets/${scriptFile}" as="script" integrity="${scriptIntegrity}" crossorigin="anonymous" fetchpriority="high" data-terminal-preload>`;
+  const scriptTag = `<script src="/assets/${scriptFile}" integrity="${scriptIntegrity}" crossorigin="anonymous" data-terminal-entry onload="window.__terminalAssetReady()" onerror="window.__terminalAssetRetry('app')"></script>`;
+  const builtHtml = html
+    .replace(styleMatch[0], styleTag)
+    .replace(scriptMatch[0], scriptTag);
+
+  if (builtHtml === html || /<style>\s*:root\{/.test(builtHtml) || /<script>\s*"use strict";\s*\(function\(\)\{/.test(builtHtml)) {
+    throw new Error("Active terminal source extraction did not replace both inline blocks");
+  }
+
+  console.log(
+    `Bundled active terminal CSS ${(styleBytes / 1024).toFixed(0)}KB -> ${(styleOutput.length / 1024).toFixed(0)}KB; `
+    + `JS ${(scriptBytes / 1024).toFixed(0)}KB -> ${(scriptOutput.length / 1024).toFixed(0)}KB`
+  );
+  return builtHtml;
+}
+
 try {
   await fs.rm(distDir, { recursive: true, force: true });
 } catch (error) {
@@ -161,17 +262,16 @@ await fs.writeFile(
 );
 console.log(`Fingerprint Cash entry ${cashScriptFile}`);
 
-const indexPath = path.join(distDir, "index.html");
-const indexHtml = await fs.readFile(indexPath, "utf8");
-await fs.writeFile(
-  indexPath,
-  indexHtml
+for (const activeTerminalPage of ["index.html", "gg.html"]) {
+  const pagePath = path.join(distDir, activeTerminalPage);
+  const pageHtml = await fs.readFile(pagePath, "utf8");
+  const versionedPageHtml = pageHtml
     .replace(/styles\.css(?:\?v=[^"]*)?/g, `styles.css?v=${buildId}`)
     .replace(/slimewire-final-overrides\.css(?:\?v=[^"]*)?/g, `slimewire-final-overrides.css?v=${buildId}`)
     .replace(/ogre-stages\.css(?:\?v=[^"]*)?/g, `ogre-stages.css?v=${buildId}`)
-    .replace(/app\.js(?:\?v=[^"]*)?/g, `app.js?v=${buildId}`),
-  "utf8"
-);
+    .replace(/app\.js(?:\?v=[^"]*)?/g, `app.js?v=${buildId}`);
+  await fs.writeFile(pagePath, await extractActiveTerminalBundles(versionedPageHtml), "utf8");
+}
 
 try {
   const assetDir = path.join(distDir, "assets");

@@ -2114,7 +2114,7 @@
         const o=byLc[String(r.address).toLowerCase()];if(!o)continue;changed=true;
         r._dexMarketResolved=true;
         if(o.price>0)r.priceUsd=o.price;if(o.mc>0)r.marketCapUsd=o.mc;if(o.liq>0)r.liquidityUsd=o.liq;if(o.v24>0)r.volume24hUsd=o.v24;
-        if(Number.isFinite(o.m5))r.m5=o.m5;if(o.pair)r.pairAddress=o.pair;
+        if(Number.isFinite(o.m5))r.m5=o.m5;if(o.pair&&!r.pairAddress)r.pairAddress=o.pair;
         if(o.sym&&!r.symbol)r.symbol=o.sym;if(o.name&&!r.name)r.name=o.name;   // pasted-fresh RH coin: fill ticker/name so the page isn't "?"
         if(o.img&&!r.imageUrl)r.imageUrl=o.img;   // a stored SlimeWire image is already present and still wins
         if(o.tw&&!r.x)r.x=o.tw;if(o.tg&&!r.telegram)r.telegram=o.tg;if(o.web&&!r.website)r.website=o.web;
@@ -2137,7 +2137,7 @@
       if(!Object.keys(c).length&&!Object.keys(coin).length)return false;let changed=false;
       const put=(key,value,valid)=>{if(valid&&!Object.is(r[key],value)){r[key]=value;changed=true;}};
       const first=(...values)=>values.find(v=>String(v==null?"":v).trim())||"";
-      put("pairAddress",String(first(coin.pairAddress,c.pairAddress)),Boolean(first(coin.pairAddress,c.pairAddress)));
+      if(!r.pairAddress)put("pairAddress",String(first(coin.pairAddress,c.pairAddress)),Boolean(first(coin.pairAddress,c.pairAddress)));
       put("symbol",String(first(coin.symbol,c.symbol)),Boolean(first(coin.symbol,c.symbol)));put("name",String(first(coin.name,c.name)),Boolean(first(coin.name,c.name)));
       put("imageUrl",String(first(coin.imageUrl,coin.iconUrl,c.imageUrl)),Boolean(first(coin.imageUrl,coin.iconUrl,c.imageUrl)));
       put("twitterUrl",String(first(coin.twitterUrl,c.twitterUrl)),Boolean(first(coin.twitterUrl,c.twitterUrl)));
@@ -2724,8 +2724,14 @@
   // faster paint. A skeleton spinner sits behind the iframe and is removed on load (instant feel).
   // Needs the POOL address (from the feed row); fresh/deep-linked tokens use our real-candle chart
   // until the browser resolves their strongest pair and upgrades the embed.
+  function marketPoolAddress(value,token,network){
+    const pool=String(value||"").trim(),mint=String(token||"").trim(),rh=network==="robinhood";
+    const valid=rh?/^0x[0-9a-f]{40}$/i.test(pool):/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(pool);
+    const same=rh?pool.toLowerCase()===mint.toLowerCase():pool===mint;
+    return valid&&!same?pool:"";
+  }
   function solChartUrl(mint,r){
-    const pool=(r&&(r.pairAddress||r.raydiumPool))||"";
+    const pool=marketPoolAddress((r&&(r.pairAddress||r.raydiumPool))||"",mint,"solana");
     return pool
       ? "https://www.geckoterminal.com/solana/pools/"+encodeURIComponent(pool)+"?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&chart_type=price&resolution=15m"
       : "/chart-lab?ca="+encodeURIComponent(mint)+"&tf=15m&embed=1&cv=5&sym="+encodeURIComponent((r&&r.symbol)||"");
@@ -3078,7 +3084,7 @@
       const tr=((j&&j.data)||[]).slice(0,60).map(map).filter(t=>t.tx);
       if(tr.length)return tr;
     }catch(e){}
-    try{const {d}=await api("/api/web/token-trades?pool="+encodeURIComponent(pool)+"&network="+encodeURIComponent(network)+"&ca="+encodeURIComponent(token||"")+"&price="+encodeURIComponent(Number(price)||0));return (d&&d.trades)||[];}catch(e){return [];}
+    try{const {d}=await api("/api/web/token-trades?pool="+encodeURIComponent(pool)+"&network="+encodeURIComponent(network)+"&ca="+encodeURIComponent(token||"")+"&price="+encodeURIComponent(Number(price)||0));return ((d&&d.trades)||[]).map(t=>({...t,scope:(d&&d.scope)||"pool"}));}catch(e){return [];}
   }
   // Pre-DEX pump.fun coins have NO GeckoTerminal pool, so their swaps come off our PumpPortal tape.
   async function fetchPumpTrades(mint){try{const {d}=await api("/api/web/pump-trades?mint="+encodeURIComponent(mint));return (d&&d.trades)||[];}catch(e){return [];}}
@@ -3094,11 +3100,12 @@
   }
   function tapeTableHtml(tr,network,loading,msg){
     const s=tapeSummary(tr),pct=Math.round(s.pressure*100),base=network==="robinhood"?"https://robinhoodchain.blockscout.com":"https://solscan.io";
+    const scope=tr.some(t=>t.scope==="token")?" · token-wide fallback":"";
     const rows=tr.slice(0,16).map(t=>{const side=t.kind==="sell"?"sell":"buy",tx=t.tx?base+"/tx/"+encodeURIComponent(t.tx):"",maker=t.maker?base+"/address/"+encodeURIComponent(t.maker):"";return'<tr><td><b class="tapeSide '+side+'">'+side.toUpperCase()+'</b><small>'+esc(txAgo(t.ts))+'</small></td><td>'+tapeUsd(t.usd)+'</td><td>'+tapePrice(t.price)+'</td><td>'+(maker?'<a href="'+esc(maker)+'" target="_blank" rel="noopener noreferrer">'+esc(short(t.maker))+'</a>':'—')+'</td><td>'+(tx?'<a href="'+esc(tx)+'" target="_blank" rel="noopener noreferrer">↗</a>':'—')+'</td></tr>';}).join("");
-    return'<div class="tapeHead"><div><i></i><b>Live Trade Tape</b><span>'+esc(network==="robinhood"?"Robinhood":"Solana")+' · recent market swaps</span></div><em>'+(loading?'SYNCING':'LIVE')+'</em></div><div class="tapeGauges"><article><span>Direction</span><b>'+esc(s.label)+'</b><div class="tapePressure"><i style="left:'+pct+'%"></i></div><small>'+pct+'% buy pressure · '+s.count+' trades</small></article><article><span>Net flow</span><b class="'+(s.net>=0?'buy':'sell')+'">'+(s.net>=0?'+':'−')+tapeUsd(Math.abs(s.net))+'</b><small>Buys '+tapeUsd(s.bv)+' · Sells '+tapeUsd(s.sv)+'</small></article><article><span>Pace</span><b>'+(s.pace>0?s.pace.toFixed(s.pace>=10?0:1):'0')+'/min</b><small>'+s.buys+' buys · '+s.sells+' sells</small></article></div><div class="tapeTable"><table><thead><tr><th>Side / Time</th><th>USD</th><th>Price</th><th>Maker</th><th>Tx</th></tr></thead><tbody>'+(rows||'<tr><td colspan="5" class="tapeEmpty">'+esc(msg||(loading?'Loading recent swaps…':'No recent swaps in this pool yet.'))+'</td></tr>')+'</tbody></table></div>';
+    return'<div class="tapeHead"><div><i></i><b>Live Trade Tape</b><span>'+esc(network==="robinhood"?"Robinhood":"Solana")+' · recent market swaps'+esc(scope)+'</span></div><em>'+(loading?'SYNCING':'LIVE')+'</em></div><div class="tapeGauges"><article><span>Direction</span><b>'+esc(s.label)+'</b><div class="tapePressure"><i style="left:'+pct+'%"></i></div><small>'+pct+'% buy pressure · '+s.count+' trades</small></article><article><span>Net flow</span><b class="'+(s.net>=0?'buy':'sell')+'">'+(s.net>=0?'+':'−')+tapeUsd(Math.abs(s.net))+'</b><small>Buys '+tapeUsd(s.bv)+' · Sells '+tapeUsd(s.sv)+'</small></article><article><span>Pace</span><b>'+(s.pace>0?s.pace.toFixed(s.pace>=10?0:1):'0')+'/min</b><small>'+s.buys+' buys · '+s.sells+' sells</small></article></div><div class="tapeTable"><table><thead><tr><th>Side / Time</th><th>USD</th><th>Price</th><th>Maker</th><th>Tx</th></tr></thead><tbody>'+(rows||'<tr><td colspan="5" class="tapeEmpty">'+esc(msg||(loading?'Loading recent swaps…':'No recent swaps in this pool yet.'))+'</td></tr>')+'</tbody></table></div>';
   }
   async function loadInlineTape(mint,r,network,targetId,opts){
-    opts=opts||{};network=network==="robinhood"?"robinhood":"solana";const pool=(r&&(r.pairAddress||r.raydiumPool))||"",key=network+":"+(pool||mint),target=$("#"+targetId);
+    opts=opts||{};network=network==="robinhood"?"robinhood":"solana";const pool=marketPoolAddress((r&&(r.pairAddress||r.raydiumPool))||"",mint,network),key=network+":"+(pool||mint),target=$("#"+targetId);
     if(!target)return;if(inlineTapePollT){clearTimeout(inlineTapePollT);inlineTapePollT=null;}inlineTapeKey=key;
     const old=target._trades||[];if(!old.length)target.innerHTML=tapeTableHtml([],network,true,pool?"":"Resolving the strongest pool…");
     const tr=pool?await fetchPoolTrades(pool,network,mint,r&&r.priceUsd):(network==="solana"?await fetchPumpTrades(mint):[]);
@@ -3122,7 +3129,7 @@
   async function loadRhTxPane(address,r,opts){
     opts=opts||{};const pane=$("#v-rhtrade [data-rh-pane=\"tx\"]");if(!pane)return;
     if(rhTxPollT){clearTimeout(rhTxPollT);rhTxPollT=null;}
-    const pool=String((r&&(r.pairAddress||r.raydiumPool))||""),key="robinhood:"+(pool||address),haveTable=!!pane.querySelector("table");
+    const pool=marketPoolAddress((r&&(r.pairAddress||r.raydiumPool))||"",address,"robinhood"),key="robinhood:"+(pool||address),haveTable=!!pane.querySelector("table");
     if(!opts.silent&&!haveTable)pane.innerHTML='<div class="loading" style="padding:24px"><span class="spin"></span></div>';
     const incoming=pool?await fetchPoolTrades(pool,"robinhood",address,r&&r.priceUsd):[];
     if(state.route!=="rhtrade"||state.rhMint!==address||state.rhTradeTab!=="tx")return;
@@ -3148,7 +3155,7 @@
     opts=opts||{};
     const pane=$('[data-pane="tx"]');if(!pane)return;
     if(state.txPollT){clearTimeout(state.txPollT);state.txPollT=null;}
-    const pool=(r&&(r.pairAddress||r.raydiumPool))||"";
+    const pool=marketPoolAddress((r&&(r.pairAddress||r.raydiumPool))||"",mint,"solana");
     const haveTable=!!pane.querySelector("table");
     if(!opts.retry&&!opts.silent&&!haveTable)pane.innerHTML='<div class="loading" style="padding:24px"><span class="spin"></span></div>';
     // Graduated/migrated coins → GeckoTerminal pool swaps; bonding-curve coins (no pool) → pump tape.
@@ -3314,8 +3321,8 @@
     try{
       const identityPromise=api("/api/web/token-search?q="+encodeURIComponent(mint)).catch(()=>({}));
       const j=await fetch("https://api.dexscreener.com/latest/dex/tokens/"+encodeURIComponent(mint)).then(x=>x.ok?x.json():null).catch(()=>null);
-      const pairs=(j&&j.pairs)||[];let best=null,bestLiq=-1;
-      for(const p of pairs){if(!p||!p.baseToken||p.baseToken.address!==mint)continue;const liq=Number((p.liquidity&&p.liquidity.usd)||0);if(liq>bestLiq){bestLiq=liq;best=p;}}
+      const pairs=(j&&j.pairs)||[],chartPane=$('[data-pane="chart"]'),pinnedPool=String((state.tradeRow&&state.tradeRow.pairAddress)||(chartPane&&chartPane.dataset.poolAddress)||"").trim();let best=null,bestLiq=-1;
+      for(const p of pairs){if(!p||!p.baseToken||p.baseToken.address!==mint)continue;if(pinnedPool&&String(p.pairAddress||"")===pinnedPool){best=p;break;}const liq=Number((p.liquidity&&p.liquidity.usd)||0);if(liq>bestLiq){bestLiq=liq;best=p;}}
       if(best&&state.route==="trade"&&state.mint===mint){
         const r=state.tradeRow||{tokenMint:mint};const v=best.volume||{},pc=best.priceChange||{},info=best.info||{};
         if(best.baseToken&&best.baseToken.symbol&&!r.symbol)r.symbol=best.baseToken.symbol;
@@ -3330,15 +3337,16 @@
         if(info.websites&&info.websites[0]&&info.websites[0].url&&!r.websiteUrl)r.websiteUrl=info.websites[0].url;
         const img=info.imageUrl||info.image||(best.baseToken&&best.baseToken.imageUrl)||"";if(img&&!r.imageUrl)r.imageUrl=img;  // always fill the coin pfp
         const resolvedPool=String(best.pairAddress||"").trim();
-        if(resolvedPool)r.pairAddress=resolvedPool;
+        if(resolvedPool&&!r.pairAddress)r.pairAddress=resolvedPool;
+        const chartPool=String(r.pairAddress||pinnedPool||resolvedPool).trim();
         state.tradeRow=r;rememberTradeRecent(r);const th=$("#thead");if(th)th.innerHTML=theadHtml(r);fillPerf(r);
         const subTitle=$("#subbar h1"),wantedTitle=String(r.symbol||short(mint));if(subTitle&&subTitle.textContent!==wantedTitle)subbarTrade(r);
         // DexScreener's embed needs a PAIR address, not a token mint. Until the pair resolves we show
         // SlimeWire's own real-candle chart; once this browser-side market read supplies the pair,
         // upgrade to the full Gecko chart. Never interrupt a deliberately selected sub-minute view.
-        if(resolvedPool){
+        if(chartPool){
           const cw=$('[data-pane="chart"]'),tf=(cw&&cw.closest(".trade")&&cw.closest(".trade").dataset.proTf)||localStorage.getItem("ggSolChartTf")||"15m",micro=["1s","15s","30s"].includes(tf);
-          if(cw){const trade=cw.closest(".trade"),slime=trade&&trade.dataset.proChartMode==="slime";cw.dataset.poolAddress=resolvedPool;cw.dataset.proStandardSrc=solChartUrl(mint,r);const frame=cw.querySelector("iframe");if(!micro&&!slime&&frame&&!/geckoterminal\.com/i.test(frame.src))cw.innerHTML=chartIframe(mint,r);}
+          if(cw){const trade=cw.closest(".trade"),slime=trade&&trade.dataset.proChartMode==="slime";cw.dataset.poolAddress=chartPool;cw.dataset.proPoolPinned="1";cw.dataset.proStandardSrc=solChartUrl(mint,r);const frame=cw.querySelector("iframe");if(!micro&&!slime&&frame&&!/geckoterminal\.com/i.test(frame.src))cw.innerHTML=chartIframe(mint,r);}
         }
         // Capture the LIVE price (SOL per token) so the PnL bar can mark-to-market instantly. Use the
         // SOL-quoted native price when the pair quotes in SOL; else convert USD via a live SOL/USD we
@@ -3786,12 +3794,30 @@
     }
     return r;
   }
+  function openTradeReceipt(trade,label){
+    if(!trade)return;
+    const sig=String(trade.signature||"").trim();
+    const side=String(trade.type||label||"trade").toLowerCase();
+    const amount=side==="sell"
+      ? (trade.netSol!=null?String(trade.netSol)+" SOL received":"Sale sent")
+      : (trade.spentSol!=null?String(trade.spentSol)+" SOL spent":"Buy sent");
+    const wallet=trade.walletLabel||short(trade.walletPublicKey||"");
+    const auto=trade.autoExitArmed
+      ? '<div class="lcnote" style="margin-top:10px"><b>Automated exit armed</b><br>'+esc((trade.autoExitPlan&&trade.autoExitPlan.shortMessage)||"Your server-side exit plan is watching this position.")+'</div>'
+      : (trade.autoExitError?'<div class="warn" style="margin-top:10px">Trade landed, but the exit plan needs attention: '+esc(trade.autoExitError)+'</div>':'');
+    const settlement=trade.solCashoutError?'<div class="warn" style="margin-top:10px"><b>Sale landed; SOL return needs attention.</b><br>'+esc(trade.solCashoutError)+' The proceeds remain as ETH in this same wallet. Open Wallet to retry the ETH → SOL conversion—do not submit the token sale again.</div>':'';
+    const persistence=trade.recordError?'<div class="warn" style="margin-top:10px"><b>Trade landed; history update is delayed.</b><br>Your signature is the receipt. Activity will retry without resubmitting the trade.</div>':'';
+    const explorer=String(trade.explorerUrl||trade.explorerTx||(sig?"https://solscan.io/tx/"+encodeURIComponent(sig):""));
+    openModal('<h3>✓ '+esc((label||side)+" submitted")+'</h3><p class="sub mut" style="font-size:12px">One idempotent order was received. Portfolio balances refresh automatically while the chain and indexers settle.</p><div class="feebox"><div class="line"><span>Status</span><b>Submitted</b></div><div class="line"><span>Wallet</span><b>'+esc(wallet||"Managed wallet")+'</b></div><div class="line"><span>Amount</span><b>'+esc(amount)+'</b></div>'+(sig?'<div class="line"><span>Signature</span><button class="wbtn ghost" id="tradeReceiptCopy" type="button">'+esc(short(sig))+' · Copy</button></div>':'')+'</div>'+auto+settlement+persistence+'<div class="actions" style="margin-top:12px">'+(explorer?'<a class="wbtn" href="'+esc(explorer)+'" target="_blank" rel="noopener">View on explorer</a>':'')+'<button class="wbtn ghost" id="tradeReceiptActivity" type="button">View activity</button></div>');
+    const copyBtn=$("#tradeReceiptCopy");if(copyBtn)copyBtn.onclick=()=>copy(sig,"Signature copied");
+    const activity=$("#tradeReceiptActivity");if(activity)activity.onclick=()=>{state.portfolioTab="cards";closeModal();go("portfolio");};
+  }
   function handleTradeResult(ok,status,d,label){
+    if(ok&&d&&d.ok&&d.trade){toast(label+" submitted");openTradeReceipt(d.trade,label);afterTradeRefresh();return;}
     // ONLY 401 is a real session problem — and even then do NOT wipe the token (that orphaned a just-
     // restored wallet → "buy says reconnect"); route to Wallet where a dead token downgrades cleanly.
     // A 403 is a permission/limit error: show the server's actual message, never "session expired".
     if(status===401){toast("Couldn't authorize — open Wallet and reconnect (Log in or Restore).",true);go("wallet");return;}
-    if(ok&&d&&d.ok&&d.trade){toast(label+" submitted — "+(d.trade.message||"done"));afterTradeRefresh();return;}
     // Show the REAL reason (d.message) — not the generic code (d.error="request_error"). This is why
     // every failure read "request error" instead of the actual cause (no route, low SOL, etc.).
     toast((d&&(d.message||d.error))||(label+" failed"+(status?" ("+status+")":" (no response)")),true);
@@ -4385,8 +4411,10 @@
       }else body.percent=String(amt);
       const {ok,d}=await jpost("/api/web/rh/trade",body);
       if(ok&&d&&d.ok){
-        toast((swapDir==="buy"?"Bought ":"Sold → ")+(d.outFormatted?Number(d.outFormatted).toLocaleString(undefined,{maximumFractionDigits:6}):"")+" "+(d.outSymbol||swapTok.symbol||"")+" ✅");
-        if(swapDir==="buy"&&((Number(tp)>0)||(Number(sl)>0))){await jpost("/api/web/rh/guards",{walletIndex:String(wi),tokenAddress:swapTok.mint,symbol:swapTok.symbol||"",takeProfitPct:tp,stopLossPct:sl,sellPercent:"100"}).catch(()=>{});toast("🎯 TP/SL armed — the site is watching it");}
+        let autoExitArmed=false,autoExitError="";
+        if(swapDir==="buy"&&((Number(tp)>0)||(Number(sl)>0))){const guard=await jpost("/api/web/rh/guards",{walletIndex:String(wi),tokenAddress:swapTok.mint,symbol:swapTok.symbol||"",takeProfitPct:tp,stopLossPct:sl,sellPercent:"100"}).catch(()=>null);autoExitArmed=Boolean(guard&&guard.ok&&guard.d&&guard.d.ok);if(!autoExitArmed)autoExitError=(guard&&guard.d&&(guard.d.message||guard.d.error))||"The TP/SL guard could not be armed.";}
+        const rhWallet=state.wallets.find(w=>Number(w.index)===Number(wi));
+        openTradeReceipt({type:swapDir,signature:(d.txHashes||[]).at(-1)||"",explorerUrl:d.explorerTx||"",walletLabel:(rhWallet&&rhWallet.label)||("Wallet "+wi),walletPublicKey:(rhWallet&&rhWallet.publicKey)||"",spentSol:swapDir==="buy"?((d.solFunding&&d.solFunding.amountSol)||amt):null,netSol:swapDir==="sell"&&d.solCashout?d.solCashout.outSol:null,solCashoutError:d.solCashoutError||"",recordError:d.recordError||"",autoExitArmed,autoExitError},swapDir==="buy"?"Buy":"Sell");
       } else toast((d&&(d.message||d.error))||"Trade failed",true);
       done();refreshWallets();
     } else {

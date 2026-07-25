@@ -1995,6 +1995,7 @@ test("Robinhood buy cards keep complete market rows during intermittent scan gap
 });
 
 test("coin charts stay trader-focused while Robinhood liquidity remains creator-only", () => {
+  assert.doesNotMatch(serverSource, /api\.geckoterminal\.com/, "GeckoTerminal resolution must stay browser-side");
   for (const src of [ggSource, indexSource]) {
     assert.doesNotMatch(functionBody(src, "renderTrade"), /blinkLinksHtml/);
     const rhChart = functionBody(src, "renderRhTrade");
@@ -2010,7 +2011,10 @@ test("coin charts stay trader-focused while Robinhood liquidity remains creator-
   }
   assert.match(serverSource, /pathname === "\/api\/web\/token-trades"/);
   assert.match(serverSource, /requestUrl\.searchParams\.get\("network"\)/);
-  assert.match(functionBody(serverSource, "fetchGeckoPoolTrades"), /networks\/\$\{network\}\/pools/);
+  const poolTrades = functionBody(serverSource, "fetchGeckoPoolTrades");
+  assert.match(poolTrades, /fetchPoolSwaps/);
+  assert.match(poolTrades, /swap-api\.pump\.fun/);
+  assert.doesNotMatch(poolTrades, /api\.geckoterminal\.com/);
 });
 
 test("Raid bot: clean card + overall progress bar + goal-to-go + views + Refresh", () => {
@@ -3949,7 +3953,9 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "gatherRhScanUncollapsed"), /holders/);
   assert.match(functionBody(serverSource, "gatherRhScanUncollapsed"), /aggregateDexPairActivity\(a, pairs\)/);
   assert.match(functionBody(serverSource, "gatherRhScanUncollapsed"), /rhTokenVolumeFallback/);
-  assert.match(functionBody(serverSource, "rhTokenVolumeFallback"), /ohlcv\/hour/);
+  assert.match(functionBody(serverSource, "rhTokenVolumeFallback"), /fetchPoolSwaps/);
+  assert.match(functionBody(serverSource, "rhTokenVolumeFallback"), /lookbackSeconds: 86_400/);
+  assert.doesNotMatch(functionBody(serverSource, "rhTokenVolumeFallback"), /geckoterminal/i);
   assert.match(functionBody(serverSource, "gatherSlimeScan"), /webOhlcvPayload\(mint, "1h", \{ poolAddress \}\)/);
   assert.match(functionBody(serverSource, "buildXRhReply"), /rhVolumeInfo\(info\)/);
   assert.match(functionBody(serverSource, "buildXRhReply"), /holderLabel: holdersLabel/);
@@ -4059,9 +4065,9 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(rhTicker, /tickerMarketLeadership/);
   assert.match(rhTicker, /tickerMarketRowStrength/);                 // one real pair supplies MC+volume; no cross-pair Frankenstein maxima
   assert.match(rhTicker, /candidate\.contractProof \|\| candidate\.dexPair \|\| await scanFastTimeout\(isRhContract/); // exact chain index/live pair proves token
-  assert.match(rhTicker, /dexscreener\|geckoterminal/);
-  assert.match(rhTicker, /api\.geckoterminal\.com\/api\/v2\/search\/pools/);
-  assert.match(rhTicker, /const \[dexData, geckoData, blockscoutRows\] = await Promise\.all/);
+  assert.match(rhTicker, /dexscreener/);
+  assert.doesNotMatch(rhTicker, /api\.geckoterminal\.com/);
+  assert.match(rhTicker, /const \[dexData, blockscoutRows\] = await Promise\.all/);
   assert.match(rhTicker, /providerTimeoutMs\) \|\| 1_800/);
   assert.match(rhTicker, /rhTickerBlockscoutSearch/);                  // exact chain-native ticker lookup survives DEX index gaps
   assert.match(rhTicker, /rhTickerSymbolIndex/);                       // positive identity remains hot across provider blinks
@@ -4080,7 +4086,7 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   const directRh = functionBody(serverSource, "rhTickerDirectMarket");
   assert.match(directRh, /latest\/dex\/tokens/);
   assert.match(directRh, /tokens\/v1\/robinhood/);
-  assert.match(directRh, /networks\/robinhood\/tokens/);
+  assert.doesNotMatch(directRh, /geckoterminal/i);
   assert.match(directRh, /tickerMarketRowStrength/);
   const batchRh = functionBody(serverSource, "rhTickerBatchMarkets");
   assert.match(batchRh, /tokens\/v1\/robinhood/);
@@ -4348,7 +4354,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(rhPairTarget, /quote\.address/);                       // requested quote-side coins never inherit the base coin identity
   const rhGather = functionBody(serverSource, "gatherRhScanUncollapsed");
   assert.match(rhGather, /pairTarget\.isBase \? pair\?\.priceUsd : null/);
-  assert.match(rhGather, /api\.geckoterminal\.com\/api\/v2\/networks\/robinhood\/tokens/); // independent market fallback prevents an all-n/a card when Dex/Blockscout blink
+  assert.doesNotMatch(rhGather, /api\.geckoterminal\.com/);          // Render must never depend on Gecko's shared-IP route
+  assert.match(rhGather, /api\.dexscreener\.com\/tokens\/v1\/robinhood/); // exact-address indexed market fallback
   assert.match(rhGather, /const noxaPromise/);                         // NOXA's slower exact factory read starts concurrently, not after the fast providers already timed out
   assert.match(rhGather, /rhScanSafety\(a\)/);                       // the longer safety pass is shared instead of duplicated across retries
   assert.match(functionBody(serverSource, "rhScanSafety"), /rhSafetyInFlight/);

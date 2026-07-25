@@ -6,14 +6,21 @@
 
   const TOKEN_KEY = "ogreWebToken";
   const COOKIE_SESSION = "__slimewire_shared_cookie__";
-  const ACTIVITY_KEY = "slimecashActivity";
+  const LEGACY_ACTIVITY_KEY = "slimecashActivity";
   const PENDING_FUND_KEY = "slimecashPendingFund";
   const CONTACTS_KEY = "slimecashContacts";
   const SECURITY_KEY = "slimecashSecurity";
   const NOTIFICATIONS_KEY = "slimecashNotifications";
   const REQUESTS_KEY = "slimecashRequests";
   const ACTIVE_WALLET_KEY = "slimecashActiveWalletIndex";
-  const BALANCE_CACHE_KEY = "slimecashBalanceSnapshotV2";
+  const LEGACY_BALANCE_CACHE_KEY = "slimecashBalanceSnapshotV2";
+  const LEGACY_HISTORY_CACHE_KEY = "slimecashHistorySnapshotV1";
+  const BALANCE_CACHE_PREFIX = "slimecashBalanceSnapshotV3:";
+  const HISTORY_CACHE_PREFIX = "slimecashHistorySnapshotV2:";
+  const ACTIVITY_CACHE_PREFIX = "slimecashActivityV2:";
+  const LAST_CONFIRMED_ACCOUNT_KEY = "slimecashLastConfirmedAccountV1";
+  const BALANCE_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+  const HISTORY_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
   const API_BASE = (window.OGRE_PORTAL_CONFIG && window.OGRE_PORTAL_CONFIG.apiBase)
     || (/^(?:www\.)?slimewire\.org$/i.test(location.hostname) ? "https://app.slimewire.org" : "");
   const WSOL_MINT = "So11111111111111111111111111111111111111112";
@@ -23,6 +30,7 @@
   const state = {
     token: localStorage.getItem(TOKEN_KEY) || "",
     account: null,
+    confirmedAccountRef: "",
     wallet: null,          // { index, publicKey, label }
     wallets: [],
     lamports: null,
@@ -58,8 +66,24 @@
     deferredInstall: null,
     positionsLoading: false,
     balanceRefreshing: false,
-    balanceUpdatedAt: ""
+    balanceRefreshPromise: null,
+    balanceUpdatedAt: "",
+    balanceKnown: false,
+    balanceSource: "",
+    balanceError: "",
+    sessionChecking: false,
+    sessionError: "",
+    walletSyncError: "",
+    activityRefreshing: false,
+    activityPromise: null,
+    activityUpdatedAt: "",
+    activitySource: "",
+    activityError: ""
   };
+
+  const inFlightReads = new Map();
+  let sessionEpoch = 0;
+  let cookieIdentityPromise = null;
 
   const $ = (id) => document.getElementById(id);
 
@@ -214,60 +238,213 @@
   })();
 
   /* ---------------- api ---------------- */
-  async function api(method, path, body) {
+  async function api(method, path, body, options = {}) {
     const execute = async (cookieOnly = false) => {
       const headers = { "Content-Type": "application/json" };
       if (state.token && state.token !== COOKIE_SESSION && !cookieOnly) headers.Authorization = `Bearer ${state.token}`;
       try {
         const controller = new AbortController();
         const moneyTimeout = /\/(?:wallet-funding\/execute|cash\/(?:send|convert)|rh\/bridge-to-sol)$/.test(path) ? 120_000 : 35_000;
-        const timer = setTimeout(() => controller.abort(), method === "GET" ? 12_000 : moneyTimeout);
+        const timeoutMs = Math.max(1_000, Number(options.timeoutMs || (method === "GET" ? 9_000 : moneyTimeout)));
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
         const response = await fetch(`${API_BASE}${path}`, { method, credentials: "include", headers, body: body ? JSON.stringify(body) : undefined, signal: controller.signal }).finally(() => clearTimeout(timer));
         const isJson = /application\/json/i.test(response.headers.get("content-type") || "");
         if (!isJson) return { ok: false, status: response.status, data: { error: "SlimeCash could not reach the account service. Try again." } };
         const data = await response.json().catch(() => ({}));
         return { ok: response.ok && data.ok !== false, status: response.status, data };
-      } catch {
-        return { ok: false, status: 0, data: { error: "Network error. Check your connection." } };
+      } catch (error) {
+        const timedOut = error?.name === "AbortError";
+        return { ok: false, status: 0, data: { error: timedOut ? "The account service took too long. Try again." : "Network error. Check your connection." } };
       }
     };
     let result = await execute();
-    if ([401, 403].includes(result.status) && state.token && state.token !== COOKIE_SESSION) {
-      result = await execute(true);
-      if (result.ok) setToken(COOKIE_SESSION);
+    // Verify the cookie owner before replaying anything, especially a send,
+    // conversion, or trade. A 403 is a real permission response and is never a
+    // reason to run the operation again under another account.
+    if (result.status === 401 && state.token && state.token !== COOKIE_SESSION) {
+      const identity = await verifyCookieAccountIdentity();
+      if (identity.ok && identity.user) {
+        setToken(COOKIE_SESSION, { preserveLocalState: true });
+        const confirmation = confirmCashAccountIdentity(identity.user);
+        if (confirmation.mismatch) hydrateConfirmedCashSnapshots();
+        if (confirmation.mismatch && path !== "/api/web/me") {
+          result = { ok: false, status: 409, data: { error: "Account changed. Refreshing the correct wallet data now." }, accountChanged: true };
+        } else if (path === "/api/web/me") {
+          result = { ok: true, status: 200, data: { ok: true, user: identity.user }, usedCookieSession: true, accountChanged: confirmation.mismatch };
+        } else {
+          const cookieResult = await execute(true);
+          result = { ...cookieResult, usedCookieSession: true, accountChanged: false };
+        }
+      }
     }
     return result;
   }
-  const get = (path) => api("GET", path);
+  const get = (path, options = {}) => {
+    if (options.dedupe === false) return api("GET", path, undefined, options);
+    const authMode = state.token === COOKIE_SESSION ? "cookie" : state.token ? "token" : "guest";
+    const key = `${sessionEpoch}:${authMode}:${path}`;
+    if (inFlightReads.has(key)) return inFlightReads.get(key);
+    const request = api("GET", path, undefined, options).finally(() => {
+      if (inFlightReads.get(key) === request) inFlightReads.delete(key);
+    });
+    inFlightReads.set(key, request);
+    return request;
+  };
   const post = (path, body) => api("POST", path, body || {});
 
-  function setToken(token) {
+  function accountRefFor(user = state.account) {
+    return String(user?.id || user?.userId || "").trim();
+  }
+
+  function scopedCashStorageKey(prefix, accountRef = state.confirmedAccountRef) {
+    const ref = String(accountRef || "").trim();
+    return ref ? `${prefix}${encodeURIComponent(ref)}` : "";
+  }
+
+  function removeCashCacheForAccount(accountRef) {
+    for (const prefix of [BALANCE_CACHE_PREFIX, HISTORY_CACHE_PREFIX, ACTIVITY_CACHE_PREFIX]) {
+      const key = scopedCashStorageKey(prefix, accountRef);
+      if (key) localStorage.removeItem(key);
+    }
+  }
+
+  function removeLegacyCashCaches() {
+    localStorage.removeItem(LEGACY_BALANCE_CACHE_KEY);
+    localStorage.removeItem(LEGACY_HISTORY_CACHE_KEY);
+    localStorage.removeItem(LEGACY_ACTIVITY_KEY);
+  }
+
+  function clearCashSnapshotState() {
+    state.account = null;
+    state.confirmedAccountRef = "";
+    state.wallet = null;
+    state.wallets = [];
+    state.lamports = null;
+    state.usdcRaw = null;
+    state.usdc = 0;
+    state.rhEth = null;
+    state.rhEthUsd = 0;
+    state.rhAddress = "";
+    state.rhWalletRows = [];
+    state.rhToolWalletIndex = null;
+    state.tokens = [];
+    state.handle = "";
+    state.displayHandle = "";
+    state.referralLink = "";
+    state.referralInvites = 0;
+    state.resolved = null;
+    state.selectedReceipt = null;
+    state.cashSecurity = null;
+    state.pendingSendAttemptId = "";
+    state.pendingRequestId = "";
+    state.balanceKnown = false;
+    state.balanceUpdatedAt = "";
+    state.balanceSource = "";
+    state.balanceError = "";
+    state.activity = [];
+    state.activityUpdatedAt = "";
+    state.activitySource = "";
+    state.activityError = "";
+    state.walletSyncError = "";
+    const positions = $("cashPositions");
+    if (positions) positions.innerHTML = '<div class="activity-empty">Sign in to see coin positions.</div>';
+  }
+
+  function confirmCashAccountIdentity(user) {
+    const nextRef = accountRefFor(user);
+    if (!nextRef) return { ok: false, mismatch: false, accountRef: "" };
+    const rememberedRef = String(localStorage.getItem(LAST_CONFIRMED_ACCOUNT_KEY) || "");
+    const previousRef = state.confirmedAccountRef || rememberedRef;
+    const mismatch = Boolean(previousRef && previousRef !== nextRef);
+    if (mismatch) {
+      sessionEpoch += 1;
+      inFlightReads.clear();
+      removeCashCacheForAccount(previousRef);
+      localStorage.removeItem(PENDING_FUND_KEY);
+      clearCashSnapshotState();
+      renderProfile();
+      renderBalance();
+      renderActivity();
+      renderCashWallets();
+    }
+    state.account = user;
+    state.confirmedAccountRef = nextRef;
+    localStorage.setItem(LAST_CONFIRMED_ACCOUNT_KEY, nextRef);
+    removeLegacyCashCaches();
+    return { ok: true, mismatch, accountRef: nextRef };
+  }
+
+  function clearAnonymousCashState() {
+    const previousRef = state.confirmedAccountRef || String(localStorage.getItem(LAST_CONFIRMED_ACCOUNT_KEY) || "");
+    if (previousRef) removeCashCacheForAccount(previousRef);
+    localStorage.removeItem(LAST_CONFIRMED_ACCOUNT_KEY);
+    localStorage.removeItem(PENDING_FUND_KEY);
+    removeLegacyCashCaches();
+    clearCashSnapshotState();
+  }
+
+  async function verifyCookieAccountIdentity() {
+    if (cookieIdentityPromise) return cookieIdentityPromise;
+    cookieIdentityPromise = (async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6_000);
+      try {
+        const response = await fetch(`${API_BASE}/api/web/me`, {
+          method: "GET",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal
+        });
+        const isJson = /application\/json/i.test(response.headers.get("content-type") || "");
+        const data = isJson ? await response.json().catch(() => ({})) : {};
+        return { ok: response.ok && Boolean(data.user), status: response.status, user: data.user || null };
+      } catch {
+        return { ok: false, status: 0, user: null };
+      } finally {
+        clearTimeout(timer);
+      }
+    })().finally(() => { cookieIdentityPromise = null; });
+    return cookieIdentityPromise;
+  }
+
+  function setToken(token, options = {}) {
     const next = token || "";
     if (next !== state.token) {
-      localStorage.removeItem(BALANCE_CACHE_KEY);
-      localStorage.removeItem(ACTIVE_WALLET_KEY);
-      state.account = null;
-      state.wallet = null;
-      state.wallets = [];
-      state.lamports = null;
-      state.usdcRaw = null;
-      state.usdc = 0;
-      state.rhEth = null;
-      state.rhAddress = "";
-      state.rhWalletRows = [];
-      state.tokens = [];
+      sessionEpoch += 1;
+      inFlightReads.clear();
+      if (!options.preserveLocalState) {
+        localStorage.removeItem(ACTIVE_WALLET_KEY);
+        clearAnonymousCashState();
+      }
     }
     state.token = next;
     if (next && next !== COOKIE_SESSION) localStorage.setItem(TOKEN_KEY, next); else localStorage.removeItem(TOKEN_KEY);
   }
 
   async function restoreSharedSession() {
-    if (state.token) return false;
-    const result = await api("GET", "/api/web/me");
-    if (!result.ok || !result.data?.user) return false;
-    setToken(COOKIE_SESSION);
-    state.account = result.data.user;
-    return true;
+    const restoreEpoch = sessionEpoch;
+    const result = await get("/api/web/me", { timeoutMs: 6_000 });
+    if (sessionEpoch !== restoreEpoch && !result.usedCookieSession) {
+      if (state.confirmedAccountRef && state.account) {
+        return { ok: true, source: "newer-session", user: state.account, accountRef: state.confirmedAccountRef, accountChanged: true };
+      }
+      return { ok: false, retryable: true, superseded: true, error: "A newer account session is still being confirmed." };
+    }
+    if (!result.ok || !result.data?.user) {
+      const unauthenticated = [401, 403].includes(result.status);
+      if (unauthenticated) setToken("");
+      return {
+        ok: false,
+        unauthenticated,
+        retryable: !unauthenticated,
+        error: result.data?.error || "Could not restore the shared SlimeWire session."
+      };
+    }
+    if (!state.token || result.usedCookieSession) setToken(COOKIE_SESSION, { preserveLocalState: true });
+    const confirmation = confirmCashAccountIdentity(result.data.user);
+    if (!confirmation.ok) return { ok: false, retryable: true, error: "The account identity could not be confirmed." };
+    state.sessionError = "";
+    return { ok: true, source: state.token === COOKIE_SESSION ? "shared-cookie" : "saved-token", user: state.account, accountRef: confirmation.accountRef, accountChanged: Boolean(result.accountChanged || confirmation.mismatch) };
   }
 
   function downloadText(filename, text) {
@@ -424,10 +601,35 @@
 
   async function loadAccount() {
     if (!state.token) { state.account = null; renderProfile(); return null; }
-    const result = await get("/api/web/me");
-    if (result.status === 401) { setToken(""); state.account = null; return null; }
-    if (result.ok) state.account = result.data.user || result.data.me || null;
+    const accountRequestEpoch = sessionEpoch;
+    const result = await get("/api/web/me", { timeoutMs: 6_000 });
+    if (sessionEpoch !== accountRequestEpoch && !result.usedCookieSession) return null;
+    if ([401, 403].includes(result.status)) {
+      setToken("");
+      state.account = null;
+      state.sessionError = "";
+      renderProfile();
+      renderBalance();
+      renderActivity();
+      renderCashSyncStatus();
+      return null;
+    }
+    if (result.ok) {
+      const user = result.data.user || result.data.me || null;
+      if (result.usedCookieSession) setToken(COOKIE_SESSION, { preserveLocalState: true });
+      const confirmation = confirmCashAccountIdentity(user);
+      if (!confirmation.ok) {
+        state.sessionError = "The account identity could not be confirmed.";
+        renderCashSyncStatus();
+        return null;
+      }
+      if (confirmation.mismatch) hydrateConfirmedCashSnapshots();
+      state.sessionError = "";
+    } else {
+      state.sessionError = result.data?.error || "Account sync is temporarily unavailable.";
+    }
     renderProfile();
+    renderCashSyncStatus();
     return state.account;
   }
 
@@ -463,7 +665,7 @@
       return;
     }
     if (result.data.token) setToken(result.data.token);
-    state.account = result.data.user || state.account;
+    if (result.data.user) confirmCashAccountIdentity(result.data.user);
     await loadAccount();
     await ensureWallet({ create: false });
     const backedUp = await backupCashAccount({ quiet: true });
@@ -490,31 +692,62 @@
       return;
     }
     setToken(result.data.token);
-    state.account = result.data.user || null;
+    if (result.data.user) confirmCashAccountIdentity(result.data.user);
     localStorage.removeItem(ACTIVE_WALLET_KEY);
     const balanceRefresh = refreshBalance({ silent: true });
     await Promise.all([loadAccount(), ensureWallet({ create: false })]);
     closeSheet("onboard");
     refreshProfile();
-    void balanceRefresh.catch(() => {});
+    void Promise.resolve(balanceRefresh).catch(() => {});
     loadCashHistory();
     toast(`Welcome back${state.account?.username ? `, @${state.account.username}` : ""}`);
   }
 
   async function ensureAccount() {
-    if (state.token && (state.account || await loadAccount())) return true;
+    if (state.token && state.confirmedAccountRef && state.account) return true;
+    if (state.token && await loadAccount()) return true;
+    if (!state.token) {
+      state.sessionChecking = true;
+      renderCashSyncStatus();
+      const restored = await restoreSharedSession();
+      state.sessionChecking = false;
+      if (restored.ok) {
+        renderProfile();
+        renderCashSyncStatus();
+        return true;
+      }
+      if (restored.retryable) {
+        state.sessionError = restored.error;
+        renderCashSyncStatus();
+        toast("Account sync is delayed. Your saved view is still available; tap Retry.", true);
+        return false;
+      }
+    }
     showOnboard();
     return false;
   }
 
   async function ensureWallet({ create = false, label = "SlimeCash" } = {}) {
-    if (!state.token) return null;
-    let result = await get("/api/web/wallets");
-    if (result.status === 401) { setToken(""); return null; }
-    if (!result.ok) return null;
+    const walletAccountRef = String(state.confirmedAccountRef || "");
+    if (!state.token || !walletAccountRef) return null;
+    let result = await get("/api/web/wallets", { timeoutMs: 8_000 });
+    if (state.confirmedAccountRef !== walletAccountRef) return null;
+    if ([401, 403].includes(result.status)) {
+      setToken("");
+      renderProfile();
+      renderBalance();
+      showOnboard();
+      return null;
+    }
+    if (!result.ok) {
+      state.walletSyncError = result.data?.error || "Wallets could not sync yet.";
+      return state.wallet;
+    }
+    state.walletSyncError = "";
     let rows = (result.data.wallets || []).filter((row) => !row.volumeBot && !row.ephemeral && !row.sessionWallet);
     if (!rows.length && create) {
       const created = await post("/api/web/wallets/create", { label, count: 1 });
+      if (state.confirmedAccountRef !== walletAccountRef) return null;
       if (!created.ok) { toast(created.data.error || "Could not create a wallet.", true); return null; }
       downloadWalletFiles(created.data.downloads);
       // The create response already has the new wallet. Paint immediately
@@ -522,6 +755,7 @@
       rows = (created.data.wallets || []).filter((row) => !row.volumeBot && !row.ephemeral && !row.sessionWallet);
       if (!rows.length) {
         result = await get("/api/web/wallets");
+        if (state.confirmedAccountRef !== walletAccountRef) return null;
         rows = (result.data.wallets || []).filter((row) => !row.volumeBot && !row.ephemeral && !row.sessionWallet);
       }
     }
@@ -534,9 +768,11 @@
   }
 
   async function refreshCashRhBalances({ walletIndex = null, render = true } = {}) {
-    if (!state.token) return false;
+    const balanceAccountRef = String(state.confirmedAccountRef || "");
+    if (!state.token || !balanceAccountRef) return false;
     const query = walletIndex ? `?walletIndex=${encodeURIComponent(walletIndex)}` : "";
     const result = await get(`/api/web/rh/balances${query}`);
+    if (state.confirmedAccountRef !== balanceAccountRef) return false;
     if (!result.ok) return false;
     state.rhEthUsd = Number(result.data.ethUsd || 0);
     const byIndex = new Map((result.data.wallets || []).map((row) => [Number(row.walletIndex), row]));
@@ -560,7 +796,9 @@
     const list = $("cashWalletList");
     if (!list) return;
     if (!state.wallets.length) {
-      list.innerHTML = '<div class="activity-empty">No wallet on this account yet. Create one or import a wallet backup below.</div>';
+      list.innerHTML = state.walletSyncError
+        ? `<div class="recoverable-state"><b>Wallet sync is delayed</b><span>${escapeHtml(state.walletSyncError)}</span><button type="button" data-cash-wallet-retry>Retry wallet sync</button></div>`
+        : '<div class="activity-empty">No wallet on this account yet. Create one or import a wallet backup below.</div>';
       return;
     }
     const mainIndex = Math.min(...state.wallets.map((wallet) => Number(wallet.index)));
@@ -579,9 +817,10 @@
     if (!(await ensureAccount())) return;
     await ensureWallet({ create: false });
     renderCashWallets();
-    $("cashWalletStatus").textContent = "";
+    $("cashWalletStatus").textContent = state.walletSyncError ? "Showing the wallets last confirmed on this device. Retry when your connection is ready." : "";
+    $("cashWalletStatus").className = state.walletSyncError ? "status bad" : "status";
     openSheet("wallets");
-    await refreshCashRhBalances();
+    void refreshCashRhBalances();
   }
 
   async function selectCashWallet(index) {
@@ -707,24 +946,43 @@
   }
 
   /* ---------------- pricing (client-side DexScreener, same pattern as the terminal) ---------------- */
-  async function refreshSolPrice() {
+  let solPricePromise = null;
+  const tokenPriceReads = new Map();
+  async function fetchCashJson(url, timeoutMs = 5_000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${WSOL_MINT}`);
-      const data = await response.json();
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) return null;
+      return await response.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function refreshSolPrice() {
+    if (solPricePromise) return solPricePromise;
+    solPricePromise = (async () => {
+    try {
+      const data = await fetchCashJson(`https://api.dexscreener.com/latest/dex/tokens/${WSOL_MINT}`);
       const pairs = (data.pairs || []).filter((pair) => Number(pair.liquidity?.usd) > 100000);
       pairs.sort((a, b) => Number(b.liquidity?.usd || 0) - Number(a.liquidity?.usd || 0));
       const price = Number(pairs[0]?.priceUsd || 0);
       if (price > 0) state.solUsd = price;
     } catch { /* keep last price */ }
+    })().finally(() => { solPricePromise = null; });
+    return solPricePromise;
   }
 
   async function refreshTokenPrices(mints) {
-    const wanted = mints.filter((mint) => mint !== USDC_MINT).slice(0, 10);
+    const wanted = [...new Set(mints.filter((mint) => mint !== USDC_MINT))].sort().slice(0, 10);
     state.tokenUsd[USDC_MINT] = 1;
     if (!wanted.length) return;
-    try {
-      const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${wanted.join(",")}`);
-      const data = await response.json();
+    const key = wanted.join(",");
+    if (tokenPriceReads.has(key)) return tokenPriceReads.get(key);
+    const request = (async () => {
+      try {
+      const data = await fetchCashJson(`https://api.dexscreener.com/latest/dex/tokens/${key}`);
       const best = {};
       for (const pair of data.pairs || []) {
         const mint = pair.baseToken?.address;
@@ -735,27 +993,63 @@
       for (const [mint, entry] of Object.entries(best)) {
         if (entry.price > 0) state.tokenUsd[mint] = entry.price;
       }
-    } catch { /* best effort */ }
+      } catch { /* best effort */ }
+    })().finally(() => tokenPriceReads.delete(key));
+    tokenPriceReads.set(key, request);
+    return request;
   }
 
   /* ---------------- balance ---------------- */
-  function readCashBalanceCache() {
+  function readCashBalanceCache(accountRef = state.confirmedAccountRef) {
     try {
-      const cached = JSON.parse(localStorage.getItem(BALANCE_CACHE_KEY) || "null");
-      if (!cached || !Array.isArray(cached.balances) || Date.now() - Number(cached.savedAt || 0) > 30 * 60 * 1000) return null;
+      const ref = String(accountRef || "");
+      const key = scopedCashStorageKey(BALANCE_CACHE_PREFIX, ref);
+      if (!ref || !key) return null;
+      const cached = JSON.parse(localStorage.getItem(key) || "null");
+      if (!cached || String(cached.accountRef || "") !== ref || !Array.isArray(cached.balances) || Date.now() - Number(cached.savedAt || 0) > BALANCE_CACHE_MAX_AGE_MS) return null;
       return cached;
     } catch {
       return null;
     }
   }
 
+  function compactCashBalanceRows(rows = []) {
+    return rows.filter((row) => !row.volumeBot).map((row) => ({
+      index: row.index,
+      publicKey: row.publicKey,
+      label: row.label || "",
+      lamports: Number(row.lamports || row.cashAssets?.SOL?.rawAmount || 0),
+      cashAssets: {
+        SOL: row.cashAssets?.SOL ? { rawAmount: Number(row.cashAssets.SOL.rawAmount || 0), uiAmount: Number(row.cashAssets.SOL.uiAmount || 0) } : undefined,
+        USDC: row.cashAssets?.USDC ? { rawAmount: Number(row.cashAssets.USDC.rawAmount || 0), uiAmount: Number(row.cashAssets.USDC.uiAmount || 0) } : undefined
+      }
+    }));
+  }
+
+  function compactCashRhSnapshot(data = {}) {
+    return {
+      ethUsd: Number(data.ethUsd || 0),
+      wallets: (data.wallets || []).map((row) => ({
+        walletIndex: Number(row.walletIndex || 0),
+        address: row.address || "",
+        available: Boolean(row.available),
+        eth: Number(row.eth || 0),
+        explorer: row.explorer || ""
+      }))
+    };
+  }
+
   function saveCashBalanceCache(balanceData = {}, rhData = {}) {
     try {
-      localStorage.setItem(BALANCE_CACHE_KEY, JSON.stringify({
+      const accountRef = String(state.confirmedAccountRef || "");
+      const key = scopedCashStorageKey(BALANCE_CACHE_PREFIX, accountRef);
+      if (!accountRef || !key) return;
+      localStorage.setItem(key, JSON.stringify({
         savedAt: Date.now(),
-        balances: balanceData.balances || [],
+        accountRef,
+        balances: compactCashBalanceRows(balanceData.balances || []),
         solUsd: Number(balanceData.solUsd || 0),
-        rhBalances: rhData || {}
+        rhBalances: compactCashRhSnapshot(rhData)
       }));
     } catch { /* cache is an optional speed layer */ }
   }
@@ -786,42 +1080,60 @@
       state.rhAddress = activeRh.address || "";
       state.rhEth = activeRh.available ? Number(activeRh.eth || 0) : null;
     }
+    state.balanceKnown = true;
     state.balanceRefreshing = Boolean(options.refreshing);
     state.balanceUpdatedAt = String(options.updatedAt || "");
+    state.balanceSource = String(options.source || state.balanceSource || "live");
     renderBalance();
     renderCashWallets();
     return true;
   }
 
   async function refreshBalance({ silent = false } = {}) {
-    if (!state.token) return;
+    const refreshAccountRef = String(state.confirmedAccountRef || "");
+    if (!state.token || !refreshAccountRef) return;
+    if (state.balanceRefreshPromise) return state.balanceRefreshPromise;
+    let finishRefresh;
+    state.balanceRefreshPromise = new Promise((resolve) => { finishRefresh = resolve; });
+    state.balanceRefreshing = true;
+    state.balanceError = "";
+    renderCashSyncStatus();
+    try {
     const previousSol = state.lamports;
     const previousUsdc = state.usdcRaw;
     const cached = readCashBalanceCache();
-    const fastRequest = get("/api/web/balances?fast=true");
-    const balanceRequest = get("/api/web/balances");
-    const rhRequest = get("/api/web/rh/balances");
+    const fastRequest = state.balanceKnown
+      ? Promise.resolve(null)
+      : get("/api/web/balances?fast=true", { timeoutMs: 5_000 });
+    const balanceRequest = get("/api/web/balances", { timeoutMs: 9_000 });
+    const rhRequest = get("/api/web/rh/balances", { timeoutMs: 9_000 });
     const fastResult = await Promise.race([
       fastRequest,
       new Promise((resolve) => setTimeout(() => resolve(null), 1_800))
     ]);
-    if (fastResult?.status === 401) { setToken(""); showOnboard(); return; }
+    if (state.confirmedAccountRef !== refreshAccountRef) return;
+    if (fastResult?.status === 401) { setToken(""); renderProfile(); renderCashWallets(); showOnboard(); return; }
     if (fastResult?.ok && fastResult.data?.ok) {
       applyCashBalanceSnapshot(fastResult.data, cached?.rhBalances || {}, {
         partial: true,
         refreshing: true,
-        updatedAt: cached?.savedAt ? new Date(cached.savedAt).toISOString() : ""
+        updatedAt: new Date().toISOString(),
+        source: "live"
       });
     }
     const balanceResult = await balanceRequest;
-    if (balanceResult.status === 401) { setToken(""); showOnboard(); return; }
+    if (state.confirmedAccountRef !== refreshAccountRef) return;
+    if (balanceResult.status === 401) { setToken(""); renderProfile(); renderCashWallets(); showOnboard(); return; }
     const balanceData = balanceResult.ok ? balanceResult.data : cached;
     const earlyRhData = cached?.rhBalances || {};
     if (!balanceData || !applyCashBalanceSnapshot(balanceData, earlyRhData, {
       refreshing: true,
-      updatedAt: balanceData.lastUpdatedAt || (cached?.savedAt ? new Date(cached.savedAt).toISOString() : "")
+      updatedAt: balanceResult.ok ? (balanceData.lastUpdatedAt || new Date().toISOString()) : (cached?.savedAt ? new Date(cached.savedAt).toISOString() : ""),
+      source: balanceResult.ok ? "live" : "cache"
     })) {
-      if (!silent) toast(balanceResult.data?.error || "Could not load balances. Try again.", true);
+      state.balanceError = balanceResult.data?.error || "Could not load balances. Try again.";
+      if (!silent) toast(state.balanceError, true);
+      renderBalance();
       return;
     }
     if (balanceResult.ok) saveCashBalanceCache(balanceResult.data, earlyRhData);
@@ -863,14 +1175,29 @@
     // Robinhood RPC/bridge reads can be much slower than Solana. Paint Cash as
     // soon as SOL/USDC returns, then merge ETH without delaying the total.
     const rhResult = await rhRequest;
-    if (rhResult.status === 401) { setToken(""); showOnboard(); return; }
+    if (state.confirmedAccountRef !== refreshAccountRef) return;
+    if (rhResult.status === 401) { setToken(""); renderProfile(); renderCashWallets(); showOnboard(); return; }
     const rhData = rhResult.ok ? rhResult.data : earlyRhData;
     applyCashBalanceSnapshot(balanceData, rhData, {
-      refreshing: !balanceResult.ok || !rhResult.ok || balanceData.stale || balanceData.backgroundRefreshing,
-      updatedAt: balanceData.lastUpdatedAt || (cached?.savedAt ? new Date(cached.savedAt).toISOString() : "")
+      refreshing: false,
+      updatedAt: balanceResult.ok ? (balanceData.lastUpdatedAt || new Date().toISOString()) : (cached?.savedAt ? new Date(cached.savedAt).toISOString() : ""),
+      source: balanceResult.ok ? "live" : "cache"
     });
     if (balanceResult.ok) saveCashBalanceCache(balanceResult.data, rhData);
-    if ((!balanceResult.ok || !rhResult.ok) && !silent) toast("Live balances are still syncing. Showing the last confirmed values.");
+    state.balanceError = !balanceResult.ok
+      ? (balanceResult.data?.error || "Live SOL balances are delayed.")
+      : !rhResult.ok
+        ? (rhResult.data?.error || "Robinhood ETH is still syncing.")
+        : "";
+    if (state.balanceError && !silent) toast("Live balances are still syncing. Showing the last confirmed values.");
+    } finally {
+      const accountChanged = Boolean(state.confirmedAccountRef && state.confirmedAccountRef !== refreshAccountRef);
+      state.balanceRefreshing = false;
+      state.balanceRefreshPromise = null;
+      finishRefresh?.();
+      renderBalance();
+      if (accountChanged && state.token) setTimeout(() => { void refreshBalance({ silent: true }); }, 0);
+    }
   }
 
   function totalUsd() {
@@ -880,22 +1207,122 @@
   }
 
   function renderBalance() {
+    renderCashSyncStatus();
     const sol = (state.lamports || 0) / 1e9;
-    $("balanceUsd").textContent = formatUsd(totalUsd());
+    $("balanceUsd").textContent = state.balanceKnown ? formatUsd(totalUsd()) : "--";
+    if (!state.balanceKnown) {
+      $("balanceSub").textContent = state.sessionChecking ? "Restoring your secure session..." : "Waiting for a confirmed balance...";
+      return;
+    }
     const rhValue = Math.max(0, Number(state.rhEth || 0)) * Math.max(0, Number(state.rhEthUsd || 0));
     const rh = state.rhEth == null ? "ETH loading…" : `${Number(state.rhEth).toFixed(6)} ETH (Robinhood)${rhValue > 0 ? ` · ${formatUsd(rhValue)}` : ""}`;
     const freshness = state.balanceRefreshing ? " · refreshing live" : "";
     $("balanceSub").textContent = `$${state.usdc.toFixed(2)} USD · ${sol.toFixed(4)} SOL · ${rh}${freshness}`;
   }
 
+  function friendlyAge(value) {
+    const time = Date.parse(value || "");
+    if (!Number.isFinite(time)) return "";
+    const seconds = Math.max(0, Math.round((Date.now() - time) / 1000));
+    if (seconds < 45) return "just now";
+    if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))}m ago`;
+    if (seconds < 86400) return `${Math.max(1, Math.round(seconds / 3600))}h ago`;
+    return `${Math.max(1, Math.round(seconds / 86400))}d ago`;
+  }
+
+  function renderCashSyncStatus() {
+    const wrap = $("cashSyncStatus"), text = $("cashSyncText"), retry = $("balanceRetryBtn");
+    if (!wrap || !text || !retry) return;
+    const age = friendlyAge(state.balanceUpdatedAt);
+    let message = "";
+    let tone = "";
+    let canRetry = false;
+    if (state.sessionChecking) {
+      message = state.balanceKnown
+        ? `Saved balance${age ? ` from ${age}` : ""} - restoring secure session`
+        : "Restoring your shared SlimeWire session...";
+      tone = state.balanceKnown ? "stale" : "working";
+    } else if (state.sessionError) {
+      message = `${state.sessionError} Your saved view is safe.`;
+      tone = "bad";
+      canRetry = true;
+    } else if (state.balanceError) {
+      message = `${state.balanceError}${state.balanceKnown ? " Showing last confirmed values." : ""}`;
+      tone = "bad";
+      canRetry = true;
+    } else if (state.balanceRefreshing) {
+      message = state.balanceKnown ? `Last confirmed${age ? ` ${age}` : ""} - updating live` : "Checking live balances...";
+      tone = "working";
+    } else if (state.balanceKnown) {
+      message = state.balanceSource === "cache" ? `Saved balance${age ? ` from ${age}` : ""}` : `Live balance${age ? ` - updated ${age}` : ""}`;
+      tone = state.balanceSource === "cache" ? "stale" : "ok";
+      canRetry = state.balanceSource === "cache";
+    } else if (state.token) {
+      message = "Balance has not loaded yet.";
+      canRetry = true;
+    }
+    wrap.hidden = !message;
+    wrap.className = `cash-sync-status ${tone}`.trim();
+    text.textContent = message;
+    retry.hidden = !canRetry;
+  }
+
   /* ---------------- activity (device-local) ---------------- */
   function readActivity() {
-    try { return JSON.parse(localStorage.getItem(ACTIVITY_KEY) || "[]"); } catch { return []; }
+    try {
+      const accountRef = String(state.confirmedAccountRef || "");
+      const key = scopedCashStorageKey(ACTIVITY_CACHE_PREFIX, accountRef);
+      if (!accountRef || !key) return [];
+      const cached = JSON.parse(localStorage.getItem(key) || "null");
+      return cached && String(cached.accountRef || "") === accountRef && Array.isArray(cached.rows) ? cached.rows : [];
+    } catch { return []; }
+  }
+  function readCashHistoryCache(accountRef = state.confirmedAccountRef) {
+    try {
+      const ref = String(accountRef || "");
+      const key = scopedCashStorageKey(HISTORY_CACHE_PREFIX, ref);
+      if (!ref || !key) return null;
+      const cached = JSON.parse(localStorage.getItem(key) || "null");
+      if (!cached || String(cached.accountRef || "") !== ref || !Array.isArray(cached.rows) || Date.now() - Number(cached.savedAt || 0) > HISTORY_CACHE_MAX_AGE_MS) return null;
+      return cached;
+    } catch {
+      return null;
+    }
+  }
+  function cacheableActivity(entry = {}, index = 0) {
+    const row = normalizedActivity(entry, index);
+    return {
+      id: row.id,
+      at: row.at,
+      type: row.type,
+      asset: row.asset,
+      signature: row.signature,
+      amountUsd: row.amountUsd,
+      title: String(row.title || "").slice(0, 120),
+      sub: String(row.sub || "").slice(0, 180),
+      status: String(row.status || "").slice(0, 40),
+      explorerUrl: String(row.explorerUrl || "").slice(0, 300)
+    };
+  }
+  function saveCashHistoryCache(rows = []) {
+    try {
+      const accountRef = String(state.confirmedAccountRef || "");
+      const key = scopedCashStorageKey(HISTORY_CACHE_PREFIX, accountRef);
+      if (!accountRef || !key) return;
+      localStorage.setItem(key, JSON.stringify({
+        savedAt: Date.now(),
+        accountRef,
+        rows: rows.slice(0, 60).map(cacheableActivity)
+      }));
+    } catch { /* history cache is optional */ }
   }
   function addActivity(entry) {
+    const accountRef = String(state.confirmedAccountRef || "");
+    const key = scopedCashStorageKey(ACTIVITY_CACHE_PREFIX, accountRef);
+    if (!accountRef || !key) return;
     const list = readActivity();
     list.unshift(entry);
-    localStorage.setItem(ACTIVITY_KEY, JSON.stringify(list.slice(0, 40)));
+    localStorage.setItem(key, JSON.stringify({ accountRef, rows: list.slice(0, 40) }));
   }
   function normalizedActivity(entry = {}, index = 0) {
     const signature = String(entry.signature || entry.tx || entry.transactionSignature || "");
@@ -922,15 +1349,88 @@
     const list = state.activity.length ? state.activity : readActivity().map(normalizedActivity);
     state.activity = list;
     $("activityList").innerHTML = activityRowsHtml(list, 6);
+    const freshness = $("activityFreshness");
+    if (freshness) {
+      const age = friendlyAge(state.activityUpdatedAt);
+      freshness.textContent = state.activityRefreshing
+        ? (list.length ? "saved - syncing" : "syncing")
+        : state.activityError
+          ? "saved - retry available"
+          : age ? `${state.activitySource === "cache" ? "saved" : "updated"} ${age}` : "";
+      freshness.className = state.activityError ? "activity-freshness bad" : "activity-freshness";
+    }
+  }
+
+  function hydrateConfirmedCashSnapshots() {
+    if (!state.confirmedAccountRef) return false;
+    const cachedHistory = readCashHistoryCache();
+    const deviceActivity = readActivity().map(normalizedActivity);
+    if (cachedHistory?.rows?.length || deviceActivity.length) {
+      state.activity = [...(cachedHistory?.rows || []).map(normalizedActivity), ...deviceActivity]
+        .filter((entry, index, all) => all.findIndex((item) => item.id === entry.id) === index)
+        .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+      state.activityUpdatedAt = cachedHistory?.savedAt ? new Date(cachedHistory.savedAt).toISOString() : "";
+      state.activitySource = "cache";
+    }
+    renderActivity();
+    const cachedBalance = readCashBalanceCache();
+    if (cachedBalance) {
+      applyCashBalanceSnapshot(cachedBalance, cachedBalance.rhBalances || {}, {
+        refreshing: true,
+        updatedAt: cachedBalance.savedAt ? new Date(cachedBalance.savedAt).toISOString() : "",
+        source: "cache"
+      });
+    } else {
+      renderBalance();
+    }
+    return Boolean(cachedBalance || cachedHistory?.rows?.length || deviceActivity.length);
   }
 
   async function loadCashHistory({ open = false } = {}) {
+    const historyAccountRef = String(state.confirmedAccountRef || "");
     if (open) { openSheet("activitysheet"); $("activityFullList").innerHTML = `<div class="activity-empty">Syncing confirmed activity…</div>`; }
-    const result = await get("/api/web/cash/history?limit=60");
-    const remote = result.ok ? (result.data.history || result.data.activity || result.data.rows || []) : [];
-    const merged = [...remote.map(normalizedActivity), ...readActivity().map(normalizedActivity)]
+    if (!state.token || !historyAccountRef) {
+      if (open) $("activityFullList").innerHTML = `<div class="activity-empty">Confirming your SlimeWire account…</div>`;
+      return false;
+    }
+    if (open && state.activity.length) $("activityFullList").innerHTML = activityRowsHtml(state.activity);
+    if (state.activityPromise) {
+      return open
+        ? state.activityPromise.then(() => { $("activityFullList").innerHTML = activityRowsHtml(state.activity); })
+        : state.activityPromise;
+    }
+    let finishHistory;
+    state.activityPromise = new Promise((resolve) => { finishHistory = resolve; });
+    state.activityRefreshing = true;
+    state.activityError = "";
+    renderActivity();
+    const result = await get("/api/web/cash/history?limit=60", { timeoutMs: 8_000 });
+    if (state.confirmedAccountRef !== historyAccountRef) {
+      state.activityRefreshing = false;
+      state.activityPromise = null;
+      finishHistory?.();
+      renderActivity();
+      if (state.token && state.confirmedAccountRef) setTimeout(() => { void loadCashHistory({ open }); }, 0);
+      return false;
+    }
+    const remoteValue = result.ok ? (result.data.history || result.data.activity || result.data.rows || []) : [];
+    const remote = Array.isArray(remoteValue) ? remoteValue : [];
+    const cachedHistory = readCashHistoryCache();
+    const merged = [...remote.map(normalizedActivity), ...(cachedHistory?.rows || []).map(normalizedActivity), ...readActivity().map(normalizedActivity)]
       .filter((entry, index, all) => all.findIndex((item) => item.id === entry.id) === index)
       .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+    if (result.ok) {
+      saveCashHistoryCache(merged);
+      state.activityUpdatedAt = new Date().toISOString();
+      state.activitySource = "live";
+    } else {
+      state.activityUpdatedAt = cachedHistory?.savedAt ? new Date(cachedHistory.savedAt).toISOString() : state.activityUpdatedAt;
+      state.activitySource = cachedHistory?.rows?.length ? "cache" : state.activitySource;
+      state.activityError = result.data?.error || "Confirmed history could not sync.";
+    }
+    state.activityRefreshing = false;
+    state.activityPromise = null;
+    finishHistory?.();
     state.activity = merged; renderActivity();
     if (open) {
       $("activityFullList").innerHTML = activityRowsHtml(merged);
@@ -951,8 +1451,10 @@
 
   /* ---------------- handle / profile ---------------- */
   async function refreshProfile() {
+    const profileAccountRef = String(state.confirmedAccountRef || "");
+    if (!state.token || !profileAccountRef) return;
     const result = await get("/api/web/cash/me");
-    if (!result.ok) return;
+    if (!result.ok || state.confirmedAccountRef !== profileAccountRef) return;
     state.handle = result.data.handle || "";
     state.displayHandle = result.data.displayHandle || state.handle;
     state.referralLink = result.data.referralLink || `${location.origin}/cash/`;
@@ -1284,13 +1786,17 @@
   /* ------- smart provider handoff + live deposit tracker ------- */
   function readPendingFund() {
     try {
+      const accountRef = String(state.confirmedAccountRef || "");
+      if (!accountRef) return null;
       const row = JSON.parse(localStorage.getItem(PENDING_FUND_KEY) || "null");
-      if (!row || Date.now() - Number(row.at || 0) > 6 * 60 * 60 * 1000) return null;
+      if (!row || String(row.accountRef || "") !== accountRef || Date.now() - Number(row.at || 0) > 6 * 60 * 60 * 1000) return null;
       return row;
     } catch { return null; }
   }
   function savePendingFund(row) {
-    localStorage.setItem(PENDING_FUND_KEY, JSON.stringify(row));
+    const accountRef = String(state.confirmedAccountRef || "");
+    if (!accountRef) return;
+    localStorage.setItem(PENDING_FUND_KEY, JSON.stringify({ ...row, accountRef }));
     renderPendingFund();
   }
   function clearPendingFund() {
@@ -1627,12 +2133,27 @@
   }
 
   /* ---------------- contacts / requests / preferences ---------------- */
-  function readLocalJson(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || "null") ?? fallback; } catch { return fallback; } }
-  function writeLocalJson(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
+  function accountLocalKey(key) {
+    const accountRef = String(state.confirmedAccountRef || "");
+    return accountRef ? `${key}:${encodeURIComponent(accountRef)}` : "";
+  }
+  function readLocalJson(key, fallback) {
+    const scopedKey = accountLocalKey(key);
+    if (!scopedKey) return fallback;
+    try { return JSON.parse(localStorage.getItem(scopedKey) || "null") ?? fallback; } catch { return fallback; }
+  }
+  function writeLocalJson(key, value) {
+    const scopedKey = accountLocalKey(key);
+    if (!scopedKey) return;
+    try { localStorage.setItem(scopedKey, JSON.stringify(value)); } catch {}
+  }
 
   async function loadContacts() {
+    const contactsAccountRef = String(state.confirmedAccountRef || "");
     openSheet("contacts");
+    if (!state.token || !contactsAccountRef) { $("contactList").innerHTML = '<div class="activity-empty">Confirming your account…</div>'; return; }
     const result = await get("/api/web/cash/contacts");
+    if (state.confirmedAccountRef !== contactsAccountRef) return;
     const rows = result.ok ? (result.data.contacts || []) : readLocalJson(CONTACTS_KEY, []);
     $("contactList").innerHTML = rows.length ? rows.map((contact, index) => `<div class="compact-row"><span class="favorite-dot">★</span><div class="compact-row-main"><b>${escapeHtml(contact.name || contact.handle || "Contact")}</b><span>${escapeHtml(shortAddress(contact.address || ""))}</span></div><button class="compact-row-action" data-pay-contact="${index}" data-contact-address="${escapeHtml(contact.address || "")}" data-contact-name="${escapeHtml(contact.handle || contact.name || "")}" type="button">Pay</button></div>`).join("") : `<div class="activity-empty">No favorites yet.</div>`;
   }
@@ -1656,8 +2177,11 @@
   }
 
   async function loadRequests() {
+    const requestsAccountRef = String(state.confirmedAccountRef || "");
     openSheet("requests"); renderRequests();
+    if (!state.token || !requestsAccountRef) return;
     const result = await get("/api/web/cash/requests?limit=30");
+    if (state.confirmedAccountRef !== requestsAccountRef) return;
     if (result.ok) { const rows = result.data.requests || result.data.rows || []; writeLocalJson(REQUESTS_KEY, rows); renderRequests(rows); }
   }
 
@@ -1758,7 +2282,8 @@
   async function loadCashPositions({ force = false } = {}) {
     const wrap = $("cashPositions"), status = $("cashPositionsStatus");
     if (!wrap || state.positionsLoading) return;
-    if (!state.token) { wrap.innerHTML = '<div class="activity-empty">Sign in to see coin positions.</div>'; return; }
+    const positionsAccountRef = String(state.confirmedAccountRef || "");
+    if (!state.token || !positionsAccountRef) { wrap.innerHTML = '<div class="activity-empty">Sign in to see coin positions.</div>'; return; }
     state.positionsLoading = true;
     status.textContent = "Reading every wallet on-chainâ€¦"; status.className = "status";
     if (!wrap.querySelector(".cash-position-group")) wrap.innerHTML = '<div class="activity-empty">Loading coin positionsâ€¦</div>';
@@ -1768,6 +2293,15 @@
         get(`/api/web/positions?fast=true${force ? "&force=true" : ""}`),
         get("/api/web/rh/wallets")
       ]);
+      if (state.confirmedAccountRef !== positionsAccountRef) return;
+      if (!solResult.ok && !rhResult.ok) {
+        status.textContent = "Positions could not refresh. The last successful view is unchanged - tap Refresh to retry.";
+        status.className = "status bad";
+        if (!wrap.querySelector(".cash-position-group")) {
+          wrap.innerHTML = '<div class="recoverable-state"><b>Positions are temporarily unavailable</b><span>Your wallets are safe. Check your connection, then tap Refresh.</span></div>';
+        }
+        return;
+      }
       const groups = [];
       if (solResult.ok && solResult.data?.ok) {
         for (const position of (solResult.data.positions || [])) {
@@ -1967,23 +2501,66 @@
   const shortAddress = (address) => address ? `${address.slice(0, 4)}…${address.slice(-4)}` : "";
   const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 
+  let cashRetryPromise = null;
+  async function retryCashStartup({ quiet = false } = {}) {
+    if (cashRetryPromise) return cashRetryPromise;
+    cashRetryPromise = (async () => {
+      const button = $("balanceRetryBtn");
+      if (button) { button.disabled = true; button.textContent = "Retrying..."; }
+      state.sessionError = "";
+      state.balanceError = "";
+      state.sessionChecking = true;
+      renderCashSyncStatus();
+      const restored = await restoreSharedSession();
+      state.sessionChecking = false;
+      if (!restored.ok) {
+        state.sessionError = restored.retryable ? restored.error : "";
+        renderCashSyncStatus();
+        if (restored.unauthenticated) showOnboard();
+        if (!quiet && restored.retryable) toast("Still reconnecting. Account data will load after identity is confirmed.", true);
+        return false;
+      }
+      hydrateConfirmedCashSnapshots();
+      await Promise.allSettled([
+        ensureWallet({ create: false }),
+        refreshBalance({ silent: true }),
+        loadCashHistory()
+      ]);
+      renderProfile();
+      renderCashSyncStatus();
+      if (!quiet && !state.balanceError && !state.sessionError) toast("SlimeCash is live and up to date");
+      return true;
+    })().finally(() => {
+      const button = $("balanceRetryBtn");
+      if (button) { button.disabled = false; button.textContent = "Retry"; }
+      cashRetryPromise = null;
+    });
+    return cashRetryPromise;
+  }
+
   /* ---------------- boot ---------------- */
   async function boot() {
     // Splash for at least a beat, then the app.
     const params = new URLSearchParams(location.search);
+    state.sessionChecking = true;
 
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/cash/sw.js", { updateViaCache: "none" }).catch(() => {});
     }
-    await restoreSharedSession();
     const paintOnlineState = () => {
       let banner = document.getElementById("offlineBanner");
       if (navigator.onLine) { banner?.remove(); return; }
       if (!banner) { banner = document.createElement("div"); banner.id = "offlineBanner"; banner.className = "offline-banner"; banner.textContent = "Offline · balances may be old and sends are disabled"; document.body.prepend(banner); }
     };
-    window.addEventListener("online", paintOnlineState); window.addEventListener("offline", paintOnlineState); paintOnlineState();
+    window.addEventListener("online", () => {
+      paintOnlineState();
+      if (state.sessionError || state.balanceError) void retryCashStartup({ quiet: true });
+    });
+    window.addEventListener("offline", paintOnlineState);
+    paintOnlineState();
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState !== "visible" || !state.token || !state.wallet) return;
+      if (Date.now() - Date.parse(state.balanceUpdatedAt || 0) > 45_000) void refreshBalance({ silent: true });
       void checkPendingCashFunding();
       if (readPendingFund() && !readPendingFund().arrived && !state.depositTimer) {
         state.depositTimer = setInterval(() => { void checkPendingCashFunding(); }, 3000);
@@ -2007,31 +2584,33 @@
 
     void refreshSolPrice();
 
-    // Paint the shell and the last confirmed public balance snapshot before
-    // waiting on account/RPC reads. Slow Solana providers must never look like
-    // a frozen or broken Cash app.
+    // Paint the shell immediately. Account data remains blank until /api/web/me
+    // confirms which account owns any saved snapshots on this device.
     $("splash").classList.add("fade");
     setTimeout(() => { $("splash").hidden = true; }, 400);
     $("app").hidden = false;
     renderProfile();
     renderActivity();
     renderPendingFund();
-    const cachedBalance = readCashBalanceCache();
-    if (state.token && cachedBalance) {
-      applyCashBalanceSnapshot(cachedBalance, cachedBalance.rhBalances || {}, {
-        refreshing: true,
-        updatedAt: cachedBalance.savedAt ? new Date(cachedBalance.savedAt).toISOString() : ""
-      });
-    }
+    renderBalance();
 
-    const initialBalanceRefresh = state.token ? refreshBalance({ silent: true }).catch(() => null) : null;
+    // Validate identity before reading any account-scoped balance or history.
+    const sessionRestore = await restoreSharedSession();
+    state.sessionChecking = false;
+    state.sessionError = sessionRestore.retryable ? sessionRestore.error : "";
+    if (sessionRestore.ok) {
+      hydrateConfirmedCashSnapshots();
+      renderPendingFund();
+    }
+    renderCashSyncStatus();
+
+    const initialBalanceRefresh = sessionRestore.ok && state.confirmedAccountRef
+      ? refreshBalance({ silent: true }).catch(() => null)
+      : null;
     let signedIn = false;
-    if (state.token) {
-      const [account] = await Promise.all([
-        loadAccount(),
-        ensureWallet({ create: false })
-      ]);
-      signedIn = Boolean(account && state.token);
+    if (sessionRestore.ok && state.token && state.confirmedAccountRef) {
+      await ensureWallet({ create: false });
+      signedIn = Boolean(state.token && state.confirmedAccountRef);
     }
 
     renderProfile();
@@ -2046,12 +2625,14 @@
       setTimeout(() => toast(recoveredMessage), 450);
     }
 
-    if (!signedIn) {
+    if (!signedIn && sessionRestore.unauthenticated) {
       showOnboard();
-    } else {
-      refreshProfile();
+    } else if (signedIn) {
+      void refreshProfile();
       if (!initialBalanceRefresh) refreshBalance();
-      loadCashHistory();
+      void loadCashHistory();
+    } else {
+      renderCashSyncStatus();
     }
     selectSendAsset(params.get("asset") === "SOL" ? "SOL" : "USDC");
 
@@ -2080,7 +2661,11 @@
       }, 5000);
     }
 
-    setInterval(() => { refreshSolPrice(); if (state.token && state.wallet) refreshBalance({ silent: true }); }, 60000);
+    setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void refreshSolPrice();
+      if (state.token && state.wallet) void refreshBalance({ silent: true });
+    }, 60000);
   }
 
   /* ---------------- events ---------------- */
@@ -2136,6 +2721,8 @@
 
   $("addCashBtn").addEventListener("click", openAddCash);
   $("receiveBtn").addEventListener("click", openReceive);
+  $("balanceRetryBtn").addEventListener("click", () => retryCashStartup());
+  $("homeWalletsBtn").addEventListener("click", openCashWallets);
   $("activityAllBtn").addEventListener("click", () => loadCashHistory({ open: true }));
   $("activityRefreshBtn").addEventListener("click", () => loadCashHistory({ open: true }));
   $("positionsRefreshBtn").addEventListener("click", () => loadCashPositions({ force: true }));
@@ -2205,6 +2792,10 @@
     if (button.dataset.cashWalletEvmBackup) backupCashEvmWallet(button.dataset.cashWalletEvmBackup, button.dataset.walletKey, button);
     if (button.dataset.copyWalletAddress) copyText(button.dataset.copyWalletAddress);
     if (button.dataset.cashWalletRemove) removeCashWallet(button.dataset.cashWalletRemove, button.dataset.walletKey);
+    if (button.hasAttribute("data-cash-wallet-retry")) {
+      state.walletSyncError = "";
+      void ensureWallet({ create: false }).then(() => { renderCashWallets(); void refreshCashRhBalances(); });
+    }
   });
   $("avatarBtn").addEventListener("click", () => switchTab("more"));
   $("accountAccessBtn").addEventListener("click", showOnboard);

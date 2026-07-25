@@ -51,9 +51,10 @@ test("Robinhood pool selection uses the deepest exact-token pool and preserves q
 test("public OHLCV route and cache are chain-aware without changing Solana fallbacks", () => {
   assert.match(serverSource, /pathname === "\/api\/web\/ohlcv"[\s\S]*normalizeRobinhoodTokenAddress\(rawOhlcvMint\)/);
   assert.match(serverSource, /webOhlcvPayload\(ohlcvMint, tfKey, \{ network: ohlcvNetwork \}\)/);
-  assert.match(serverSource, /api\.geckoterminal\.com\/api\/v2\/networks\/robinhood\/tokens\/\$\{encodeURIComponent\(token\)\}\/pools\?page=1/);
-  assert.match(serverSource, /networks\/\$\{network\}\/pools\/\$\{encodeURIComponent\(pool\)\}\/ohlcv\/\$\{tf\.path\}[\s\S]*token=\$\{tokenSide\}/);
-  assert.match(serverSource, /const poolKey = network === "robinhood" \? String\(options\.poolAddress \|\| ""\)\.toLowerCase\(\) : ""/);
+  assert.doesNotMatch(serverSource, /api\.geckoterminal\.com/);
+  assert.match(serverSource, /buildRhChartData\(mint, tfKey, \{ poolAddress: requestedPool \}\)/);
+  assert.match(serverSource, /fetchPoolSwaps\(poolAddress, address/);
+  assert.match(serverSource, /const poolKey = network === "robinhood"[\s\S]*String\(options\.poolAddress \|\| ""\)/);
   assert.match(serverSource, /const cacheKey = `\$\{network\}:\$\{normalizedMint\}:\$\{tfKey\}:\$\{poolKey\}:\$\{options\.tokenSide \|\| ""\}`/);
   assert.match(serverSource, /if \(network === "solana"\) pumpPortalStream\.watchMint\(mint\)/);
   assert.match(serverSource, /!candles\.length && network === "solana"[\s\S]*synthCandlesFromPumpTrades/);

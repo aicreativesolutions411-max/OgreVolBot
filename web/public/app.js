@@ -15445,7 +15445,10 @@ function applyTokenRefToState(tokenRef = {}) {
     tokenAddress: mint,
     mint
   };
-  rememberSmartChartDexResolution(state.smartChartTokenRef);
+  rememberSmartChartDexResolution({
+    ...state.smartChartTokenRef,
+    pairPinned: Boolean(state.smartChartTokenRef.pairAddress || state.smartChartTokenRef.pairId)
+  });
   state.terminalToken = mint;
   state.terminalAutoToken = mint;
   state.tradeToken = mint;
@@ -17766,7 +17769,16 @@ function rememberSmartChartBootstrap(chart = {}) {
 
 function rememberSmartChartDexResolution(tokenRef = {}) {
   const mint = String(tokenRef.tokenMint || tokenRef.mint || tokenRef.tokenAddress || "").trim();
-  const pairAddress = String(tokenRef.pairAddress || tokenRef.pairId || "").trim();
+  const previous = state.smartChartDexResolution?.[mint] || {};
+  const incomingPair = String(tokenRef.pairAddress || tokenRef.pairId || "").trim();
+  const incomingPairPinned = Boolean(tokenRef.pairPinned && incomingPair);
+  const pairAddress = String(
+    previous.pairPinned
+      ? previous.pairAddress
+      : incomingPairPinned
+        ? incomingPair
+        : previous.pairAddress || incomingPair
+  ).trim();
   if (!mint || (!pairAddress && !tokenRef.dexUrl && !tokenRef.symbol && !tokenRef.name)) return;
   state.smartChartDexResolution = {
     ...(state.smartChartDexResolution || {}),
@@ -17775,6 +17787,7 @@ function rememberSmartChartDexResolution(tokenRef = {}) {
       tokenMint: mint,
       chain: tokenRef.chain || (/^0x[0-9a-f]{40}$/i.test(mint) ? "robinhood" : "solana"),
       pairAddress,
+      pairPinned: Boolean(previous.pairPinned || incomingPairPinned),
       dexUrl: tokenRef.dexUrl || dexUrl(pairAddress || mint),
       dexId: tokenRef.dex || tokenRef.dexId || "",
       symbol: tokenRef.symbol || "",
@@ -17800,7 +17813,7 @@ function queueSmartChartDexResolution(token = {}) {
   if (!mint) return false;
   const pairAddress = String(token?.pairAddress || token?.pairId || "").trim();
   if (pairAddress) {
-    rememberSmartChartDexResolution({ ...token, tokenMint: mint, pairAddress });
+    rememberSmartChartDexResolution({ ...token, tokenMint: mint, pairAddress, pairPinned: true });
     return false;
   }
   if (smartChartBootstrapForMint(mint)?.pairAddress) return false;
@@ -17904,7 +17917,10 @@ async function fastDirectDexLookup(mint) {
 function prefetchTokenChart(tokenRef = {}, options = {}) {
   const mint = String(tokenRef?.tokenMint || tokenRef?.mint || tokenRef?.tokenAddress || "").trim();
   if (!mint) return false;
-  rememberSmartChartDexResolution(tokenRef);
+  rememberSmartChartDexResolution({
+    ...tokenRef,
+    pairPinned: Boolean(tokenRef.pairAddress || tokenRef.pairId)
+  });
   ogreMemoryNoteToken(mint, tokenRef.symbol || tokenRef.name || "");
   void fastDirectDexLookup(mint);
   queueSmartChartBootstrap(tokenRef, { source: options.source || "prefetch" });
@@ -17994,11 +18010,19 @@ function assetBuildVersion() {
 }
 function smartChartFrameUrl(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  const resolved = smartChartResolvedDex(mint);
+  const callerPinnedPool = smartChartPoolAddress(String(
+    token?.pairAddress
+    || token?.pairId
+    || (resolved?.pairPinned ? resolved.pairAddress : "")
+    || ""
+  ).trim(), mint, smartChartTapeNetwork(token));
   // Pro mode is the desktop default: the DEX provider owns candle aggregation,
   // drawing tools, volume, and 1m+ intervals. Slime Mode deliberately switches
   // to the native chart, which also supports the experimental sub-minute views.
   if (mint && state.smartChartSlimeMode) {
     const symq = String(token.symbol || "").slice(0, 12);
+    const pinnedPool = smartChartTapePool(token);
     // STABLE src — only ca + symbol, both fixed per coin. NO live values (a changing ?mc= made the
     // iframe reload/flash). The chart fetches its OWN authoritative stats straight from DexScreener
     // (the same source as the top bar), so MC/liq/vol always match without anything in the URL.
@@ -18007,7 +18031,16 @@ function smartChartFrameUrl(token = {}, mode = "chart") {
     // static host it's framed from (slimewire.org has no /api -> a relative fetch returns HTML and
     // the chart stays on "Loading…" forever — the empty-chart bug).
     const apiq = apiBase ? `&api=${encodeURIComponent(apiBase)}` : "";
-    return `/chart-lab?ca=${encodeURIComponent(mint)}&embed=1${symq ? `&sym=${encodeURIComponent(symq)}` : ""}${apiq}${ver ? `&v=${encodeURIComponent(ver)}` : ""}`;
+    const poolq = pinnedPool
+      ? `&pool=${encodeURIComponent(pinnedPool)}`
+      : "";
+    return `/chart-lab?ca=${encodeURIComponent(mint)}&embed=1${symq ? `&sym=${encodeURIComponent(symq)}` : ""}${poolq}${apiq}${ver ? `&v=${encodeURIComponent(ver)}` : ""}`;
+  }
+  if (callerPinnedPool) {
+    return dexChartEmbedUrl({ ...token, pairAddress: callerPinnedPool }, {
+      trades: mode === "chartTxns" || mode === "txns",
+      info: mode === "info"
+    });
   }
   const bootstrap = smartChartBootstrapForMint(mint);
   if (mode === "info" && bootstrap?.infoUrl) return bootstrap.infoUrl;
@@ -20788,9 +20821,19 @@ function smartChartTapeNetwork(token = {}) {
   return /^0x[0-9a-f]{40}$/i.test(address) || /robinhood|hood/.test(chain) ? "robinhood" : "solana";
 }
 
+function smartChartPoolAddress(value, mint, network) {
+  const pool = String(value || "").trim();
+  const token = String(mint || "").trim();
+  const robinhood = network === "robinhood";
+  const valid = robinhood ? /^0x[0-9a-f]{40}$/i.test(pool) : /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(pool);
+  const same = robinhood ? pool.toLowerCase() === token.toLowerCase() : pool === token;
+  return valid && !same ? pool : "";
+}
+
 function smartChartTapePool(token = {}) {
   const mint = String(token?.tokenMint || token?.mint || state.smartChartToken || "").trim();
-  return String(token?.pairAddress || token?.pairId || smartChartResolvedDex(mint)?.pairAddress || smartChartBootstrapForMint(mint)?.pairAddress || "").trim();
+  const network = smartChartTapeNetwork(token);
+  return smartChartPoolAddress(token?.pairAddress || token?.pairId || smartChartResolvedDex(mint)?.pairAddress || smartChartBootstrapForMint(mint)?.pairAddress || "", mint, network);
 }
 
 function scheduleSmartChartTapeRefresh(mint) {

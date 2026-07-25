@@ -12,12 +12,14 @@
   const FUN_PENDING_FUND_KEY = "slimewireFunPendingWalletFund:v1";
   const WALLET_BACKUP_MARK_PREFIX = "slimewireFunWalletBackedUp:v1:";
   const WALLET_BACKUP_REMINDER_KEY = "slimewireFunWalletBackupReminder:v1";
-  const WALLET_PORTFOLIO_CACHE_KEY = "slimewalletPortfolioSnapshotV1";
+  const WALLET_PORTFOLIO_CACHE_KEY = "slimewalletPortfolioSnapshotV2";
+  const WALLET_PORTFOLIO_LEGACY_CACHE_KEY = "slimewalletPortfolioSnapshotV1";
+  const FUN_FEED_CACHE_KEY = "slimewireFunFeedCacheV1";
   const WALLET_HIDDEN_TOKENS_KEY = "slimewalletHiddenTokensV1";
   const WALLET_LOCK_KEY = "slimewalletAppLockV1";
   const WALLET_SESSION_STARTED_KEY = "slimewalletSessionStartedV1";
   const TOKEN_FALLBACK = "/assets/slimewire/png/slimewire-mark.png";
-  const WALLET_BRAND_ASSET = "/assets/slimewire/slimewallet-pfp.png";
+  const WALLET_BRAND_ASSET = "/assets/slimewire/slimewallet-icon-192.png";
   const SLIME_PFPS = [
     "f_f648203a.png", "f_cc8f54e4.png", "f_c9dc667d.png", "f_c4f3d050.png", "f_c20374ef.png",
     "f_bb7b4bd6.png", "f_959b04a3.png", "f_94d9b765.png", "f_874a4027.png", "f_83fe78aa.png",
@@ -35,6 +37,11 @@
   const state = {
     token: localStorage.getItem(TOKEN_KEY) || "",
     user: null,
+    confirmedUserId: "",
+    accountGeneration: 0,
+    stagedPortfolioCache: null,
+    sessionRestoring: IS_WALLET_ROUTE || !localStorage.getItem(TOKEN_KEY),
+    sessionRestoreStatus: IS_WALLET_ROUTE || !localStorage.getItem(TOKEN_KEY) ? "restoring" : "authenticated",
     wallets: [],
     solUsd: 0,
     rhEthUsd: 0,
@@ -43,6 +50,8 @@
     portfolioPromise: null,
     portfolioPromiseForced: false,
     portfolioForceRequested: false,
+    portfolioStatus: "unavailable",
+    portfolioUpdatedAt: 0,
     activeWallet: Number(localStorage.getItem(ACTIVE_WALLET_KEY)) || null,
     chain: FROM_CASH ? "solana" : "all",
     feed: FROM_CASH ? "new" : "movers",
@@ -74,6 +83,7 @@
     seasonBusy: false,
     recents: readLocal(RECENTS_KEY, []),
     feedCache: new Map(),
+    feedStatus: "unavailable",
     feedRequestVersion: 0,
     searchRequestVersion: 0,
     feedTimer: null,
@@ -101,6 +111,7 @@
     deferredInstall: null
   };
   let funIndicatorAssetsPromise = null;
+  let funFundingAssetsPromise = null;
 
   function loadFunScript(src) {
     const existing = document.querySelector(`script[data-fun-lazy-src="${src}"]`);
@@ -130,6 +141,17 @@
       });
     }
     return funIndicatorAssetsPromise;
+  }
+
+  async function ensureFunFundingAssets() {
+    if (!window.SlimeWireFunding && !funFundingAssetsPromise) {
+      funFundingAssetsPromise = loadFunScript("/slimewire-funding.js?v=8").catch((error) => {
+        funFundingAssetsPromise = null;
+        throw error;
+      });
+    }
+    if (funFundingAssetsPromise) await funFundingAssetsPromise;
+    return window.SlimeWireFunding || null;
   }
 
   function escapeHtml(value) {
@@ -168,6 +190,21 @@
     return `$${number.toFixed(2)}`;
   }
   function formatPct(value) { const number = Number(value); return Number.isFinite(number) ? `${number >= 0 ? "+" : ""}${number.toFixed(1)}%` : "—"; }
+  function marketNumber(...values) {
+    for (const value of values) {
+      if (value == null || value === "") continue;
+      const number = Number(value);
+      if (Number.isFinite(number)) return number;
+    }
+    return null;
+  }
+  function freshnessAgeLabel(timestamp) {
+    const ageSeconds = Math.max(0, Math.floor((Date.now() - Number(timestamp || 0)) / 1000));
+    if (!Number.isFinite(ageSeconds) || !timestamp) return "unavailable";
+    if (ageSeconds < 5) return "just now";
+    if (ageSeconds < 60) return `${ageSeconds}s ago`;
+    return `${Math.floor(ageSeconds / 60)}m ago`;
+  }
   function ageLabel(value) {
     let seconds = Number(value?.pairAgeSeconds ?? value);
     if (!Number.isFinite(seconds) && value?.createdAt) seconds = (Date.now() - Date.parse(value.createdAt)) / 1000;
@@ -279,6 +316,89 @@
   function attemptId(prefix = "fun") { return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`; }
   function toast(message, error = false) { const node = $("[data-toast]"); node.textContent = message; node.className = `toast show${error ? " error" : ""}`; clearTimeout(node._timer); node._timer = setTimeout(() => node.className = "toast", 3600); }
 
+  function confirmedAccountId(user = state.user) {
+    return String(user?.id || "").trim();
+  }
+
+  function clearPrivateWalletState(options = {}) {
+    state.accountGeneration += 1;
+    if (options.clearCache !== false) localStorage.removeItem(WALLET_PORTFOLIO_CACHE_KEY);
+    state.stagedPortfolioCache = null;
+    state.portfolioPromise = null;
+    state.portfolioPromiseForced = false;
+    state.portfolioForceRequested = false;
+    state.rhBalancePromise = null;
+    state.walletBalancePromise = null;
+    state.positionValuePromise = null;
+    state.positionValueForceRequested = false;
+    state.positionLoadVersion += 1;
+    state.wallets = [];
+    state.positions = [];
+    state.rhWalletPosition = null;
+    state.activeWallet = null;
+    state.portfolioStatus = "unavailable";
+    state.portfolioUpdatedAt = 0;
+    localStorage.removeItem(ACTIVE_WALLET_KEY);
+  }
+
+  function authenticatedAccountScope() {
+    return { token: state.token, userId: state.confirmedUserId, generation: state.accountGeneration };
+  }
+
+  function accountScopeMatches(scope = {}) {
+    return Boolean(scope.userId
+      && scope.userId === state.confirmedUserId
+      && scope.token === state.token
+      && Number(scope.generation) === Number(state.accountGeneration));
+  }
+
+  function confirmAuthenticatedUser(user = null) {
+    const nextUserId = confirmedAccountId(user);
+    if (!nextUserId) {
+      state.user = null;
+      state.confirmedUserId = "";
+      clearPrivateWalletState();
+      return false;
+    }
+    const previousUserId = state.confirmedUserId;
+    if (previousUserId && previousUserId !== nextUserId) clearPrivateWalletState();
+    state.user = user;
+    state.confirmedUserId = nextUserId;
+    state.sessionRestoreStatus = "authenticated";
+    const cached = state.stagedPortfolioCache;
+    state.stagedPortfolioCache = null;
+    if (cached) {
+      if (cached.ownerId !== nextUserId) clearPrivateWalletState();
+      else if (state.portfolioStatus === "unavailable") {
+        applyPortfolioSnapshot(cached.data, { saveCache: false, fromCache: true, savedAt: cached.savedAt });
+      }
+    }
+    return true;
+  }
+
+  async function cookieSessionIdentity() {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8_000);
+    try {
+      const response = await fetch(`${API_BASE}/api/web/me`, { credentials: "include", signal: controller.signal });
+      let data = null;
+      try { data = await response.json(); } catch {}
+      return { ok: response.ok, status: response.status, user: data?.user || null };
+    } catch {
+      return { ok: false, status: 0, user: null };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function adoptCookieSessionUser(cookieUser) {
+    const cookieUserId = confirmedAccountId(cookieUser);
+    if (!cookieUserId) return false;
+    const sameConfirmedUser = cookieUserId === state.confirmedUserId || cookieUserId === state.stagedPortfolioCache?.ownerId;
+    setToken(COOKIE_SESSION, { preserveLocalState: sameConfirmedUser });
+    return confirmAuthenticatedUser(cookieUser);
+  }
+
   async function request(path, options = {}) {
     const execute = async (cookieOnly = false) => {
       const headers = { ...(options.headers || {}) };
@@ -293,43 +413,82 @@
       finally { clearTimeout(timer); }
     };
     let result = await execute();
-    if ([401, 403].includes(result.status) && state.token && state.token !== COOKIE_SESSION && (path === "/api/web/me" || !options.noRetry)) {
+    // Only an actual authentication failure may fall back to the shared cookie.
+    // A 403 is a real permission/policy response and must never replay a money
+    // operation under a different cookie account.
+    if (result.status === 401 && state.token && state.token !== COOKIE_SESSION && (path === "/api/web/me" || !options.noRetry)) {
+      if (path !== "/api/web/me") {
+        // Confirm which cookie account owns the retry before a POST can move money.
+        // Checking after the retry could turn a landed trade into a false failure.
+        const expectedUserId = state.confirmedUserId || state.stagedPortfolioCache?.ownerId || "";
+        const identity = await cookieSessionIdentity();
+        if (!identity.ok || !adoptCookieSessionUser(identity.user)) {
+          setToken("");
+          state.sessionRestoreStatus = identity.status === 0 || identity.status >= 500 ? "unavailable" : "guest";
+          return { ok: false, status: identity.status || 401, data: { error: "Session identity could not be confirmed." } };
+        }
+        const accountChanged = Boolean(expectedUserId && expectedUserId !== state.confirmedUserId);
+        if (accountChanged && String(options.method || "GET").toUpperCase() !== "GET") {
+          return { ok: false, status: 409, data: { error: "Account changed. Review the active wallet before submitting again." }, accountChanged: true };
+        }
+      }
       result = await execute(true);
-      if (result.ok) setToken(COOKIE_SESSION);
+      if (result.ok && path === "/api/web/me") {
+        const cookieUser = result.data?.user || null;
+        if (!adoptCookieSessionUser(cookieUser)) {
+          setToken("");
+          state.sessionRestoreStatus = "guest";
+          return { ok: false, status: 401, data: { error: "Session identity could not be confirmed." } };
+        }
+      } else if (result.status === 401) setToken("");
+    } else if (result.status === 401 && state.token === COOKIE_SESSION) {
+      setToken("");
+      state.sessionRestoreStatus = "guest";
     }
     return result;
   }
   function post(path, body, options = {}) { return request(path, { ...options, method: "POST", headers: { ...(options.headers || {}), "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }); }
   function apiMessage(data, fallback) { return String(data?.message || data?.error || fallback || "Something went wrong."); }
-  function setToken(token) {
+  function setToken(token, options = {}) {
     const next = token || "";
-    if (next !== state.token) {
-      localStorage.removeItem(WALLET_PORTFOLIO_CACHE_KEY);
-      localStorage.removeItem(ACTIVE_WALLET_KEY);
-      state.portfolioPromise = null;
-      state.portfolioPromiseForced = false;
-      state.portfolioForceRequested = false;
-      state.rhBalancePromise = null;
-      state.walletBalancePromise = null;
-      state.wallets = [];
-      state.positions = [];
-      state.rhWalletPosition = null;
-      state.activeWallet = null;
+    const preserveLocalState = Boolean(options.preserveLocalState);
+    if (next !== state.token && !preserveLocalState) {
+      clearPrivateWalletState();
+      state.user = null;
+      state.confirmedUserId = "";
     }
     state.token = next;
-    if (next && next !== COOKIE_SESSION) localStorage.setItem(TOKEN_KEY, next); else {
+    if (next && next !== COOKIE_SESSION) localStorage.setItem(TOKEN_KEY, next); else if (!next) {
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(WALLET_PORTFOLIO_CACHE_KEY);
+    } else {
+      // Cookie sessions are shared by slimewire.org and app.slimewire.org. Keep the
+      // last confirmed local snapshot so the wallet can paint instantly next time.
+      localStorage.removeItem(TOKEN_KEY);
     }
   }
-  async function loadMe() { if (!state.token) return null; const result = await request("/api/web/me", { noRetry: true }); if (result.ok) state.user = result.data?.user || null; return state.user; }
+  async function loadMe() {
+    if (!state.token) return null;
+    const result = await request("/api/web/me", { noRetry: true });
+    if (result.ok && result.data?.user) confirmAuthenticatedUser(result.data.user);
+    else if ([401, 403].includes(result.status)) {
+      setToken("");
+      state.sessionRestoreStatus = "guest";
+    } else state.sessionRestoreStatus = "unavailable";
+    return state.user;
+  }
 
   async function restoreSharedSession() {
-    if (state.token) return false;
+    if (state.token) { state.sessionRestoreStatus = "authenticated"; return false; }
     const result = await request("/api/web/me", { noRetry: true, timeout: 8_000 });
-    if (!result.ok || !result.data?.user) return false;
-    setToken(COOKIE_SESSION);
-    state.user = result.data.user;
+    if (!result.ok || !result.data?.user) {
+      state.sessionRestoreStatus = result.status === 0 || result.status >= 500 ? "unavailable" : "guest";
+      return false;
+    }
+    const restoredUserId = confirmedAccountId(result.data.user);
+    const cacheMatches = Boolean(restoredUserId && state.stagedPortfolioCache?.ownerId === restoredUserId);
+    setToken(COOKIE_SESSION, { preserveLocalState: cacheMatches });
+    confirmAuthenticatedUser(result.data.user);
     return true;
   }
 
@@ -346,7 +505,7 @@
       const result = await post("/api/web/telegram-login/exchange", { ticket }, { noRetry: true, timeout: 10_000 });
       if (!result.ok || !result.data?.token) throw new Error(apiMessage(result.data, "Telegram sign-in expired. Tap the card again."));
       setToken(result.data.token);
-      state.user = result.data.user || null;
+      confirmAuthenticatedUser(result.data.user || null);
       toast("Signed in from Telegram");
       return true;
     } catch (error) {
@@ -361,25 +520,52 @@
     if (state.token && state.user) return true;
     if (state.token) {
       const check = await request("/api/web/me", { noRetry: true });
-      if (check.ok) { state.user = check.data?.user || check.data?.me || null; return true; }
+      if (check.ok) return confirmAuthenticatedUser(check.data?.user || check.data?.me || null);
       if (check.status !== 401) return true;
       setToken("");
     }
     const result = await post("/api/web/signup", { ref: localStorage.getItem("ggRef") || "" });
-    if (result.ok && result.data?.token) { setToken(result.data.token); state.user = result.data.user || null; return true; }
+    if (result.ok && result.data?.token) { setToken(result.data.token); return confirmAuthenticatedUser(result.data.user || null); }
     return false;
   }
   async function ensureAutomation() { if (!state.token) return; await post("/api/web/profile/automation", { action: "enable" }); }
   function readWalletPortfolioCache() {
     const cached = readLocal(WALLET_PORTFOLIO_CACHE_KEY, null);
-    if (!cached?.data || Date.now() - Number(cached.savedAt || 0) > 30 * 60_000) return null;
-    return cached.data;
+    if (!cached?.data || !cached.ownerId || Date.now() - Number(cached.savedAt || 0) > 30 * 60_000) {
+      localStorage.removeItem(WALLET_PORTFOLIO_CACHE_KEY);
+      return null;
+    }
+    return { ownerId: String(cached.ownerId), data: cached.data, savedAt: Number(cached.savedAt || 0) };
+  }
+  function stageWalletPortfolioCache() {
+    localStorage.removeItem(WALLET_PORTFOLIO_LEGACY_CACHE_KEY);
+    state.stagedPortfolioCache = readWalletPortfolioCache();
+    return state.stagedPortfolioCache;
+  }
+  function cacheSafePortfolioValue(value) {
+    const blocked = /(?:secret|privatekey|keypair|seed|mnemonic|password|spendpin|authorization|authtoken|sessiontoken|accesstoken|refreshtoken|bearertoken|recovery|credential|apikey|jwt|cookie|headers)/i;
+    try {
+      return JSON.parse(JSON.stringify(value, (key, item) => blocked.test(String(key).replace(/[^a-z0-9]/gi, "")) ? undefined : item));
+    } catch {
+      return null;
+    }
   }
   function saveWalletPortfolioCache(data = {}) {
-    if (!IS_WALLET_ROUTE || !state.token || !Array.isArray(data.balances)) return;
-    saveLocal(WALLET_PORTFOLIO_CACHE_KEY, { savedAt: Date.now(), data });
+    const ownerId = state.confirmedUserId;
+    if (!IS_WALLET_ROUTE || !state.token || !ownerId || ownerId !== confirmedAccountId() || !Array.isArray(data.balances)) return;
+    // Only public wallet state is cached. Authentication material, recovery keys,
+    // private keys, seed phrases, spend PINs and request headers never enter it.
+    const safeData = cacheSafePortfolioValue({
+      ok: Boolean(data.ok), fast: Boolean(data.fast), solUsd: Number(data.solUsd) || 0,
+      balances: data.balances,
+      positions: Array.isArray(data.positions) ? data.positions : [],
+      rhBalances: data.rhBalances && typeof data.rhBalances === "object" ? data.rhBalances : {}
+    });
+    if (!safeData) return;
+    saveLocal(WALLET_PORTFOLIO_CACHE_KEY, { version: 2, ownerId, savedAt: Date.now(), data: safeData });
   }
   function applyPortfolioSnapshot(data = {}, options = {}) {
+    if (options.accountScope && !accountScopeMatches(options.accountScope)) return null;
     const previousByIndex = new Map(state.wallets.map((wallet) => [Number(wallet.index), wallet]));
     state.wallets = (data.balances || []).filter((wallet) => !wallet.volumeBot).map((wallet) => (
       data.fast ? { ...(previousByIndex.get(Number(wallet.index)) || {}), ...wallet } : wallet
@@ -395,6 +581,8 @@
     state.positions = displayablePositions(data.positions || state.positions || []);
     if (!state.activeWallet || !state.wallets.some((wallet) => wallet.index === state.activeWallet)) state.activeWallet = state.wallets[0]?.index || null;
     if (state.activeWallet) localStorage.setItem(ACTIVE_WALLET_KEY, String(state.activeWallet));
+    state.portfolioStatus = options.status || (options.fromCache ? "stale" : "live");
+    state.portfolioUpdatedAt = Number(options.savedAt || Date.now());
     paintWalletPill();
     renderCashHandoff();
     renderHomeReadiness();
@@ -402,7 +590,7 @@
     return data;
   }
   async function loadPortfolioSnapshot(options = {}) {
-    if (!state.token) return null;
+    if (!state.token || !state.confirmedUserId) return null;
     const requestedForce = Boolean(options.force);
     if (state.portfolioPromise) {
       if (requestedForce && !state.portfolioPromiseForced) state.portfolioForceRequested = true;
@@ -410,11 +598,14 @@
     }
     const force = requestedForce || state.portfolioForceRequested;
     state.portfolioForceRequested = false;
-    const authToken = state.token;
+    const accountScope = authenticatedAccountScope();
     const refresh = (async () => {
       const result = await request(`/api/web/portfolio/snapshot${force ? "?force=true" : ""}`);
-      if (!result.ok || !result.data?.ok || authToken !== state.token) return null;
-      return applyPortfolioSnapshot(result.data);
+      if (!result.ok || !result.data?.ok || !accountScopeMatches(accountScope)) {
+        if (accountScopeMatches(accountScope) && state.portfolioStatus !== "stale") state.portfolioStatus = "unavailable";
+        return null;
+      }
+      return applyPortfolioSnapshot(result.data, { accountScope });
     })();
     state.portfolioPromise = refresh;
     state.portfolioPromiseForced = force;
@@ -425,7 +616,7 @@
         state.portfolioPromise = null;
         state.portfolioPromiseForced = false;
       }
-      if (state.portfolioForceRequested && authToken === state.token) void loadPortfolioSnapshot({ force: true });
+      if (state.portfolioForceRequested && accountScopeMatches(accountScope)) void loadPortfolioSnapshot({ force: true });
     }
   }
   async function loadWallets(force = false) {
@@ -447,18 +638,18 @@
     };
   }
   async function loadWalletBalancePreview() {
-    if (!state.token) return null;
+    if (!state.token || !state.confirmedUserId) return null;
     if (state.walletBalancePromise) return state.walletBalancePromise;
-    const authToken = state.token;
+    const accountScope = authenticatedAccountScope();
     const refresh = (async () => {
       const result = await request("/api/web/balances?fast=true", { timeout: 5_000 });
-      if (!result.ok || !result.data?.ok || authToken !== state.token) return null;
+      if (!result.ok || !result.data?.ok || !accountScopeMatches(accountScope)) return null;
       const snapshot = {
         ...result.data,
         positions: state.positions,
         rhBalances: currentRhBalanceSnapshot()
       };
-      applyPortfolioSnapshot(snapshot);
+      applyPortfolioSnapshot(snapshot, { status: "refreshing", accountScope });
       renderWalletHero();
       if (state.view === "wallet" && state.profileTab === "positions") renderWalletPositions();
       return snapshot;
@@ -468,11 +659,12 @@
     finally { if (state.walletBalancePromise === refresh) state.walletBalancePromise = null; }
   }
   async function hydrateFunRhBalances(render = true) {
-    if (!state.token) return false;
+    if (!state.token || !state.confirmedUserId) return false;
     if (!state.rhBalancePromise) {
-      state.rhBalancePromise = (async () => {
+      const accountScope = authenticatedAccountScope();
+      const refresh = (async () => {
         const result = await request("/api/web/rh/balances");
-        if (!result.ok || !result.data?.ok) return false;
+        if (!result.ok || !result.data?.ok || !accountScopeMatches(accountScope)) return false;
         state.rhEthUsd = Math.max(0, Number(result.data.ethUsd) || 0);
         const byIndex = new Map((result.data.wallets || []).map((row) => [Number(row.walletIndex), row]));
         state.wallets = state.wallets.map((wallet) => {
@@ -480,7 +672,9 @@
           return row ? { ...wallet, rhAddress: row.address || "", rhEth: row.available ? Number(row.eth || 0) : null, rhAvailable: Boolean(row.available), rhExplorer: row.explorer || "" } : wallet;
         });
         return true;
-      })().finally(() => { state.rhBalancePromise = null; });
+      })();
+      const tracked = refresh.finally(() => { if (state.rhBalancePromise === tracked) state.rhBalancePromise = null; });
+      state.rhBalancePromise = tracked;
     }
     const refreshed = await state.rhBalancePromise;
     if (refreshed && render) { renderWalletHero(); renderHomeReadiness(); if (state.view === "quick") renderQuickRoute(); }
@@ -622,13 +816,14 @@
     target.innerHTML = `<section class="readiness-card ready"><div class="readiness-summary"><div><span>WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL ready` : "Add SOL to trade"}</h2><p>${backedUp ? (sol > 0 ? "Pick a coin and choose your amount." : "Add SOL from Phantom, Solflare, or another Solana wallet.") : "Save this wallet backup before trading on another device."}</p></div><div class="wallet-cash-total"><span>TOTAL VALUE</span><b>${formatWalletUsd(totalUsd)}</b><small>SOL + COINS + RH ETH</small></div></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b class="${backedUp ? "done" : "needs-action"}">${backedUp ? "OK" : "2"} <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Add SOL"}</i></b></div><div class="readiness-actions"><button type="button" data-deposit>${sol > 0 ? "Add more SOL" : "Add SOL"}</button><button class="secondary" type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Wallet backups</button></div></section>`;
   }
 
-  function normalizeSol(row) {
-    return { ...row, chain: "solana", address: row.tokenMint, marketCap: Number(row.marketCap || row.marketCapUsd || row.fdv || 0), liquidity: Number(row.liquidityUsd || row.liquidity?.usd || row.reserveUsd || 0), holders: Number(row.holderCount || row.holders || row.holdersCount || 0), volume: Number(row.volumeH24 || row.volumeH1 || row.volumeUsd || row.volume5m || 0), volumeLabel: row.volumeLabel || row.volumeH1Label || row.volume5mLabel || "checking", change: Number(row.m5 ?? row.h1 ?? row.priceChange?.h1), age: ageLabel(row), imageUrl: row.imageUrl || row.avatarUrl || row.imageUri || row.logoUrl || row.meta?.imageUrl || row.metadata?.image || "" };
+  function normalizeSol(row, receivedAt = Date.now()) {
+    const volume = marketNumber(row.volumeH24, row.volumeH1, row.volumeUsd, row.volume5m);
+    return { ...row, chain: "solana", address: row.tokenMint, marketCap: marketNumber(row.marketCap, row.marketCapUsd, row.fdv), liquidity: marketNumber(row.liquidityUsd, row.liquidity?.usd, row.reserveUsd), holders: marketNumber(row.holderCount, row.holders, row.holdersCount), volume, volumeLabel: volume == null ? (row.volumeLabel || row.volumeH1Label || row.volume5mLabel || "Unavailable") : "", change: marketNumber(row.m5, row.h1, row.priceChange?.h1), age: ageLabel(row), imageUrl: row.imageUrl || row.avatarUrl || row.imageUri || row.logoUrl || row.meta?.imageUrl || row.metadata?.image || "", marketState: row.marketState || "live", marketUpdatedAt: marketNumber(row.marketUpdatedAt, row.updatedAtMs, receivedAt) };
   }
-  function normalizeRh(row) {
-    const marketCap = Number(row.marketCapUsd || row.marketCap || row.mc || row.fdv || 0);
-    const volume = Number(row.volume24hUsd || row.volumeH24 || row.volumeUsd || row.vol24 || row.vol1 || row.volume?.h24 || 0);
-    return { ...row, chain: "robinhood", tokenMint: row.address || row.tokenMint, address: row.address || row.tokenMint, marketCap, liquidity: Number(row.liquidityUsd || row.liquidity || row.liq || row.liquidity?.usd || 0), holders: Number(row.holderCount || row.holders || row.holdersCount || 0), volume, volumeLabel: row.volumeLabel || row.volume24hLabel || (volume > 0 ? "" : "checking"), change: Number(row.priceChange1h ?? row.m5 ?? row.h1 ?? row.ch1 ?? row.priceChange24h ?? row.ch24), age: ageLabel(row), imageUrl: row.imageUrl || row.localImagePath || row.iconUrl || row.imageUri || row.logoUrl || row.metadata?.image || "" };
+  function normalizeRh(row, receivedAt = Date.now()) {
+    const marketCap = marketNumber(row.marketCapUsd, row.marketCap, row.mc, row.fdv);
+    const volume = marketNumber(row.volume24hUsd, row.volumeH24, row.volumeUsd, row.vol24, row.vol1, row.volume?.h24);
+    return { ...row, chain: "robinhood", tokenMint: row.address || row.tokenMint, address: row.address || row.tokenMint, marketCap, liquidity: marketNumber(row.liquidityUsd, row.liquidity, row.liq, row.liquidity?.usd), holders: marketNumber(row.holderCount, row.holders, row.holdersCount), volume, volumeLabel: volume == null ? (row.volumeLabel || row.volume24hLabel || "Unavailable") : "", change: marketNumber(row.priceChange1h, row.m5, row.h1, row.ch1, row.priceChange24h, row.ch24), age: ageLabel(row), imageUrl: row.imageUrl || row.localImagePath || row.iconUrl || row.imageUri || row.logoUrl || row.metadata?.image || "", marketState: row.marketState || "live", marketUpdatedAt: marketNumber(row.marketUpdatedAt, row.updatedAtMs, receivedAt) };
   }
   const FEED_CONFIG = {
     movers: { bucket: "live", sort: "best", rh: "trending", note: "Live movers ranked by signal" },
@@ -636,17 +831,59 @@
     soon: { bucket: "live", sort: "best", cat: "graduating", rh: "soon", note: "$17K–$40K market cap across both chains" },
     graduated: { bucket: "graduated", sort: "best", cat: "graduated", rh: "safe", note: "Established pools with active trading" }
   };
+  const MOBILE_FEED_LIMIT = 24;
+  function compactFeedRow(row = {}) {
+    return {
+      tokenMint: row.tokenMint || row.address || "", address: row.address || row.tokenMint || "",
+      chain: row.chain || "solana", symbol: row.symbol || "", name: row.name || "",
+      imageUrl: directCoinImage(row), marketCap: row.marketCap, liquidity: row.liquidity,
+      holders: row.holders, volume: row.volume, volumeLabel: row.volumeLabel || "",
+      change: row.change, age: row.age || "", pairAgeSeconds: row.pairAgeSeconds,
+      createdAt: row.createdAt || "", live: Boolean(row.live), marketState: row.marketState || "stale",
+      marketUpdatedAt: Number(row.marketUpdatedAt || 0)
+    };
+  }
+  function restoreFeedCache() {
+    const saved = readLocal(FUN_FEED_CACHE_KEY, []);
+    if (!Array.isArray(saved)) return;
+    for (const entry of saved) {
+      if (!entry?.key || !Array.isArray(entry.rows) || Date.now() - Number(entry.at || 0) > 5 * 60_000) continue;
+      state.feedCache.set(entry.key, { at: Number(entry.at), status: "stale", rows: entry.rows.map((row) => ({ ...row, marketState: "stale" })) });
+    }
+  }
+  function saveFeedCache() {
+    const entries = [...state.feedCache.entries()].slice(-4).map(([key, entry]) => ({
+      key, at: Number(entry.at || 0), rows: (entry.rows || []).slice(0, MOBILE_FEED_LIMIT * 2).map(compactFeedRow)
+    }));
+    saveLocal(FUN_FEED_CACHE_KEY, entries);
+  }
+  function feedNote(config, entry, updating = false) {
+    if (!entry?.rows?.length) return `${config.note} · unavailable${updating ? " · retrying" : ""}`;
+    const status = entry.status === "live" && Date.now() - Number(entry.at || 0) < 30_000 ? "Live" : "Stale";
+    return `${config.note} · ${status} · ${freshnessAgeLabel(entry.at)}${updating ? " · updating" : ""}`;
+  }
   async function fetchSolFeed(config, force = false) {
     const query = new URLSearchParams({ bucket: config.bucket, sort: config.sort }); if (config.cat) query.set("cat", config.cat);
+    query.set("view", "mobile");
+    query.set("limit", String(MOBILE_FEED_LIMIT));
     if (force) query.set("force", "true");
     const result = await request(`/api/web/live-pairs?${query}`);
-    return result.ok ? (result.data?.livePairs?.rows || []).map(normalizeSol) : [];
+    const receivedAt = Date.now();
+    const payload = result.data?.livePairs || {};
+    const rawRows = result.ok ? (payload.rows || []).slice(0, MOBILE_FEED_LIMIT) : [];
+    const marketUpdatedAt = Number(rawRows[0]?.marketUpdatedAt) || Date.parse(payload.refreshedAt || "") || receivedAt;
+    const stale = Boolean(payload.stale || rawRows.some((row) => row?.marketState === "stale"));
+    return { ok: Boolean(result.ok), stale, receivedAt: marketUpdatedAt, rows: rawRows.map((row) => normalizeSol(row, marketUpdatedAt)) };
   }
   async function fetchRhFeed(config, force = false) {
-    const query = new URLSearchParams({ category: config.rh || "trending" });
+    const query = new URLSearchParams({ category: config.rh || "trending", view: "mobile", limit: String(MOBILE_FEED_LIMIT) });
     if (force) query.set("force", "true");
     const result = await request(`/api/web/rh/pairs?${query}`, { timeout: 5000 });
-    return result.ok ? (result.data?.rows || []).map(normalizeRh) : [];
+    const receivedAt = Date.now();
+    const rawRows = result.ok ? (result.data?.rows || []).slice(0, MOBILE_FEED_LIMIT) : [];
+    const marketUpdatedAt = Number(result.data?.marketUpdatedAt) || Number(rawRows[0]?.marketUpdatedAt) || receivedAt;
+    const stale = Boolean(result.data?.stale || rawRows.some((row) => row?.marketState === "stale"));
+    return { ok: Boolean(result.ok), stale, receivedAt: marketUpdatedAt, rows: rawRows.map((row) => normalizeRh(row, marketUpdatedAt)) };
   }
   function sortAndDedupeFeed(rows, feed) {
     const visible = feed === "soon"
@@ -692,31 +929,60 @@
     const config = FEED_CONFIG[state.feed] || FEED_CONFIG.movers;
     const cacheKey = `${state.chain}:${state.feed}`;
     const cached = state.feedCache.get(cacheKey);
-    if (!force && cached && Date.now() - cached.at < 15_000) { state.rows = cached.rows; hydrateSelectedFromFeed(); renderCoinList(); $(`[data-feed-note]`).textContent = `${config.note} · updated ${Math.max(1, Math.round((Date.now() - cached.at) / 1000))}s ago`; scheduleFeedRefresh(); return; }
-    if (!options.silent && !state.rows.length) $("[data-coin-list]").innerHTML = '<div class="skeleton-list"></div>';
-    $("[data-feed-note]").textContent = config.note;
+    if (cached?.rows?.length) {
+      state.rows = cached.rows;
+      state.feedStatus = cached.status || "stale";
+      hydrateSelectedFromFeed();
+      renderCoinList();
+      $("[data-feed-note]").textContent = feedNote(config, cached, Date.now() - Number(cached.at || 0) >= 15_000);
+      if (!force && Date.now() - Number(cached.at || 0) < 15_000) { scheduleFeedRefresh(); return; }
+    } else if (!options.silent && !state.rows.length) {
+      $("[data-coin-list]").innerHTML = '<div class="skeleton-list"></div>';
+      $("[data-feed-note]").textContent = `${config.note} · connecting`;
+    }
     let rows = [];
+    let sourceOk = false;
+    let allSourcesOk = false;
+    let receivedAt = 0;
     const hardRefresh = force && !options.silent;
-    if (selectedChain === "solana") rows = await fetchSolFeed(config, hardRefresh);
-    else if (selectedChain === "robinhood") rows = await fetchRhFeed(config, hardRefresh);
+    if (selectedChain === "solana") {
+      const sol = await fetchSolFeed(config, hardRefresh);
+      rows = sol.rows; sourceOk = sol.ok; allSourcesOk = sol.ok && !sol.stale; receivedAt = sol.receivedAt;
+    }
+    else if (selectedChain === "robinhood") {
+      const rh = await fetchRhFeed(config, hardRefresh);
+      rows = rh.rows; sourceOk = rh.ok; allSourcesOk = rh.ok && !rh.stale; receivedAt = rh.receivedAt;
+    }
     else {
       const solPromise = fetchSolFeed(config, hardRefresh), rhPromise = fetchRhFeed(config, hardRefresh);
       const [sol, rh] = await Promise.all([solPromise, rhPromise]);
       const previousRows = cached?.rows?.length ? cached.rows : state.rows;
-      const stableSol = sol.length ? sol : previousRows.filter((row) => row.chain === "solana");
-      const stableRh = rh.length ? rh : previousRows.filter((row) => row.chain === "robinhood");
+      const stableSol = sol.ok ? sol.rows : previousRows.filter((row) => row.chain === "solana").map((row) => ({ ...row, marketState: "stale" }));
+      const stableRh = rh.ok ? rh.rows : previousRows.filter((row) => row.chain === "robinhood").map((row) => ({ ...row, marketState: "stale" }));
       rows = [...stableSol.slice(0, 32), ...stableRh.slice(0, 24)];
+      sourceOk = sol.ok || rh.ok;
+      allSourcesOk = sol.ok && rh.ok && !sol.stale && !rh.stale;
+      const sourceTimes = [sol.ok ? sol.receivedAt : 0, rh.ok ? rh.receivedAt : 0].filter((value) => Number(value) > 0);
+      receivedAt = sourceTimes.length ? Math.min(...sourceTimes) : 0;
     }
     if (version !== state.feedRequestVersion || selectedChain !== state.chain || selectedFeed !== state.feed) return;
     const nextRows = sortAndDedupeFeed(rows, selectedFeed);
-    // A brief provider timeout must not flash an empty market. Keep the last good rows while the
-    // next refresh is already scheduled.
-    state.rows = nextRows.length ? nextRows : (cached?.rows?.length ? cached.rows : state.rows);
-    state.feedCache.set(cacheKey, { at: Date.now(), rows: state.rows });
-    $(`[data-feed-note]`).textContent = `${config.note} · updated now`;
+    const previousRows = cached?.rows?.length ? cached.rows : state.rows;
+    // A brief provider timeout must not flash an empty market or reset its timestamp. Preserve the
+    // last confirmed rows and label them stale until a provider actually answers.
+    state.rows = sourceOk ? nextRows : previousRows.map((row) => ({ ...row, marketState: "stale" }));
+    const entry = {
+      at: sourceOk ? (receivedAt || Date.now()) : Number(cached?.at || 0),
+      status: allSourcesOk ? "live" : (state.rows.length ? "stale" : "unavailable"),
+      rows: state.rows
+    };
+    state.feedStatus = entry.status;
+    state.feedCache.set(cacheKey, entry);
+    if (entry.rows.length) saveFeedCache();
+    $("[data-feed-note]").textContent = feedNote(config, entry, !sourceOk);
     hydrateSelectedFromFeed();
     renderCoinList();
-    void hydrateMissingCoinArt(version);
+    if (sourceOk) void hydrateMissingCoinArt(version);
     scheduleFeedRefresh();
   }
   async function hydrateMissingCoinArt(version) {
@@ -780,10 +1046,12 @@
   }
   function coinRowHtml(coin, index = 0) {
     const key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
-    const change = Number(coin.change), changeClass = Number.isFinite(change) ? (change >= 0 ? "up" : "down") : "";
+    const change = marketNumber(coin.change), changeClass = change == null ? "" : (change >= 0 ? "up" : "down");
+    const volume = coin.volume == null ? (coin.volumeLabel || "Unavailable") : (Number(coin.volume) === 0 ? "$0" : formatUsd(coin.volume));
+    const freshness = coin.marketState === "stale" ? '<i class="market-freshness stale">STALE</i>' : "";
     return `<button class="coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="${chain}">
-      <span class="coin-avatar" style="background-image:url('${coinBadge(coin)}')"><img ${coinImageAttrs(coin)} alt="" loading="${index < 10 ? "eager" : "lazy"}" decoding="async" referrerpolicy="no-referrer"><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span>
-      <span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span>${coin.live ? '<i class="live-tag">LIVE</i>' : ""}</span><span class="coin-meta"><i>${escapeHtml(coin.age || "new")}</i><i>Vol ${escapeHtml(coin.volume > 0 ? formatUsd(coin.volume) : (coin.volumeLabel || "checking"))}</i><i class="${changeClass}">${escapeHtml(formatPct(change))}</i></span></span>
+      <span class="coin-avatar" style="background-image:url('${coinBadge(coin)}')"><img ${coinImageAttrs(coin)} alt="" loading="${index < 3 ? "eager" : "lazy"}" decoding="async" referrerpolicy="no-referrer"><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span>
+      <span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span>${coin.live ? '<i class="live-tag">LIVE</i>' : freshness}</span><span class="coin-meta"><i>${escapeHtml(coin.age || "new")}</i><i>Vol ${escapeHtml(volume)}</i><i class="${changeClass}">${escapeHtml(change == null ? "—" : formatPct(change))}</i></span></span>
       <span class="coin-value"><b>${escapeHtml(formatUsd(coin.marketCap))}</b><span>MARKET CAP</span></span>
     </button>`;
   }
@@ -901,7 +1169,7 @@
       return;
     }
     const chain = coin.chain === "robinhood" ? "rh" : "sol", safety = quickSafetyLabel(coin), preset = activePreset();
-    const change = Number(coin.change), amount = state.quickAmount || "0.1";
+    const change = marketNumber(coin.change), amount = state.quickAmount || "0.1";
     const symbol = String(coin.symbol || "").replace(/^\$+/, "");
     const tokenLabel = symbol ? `$${symbol}` : short(key);
     const holders = Number(coin.holders || coin.holderCount || state.selectedDetail?.holders || 0);
@@ -915,7 +1183,8 @@
     const chartPanel = `<div class="quick-inline-chart"><iframe src="${chartSrc}" title="${escapeHtml(coin.symbol || "coin")} chart" loading="eager"></iframe></div>${quickDock}`;
     const toolsPanel = `<div class="quick-tools-grid"><button type="button" data-manage-presets><i>◎</i><b>Presets</b><span>TP, stop loss and ladders</span><em>›</em></button><button type="button" data-quick-bundle><i>♙</i><b>Bundle Buy</b><span>Split across wallets</span><em>›</em></button><button type="button" data-manage-wallets><i>▣</i><b>Wallets</b><span>Add, fund or switch</span><em>›</em></button><button type="button" data-link-tool="safety"><i>◇</i><b>SlimeShield</b><span>Contract safety read</span><em>›</em></button></div>${quickDock}<button class="quick-back-buy" type="button" data-quick-panel="trade">← Back to Buy</button>`;
     const activePanel = state.quickPanel === "chart" ? chartPanel : state.quickPanel === "tools" ? toolsPanel : tradePanel;
-    content.innerHTML = `<article class="quick-token-card"><div class="quick-token-head"><span class="coin-avatar" style="background-image:url('${coinBadge(coin)}')"><img ${coinImageAttrs(coin)} alt=""><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span><div class="quick-token-name"><b>${escapeHtml(tokenLabel)}</b><button type="button" data-copy-coin>${escapeHtml(short(key))}<i>▣</i></button><span>${chain === "rh" ? "Robinhood Chain · funded with SOL" : "Solana quick trade"}</span></div><span class="quick-safety ${safety.pending ? "pending" : ""}">${escapeHtml(safety.text)}</span></div><div class="quick-market-grid"><div><span>MC</span><b>${escapeHtml(formatUsd(coin.marketCap || coin.mc))}</b></div><div><span>LIQ</span><b>${escapeHtml(formatUsd(coin.liquidity || coin.liq || coin.liquidityUsd))}</b></div><div><span>HOLDERS</span><b>${holders > 0 ? holders.toLocaleString() : "—"}</b></div><div><span>VOL</span><b>${escapeHtml(coin.volume > 0 ? formatUsd(coin.volume) : (coin.volumeLabel || "checking"))}</b></div><div><span>1H</span><b class="${Number.isFinite(change) ? (change >= 0 ? "up" : "down") : ""}">${escapeHtml(formatPct(change))}</b></div></div>${panelTabs}${activePanel}</article>${state.quickPanel === "trade" ? quickWalletPanel() : ""}`;
+    const volumeLabel = coin.volume == null ? (coin.volumeLabel || "Unavailable") : (Number(coin.volume) === 0 ? "$0" : formatUsd(coin.volume));
+    content.innerHTML = `<article class="quick-token-card"><div class="quick-token-head"><span class="coin-avatar" style="background-image:url('${coinBadge(coin)}')"><img ${coinImageAttrs(coin)} alt=""><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span><div class="quick-token-name"><b>${escapeHtml(tokenLabel)}</b><button type="button" data-copy-coin>${escapeHtml(short(key))}<i>▣</i></button><span>${chain === "rh" ? "Robinhood Chain · funded with SOL" : "Solana quick trade"}</span></div><span class="quick-safety ${safety.pending ? "pending" : ""}">${escapeHtml(safety.text)}</span></div><div class="quick-market-grid"><div><span>MC</span><b>${escapeHtml(formatUsd(marketNumber(coin.marketCap, coin.mc)))}</b></div><div><span>LIQ</span><b>${escapeHtml(formatUsd(marketNumber(coin.liquidity, coin.liq, coin.liquidityUsd)))}</b></div><div><span>HOLDERS</span><b>${holders > 0 ? holders.toLocaleString() : "Unavailable"}</b></div><div><span>VOL</span><b>${escapeHtml(volumeLabel)}</b></div><div><span>1H</span><b class="${change == null ? "" : (change >= 0 ? "up" : "down")}">${escapeHtml(change == null ? "—" : formatPct(change))}</b></div></div>${panelTabs}${activePanel}</article>${state.quickPanel === "trade" ? quickWalletPanel() : ""}`;
   }
 
   async function loadQuickTarget(raw = "") {
@@ -930,8 +1199,10 @@
   }
   function renderCoinShell() {
     const coin = state.selected || {}, key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
-    $("[data-coin-mini]").innerHTML = `<div class="coin-identity"><img ${coinImageAttrs(coin)} style="background-image:url('${coinBadge(coin)}')" alt="" decoding="async" referrerpolicy="no-referrer"><div><b>${escapeHtml(coin.symbol || short(key))}</b><button class="coin-ca-button" type="button" data-copy-coin title="Copy ${escapeHtml(key)}"><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span><i>▣</i></button></div></div><div class="coin-head-quote"><b>${formatUsd(coin.marketCap || coin.mc)}</b><span class="${Number(coin.change) >= 0 ? "up" : "down"}">${formatPct(coin.change)} · 1H</span></div>`;
-    $("[data-coin-stats]").innerHTML = `<div><span>Market cap</span><b>${formatUsd(coin.marketCap || coin.mc)}</b></div><div><span>Liquidity</span><b>${formatUsd(coin.liquidity || coin.liq || coin.liquidityUsd)}</b></div><div><span>Holders</span><b>${Number(coin.holders || coin.holderCount) > 0 ? Number(coin.holders || coin.holderCount).toLocaleString() : "checking"}</b></div><div><span>Volume</span><b>${coin.volume > 0 ? formatUsd(coin.volume) : escapeHtml(coin.volumeLabel || "checking")}</b></div>`;
+    const change = marketNumber(coin.change), holders = marketNumber(coin.holders, coin.holderCount);
+    const volume = coin.volume == null ? (coin.volumeLabel || "Unavailable") : (Number(coin.volume) === 0 ? "$0" : formatUsd(coin.volume));
+    $("[data-coin-mini]").innerHTML = `<div class="coin-identity"><img ${coinImageAttrs(coin)} style="background-image:url('${coinBadge(coin)}')" alt="" decoding="async" referrerpolicy="no-referrer"><div><b>${escapeHtml(coin.symbol || short(key))}</b><button class="coin-ca-button" type="button" data-copy-coin title="Copy ${escapeHtml(key)}"><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span><i>▣</i></button></div></div><div class="coin-head-quote"><b>${formatUsd(marketNumber(coin.marketCap, coin.mc))}</b><span class="${change == null ? "" : (change >= 0 ? "up" : "down")}">${change == null ? "—" : formatPct(change)} · 1H</span></div>`;
+    $("[data-coin-stats]").innerHTML = `<div><span>Market cap</span><b>${formatUsd(marketNumber(coin.marketCap, coin.mc))}</b></div><div><span>Liquidity</span><b>${formatUsd(marketNumber(coin.liquidity, coin.liq, coin.liquidityUsd))}</b></div><div><span>Holders</span><b>${holders != null && holders > 0 ? holders.toLocaleString() : "Unavailable"}</b></div><div><span>Volume</span><b>${escapeHtml(volume)}</b></div>`;
     $(`[data-coin-mini] .coin-head-quote`)?.insertAdjacentHTML("beforebegin", `<a class="coin-community-link" href="/community?ca=${encodeURIComponent(key)}">Community</a>`);
     renderChart();
     renderQuickTrade();
@@ -971,6 +1242,7 @@
     if (state.view === "coin") renderPositionCard();
   }
   async function loadValuedPositions(version, options = {}) {
+    if (!state.token || !state.confirmedUserId) return state.positions;
     const requestedForce = Boolean(options.force);
     if (state.positionValuePromise) {
       // A completed trade must not lose its forced refresh just because the
@@ -981,11 +1253,11 @@
     }
     const force = requestedForce || state.positionValueForceRequested;
     state.positionValueForceRequested = false;
-    const authToken = state.token;
+    const accountScope = authenticatedAccountScope();
     let needsFreshFollowup = false;
     const refresh = (async () => {
       const result = await request(`/api/web/positions${force ? "?force=true" : ""}`);
-      if (!authToken || authToken !== state.token || version !== state.positionLoadVersion || !result.ok || !result.data?.ok) return state.positions;
+      if (!accountScopeMatches(accountScope) || version !== state.positionLoadVersion || !result.ok || !result.data?.ok) return state.positions;
       needsFreshFollowup = !force && Boolean(result.data.stale || result.data.backgroundRefreshing);
       state.positions = displayablePositions(result.data.positions);
       paintPositionSurfaces();
@@ -999,11 +1271,11 @@
       if (version !== state.positionLoadVersion || state.positionValueForceRequested) {
         void loadValuedPositions(state.positionLoadVersion, { force: state.positionValueForceRequested });
       }
-      else if (needsFreshFollowup && authToken === state.token) void loadValuedPositions(version, { force: true });
+      else if (needsFreshFollowup && accountScopeMatches(accountScope)) void loadValuedPositions(version, { force: true });
     }
   }
   async function loadPositions(options = {}) {
-    if (!state.token) return [];
+    if (!state.token || !state.confirmedUserId) return [];
     ++state.positionLoadVersion;
     await loadPortfolioSnapshot({ force: Boolean(options.force) });
     paintPositionSurfaces();
@@ -1132,9 +1404,19 @@
     // afterward without holding the wallet total hostage.
     renderWalletHero();
     if (state.token && state.profileTab === "positions" && state.wallets.length) renderWalletPositions();
+    if (state.sessionRestoring) {
+      if (state.profileTab === "positions" && state.wallets.length) renderWalletPositions();
+      else panel.innerHTML = '<div class="wallet-assets-head"><h2>Assets</h2></div><section class="wallet-route-assets"><div class="wallet-empty-assets"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><h3>Restoring this device</h3><p>Your wallet shell is ready. Saved balances appear immediately; live balances reconcile in the background.</p></div></section>';
+      return;
+    }
     if (initialRefresh) await initialRefresh;
     renderWalletHero();
     if (!state.token && state.profileTab === "social") { renderSocialProfile(); return; }
+    if (!state.token && state.sessionRestoreStatus === "unavailable" && state.wallets.length) {
+      if (state.profileTab === "positions") renderWalletPositions();
+      else panel.innerHTML = emptyState("Live account unavailable", "Your last saved wallet view is still visible. Reconnect to load private activity.");
+      return;
+    }
     if (!state.token) {
       panel.innerHTML = IS_WALLET_ROUTE ? `<div class="wallet-assets-head"><h2>Assets</h2></div><section class="wallet-route-assets"><div class="wallet-empty-assets"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><h3>Your wallet starts here</h3><p>Create a SlimeWire profile and wallet only when you are ready. Nothing runs in the background.</p><button type="button" data-fun-account="create">Create profile</button><button type="button" data-fun-account="login">Log in</button></div></section>` : emptyState("Your mobile wallet starts here", "Tap Deposit or Receive when you are ready. SlimeWire creates the account only when you use it.");
       return;
@@ -1184,13 +1466,17 @@
   }
   function renderWalletHero() {
     const wallet = activeWallet(), hero = $("[data-wallet-hero]");
-    const accountAccess = !IS_WALLET_ROUTE ? "" : state.token
+    const accountAccess = !IS_WALLET_ROUTE ? "" : state.sessionRestoring
+      ? '<div class="wallet-account-status"><span>RESTORING</span><b>Checking this device…</b></div>'
+      : state.sessionRestoreStatus === "unavailable" && wallet
+        ? '<div class="wallet-account-status"><span>OFFLINE</span><b>Saved wallet view</b></div>'
+      : state.token
       ? `<div class="wallet-account-status"><span>✓ Signed in</span><b>${escapeHtml(state.user?.username ? `@${state.user.username}` : "SlimeWire account")}</b></div>`
       : '<button class="wallet-account-login" type="button" data-fun-account="login">Log in to your account</button>';
     renderWalletPresetStrip();
     if (!wallet) {
-      hero.innerHTML = IS_WALLET_ROUTE ? state.token
-        ? `<button class="wallet-account-switcher" type="button" data-manage-wallets><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>SLIMEWALLET</small><b>Manage wallets</b></span><i>›</i></button>${accountAccess}<div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>$0.00</h1><p>Account connected · add or restore a wallet</p></div><div class="wallet-hero-tools"><button type="button" data-create-wallet>＋ Create wallet</button><button type="button" data-restore-wallets>↥ Restore wallet</button></div>`
+      hero.innerHTML = IS_WALLET_ROUTE ? (state.token || state.sessionRestoring)
+        ? `<button class="wallet-account-switcher" type="button" data-manage-wallets><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>SLIMEWALLET</small><b>${state.sessionRestoring ? "Restoring account" : "Manage wallets"}</b></span><i>›</i></button>${accountAccess}<div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>$0.00</h1><p>${state.sessionRestoring ? "Checking this device · saved wallets load instantly" : "Account connected · add or restore a wallet"}</p></div><div class="wallet-hero-tools"><button type="button" data-create-wallet>＋ Create wallet</button><button type="button" data-restore-wallets>↥ Restore wallet</button></div>`
         : `<button class="wallet-account-switcher" type="button" data-fun-account="login"><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>SLIMEWALLET</small><b>Log in</b></span><i>›</i></button>${accountAccess}<div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>$0.00</h1><p>Log in once to load every wallet</p></div><div class="wallet-hero-tools"><button type="button" data-fun-account="login">Log in</button><button type="button" data-fun-account="create">Create profile</button></div>`
         : `<img class="wallet-pfp" src="${slimePfp("guest")}" alt=""><h1>Slime guest</h1><p>No wallet created yet</p><div class="wallet-total">Ready when you are</div>`;
       return;
@@ -1200,7 +1486,12 @@
     if (IS_WALLET_ROUTE) {
       const total = walletRouteTotal();
       const totalLabel = total.totalUsd == null ? `${formatPositionSol(total.totalSol)} SOL` : formatWalletUsd(total.totalUsd);
-      hero.innerHTML = `<button class="wallet-account-switcher" type="button" data-manage-wallets><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>ACTIVE WALLET</small><b>${escapeHtml(wallet.label || "Main Slime")}</b></span><i>⌄</i></button>${accountAccess}<div class="wallet-hero-tools"><button type="button" data-manage-wallets>Manage / restore</button><button type="button" data-export-wallets>Back up all wallets</button></div><div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>${escapeHtml(totalLabel)}</h1><p>${escapeHtml(formatPositionSol(total.totalSol))} SOL equivalent</p></div><div class="wallet-chain-cards"><button type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><i class="solana-glyph">S</i><span><b>SOL</b><small>${sol.toFixed(4)} SOL</small></span><em>${state.solUsd > 0 ? escapeHtml(formatWalletUsd(sol * state.solUsd)) : "Copy"}</em></button><button type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress || "")}"><i class="eth-glyph">◆</i><span><b>ETH</b><small>${rhEth == null ? "Loading…" : `${rhEth.toFixed(6)} ETH`}</small></span><em>${rhEth != null && state.rhEthUsd > 0 ? escapeHtml(formatWalletUsd(rhEth * state.rhEthUsd)) : "Copy"}</em></button></div>`;
+      const freshness = state.portfolioStatus === "live" ? `Live · ${freshnessAgeLabel(state.portfolioUpdatedAt)}`
+        : state.portfolioStatus === "refreshing" ? "Balances live · positions updating"
+          : state.portfolioStatus === "stale" ? `Saved · ${freshnessAgeLabel(state.portfolioUpdatedAt)} · updating`
+            : "Unavailable · retrying";
+      const freshnessState = ["live", "refreshing"].includes(state.portfolioStatus) ? "live" : state.portfolioStatus;
+      hero.innerHTML = `<button class="wallet-account-switcher" type="button" data-manage-wallets><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>ACTIVE WALLET</small><b>${escapeHtml(wallet.label || "Main Slime")}</b></span><i>⌄</i></button>${accountAccess}<div class="wallet-hero-tools"><button type="button" data-manage-wallets>Manage / restore</button><button type="button" data-export-wallets>Back up all wallets</button></div><div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>${escapeHtml(totalLabel)}</h1><p data-freshness="${freshnessState}">${escapeHtml(freshness)}</p></div><div class="wallet-chain-cards"><button type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><i class="solana-glyph">S</i><span><b>SOL</b><small>${sol.toFixed(4)} SOL</small></span><em>${state.solUsd > 0 ? escapeHtml(formatWalletUsd(sol * state.solUsd)) : "Copy"}</em></button><button type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress || "")}"><i class="eth-glyph">◆</i><span><b>ETH</b><small>${rhEth == null ? "Updating…" : `${rhEth.toFixed(6)} ETH`}</small></span><em>${rhEth != null && state.rhEthUsd > 0 ? escapeHtml(formatWalletUsd(rhEth * state.rhEthUsd)) : "Copy"}</em></button></div>`;
       return;
     }
     const rhAddress = wallet.rhAddress ? `<button class="wallet-hero-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress)}" aria-label="Copy full Robinhood address"><b>RH ${escapeHtml(short(wallet.rhAddress))}</b><span>Tap to copy ETH address</span></button>` : "";
@@ -1267,6 +1558,8 @@
     const install = $(".wallet-install-card"); if (install) install.hidden = runningStandalone();
     const buy = $(".wallet-actions [data-deposit]"); if (buy) buy.textContent = "Buy";
     const send = $(".wallet-actions [data-send-sol]"); if (send) send.textContent = "Send";
+    $$('[data-wallet-route-src]').forEach((image) => { if (!image.getAttribute("src")) image.src = image.dataset.walletRouteSrc || ""; });
+    document.documentElement.classList.remove("wallet-route-prepaint");
   }
 
   function walletDeviceLabel() {
@@ -1298,6 +1591,7 @@
   function showWalletLock() {
     if (!IS_WALLET_ROUTE || !walletLockConfig().enabled) return;
     state.walletLocked = true;
+    const image = $("[data-wallet-lock-src]"); if (image && !image.getAttribute("src")) image.src = image.dataset.walletLockSrc || "";
     const overlay = $("[data-wallet-lock-overlay]"); if (overlay) { overlay.hidden = false; $("[data-wallet-unlock-pin]")?.focus(); }
     document.body.classList.add("wallet-is-locked");
   }
@@ -1420,7 +1714,7 @@
       }
       const visibility = await post("/api/web/profile/referral", { showOnTraderBoard: Boolean($("[data-profile-public]")?.checked), traderBoardWalletMode: "all" });
       if (!visibility.ok || !visibility.data?.ok) { toast(apiMessage(visibility.data, "Could not publish profile"), true); return; }
-      state.user = visibility.data.user || credentials.data.user || state.user; toast("Trader profile saved"); renderSocialProfile();
+      confirmAuthenticatedUser(visibility.data.user || credentials.data.user || state.user); toast("Trader profile saved"); renderSocialProfile();
     } finally { button.disabled = false; }
   }
   function openFunAccount(mode = "login") {
@@ -1434,7 +1728,7 @@
     button.disabled = true; button.textContent = mode === "create" ? "Creating…" : "Logging in…";
     const result = await post(mode === "create" ? "/api/web/signup" : "/api/web/password-login", { username, password, ref: localStorage.getItem("ggRef") || "" });
     if (!result.ok || !result.data?.ok || !result.data?.token) { status.textContent = result.status === 0 ? "Could not reach SlimeWire. Check your connection and try again." : apiMessage(result.data, mode === "create" ? "Could not create profile." : "Could not log in."); button.disabled = false; button.textContent = mode === "create" ? "Create profile" : "Log in"; return; }
-    setToken(result.data.token); state.user = result.data.user || null; closeSheet();
+    setToken(result.data.token); confirmAuthenticatedUser(result.data.user || null); closeSheet();
     if (mode === "create") await downloadFunAccountBackup();
     await Promise.all([loadMe(), loadWalletBalancePreview(), loadPresets()]);
     renderWalletHero(); renderSocialProfile(); paintWalletPill(); toast(mode === "create" ? "Profile created" : "Welcome back");
@@ -1535,10 +1829,11 @@
 
   async function loadFunRhPositions(force = false) {
     const wallet = activeWallet();
-    if (!state.token || !wallet) { state.rhWalletPosition = null; return null; }
+    if (!state.token || !state.confirmedUserId || !wallet) { state.rhWalletPosition = null; return null; }
     if (!force && state.rhWalletPosition && Number(state.rhWalletPosition.walletIndex) === Number(wallet.index)) return state.rhWalletPosition;
+    const accountScope = authenticatedAccountScope();
     const result = await request(`/api/web/rh/wallet?walletIndex=${encodeURIComponent(wallet.index)}`);
-    if (!result.ok || !result.data?.ok || Number(activeWallet()?.index) !== Number(wallet.index)) return null;
+    if (!result.ok || !result.data?.ok || !accountScopeMatches(accountScope) || Number(activeWallet()?.index) !== Number(wallet.index)) return null;
     state.rhWalletPosition = { ...result.data, walletIndex: wallet.index };
     if (state.view === "wallet" && state.profileTab === "positions") renderWalletPositions();
     return state.rhWalletPosition;
@@ -1566,8 +1861,18 @@
     button.textContent = "Selling…";
     const result = await post("/api/web/bundle/sell", { tokenMint, walletIndexes: [], walletPublicKeys: [walletPublicKey], percent, slippageBps: "400", manualSellAttemptId: attemptId("fun-wallet-sell") });
     if (result.ok && result.data?.ok && Number(result.data.bundle?.successCount || 0) > 0) {
-      toast(`Sold ${percent}% from ${walletLabel}`);
-      closeSheet();
+      const row = result.data.bundle.results?.find((entry) => entry.ok) || {};
+      const position = state.positions.find((entry) => String(entry.tokenMint || "").toLowerCase() === tokenMint.toLowerCase()) || {};
+      const receiptCoin = { ...position, tokenMint, symbol: position.symbol || short(tokenMint) };
+      const walletIndex = state.wallets.find((entry) => String(entry.publicKey || "") === walletPublicKey)?.index || 0;
+      const receipt = tradeReceiptData(
+        { ...row, status: result.data.bundle.status, recordError: result.data.bundle.recordError },
+        { chain: "solana", side: "sell", body: { walletPublicKey }, coin: { key: tokenMint, symbol: receiptCoin.symbol } },
+        receiptCoin,
+        { walletIndex }
+      );
+      toast(`Sell submitted from ${walletLabel}`);
+      openSheet(tradeReceiptHtml(receipt));
       await loadPortfolioSnapshot({ force: true });
       renderWalletPositions();
     } else {
@@ -1742,10 +2047,10 @@
     if (!current) return incoming;
     const merged = { ...current, ...incoming };
     for (const field of ["marketCap", "liquidity", "holders", "volume"]) {
-      merged[field] = Number(incoming[field]) > 0 ? Number(incoming[field]) : Number(current[field] || 0);
+      merged[field] = incoming[field] != null && Number.isFinite(Number(incoming[field])) ? Number(incoming[field]) : marketNumber(current[field]);
     }
     merged.imageUrl = directCoinImage(incoming) || directCoinImage(current) || "";
-    merged.volumeLabel = merged.volume > 0 ? "" : (incoming.volumeLabel || current.volumeLabel || "checking");
+    merged.volumeLabel = merged.volume != null ? "" : (incoming.volumeLabel || current.volumeLabel || "Unavailable");
     return merged;
   }
   function addSearchMatches(target, incoming) {
@@ -1781,8 +2086,9 @@
   }
   function searchCoinRowHtml(coin, index = 0) {
     const key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
-    const change = Number(coin.change), changeClass = Number.isFinite(change) ? (change >= 0 ? "up" : "down") : "";
-    return `<button class="coin-row search-coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="${chain}"><span class="coin-avatar" style="background-image:url('${coinBadge(coin)}')"><img ${coinImageAttrs(coin)} alt="" loading="${index < 8 ? "eager" : "lazy"}" decoding="async" referrerpolicy="no-referrer"><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span><span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span></span><span class="coin-meta"><i>24h ${escapeHtml(coin.volume > 0 ? formatUsd(coin.volume) : (coin.volumeLabel || "loading"))}</i><i>Liq ${escapeHtml(formatUsd(coin.liquidity))}</i><i class="${changeClass}">${escapeHtml(formatPct(change))}</i></span></span><span class="coin-value"><b>${escapeHtml(formatUsd(coin.marketCap))}</b><span>MARKET CAP</span></span></button>`;
+    const change = marketNumber(coin.change), changeClass = change == null ? "" : (change >= 0 ? "up" : "down");
+    const volume = coin.volume == null ? (coin.volumeLabel || "Unavailable") : (Number(coin.volume) === 0 ? "$0" : formatUsd(coin.volume));
+    return `<button class="coin-row search-coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="${chain}"><span class="coin-avatar" style="background-image:url('${coinBadge(coin)}')"><img ${coinImageAttrs(coin)} alt="" loading="${index < 3 ? "eager" : "lazy"}" decoding="async" referrerpolicy="no-referrer"><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span><span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span></span><span class="coin-meta"><i>24h ${escapeHtml(volume)}</i><i>Liq ${escapeHtml(formatUsd(coin.liquidity))}</i><i class="${changeClass}">${escapeHtml(change == null ? "—" : formatPct(change))}</i></span></span><span class="coin-value"><b>${escapeHtml(formatUsd(coin.marketCap))}</b><span>MARKET CAP</span></span></button>`;
   }
   function renderSearchMatches(content, matches, query, pending = false) {
     const rows = sortSearchMatches(matches.slice(), query).slice(0, 14);
@@ -1970,10 +2276,10 @@
     if (button.isConnected) renderSeasonSheet();
     scheduleFunSeasonPoll();
   }
-  const WalletFunding = window.SlimeWireFunding;
-  function fundingProvider(kind) { return WalletFunding?.provider(kind) || null; }
-  function fundingProviderLabel(kind) { return WalletFunding?.label(kind, fundingProvider(kind)) || "Solana wallet"; }
-  function isMobileWalletPlatform() { return Boolean(WalletFunding?.isMobile()); }
+  function walletFunding() { return window.SlimeWireFunding || null; }
+  function fundingProvider(kind) { return walletFunding()?.provider(kind) || null; }
+  function fundingProviderLabel(kind) { return walletFunding()?.label(kind, fundingProvider(kind)) || "Solana wallet"; }
+  function isMobileWalletPlatform() { return Boolean(walletFunding()?.isMobile()); }
   let funFundingLaunchInFlight = false;
   function setFunFundingButtonsDisabled(disabled) {
     $$('[data-fund-wallet]').forEach((item) => {
@@ -1986,6 +2292,7 @@
     setFunFundingButtonsDisabled(false);
   }
   function openFundingSheet(note = "") {
+    void ensureFunFundingAssets().catch(() => {});
     const wallet = activeWallet();
     const destination = wallet
       ? `<div class="fund-wallet-summary"><span>Funding</span><b>${escapeHtml(wallet.label || "SlimeWire wallet")}</b><small>${escapeHtml(short(wallet.publicKey))} · ${Number(wallet.sol || 0).toFixed(4)} SOL</small></div>`
@@ -1999,6 +2306,8 @@
   }
   async function startWalletFunding(kind, button) {
     if (!["phantom", "solflare"].includes(kind)) return;
+    try { await ensureFunFundingAssets(); }
+    catch { toast("Wallet funding controls could not load. Check your connection and try again.", true); return; }
     const amountSol = Number($("[data-fund-sol]")?.value || 0);
     const status = $("[data-funding-status]");
     if (!Number.isFinite(amountSol) || amountSol < 0.005 || amountSol > 10) {
@@ -2064,7 +2373,7 @@
       if (!created.ok || !created.data?.ok || !created.data?.order?.transaction) throw new Error(apiMessage(created.data, "Could not prepare wallet funding."));
       const order = created.data.order;
       if (status) status.textContent = `Approve exactly ${amountSol} SOL in ${fundingProviderLabel(kind)}.`;
-      const signedTransaction = await WalletFunding.signSerialized(provider, order.transaction);
+      const signedTransaction = await walletFunding().signSerialized(provider, order.transaction);
       if (status) status.textContent = "Confirming your deposit on Solana…";
       const attemptBody = { walletFundingAttemptId: order.walletFundingAttemptId, signedTransaction };
       const executed = await request("/api/web/wallet-funding/execute", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(attemptBody), timeout: 70_000 });
@@ -2110,13 +2419,14 @@
     const label = fundingProviderLabel(kind);
     if (button) { button.disabled = true; button.classList.add("busy"); }
     try {
-      if (!WalletFunding?.createSolanaPayReference || !WalletFunding?.solanaPayTransferUrl) {
+      const funding = walletFunding();
+      if (!funding?.createSolanaPayReference || !funding?.solanaPayTransferUrl) {
         throw new Error("Mobile wallet funding is still loading. Try again.");
       }
       const wallet = await ensureFunFundingWallet();
-      const reference = WalletFunding.createSolanaPayReference();
+      const reference = funding.createSolanaPayReference();
       const startedAt = Date.now();
-      const payUri = WalletFunding.solanaPayTransferUrl({
+      const payUri = funding.solanaPayTransferUrl({
         recipient: wallet.publicKey,
         amountSol,
         reference,
@@ -2809,6 +3119,136 @@
     openSheet(transactionPreviewHtml(result.data.preview));
     return true;
   }
+  function tradeReceiptData(response = {}, pending = {}, coin = {}, options = {}) {
+    const trade = pending.chain === "robinhood" ? response : (response.trade || response);
+    const signatures = Array.isArray(trade.txHashes) ? trade.txHashes.filter(Boolean) : [];
+    const signature = String(trade.signature || trade.txHash || signatures[signatures.length - 1] || "");
+    const rawStatus = String(trade.confirmationStatus || trade.status || response.confirmationStatus || response.status || "").toLowerCase();
+    const confirmed = trade.confirmed === true || response.confirmed === true || ["confirmed", "landed", "complete", "completed"].includes(rawStatus);
+    const walletIndex = Number(pending.body?.walletIndex || options.walletIndex || state.activeWallet);
+    const wallet = state.wallets.find((item) => Number(item.index) === walletIndex) || activeWallet() || {};
+    const walletLabel = trade.walletLabel || pending.preview?.walletLabel || wallet.label || "Slime wallet";
+    const walletAddress = trade.walletPublicKey || pending.body?.walletPublicKey || wallet.publicKey || "";
+    const side = String(pending.side || trade.side || "trade").toLowerCase();
+    const notices = [];
+    let amountLabel = side === "buy" ? "SOL spent" : "Net SOL";
+    let amountValue = "Updating in activity";
+    if (pending.chain === "robinhood") {
+      if (side === "buy" && Number(trade.solFunding?.amountSol) > 0) amountValue = `${trade.solFunding.amountSol} SOL`;
+      else if (side === "sell" && Number(trade.solCashout?.outSol) > 0) amountValue = `${trade.solCashout.outSol} SOL`;
+      else if (side === "sell" && trade.solCashout?.settlementPending) {
+        amountValue = "SOL cash-out settling";
+        notices.push({ tone: "warning", title: "SOL settlement is still running", message: "The token sale was submitted. Check Activity before taking another action; the automatic return to SOL is still settling." });
+      } else if (trade.outFormatted) {
+        amountLabel = side === "buy" ? "Tokens received" : "Sale output";
+        amountValue = `${trade.outFormatted} ${trade.outSymbol || ""}`.trim();
+      }
+      if (side === "sell" && trade.solCashoutError) {
+        notices.push({ tone: "danger", title: "Token sold; automatic SOL return needs attention", message: `${String(trade.solCashoutError)} The sale proceeds remain recoverable as ETH in this wallet. Do not sell the token again.` });
+      }
+    } else if (side === "buy" && trade.spentSol != null) amountValue = `${trade.spentSol} SOL`;
+    else if (side === "sell" && trade.netSol != null) amountValue = `${trade.netSol} SOL`;
+
+    const protectionRequested = side === "buy" && Boolean(
+      trade.autoExitRequested
+      || Number(pending.guard?.takeProfitPct) > 0
+      || Number(pending.guard?.stopLossPct) > 0
+      || pending.body?.disableAutoExit === false
+    );
+    if (pending.chain === "robinhood" && protectionRequested) {
+      const guardResult = options.guardResult;
+      if (guardResult?.ok && guardResult.data?.ok) notices.push({ tone: "success", title: "TP / SL armed", message: "Your automated exit protection is active on the server." });
+      else notices.push({ tone: "danger", title: "Trade landed; TP / SL did not arm", message: `${apiMessage(guardResult?.data, "Protection status was not confirmed.")} Open the position and arm exits manually; do not repeat the buy.` });
+    } else if (pending.chain !== "robinhood" && side === "buy") {
+      if (trade.autoExitArmed === true) notices.push({ tone: "success", title: "TP / SL armed", message: "Your automated exit protection is active on the server." });
+      else if (trade.autoExitError) notices.push({ tone: "danger", title: "Buy landed; TP / SL did not arm", message: `${String(trade.autoExitError)} Open the position and arm exits manually; do not repeat the buy.` });
+      else if (protectionRequested) notices.push({ tone: "warning", title: "Verify TP / SL in Activity", message: "The buy was submitted, but the response did not confirm that automated exits were armed." });
+    }
+    if (trade.recordError || response.recordError) notices.push({ tone: "warning", title: "Activity indexing is delayed", message: `${String(trade.recordError || response.recordError)} The chain result above is unchanged; do not submit the trade again.` });
+
+    const explorerUrl = String(trade.explorerTx || trade.explorerUrl || (signature
+      ? (pending.chain === "robinhood" ? `https://robinhoodchain.blockscout.com/tx/${encodeURIComponent(signature)}` : `https://solscan.io/tx/${encodeURIComponent(signature)}`)
+      : ""));
+    return {
+      side, confirmed, walletIndex, walletLabel, walletAddress, amountLabel, amountValue, signature, explorerUrl, notices,
+      recoveryRequired: Boolean(side === "sell" && trade.solCashoutError),
+      symbol: pending.coin?.symbol || coin.symbol || "coin",
+      imageUrl: coinImage({ ...coin, ...(pending.coin || {}) })
+    };
+  }
+  function tradeReceiptHtml(receipt = {}) {
+    const status = receipt.confirmed ? "TRADE CONFIRMED" : "TRADE SUBMITTED";
+    const statusCopy = receipt.confirmed
+      ? "The network explicitly reported this trade as confirmed. Balances are reconciling now."
+      : "The order was submitted. Activity will show the latest network result without sending it again.";
+    const signature = receipt.signature
+      ? `<div class="trade-receipt-signature"><span>Signature</span><b>${escapeHtml(short(receipt.signature))}</b><button type="button" data-copy-receipt-signature="${escapeHtml(receipt.signature)}">Copy</button></div>`
+      : `<div><span>Signature</span><b>Available in activity when indexed</b></div>`;
+    const explorer = receipt.explorerUrl ? `<a class="sheet-secondary" href="${escapeHtml(receipt.explorerUrl)}" target="_blank" rel="noopener noreferrer">Open in explorer</a>` : "";
+    const notices = (receipt.notices || []).map((notice) => `<div class="transaction-warning trade-receipt-notice ${escapeHtml(notice.tone || "warning")}"><b>${escapeHtml(notice.title || "Trade update")}</b><ul><li>${escapeHtml(notice.message || "Check Activity for the latest state.")}</li></ul></div>`).join("");
+    const recovery = receipt.recoveryRequired && receipt.walletIndex
+      ? `<button class="sheet-secondary" type="button" data-rh-wallet-tools="${escapeHtml(String(receipt.walletIndex))}">Recover ETH / return to SOL</button>`
+      : "";
+    return `<div class="sheet-title transaction-preview-title"><img src="${escapeHtml(receipt.imageUrl || TOKEN_FALLBACK)}" alt=""><div><h2>${escapeHtml(receipt.side === "buy" ? "Buy" : "Sell")} receipt</h2><p>${escapeHtml(receipt.symbol)} · execution record</p></div></div>
+      <div class="simulation-status trade-receipt-status ${receipt.confirmed ? "passed" : "verified"}"><span>${receipt.confirmed ? "✓" : "↗"}</span><div><b>${status}</b><p>${escapeHtml(statusCopy)}</p></div></div>
+      <section class="transaction-preview-card trade-receipt-card"><div><span>Wallet</span><b>${escapeHtml(receipt.walletLabel)}${receipt.walletAddress ? ` · ${escapeHtml(short(receipt.walletAddress))}` : ""}</b></div><div><span>${escapeHtml(receipt.amountLabel)}</span><b>${escapeHtml(receipt.amountValue)}</b></div>${signature}</section>
+      ${notices}<div class="trade-receipt-actions"><button class="submit-trade" type="button" data-view-trade-activity>View activity</button>${explorer}${recovery}</div>
+      <p class="fineprint">Closing this receipt does not cancel or repeat the trade. Activity is the safe place to check its latest state.</p>`;
+  }
+
+  function bundleTradeReceiptData(response = {}, coin = {}, chain = "solana") {
+    const rh = chain === "robinhood";
+    const payload = rh ? response : (response.bundle || response);
+    const sourceRows = rh ? (response.rows || []) : (payload.results || []);
+    const rows = sourceRows.map((row, index) => {
+      const walletIndex = Number(row.walletIndex || 0);
+      const wallet = state.wallets.find((item) => Number(item.index) === walletIndex) || {};
+      const signature = String(row.tx || row.signature || (Array.isArray(row.txHashes) ? row.txHashes.filter(Boolean).at(-1) : "") || "");
+      const amountValue = rh
+        ? (row.amountSol != null ? `${row.amountSol} SOL` : row.amountEth != null ? `${row.amountEth} ETH` : "Submitted amount")
+        : (row.spentSol != null ? `${row.spentSol} SOL` : "Submitted amount");
+      return {
+        ok: row.ok === true,
+        walletIndex,
+        walletLabel: row.walletLabel || wallet.label || (walletIndex ? `Wallet ${walletIndex}` : `Wallet ${index + 1}`),
+        walletAddress: row.walletPublicKey || wallet.publicKey || "",
+        amountValue,
+        signature,
+        explorerUrl: signature ? (rh ? `https://robinhoodchain.blockscout.com/tx/${encodeURIComponent(signature)}` : `https://solscan.io/tx/${encodeURIComponent(signature)}`) : "",
+        error: row.ok === true ? "" : String(row.error || row.message || "This wallet did not submit."),
+        exitStatus: String(row.exitStatus || ""),
+        exitError: String(row.exitError || "")
+      };
+    });
+    const successCount = rows.filter((row) => row.ok).length;
+    return {
+      chain, rows, successCount, failedCount: rows.length - successCount,
+      recordError: String(response.recordError || payload.recordError || ""),
+      symbol: coin.symbol || short(coinKey(coin)) || "coin", imageUrl: coinImage(coin)
+    };
+  }
+
+  function bundleTradeReceiptHtml(receipt = {}) {
+    const anySuccess = receipt.successCount > 0;
+    const rowHtml = receipt.rows.map((row) => {
+      const signature = row.signature
+        ? `<div class="trade-receipt-signature"><span>Signature</span><b>${escapeHtml(short(row.signature))}</b><button type="button" data-copy-receipt-signature="${escapeHtml(row.signature)}">Copy</button></div>`
+        : `<div><span>Signature</span><b>${row.ok ? "Available when indexed" : "Not submitted"}</b></div>`;
+      const issue = row.error
+        ? `<div><span>Result</span><b>${escapeHtml(row.error)}</b></div>`
+        : row.exitStatus === "needs_attention"
+          ? `<div><span>Protection</span><b>Entry landed; exits need attention${row.exitError ? ` · ${escapeHtml(row.exitError)}` : ""}</b></div>`
+          : `<div><span>Result</span><b>${row.ok ? "Submitted" : "Not submitted"}</b></div>`;
+      const explorer = row.explorerUrl ? `<a href="${escapeHtml(row.explorerUrl)}" target="_blank" rel="noopener noreferrer">Open explorer</a>` : "";
+      return `<section class="transaction-preview-card trade-receipt-card"><div><span>${row.ok ? "✓ Wallet" : "⚠ Wallet"}</span><b>${escapeHtml(row.walletLabel)}${row.walletAddress ? ` · ${escapeHtml(short(row.walletAddress))}` : ""}</b></div><div><span>Entry</span><b>${escapeHtml(row.amountValue)}</b></div>${issue}${signature}${explorer ? `<div><span>Network</span><b>${explorer}</b></div>` : ""}</section>`;
+    }).join("");
+    const recordWarning = receipt.recordError ? `<div class="transaction-warning"><b>Activity indexing is delayed</b><ul><li>${escapeHtml(receipt.recordError)} The wallet results and signatures below are still valid.</li></ul></div>` : "";
+    const protectionWarning = receipt.rows.some((row) => row.exitStatus === "needs_attention") ? '<div class="transaction-warning"><b>One or more exits need attention</b><ul><li>The entry landed, but its automatic exit did not arm. Open each affected position and configure exits manually.</li></ul></div>' : "";
+    return `<div class="sheet-title transaction-preview-title"><img src="${escapeHtml(receipt.imageUrl || TOKEN_FALLBACK)}" alt=""><div><h2>Bundle receipt</h2><p>${escapeHtml(receipt.symbol)} · per-wallet execution record</p></div></div>
+      <div class="simulation-status trade-receipt-status ${anySuccess ? "verified" : ""}"><span>${anySuccess ? "↗" : "!"}</span><div><b>${anySuccess ? "BUNDLE SUBMITTED" : "BUNDLE NOT SUBMITTED"}</b><p>${escapeHtml(`${receipt.successCount} wallet${receipt.successCount === 1 ? "" : "s"} submitted · ${receipt.failedCount} failed`)}</p></div></div>
+      ${recordWarning}${protectionWarning}${rowHtml}<div class="trade-receipt-actions"><button class="submit-trade" type="button" data-view-trade-activity>View activity</button></div>
+      <p class="fineprint">A failed wallet was not submitted. A successful wallet can have a separate protection warning; never repeat the entire bundle to fix one row.</p>`;
+  }
   async function submitTrade(button) {
     if (button.dataset.previewConfirmed !== "true") { await reviewTradePayload(button, tradePayloadFromSheet(button.dataset.side)); return; }
     const pending = state.pendingTradePreview;
@@ -2817,17 +3257,24 @@
     if (state.tradeBusy) return;
     state.tradeBusy = true; button.disabled = true; button.textContent = "Submitting…";
     let result;
+    let guardResult = null;
     let stopRhProgress = () => {};
     try {
       if (!(await ensureTradeReady())) return;
       if (rh) {
         stopRhProgress = startRhTradeProgress(button, side);
         result = await post("/api/web/rh/trade", pending.body, { timeout: 90_000 });
-        if (result.ok && result.data?.ok && side === "buy" && (Number(pending.guard?.takeProfitPct) > 0 || Number(pending.guard?.stopLossPct) > 0)) await post("/api/web/rh/guards", { walletIndex, tokenAddress: key, symbol: pending.coin?.symbol || coin.symbol || "", takeProfitPct: pending.guard.takeProfitPct, stopLossPct: pending.guard.stopLossPct, sellPercent: "100", entryPriceUsd: pending.coin?.priceUsd || coin.priceUsd || 0 });
+        if (result.ok && result.data?.ok && side === "buy" && (Number(pending.guard?.takeProfitPct) > 0 || Number(pending.guard?.stopLossPct) > 0)) guardResult = await post("/api/web/rh/guards", { walletIndex, tokenAddress: key, symbol: pending.coin?.symbol || coin.symbol || "", takeProfitPct: pending.guard.takeProfitPct, stopLossPct: pending.guard.stopLossPct, sellPercent: "100", entryPriceUsd: pending.coin?.priceUsd || coin.priceUsd || 0 });
       } else {
         result = await post(`/api/web/trade/${side}`, pending.body, { timeout: 75_000 });
       }
-      if (result.ok && result.data?.ok) { toast(side === "sell" && rh && result.data?.solCashout?.outSol ? `Sold · ${result.data.solCashout.outSol} SOL returned` : `${side === "buy" ? "Buy" : "Sell"} submitted`); state.pendingTradePreview = null; closeSheet(); setTimeout(async () => { await loadPortfolioSnapshot({ force: true }); if (state.view === "wallet-asset") renderWalletAsset(); else renderCoinShell(); }, 900); }
+      if (result.ok && result.data?.ok) {
+        const receipt = tradeReceiptData(result.data, pending, coin, { guardResult });
+        toast(receipt.confirmed ? `${side === "buy" ? "Buy" : "Sell"} confirmed` : `${side === "buy" ? "Buy" : "Sell"} submitted`);
+        state.pendingTradePreview = null;
+        openSheet(tradeReceiptHtml(receipt));
+        setTimeout(async () => { await loadPortfolioSnapshot({ force: true }); if (state.view === "wallet-asset") renderWalletAsset(); else renderCoinShell(); }, 900);
+      }
       else toast(result.data?.message || result.data?.error || `${side} failed`, true);
     } finally { stopRhProgress(); state.tradeBusy = false; button.disabled = false; button.textContent = `${side === "buy" ? "Buy" : "Sell"} ${coin.symbol || "coin"}`; }
   }
@@ -3007,7 +3454,15 @@
       ? await post("/api/web/rh/bundle", { tokenAddress: key, walletIndexes, minEth: $("[data-bundle-min]")?.value, maxEth: $("[data-bundle-max]")?.value, tradeAttemptId: attemptId("fun-rh-bundle") })
       : await post("/api/web/bundle/buy", { tokenMint: key, walletIndexes, amountSol: $("[data-bundle-amount]")?.value, slippageBps: 600, tradeAttemptId: attemptId("fun-bundle") });
     button.disabled = false; button.textContent = "Submit bundle";
-    if (result.ok && result.data?.ok) { toast("Bundle submitted"); closeSheet(); } else toast(result.data?.error || result.data?.message || "Bundle failed", true);
+    if (result.ok && result.data?.ok) {
+      const receipt = bundleTradeReceiptData(result.data, coin, coin.chain === "robinhood" ? "robinhood" : "solana");
+      toast(receipt.successCount > 0 ? `${receipt.successCount} bundle ${receipt.successCount === 1 ? "entry" : "entries"} submitted` : "No bundle wallets submitted", receipt.successCount === 0);
+      openSheet(bundleTradeReceiptHtml(receipt));
+      setTimeout(() => loadPortfolioSnapshot({ force: true }).then(() => {
+        if (state.view === "wallet") renderWalletPositions();
+        else if (state.view === "coin") renderCoinShell();
+      }), 900);
+    } else toast(result.data?.error || result.data?.message || "Bundle failed", true);
   }
 
   function handleTool(action) {
@@ -3333,6 +3788,8 @@
       return;
     }
     const submit = event.target.closest("[data-submit-trade]"); if (submit) { await submitTrade(submit); return; }
+    const receiptSignature = event.target.closest("[data-copy-receipt-signature]"); if (receiptSignature) { try { await writeClipboardText(receiptSignature.dataset.copyReceiptSignature || ""); toast("Signature copied"); } catch { toast("Could not copy signature", true); } return; }
+    if (event.target.closest("[data-view-trade-activity]")) { state.profileTab = "activity"; closeSheet(); setView("wallet"); await loadWalletView(); return; }
     if (event.target.closest("[data-arm-exits]")) { await armExits(); return; }
     const tool = event.target.closest("[data-tool-action]"); if (tool) { handleTool(tool.dataset.toolAction); return; }
     const linkTool = event.target.closest("[data-link-tool]"); if (linkTool) { handleTool(linkTool.dataset.linkTool); return; }
@@ -3495,24 +3952,66 @@
     closeSheet();
   });
 
-  async function init() {
-    applyWalletRouteShell();
-    initWalletSecurity();
-    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/fun-sw.js", { scope: IS_WALLET_ROUTE ? "/wallet/" : "/fun/", updateViaCache: "none" }).catch(() => {});
-    await consumeTelegramLoginTicket();
-    await restoreSharedSession();
-    if (IS_WALLET_ROUTE && state.token) {
-      const cachedPortfolio = readWalletPortfolioCache();
-      if (cachedPortfolio) applyPortfolioSnapshot(cachedPortfolio, { saveCache: false });
+  function applyInitialRoute(routeParams) {
+    if (IS_WALLET_ROUTE) {
+      state.profileTab = routeParams.get("tab") === "activity" ? "activity" : "positions";
+      setView(routeParams.get("swap") === "1" ? "wallet-swap" : "wallet");
+    } else if (IS_QUICK_ROUTE) {
+      setView("quick", { hideNav: true });
+      renderQuickRoute();
+      const ca = routeParams.get("ca") || routeParams.get("token") || "";
+      if (ca) void loadQuickTarget(ca);
+    } else {
+      // Telegram's Slime Chart button uses a query-string CA because Android/PWA
+      // handoffs can drop #fragments. Public market data never waits for login.
+      const linkedCa = routeParams.get("ca") || routeParams.get("token") || "";
+      const match = location.hash.match(/^#coin\/(.+)$/); if (linkedCa) openCoin(linkedCa);
+      else if (match) openCoin(decodeURIComponent(match[1]));
+      else if (/^#launch\/?$/i.test(location.hash)) openFunLaunch();
+      else {
+        const toolMatch = location.hash.match(/^#tool\/(copy|sniper|walletLaunch)$/i);
+        if (toolMatch) openFunTool(toolMatch[1].toLowerCase() === "walletlaunch" ? "walletLaunch" : toolMatch[1].toLowerCase());
+        else setView("home");
+      }
+      if (routeParams.get("tab") === "wallet") setView("wallet");
+      if (routeParams.get("profile") === "1") {
+        state.profileTab = "social";
+        $$('[data-profile]').forEach((button) => button.classList.toggle("active", button.dataset.profile === "social"));
+        setView("wallet");
+      }
     }
+  }
+
+  function registerFunServiceWorkerLater() {
+    if (!("serviceWorker" in navigator)) return;
+    const register = () => navigator.serviceWorker.register("/fun-sw.js", { scope: IS_WALLET_ROUTE ? "/wallet/" : "/fun/", updateViaCache: "none" }).catch(() => {});
+    if ("requestIdleCallback" in window) window.requestIdleCallback(register, { timeout: 2_500 });
+    else setTimeout(register, 700);
+  }
+
+  async function init() {
+    const routeParams = new URLSearchParams(location.search);
+    applyWalletRouteShell();
+    restoreFeedCache();
+    if (IS_WALLET_ROUTE) stageWalletPortfolioCache();
     paintWalletPill();
     renderCashHandoff();
     renderHomeReadiness();
     $$('[data-chain]').forEach((button) => button.classList.toggle("active", button.dataset.chain === state.chain));
     $$('[data-feed]').forEach((button) => button.classList.toggle("active", button.dataset.feed === state.feed));
-    if (!IS_QUICK_ROUTE && !IS_WALLET_ROUTE) loadFeed();
+    applyInitialRoute(routeParams);
+    initWalletSecurity();
+    registerFunServiceWorkerLater();
+
+    await consumeTelegramLoginTicket();
+    if (!state.token) await restoreSharedSession();
+    else if (!state.confirmedUserId) await loadMe();
+    state.sessionRestoring = false;
+    if (!state.token) clearPrivateWalletState();
+    paintWalletPill();
+    renderWalletHero();
+    if (state.view === "wallet") void loadWalletView();
     if (state.token) Promise.all([
-      loadMe(),
       loadWalletBalancePreview(),
       loadPresets(),
       IS_WALLET_ROUTE ? Promise.resolve([]) : loadCreatedCoinsSilently()
@@ -3537,36 +4036,7 @@
         if (state.view === "quick") renderQuickRoute();
       });
     }).catch(() => {});
-    const routeParams = new URLSearchParams(location.search);
     resumePendingFunFunding();
-    if (IS_WALLET_ROUTE) {
-      state.profileTab = "positions";
-      if (routeParams.get("tab") === "activity") state.profileTab = "activity";
-      setView(routeParams.get("swap") === "1" ? "wallet-swap" : "wallet");
-    } else if (IS_QUICK_ROUTE) {
-      setView("quick", { hideNav: true });
-      renderQuickRoute();
-      const ca = routeParams.get("ca") || routeParams.get("token") || "";
-      if (ca) void loadQuickTarget(ca);
-    } else {
-      // Telegram's Slime Chart button uses a query-string CA because Android/PWA
-      // handoffs can drop #fragments. On /fun that means the full coin/chart view,
-      // while /quick and quick=1 continue to open the compact buy panel above.
-      const linkedCa = routeParams.get("ca") || routeParams.get("token") || "";
-      const match = location.hash.match(/^#coin\/(.+)$/); if (linkedCa) openCoin(linkedCa);
-      else if (match) openCoin(decodeURIComponent(match[1]));
-      else if (/^#launch\/?$/i.test(location.hash)) openFunLaunch();
-      else {
-        const toolMatch = location.hash.match(/^#tool\/(copy|sniper|walletLaunch)$/i);
-        if (toolMatch) openFunTool(toolMatch[1].toLowerCase() === "walletlaunch" ? "walletLaunch" : toolMatch[1].toLowerCase());
-      }
-      if (routeParams.get("tab") === "wallet") setView("wallet");
-      if (routeParams.get("profile") === "1") {
-        state.profileTab = "social";
-        $$('[data-profile]').forEach((button) => button.classList.toggle("active", button.dataset.profile === "social"));
-        setView("wallet");
-      }
-    }
     if (routeParams.get("install") === "1") setTimeout(showFunInstallGuide, 350);
   }
   $("[data-quick-paste-form]")?.addEventListener("submit", (event) => { event.preventDefault(); void loadQuickTarget($("[data-quick-ca]")?.value); });

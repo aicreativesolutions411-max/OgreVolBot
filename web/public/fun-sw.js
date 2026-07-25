@@ -1,26 +1,15 @@
 /* SlimeWire Go + SlimeWallet: isolated installable shells and push worker. */
 const IS_WALLET_WORKER = new URL(self.registration.scope).pathname.startsWith("/wallet/");
-const FUN_CACHE = IS_WALLET_WORKER ? "slimewallet-v10" : "slimewire-fun-v67";
+const FUN_CACHE = IS_WALLET_WORKER ? "slimewallet-v12" : "slimewire-fun-v69";
 const FUN_CACHE_PREFIX = IS_WALLET_WORKER ? "slimewallet-" : "slimewire-fun-";
 const FUN_SHELL = [
   IS_WALLET_WORKER ? "/wallet/" : "/fun/",
   "/fun.html",
-    "/fun.css?v=51",
-  "/slimewire-funding.js?v=8",
-  "/vendor/lightweight-charts.standalone.production.js",
-    "/fun.js?v=72",
-  "/fun-indicators.js?v=7",
+  "/fun.css?v=52",
+  "/fun.js?v=73",
   IS_WALLET_WORKER ? "/wallet-manifest.webmanifest?v=2" : "/fun-manifest.webmanifest?v=2",
   "/config.js",
-  "/assets/slimewire/fun-app-icon-192.png",
-  "/assets/slimewire/fun-app-icon-512.png",
-  ...(IS_WALLET_WORKER ? [
-    "/assets/slimewire/slimewallet-pfp.png",
-    "/assets/slimewire/slimewallet-icon-192.png",
-    "/assets/slimewire/slimewallet-icon-512.png",
-    "/assets/slimewire/slimewallet-profile-guardian.png",
-    "/assets/slimewire/slimewallet-vault-bg.webp"
-  ] : [])
+  IS_WALLET_WORKER ? "/assets/slimewire/slimewallet-icon-192.png" : "/assets/slimewire/fun-app-icon-192.png"
 ];
 
 self.addEventListener("install", (event) => {
@@ -43,10 +32,24 @@ self.addEventListener("fetch", (event) => {
     : (url.pathname === "/fun" || url.pathname === "/fun/" || url.pathname === "/fun.html"));
   const isStatic = request.mode !== "navigate" && /\.(?:css|js|png|webp|svg|ico|json|webmanifest|woff2?)$/i.test(url.pathname);
   if (!isFunPage && !isStatic) return;
-  event.respondWith(fetch(request).then((response) => {
-    if (response.ok) caches.open(FUN_CACHE).then((cache) => cache.put(request, response.clone())).catch(() => {});
+  // Cache the public shell under a canonical URL so one-time login tickets and
+  // other private navigation parameters never become persistent cache keys.
+  const cacheKey = isFunPage ? (IS_WALLET_WORKER ? "/wallet/" : "/fun/") : request;
+  const network = fetch(request).then((response) => {
+    if (response.ok) caches.open(FUN_CACHE).then((cache) => cache.put(cacheKey, response.clone())).catch(() => {});
     return response;
-  }).catch(() => caches.match(request).then((cached) => cached || (isFunPage ? caches.match(IS_WALLET_WORKER ? "/wallet/" : "/fun/") : Response.error()))));
+  });
+  if (isStatic) {
+    event.respondWith(caches.match(cacheKey).then((cached) => {
+      if (cached) {
+        event.waitUntil(network.catch(() => null));
+        return cached;
+      }
+      return network.catch(() => Response.error());
+    }));
+    return;
+  }
+  event.respondWith(network.catch(() => caches.match(cacheKey)));
 });
 
 self.addEventListener("push", (event) => {
