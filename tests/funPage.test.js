@@ -26,6 +26,9 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
 
 test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH trading", () => {
   assert.match(server, /requestUrl\.pathname === "\/wallet"[\s\S]{0,260}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
+  assert.match(redirects, /^\/wallet\s+\/fun\.html\s+200$/m);
+  assert.match(redirects, /^\/wallet\/\*\s+\/fun\.html\s+200$/m);
+  assert.match(redirects, /^\/wallet\.html\s+\/fun\.html\s+200$/m);
   assert.match(html, /data-view="wallet-swap"/);
   assert.match(html, /data-view="wallet-asset"/);
   assert.match(js, /data-wallet-ca-form/);
