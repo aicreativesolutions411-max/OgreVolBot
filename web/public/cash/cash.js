@@ -12,6 +12,7 @@
   const NOTIFICATIONS_KEY = "slimecashNotifications";
   const REQUESTS_KEY = "slimecashRequests";
   const ACTIVE_WALLET_KEY = "slimecashActiveWalletIndex";
+  const BALANCE_CACHE_KEY = "slimecashBalanceSnapshotV2";
   const API_BASE = (window.OGRE_PORTAL_CONFIG && window.OGRE_PORTAL_CONFIG.apiBase)
     || (/^(?:www\.)?slimewire\.org$/i.test(location.hostname) ? "https://app.slimewire.org" : "");
   const WSOL_MINT = "So11111111111111111111111111111111111111112";
@@ -54,7 +55,9 @@
     pendingSendAttemptId: "",
     pendingRequestId: "",
     deferredInstall: null,
-    positionsLoading: false
+    positionsLoading: false,
+    balanceRefreshing: false,
+    balanceUpdatedAt: ""
   };
 
   const $ = (id) => document.getElementById(id);
@@ -705,23 +708,39 @@
   }
 
   /* ---------------- balance ---------------- */
-  async function refreshBalance({ silent = false } = {}) {
-    if (!state.token) return;
-    const result = await get("/api/web/portfolio/snapshot");
-    if (result.status === 401) { setToken(""); showOnboard(); return; }
-    if (!result.ok) { if (!silent) toast(result.data.error || "Could not load balance.", true); return; }
-    const snapshotWallets = (result.data.balances || []).filter((row) => !row.volumeBot);
-    const rh = result.data.rhBalances || {};
-    state.rhEthUsd = Number(rh.ethUsd || state.rhEthUsd || 0);
-    const rhByIndex = new Map((rh.wallets || []).map((row) => [Number(row.walletIndex), row]));
-    state.wallets = snapshotWallets.map((wallet) => {
+  function readCashBalanceCache() {
+    try {
+      const cached = JSON.parse(localStorage.getItem(BALANCE_CACHE_KEY) || "null");
+      if (!cached || !Array.isArray(cached.balances) || Date.now() - Number(cached.savedAt || 0) > 30 * 60 * 1000) return null;
+      return cached;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveCashBalanceCache(balanceData = {}, rhData = {}) {
+    try {
+      localStorage.setItem(BALANCE_CACHE_KEY, JSON.stringify({
+        savedAt: Date.now(),
+        balances: balanceData.balances || [],
+        solUsd: Number(balanceData.solUsd || 0),
+        rhBalances: rhData || {}
+      }));
+    } catch { /* cache is an optional speed layer */ }
+  }
+
+  function applyCashBalanceSnapshot(balanceData = {}, rhData = {}, options = {}) {
+    const snapshotWallets = (balanceData.balances || []).filter((row) => !row.volumeBot);
+    if (!snapshotWallets.length && !state.wallets.length) return false;
+    state.solUsd = Number(balanceData.solUsd || state.solUsd || 0);
+    state.rhEthUsd = Number(rhData.ethUsd || state.rhEthUsd || 0);
+    const rhByIndex = new Map((rhData.wallets || []).map((row) => [Number(row.walletIndex), row]));
+    state.wallets = (snapshotWallets.length ? snapshotWallets : state.wallets).map((wallet) => {
       const row = rhByIndex.get(Number(wallet.index));
       return row ? { ...wallet, rhAddress: row.address || "", rhEth: row.available ? Number(row.eth || 0) : null, rhAvailable: Boolean(row.available), rhExplorer: row.explorer || "" } : wallet;
     });
     const active = state.wallets.find((row) => Number(row.index) === Number(state.wallet?.index)) || state.wallets[0];
     const assets = active?.cashAssets || {};
-    const previousSol = state.lamports;
-    const previousUsdc = state.usdcRaw;
     state.lamports = Number(assets.SOL?.rawAmount || active?.lamports || 0);
     state.usdcRaw = Number(assets.USDC?.rawAmount || 0);
     state.usdc = Number(assets.USDC?.uiAmount || 0);
@@ -731,8 +750,34 @@
       state.rhAddress = activeRh.address || "";
       state.rhEth = activeRh.available ? Number(activeRh.eth || 0) : null;
     }
+    state.balanceRefreshing = Boolean(options.refreshing);
+    state.balanceUpdatedAt = String(options.updatedAt || "");
     renderBalance();
     renderCashWallets();
+    return true;
+  }
+
+  async function refreshBalance({ silent = false } = {}) {
+    if (!state.token) return;
+    const previousSol = state.lamports;
+    const previousUsdc = state.usdcRaw;
+    const cached = readCashBalanceCache();
+    const [balanceResult, rhResult] = await Promise.all([
+      get("/api/web/balances"),
+      get("/api/web/rh/balances")
+    ]);
+    if (balanceResult.status === 401 || rhResult.status === 401) { setToken(""); showOnboard(); return; }
+    const balanceData = balanceResult.ok ? balanceResult.data : cached;
+    const rhData = rhResult.ok ? rhResult.data : (cached?.rhBalances || {});
+    if (!balanceData || !applyCashBalanceSnapshot(balanceData, rhData, {
+      refreshing: !balanceResult.ok || !rhResult.ok || balanceData.stale || balanceData.backgroundRefreshing,
+      updatedAt: balanceData.lastUpdatedAt || (cached?.savedAt ? new Date(cached.savedAt).toISOString() : "")
+    })) {
+      if (!silent) toast(balanceResult.data?.error || rhResult.data?.error || "Could not load balances. Try again.", true);
+      return;
+    }
+    if (balanceResult.ok) saveCashBalanceCache(balanceResult.data, rhData);
+    if ((!balanceResult.ok || !rhResult.ok) && !silent) toast("Live balances are still syncing. Showing the last confirmed values.");
     if (previousUsdc !== null && state.usdcRaw > previousUsdc) {
       const gainedUsdc = (state.usdcRaw - previousUsdc) / 1e6;
       addActivity({ type: "in", title: "USDC arrived", sub: "Digital dollars landed on Solana", amountUsd: gainedUsdc, at: Date.now() });
@@ -781,7 +826,8 @@
     $("balanceUsd").textContent = formatUsd(totalUsd());
     const rhValue = Math.max(0, Number(state.rhEth || 0)) * Math.max(0, Number(state.rhEthUsd || 0));
     const rh = state.rhEth == null ? "ETH loading…" : `${Number(state.rhEth).toFixed(6)} ETH (Robinhood)${rhValue > 0 ? ` · ${formatUsd(rhValue)}` : ""}`;
-    $("balanceSub").textContent = `$${state.usdc.toFixed(2)} USD · ${sol.toFixed(4)} SOL · ${rh}`;
+    const freshness = state.balanceRefreshing ? " · refreshing live" : "";
+    $("balanceSub").textContent = `$${state.usdc.toFixed(2)} USD · ${sol.toFixed(4)} SOL · ${rh}${freshness}`;
   }
 
   /* ---------------- activity (device-local) ---------------- */
@@ -1900,18 +1946,33 @@
 
     void refreshSolPrice();
 
-    let signedIn = false;
-    if (state.token) {
-      signedIn = Boolean(await loadAccount());
-      if (signedIn) await ensureWallet({ create: false });
-    }
-
+    // Paint the shell and the last confirmed public balance snapshot before
+    // waiting on account/RPC reads. Slow Solana providers must never look like
+    // a frozen or broken Cash app.
     $("splash").classList.add("fade");
     setTimeout(() => { $("splash").hidden = true; }, 400);
     $("app").hidden = false;
     renderProfile();
     renderActivity();
     renderPendingFund();
+    const cachedBalance = readCashBalanceCache();
+    if (state.token && cachedBalance) {
+      applyCashBalanceSnapshot(cachedBalance, cachedBalance.rhBalances || {}, {
+        refreshing: true,
+        updatedAt: cachedBalance.savedAt ? new Date(cachedBalance.savedAt).toISOString() : ""
+      });
+    }
+
+    let signedIn = false;
+    if (state.token) {
+      const [account] = await Promise.all([
+        loadAccount(),
+        ensureWallet({ create: false })
+      ]);
+      signedIn = Boolean(account && state.token);
+    }
+
+    renderProfile();
     if (readPendingFund() && !readPendingFund().arrived) {
       stopDepositWatch();
       state.depositTimer = setInterval(() => { void checkPendingCashFunding(); }, 8000);

@@ -79,8 +79,8 @@ test("SlimeCash includes live Robinhood ETH in wallet rows and its USD total", (
 
 test("SlimeCash service worker prefers the current deploy and retains offline fallback", () => {
   const build = html.match(/slimecash-build" content="(\d+)"/)?.[1];
-  assert.equal(build, "27", "SlimeCash should publish the current app build");
-  assert.match(sw, /const CACHE = "slimecash-v29"/);
+  assert.equal(build, "28", "SlimeCash should publish the current app build");
+  assert.match(sw, /const CACHE = "slimecash-v30"/);
   assert.match(html, new RegExp(`cash\\.js\\?v=${build}`));
   assert.match(html, new RegExp(`cash\\.css\\?v=${build}`));
   assert.match(sw, /const fetched = fetch/);
@@ -127,7 +127,10 @@ test("SlimeCash exposes explicit cash assets and routes sends through the idempo
 });
 
 test("USDC funding and sending stay explicit in the SlimeCash client", () => {
-  assert.match(cash, /get\("\/api\/web\/portfolio\/snapshot"\)/);
+  assert.match(cash, /get\("\/api\/web\/balances"\)/);
+  assert.match(cash, /get\("\/api\/web\/rh\/balances"\)/);
+  assert.match(cash, /const BALANCE_CACHE_KEY = "slimecashBalanceSnapshotV2"/);
+  assert.match(cash, /function applyCashBalanceSnapshot/);
   assert.match(cash, /active\?\.cashAssets/);
   assert.match(cash, /assets\.USDC\?\.rawAmount/);
   assert.match(cash, /asset: state\.sendAsset/);
@@ -244,8 +247,8 @@ test("SlimeCash uses a separate PWA identity and a synchronized shell", () => {
   assert.equal(manifest.id, "/slimecash-app");
   assert.equal(manifest.start_url, "/cash/?src=slimecash-pwa");
   assert.equal(manifest.scope, "/cash/");
-  assert.match(html, /slimecash-build" content="27"/);
-  assert.match(sw, /slimecash-v29/);
+  assert.match(html, /slimecash-build" content="28"/);
+  assert.match(sw, /slimecash-v30/);
   assert.match(sw, /\/slimewire-funding\.js\?v=8/);
   assert.match(cash, /serviceWorker\.register\("\/cash\/sw\.js", \{ updateViaCache: "none" \}\)/);
   assert.match(sw, /key\.startsWith\("slimecash-"\) && key !== CACHE/);

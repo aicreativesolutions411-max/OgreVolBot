@@ -1,14 +1,14 @@
 /* SlimeWire Go + SlimeWallet: isolated installable shells and push worker. */
 const IS_WALLET_WORKER = new URL(self.registration.scope).pathname.startsWith("/wallet/");
-const FUN_CACHE = IS_WALLET_WORKER ? "slimewallet-v5" : "slimewire-fun-v62";
+const FUN_CACHE = IS_WALLET_WORKER ? "slimewallet-v8" : "slimewire-fun-v65";
 const FUN_CACHE_PREFIX = IS_WALLET_WORKER ? "slimewallet-" : "slimewire-fun-";
 const FUN_SHELL = [
   IS_WALLET_WORKER ? "/wallet/" : "/fun/",
   "/fun.html",
-  "/fun.css?v=46",
+    "/fun.css?v=49",
   "/slimewire-funding.js?v=8",
   "/vendor/lightweight-charts.standalone.production.js",
-  "/fun.js?v=68",
+    "/fun.js?v=70",
   "/fun-indicators.js?v=7",
   IS_WALLET_WORKER ? "/wallet-manifest.webmanifest?v=2" : "/fun-manifest.webmanifest?v=2",
   "/config.js",
@@ -18,6 +18,7 @@ const FUN_SHELL = [
     "/assets/slimewire/slimewallet-pfp.png",
     "/assets/slimewire/slimewallet-icon-192.png",
     "/assets/slimewire/slimewallet-icon-512.png",
+    "/assets/slimewire/slimewallet-profile-guardian.png",
     "/assets/slimewire/slimewallet-vault-bg.webp"
   ] : [])
 ];

@@ -11,6 +11,10 @@
   const FUN_PENDING_FUND_KEY = "slimewireFunPendingWalletFund:v1";
   const WALLET_BACKUP_MARK_PREFIX = "slimewireFunWalletBackedUp:v1:";
   const WALLET_BACKUP_REMINDER_KEY = "slimewireFunWalletBackupReminder:v1";
+  const WALLET_PORTFOLIO_CACHE_KEY = "slimewalletPortfolioSnapshotV1";
+  const WALLET_HIDDEN_TOKENS_KEY = "slimewalletHiddenTokensV1";
+  const WALLET_LOCK_KEY = "slimewalletAppLockV1";
+  const WALLET_SESSION_STARTED_KEY = "slimewalletSessionStartedV1";
   const TOKEN_FALLBACK = "/assets/slimewire/png/slimewire-mark.png";
   const WALLET_BRAND_ASSET = "/assets/slimewire/slimewallet-pfp.png";
   const SLIME_PFPS = [
@@ -85,6 +89,10 @@
     pendingSolSend: null,
     pendingTokenSend: null,
     pendingWalletManagerAction: null,
+    pendingTradePreview: null,
+    walletLocked: false,
+    walletLastActiveAt: Date.now(),
+    walletLockTimer: null,
     launchReturnView: "home",
     toolReturnView: "home",
     activeTool: "",
@@ -127,6 +135,14 @@
   }
   function readLocal(key, fallback) { try { const parsed = JSON.parse(localStorage.getItem(key) || "null"); return parsed ?? fallback; } catch { return fallback; } }
   function saveLocal(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
+  function hiddenTokenSet() { return new Set(readLocal(WALLET_HIDDEN_TOKENS_KEY, []).map((value) => String(value || "").toLowerCase()).filter(Boolean)); }
+  function tokenIsHidden(value) { return hiddenTokenSet().has(String(value || "").toLowerCase()); }
+  function setTokenHidden(value, hidden = true) {
+    const key = String(value || "").toLowerCase();
+    const tokens = hiddenTokenSet();
+    if (hidden) tokens.add(key); else tokens.delete(key);
+    saveLocal(WALLET_HIDDEN_TOKENS_KEY, [...tokens].slice(-300));
+  }
   function walletBackupMarkKey(publicKey) { return `${WALLET_BACKUP_MARK_PREFIX}${String(publicKey || "").trim()}`; }
   function walletBackedUp(walletOrKey) {
     const publicKey = typeof walletOrKey === "string" ? walletOrKey : walletOrKey?.publicKey;
@@ -283,7 +299,15 @@
   }
   function post(path, body, options = {}) { return request(path, { ...options, method: "POST", headers: { ...(options.headers || {}), "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }); }
   function apiMessage(data, fallback) { return String(data?.message || data?.error || fallback || "Something went wrong."); }
-  function setToken(token) { state.token = token || ""; if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY); }
+  function setToken(token) {
+    const next = token || "";
+    if (next !== state.token) localStorage.removeItem(WALLET_PORTFOLIO_CACHE_KEY);
+    state.token = next;
+    if (next) localStorage.setItem(TOKEN_KEY, next); else {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(WALLET_PORTFOLIO_CACHE_KEY);
+    }
+  }
   async function loadMe() { if (!state.token) return null; const result = await request("/api/web/me", { noRetry: true }); if (result.ok) state.user = result.data?.user || null; return state.user; }
 
   function clearTelegramLoginTicketFromUrl() {
@@ -323,7 +347,16 @@
     return false;
   }
   async function ensureAutomation() { if (!state.token) return; await post("/api/web/profile/automation", { action: "enable" }); }
-  function applyPortfolioSnapshot(data = {}) {
+  function readWalletPortfolioCache() {
+    const cached = readLocal(WALLET_PORTFOLIO_CACHE_KEY, null);
+    if (!cached?.data || Date.now() - Number(cached.savedAt || 0) > 30 * 60_000) return null;
+    return cached.data;
+  }
+  function saveWalletPortfolioCache(data = {}) {
+    if (!IS_WALLET_ROUTE || !state.token || !Array.isArray(data.balances)) return;
+    saveLocal(WALLET_PORTFOLIO_CACHE_KEY, { savedAt: Date.now(), data });
+  }
+  function applyPortfolioSnapshot(data = {}, options = {}) {
     state.wallets = (data.balances || []).filter((wallet) => !wallet.volumeBot);
     state.solUsd = Math.max(0, Number(data.solUsd) || state.solUsd || 0);
     const rh = data.rhBalances || {};
@@ -339,6 +372,7 @@
     paintWalletPill();
     renderCashHandoff();
     renderHomeReadiness();
+    if (options.saveCache !== false) saveWalletPortfolioCache(data);
     return data;
   }
   async function loadPortfolioSnapshot(options = {}) {
@@ -714,8 +748,10 @@
     $(".fun-header").style.display = ["coin", "quick", "launch", "tool", "wallet-swap", "wallet-asset"].includes(view) ? "none" : "flex";
     const standardNav = $(".bottom-nav:not(.wallet-bottom-nav)");
     const walletNav = $(".wallet-bottom-nav");
-    if (standardNav) standardNav.style.display = options.hideNav || IS_WALLET_ROUTE ? "none" : "grid";
-    if (walletNav) walletNav.style.display = options.hideNav || !IS_WALLET_ROUTE ? "none" : "grid";
+    const hideStandardNav = Boolean(options.hideNav || IS_WALLET_ROUTE);
+    const hideWalletNav = Boolean(options.hideNav || !IS_WALLET_ROUTE);
+    if (standardNav) { standardNav.hidden = hideStandardNav; standardNav.style.display = hideStandardNav ? "none" : "grid"; }
+    if (walletNav) { walletNav.hidden = hideWalletNav; walletNav.style.display = hideWalletNav ? "none" : "grid"; }
     $("[data-open-global-tools]")?.classList.toggle("active", ["launch", "tool"].includes(view));
     window.scrollTo({ top: 0, behavior: "instant" });
     if (view === "home" && !IS_WALLET_ROUTE) loadFeed();
@@ -1058,7 +1094,7 @@
   }
   function walletRouteTotal() {
     const sol = portfolioSolTotal();
-    const rhTokensUsd = (state.rhWalletPosition?.tokens || []).reduce((sum, token) => sum + Math.max(0, Number(token.valueUsd) || 0), 0);
+    const rhTokensUsd = (state.rhWalletPosition?.tokens || []).filter((token) => !tokenIsHidden(token.address)).reduce((sum, token) => sum + Math.max(0, Number(token.valueUsd) || 0), 0);
     const ethUsd = state.wallets.reduce((sum, wallet) => sum + Math.max(0, Number(wallet.rhEth) || 0) * Math.max(0, Number(state.rhEthUsd) || 0), 0);
     const solUsd = state.solUsd > 0 ? sol.totalSol * state.solUsd : null;
     return { ...sol, rhTokensUsd, ethUsd, totalUsd: solUsd == null ? (ethUsd + rhTokensUsd || null) : solUsd + ethUsd + rhTokensUsd };
@@ -1126,12 +1162,16 @@
     const pnl = coin.chain === "robinhood" ? positionNumber(holding?.pnlPercent) : (positionOpenPnl(holding) == null ? null : positionPercent(holding?.openPnlPercent));
     const pnlClass = pnl == null ? "" : pnl >= 0 ? "up" : "down", chart = walletChartSrc(coin);
     const sendAttrs = coin.chain === "robinhood" ? `data-fun-send-token="${escapeHtml(key)}" data-fun-send-chain="robinhood"` : `data-fun-send-token="${escapeHtml(key)}"`;
+    const shield = state.selectedDetail?.shield || state.selectedDetail?.safety || coin.safety || {};
+    const riskVerdict = String(shield.verdict || shield.status || "checking").toLowerCase();
+    const riskBlocked = /block|danger|honeypot|scam/.test(riskVerdict);
     panel.innerHTML = `<header class="wallet-screen-head asset"><button type="button" data-wallet-route-back aria-label="Back">←</button><div><img src="${escapeHtml(coinImage(coin))}" alt=""><span><h1>${escapeHtml(coin.symbol || short(key))}</h1><small>${escapeHtml(coin.name || (coin.chain === "robinhood" ? "Robinhood Chain" : "Solana"))}</small></span></div><button type="button" data-copy-coin aria-label="Copy contract">⧉</button></header>
       <section class="wallet-asset-balance"><span>${loading ? "Loading…" : (valueUsd == null ? "$0.00" : formatWalletUsd(valueUsd))}</span><h2>${quantity == null ? "No holding yet" : `${escapeHtml(formatTokenQuantity(quantity))} ${escapeHtml(coin.symbol || "tokens")}`}</h2><p class="${pnlClass}">${pnl == null ? "Live market details" : `${escapeHtml(formatPct(pnl))} open PnL`}</p></section>
       <div class="wallet-asset-actions"><button type="button" data-open-trade="buy"><i>＋</i><b>Buy</b></button><button type="button" data-open-trade="sell" ${quantity > 0 ? "" : "disabled"}><i>−</i><b>Sell</b></button><button type="button" data-wallet-swap><i>⇄</i><b>Swap</b></button><button type="button" ${sendAttrs} data-fun-send-wallet-index="${wallet?.index || ""}" data-fun-send-wallet="${escapeHtml(wallet?.publicKey || "")}" data-fun-send-wallet-label="${escapeHtml(wallet?.label || "Wallet")}" data-fun-send-symbol="${escapeHtml(coin.symbol || short(key))}" data-fun-send-balance="${escapeHtml(String(quantity || 0))}" ${quantity > 0 ? "" : "disabled"}><i>↗</i><b>Send</b></button></div>
       <section class="wallet-market-cards"><div><span>Price</span><b>${escapeHtml(formatUsd(coin.priceUsd || coin.price))}</b></div><div><span>Market cap</span><b>${escapeHtml(formatUsd(coin.marketCap || coin.mc))}</b></div><div><span>24h volume</span><b>${escapeHtml(formatUsd(coin.volume || coin.volumeH24 || coin.volume24hUsd))}</b></div><div><span>Liquidity</span><b>${escapeHtml(formatUsd(coin.liquidity || coin.liquidityUsd))}</b></div></section>
       <section class="wallet-inline-chart"><div class="wallet-chart-tabs"><b>Live chart</b><span>15m</span></div>${chart ? `<iframe src="${escapeHtml(chart)}" title="${escapeHtml(coin.symbol || "Coin")} live chart" loading="lazy"></iframe>` : ""}<button type="button" data-wallet-expand-chart>Expand chart inside wallet <i>›</i></button></section>
       <section class="wallet-auto-exits"><div><span>Auto exits</span><h3>${holding ? "Server protection" : "Set after buying"}</h3></div><div><small>Take profit</small><b>${holding?.takeProfitPct ? `+${escapeHtml(holding.takeProfitPct)}%` : "Off"}</b></div><div><small>Stop loss</small><b class="down">${holding?.stopLossPct ? `-${escapeHtml(holding.stopLossPct)}%` : "Off"}</b></div><button type="button" data-open-trade="buy">Edit</button></section>
+      <section class="wallet-token-safety ${riskBlocked ? "danger" : ""}"><div><span>${riskBlocked ? "⚠" : "◇"}</span><p><b>${riskBlocked ? "High-risk token warning" : "SlimeShield token controls"}</b><small>${escapeHtml(shield.summary || (riskBlocked ? "Trading is blocked when preflight confirms a honeypot or unsafe authority." : "Every buy is checked again before confirmation."))}</small></p></div><button type="button" data-token-controls>Hide or report</button></section>
       <section class="wallet-asset-footer"><h3>Recent activity</h3><button type="button" data-wallet-route-tab="activity"><span>≡</span><b>View buys, sells, sends and receives</b><i>›</i></button></section>`;
     syncWalletRouteNav();
   }
@@ -1148,6 +1188,115 @@
     const send = $(".wallet-actions [data-send-sol]"); if (send) send.textContent = "Send";
   }
 
+  function walletDeviceLabel() {
+    const ua = navigator.userAgent || "";
+    const browser = /Edg\//.test(ua) ? "Edge" : /CriOS|Chrome\//.test(ua) ? "Chrome" : /Firefox\//.test(ua) ? "Firefox" : /Safari\//.test(ua) ? "Safari" : "Browser";
+    const platform = navigator.userAgentData?.platform || (/Android/i.test(ua) ? "Android" : /iPhone|iPad/i.test(ua) ? "iPhone / iPad" : /Windows/i.test(ua) ? "Windows" : /Mac/i.test(ua) ? "Mac" : "this device");
+    return `${browser} · ${platform}${runningStandalone() ? " · installed app" : ""}`;
+  }
+  function walletLockConfig() { return readLocal(WALLET_LOCK_KEY, { enabled: false, idleMinutes: 5, passkeyId: "", salt: "", verifier: "" }); }
+  function walletSessionStartedAt() {
+    try {
+      let startedAt = sessionStorage.getItem(WALLET_SESSION_STARTED_KEY);
+      if (!startedAt) {
+        startedAt = new Date().toISOString();
+        sessionStorage.setItem(WALLET_SESSION_STARTED_KEY, startedAt);
+      }
+      return startedAt;
+    } catch {
+      return "";
+    }
+  }
+  function bytesToUrlBase64(bytes) { return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+  async function walletPinVerifier(pin, saltText) {
+    const encoder = new TextEncoder(), salt = urlBase64ToUint8Array(saltText);
+    const material = await crypto.subtle.importKey("raw", encoder.encode(String(pin)), "PBKDF2", false, ["deriveBits"]);
+    const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: 180_000, hash: "SHA-256" }, material, 256);
+    return bytesToUrlBase64(bits);
+  }
+  function showWalletLock() {
+    if (!IS_WALLET_ROUTE || !walletLockConfig().enabled) return;
+    state.walletLocked = true;
+    const overlay = $("[data-wallet-lock-overlay]"); if (overlay) { overlay.hidden = false; $("[data-wallet-unlock-pin]")?.focus(); }
+    document.body.classList.add("wallet-is-locked");
+  }
+  function hideWalletLock() {
+    state.walletLocked = false; state.walletLastActiveAt = Date.now();
+    const overlay = $("[data-wallet-lock-overlay]"); if (overlay) overlay.hidden = true;
+    document.body.classList.remove("wallet-is-locked");
+    const status = $("[data-wallet-unlock-status]"); if (status) status.textContent = "";
+    const pin = $("[data-wallet-unlock-pin]"); if (pin) pin.value = "";
+  }
+  async function unlockWalletWithPin(button) {
+    const config = walletLockConfig(), pin = String($("[data-wallet-unlock-pin]")?.value || ""), status = $("[data-wallet-unlock-status]");
+    if (!config.enabled || !config.salt || !config.verifier) { hideWalletLock(); return; }
+    button.disabled = true;
+    try {
+      const verifier = await walletPinVerifier(pin, config.salt);
+      if (verifier !== config.verifier) { if (status) status.textContent = "That PIN did not match."; return; }
+      hideWalletLock(); toast("SlimeWallet unlocked");
+    } finally { button.disabled = false; }
+  }
+  async function unlockWalletWithPasskey(button) {
+    const config = walletLockConfig(), status = $("[data-wallet-unlock-status]");
+    if (!config.passkeyId || !navigator.credentials) { if (status) status.textContent = "Device unlock is not set up. Use your PIN."; return; }
+    button.disabled = true;
+    try {
+      const credential = await navigator.credentials.get({ publicKey: { challenge: crypto.getRandomValues(new Uint8Array(32)), allowCredentials: [{ type: "public-key", id: urlBase64ToUint8Array(config.passkeyId) }], userVerification: "required", timeout: 60_000 } });
+      if (!credential) throw new Error("Device unlock was cancelled.");
+      hideWalletLock(); toast("Unlocked with this device");
+    } catch (error) { if (status) status.textContent = error.message || "Device unlock failed. Use your PIN."; }
+    finally { button.disabled = false; }
+  }
+  function openWalletLockSetup() {
+    const config = walletLockConfig();
+    openSheet(`<div class="sheet-title"><img src="${WALLET_BRAND_ASSET}" alt=""><div><h2>App lock</h2><p>Protect this SlimeWallet screen on this device</p></div></div><div class="read-card"><h3>${config.enabled ? "Screen lock is on" : "Add a local wallet PIN"}</h3><p>The PIN is derived into a one-way verifier and is never sent to SlimeWire. It does not replace your account password or wallet backup.</p></div><div class="field"><label>${config.enabled ? "New PIN (leave blank to keep current)" : "Create PIN"}</label><input data-wallet-lock-pin type="password" inputmode="numeric" autocomplete="new-password" minlength="4" maxlength="12" placeholder="4–12 digits"></div><div class="field"><label>Confirm PIN</label><input data-wallet-lock-confirm type="password" inputmode="numeric" autocomplete="new-password" minlength="4" maxlength="12" placeholder="Repeat PIN"></div><div class="field"><label>Auto-lock after</label><select data-wallet-lock-minutes>${[1, 5, 15, 30].map((minutes) => `<option value="${minutes}" ${Number(config.idleMinutes || 5) === minutes ? "selected" : ""}>${minutes} minute${minutes === 1 ? "" : "s"}</option>`).join("")}</select></div><button class="submit-trade" type="button" data-save-wallet-lock>${config.enabled ? "Update app lock" : "Enable app lock"}</button>${config.enabled ? `<button class="sheet-secondary" type="button" data-wallet-passkey>${config.passkeyId ? "Replace device biometric / passkey" : "Add device biometric / passkey"}</button><button class="sheet-secondary danger-button" type="button" data-disable-wallet-lock>Turn off app lock</button>` : ""}<p class="fineprint" data-wallet-lock-setup-status>Auto-lock protects the app when it is idle or reopened. Trades still require normal server checks.</p>`);
+  }
+  async function saveWalletLock(button) {
+    const current = walletLockConfig(), pin = String($("[data-wallet-lock-pin]")?.value || ""), confirmPin = String($("[data-wallet-lock-confirm]")?.value || ""), status = $("[data-wallet-lock-setup-status]");
+    if ((!current.enabled || pin) && !/^\d{4,12}$/.test(pin)) { status.textContent = "Use a 4–12 digit PIN."; return; }
+    if (pin !== confirmPin) { status.textContent = "The two PIN entries do not match."; return; }
+    button.disabled = true;
+    try {
+      let salt = current.salt, verifier = current.verifier;
+      if (pin) { const saltBytes = crypto.getRandomValues(new Uint8Array(16)); salt = bytesToUrlBase64(saltBytes); verifier = await walletPinVerifier(pin, salt); }
+      saveLocal(WALLET_LOCK_KEY, { ...current, enabled: true, idleMinutes: Number($("[data-wallet-lock-minutes]")?.value || 5), salt, verifier });
+      closeSheet(); toast("App lock enabled"); renderSocialProfile();
+    } finally { button.disabled = false; }
+  }
+  async function registerWalletPasskey(button) {
+    if (!window.PublicKeyCredential || !navigator.credentials) { toast("Device biometrics / passkeys are not available here.", true); return; }
+    button.disabled = true;
+    try {
+      const userId = crypto.getRandomValues(new Uint8Array(32));
+      const credential = await navigator.credentials.create({ publicKey: { challenge: crypto.getRandomValues(new Uint8Array(32)), rp: { name: "SlimeWallet", id: location.hostname }, user: { id: userId, name: state.user?.username || "slimewallet-user", displayName: state.user?.username || "SlimeWallet user" }, pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }], authenticatorSelection: { residentKey: "preferred", userVerification: "required" }, timeout: 60_000, attestation: "none" } });
+      if (!credential) throw new Error("Device setup was cancelled.");
+      saveLocal(WALLET_LOCK_KEY, { ...walletLockConfig(), passkeyId: bytesToUrlBase64(credential.rawId) });
+      toast("Device unlock enabled"); openWalletLockSetup();
+    } catch (error) { toast(error.message || "Could not enable device unlock.", true); }
+    finally { button.disabled = false; }
+  }
+  function disableWalletLock() { localStorage.removeItem(WALLET_LOCK_KEY); hideWalletLock(); closeSheet(); renderSocialProfile(); toast("App lock turned off"); }
+  function initWalletSecurity() {
+    if (!IS_WALLET_ROUTE) return;
+    walletSessionStartedAt();
+    const noteActivity = () => { if (!state.walletLocked) state.walletLastActiveAt = Date.now(); };
+    ["pointerdown", "keydown", "touchstart"].forEach((name) => document.addEventListener(name, noteActivity, { passive: true }));
+    state.walletLockTimer = window.setInterval(() => {
+      const config = walletLockConfig(); if (config.enabled && !state.walletLocked && Date.now() - state.walletLastActiveAt >= Math.max(1, Number(config.idleMinutes || 5)) * 60_000) showWalletLock();
+    }, 15_000);
+    document.addEventListener("visibilitychange", () => { if (document.hidden) state.walletLastActiveAt = Date.now(); else { const config = walletLockConfig(); if (config.enabled && Date.now() - state.walletLastActiveAt >= Math.max(1, Number(config.idleMinutes || 5)) * 60_000) showWalletLock(); } });
+    if (walletLockConfig().enabled) showWalletLock();
+  }
+  function openTokenControls() {
+    const coin = state.selected || {}, key = coinKey(coin), hidden = tokenIsHidden(key);
+    openSheet(`<div class="sheet-title"><img src="${escapeHtml(coinImage(coin))}" alt=""><div><h2>Token controls</h2><p>${escapeHtml(coin.symbol || short(key))} · ${coin.chain === "robinhood" ? "Robinhood" : "Solana"}</p></div></div><div class="read-card"><h3>${hidden ? "Hidden from wallet" : "Visible in wallet"}</h3><p>Hiding removes this token from wallet totals and asset lists on this device. It never sells, burns, or transfers the token.</p></div><button class="submit-trade" type="button" data-toggle-hidden-token="${escapeHtml(key)}">${hidden ? "Show token again" : "Hide token"}</button><button class="sheet-secondary danger-button" type="button" data-report-token="${escapeHtml(key)}">Report as spam / scam</button><p class="fineprint">Reports help improve SlimeShield. A report never moves funds or publicly identifies your wallet.</p>`);
+  }
+  function openHiddenTokenManager() {
+    const tokens = [...hiddenTokenSet()];
+    openSheet(`<div class="sheet-title"><img src="${WALLET_BRAND_ASSET}" alt=""><div><h2>Hidden tokens</h2><p>${tokens.length} hidden on this device</p></div></div>${tokens.length ? tokens.map((token) => `<div class="preset-manage-row"><div><b>${escapeHtml(short(token))}</b><span>${escapeHtml(token)}</span></div><button type="button" data-toggle-hidden-token="${escapeHtml(token)}">Show</button></div>`).join("") : '<div class="read-card"><h3>No hidden tokens</h3><p>Tokens you hide or report will appear here.</p></div>'}`);
+  }
+
   function renderSocialProfile() {
     const panel = $("[data-profile-panel]"), user = state.user || {};
     if (!state.token) {
@@ -1159,6 +1308,10 @@
     const earnedSol = user.referralStats?.totalSol || "0";
     const namingCard = user.username ? "" : `<div class="read-card account-welcome"><span>PROFILE SETUP</span><h3>Create a profile or log in.</h3><p>Name and secure the wallets already on this account, or log in to an existing SlimeWire profile.</p><div class="field"><label>Profile name</label><input data-profile-username minlength="2" maxlength="24" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="Choose a profile name"></div><div class="field"><label>Password</label><input data-profile-password type="password" autocomplete="new-password" placeholder="8+ characters"></div><div class="account-actions"><button class="submit-trade" type="button" data-save-social-profile>Create profile</button><button class="recovery-button" type="button" data-fun-account="login">Log in</button></div><p class="fineprint">Creating a profile keeps your current wallets and settings. Logging in opens an existing profile.</p></div>`;
     panel.innerHTML = `<div class="read-card account-status"><span>ACCOUNT</span><h3>${escapeHtml(user.username ? `@${user.username}` : "Profile not named yet")}</h3><p>${user.hasPasswordLogin ? "Login protected · available on your other devices" : "Add a username and password so this profile can be recovered anywhere."}</p></div><div class="read-card"><h3>Invite &amp; earn 💸</h3><p>Choose a clean link ending, then share it. When invited traders trade, your referral earnings are tracked here.</p><div class="field referral-link-field"><label>Your link</label><input readonly value="${escapeHtml(user.referralLink || location.origin)}"></div><div class="field"><label>Custom link ending</label><input data-referral-code value="${escapeHtml(user.referralCode || "")}" maxlength="32" placeholder="YOURNAME"></div><div class="account-actions"><button class="submit-trade" type="button" data-save-referral-code>Save link</button><button class="recovery-button" type="button" data-copy-invite>Copy invite link</button></div></div><div class="referral-stats"><div><b>${Number(tracker.count || 0)}</b><span>Referrals</span></div><div><b>${Number(tracker.activeCount || 0)}</b><span>Active</span></div><div><b>${escapeHtml(tracker.volumeSol || "0")}</b><span>SOL volume</span></div><div><b>${escapeHtml(earnedSol)}</b><span>SOL earned</span></div></div><details class="profile-drawer"><summary>Referral tracker <span>${Number(tracker.count || 0)} users</span></summary><div class="profile-drawer-body">${trackerRows || '<p>No referrals yet. Your first signup will appear here even before they trade.</p>'}</div></details><details class="profile-drawer"><summary>Referral payout wallet <span>${user.referralPayoutWallet ? escapeHtml(short(user.referralPayoutWallet)) : "Set wallet"}</span></summary><div class="profile-drawer-body"><p>Your earned fees are paid to this Solana wallet. Leave it blank to use your main SlimeWire wallet.</p><div class="field"><label>Payout wallet</label><input data-referral-payout value="${escapeHtml(user.referralPayoutWallet || "")}" placeholder="Solana wallet address"></div><button class="submit-trade" type="button" data-save-referral-payout>Save payout wallet</button></div></details><div class="read-card"><h3>Your public trader profile</h3><p>Publish only your opted-in trade record and let people follow alerts. Following never places or copies a trade.</p></div><div class="preset-editor"><div class="field"><label>Username</label><input data-profile-username value="${escapeHtml(user.username || "")}" minlength="2" maxlength="24" placeholder="slimetrader"></div><div class="field"><label>${user.hasPasswordLogin ? "New password (only needed to change login)" : "Password"}</label><input type="password" data-profile-password autocomplete="new-password" placeholder="8+ characters"></div><label class="check-row"><input type="checkbox" data-profile-public ${user.showOnTraderBoard ? "checked" : ""}> Show my opted-in trading profile publicly</label><button class="submit-trade" type="button" data-save-social-profile>Save profile</button><button class="recovery-button" type="button" data-enable-push>Enable trade alerts on this device</button><button class="recovery-button danger-button" type="button" data-fun-sign-out>Sign out on this device</button><p class="fineprint" data-social-status>Profile alerts are informational only. SlimeWire will never auto-buy from a follow.</p></div><a class="fineprint" style="display:block;text-align:center;padding:14px 0 4px" href="/?desktop=1">🖥 Switch to the desktop site</a>`;
+    if (IS_WALLET_ROUTE) {
+      const lock = walletLockConfig(), startedAt = walletSessionStartedAt(), hiddenCount = hiddenTokenSet().size;
+      panel.insertAdjacentHTML("beforeend", `<section class="wallet-security-center"><div class="wallet-security-heading"><span>⌾</span><div><h3>Security center</h3><p>${lock.enabled ? `Auto-lock after ${Number(lock.idleMinutes || 5)} minute${Number(lock.idleMinutes || 5) === 1 ? "" : "s"}` : "App lock is not enabled yet"}</p></div><b class="${lock.enabled ? "on" : ""}">${lock.enabled ? "ON" : "SET UP"}</b></div><button type="button" data-wallet-lock-setup><span>App lock &amp; device unlock</span><b>${lock.passkeyId ? "PIN + device" : lock.enabled ? "PIN" : "Add"} ›</b></button>${lock.enabled ? '<button type="button" data-wallet-lock-now><span>Lock SlimeWallet now</span><b>Lock ›</b></button>' : ""}<button type="button" data-hidden-token-manager><span>Hidden and reported tokens</span><b>${hiddenCount} ›</b></button><div class="wallet-device-session"><span>ACTIVE DEVICE</span><b>${escapeHtml(walletDeviceLabel())}</b><small>Session opened ${escapeHtml(startedAt ? new Date(startedAt).toLocaleString() : "now")} · sign out below to revoke this device</small></div></section>`);
+    }
     if (namingCard) {
       panel.insertAdjacentHTML("afterbegin", namingCard);
       const statusCard = panel.querySelector(".account-status");
@@ -1246,7 +1399,7 @@
         return `<button class="wallet-route-asset-row" type="button" data-open-coin="${escapeHtml(asset.tokenMint)}" data-chain-kind="sol"><img ${coinImageAttrs(asset)} alt=""><span><b>${escapeHtml(asset.symbol || short(asset.tokenMint))}</b><small>${escapeHtml(formatTokenQuantity(asset.quantity))} tokens</small></span><strong>${asset.valueSol == null ? "Pricing…" : `${escapeHtml(formatPositionSol(asset.valueSol))} SOL`}<small class="${pnlClass}">${pnl == null ? "PnL —" : escapeHtml(formatPct(pnl))}</small></strong><i>›</i></button>`;
       }).join("");
       const rh = state.rhWalletPosition;
-      const rhRows = rh && Number(rh.walletIndex) === Number(wallet.index) ? (rh.tokens || []).filter((token) => Number(token.uiAmount || 0) > 0).map((token) => {
+      const rhRows = rh && Number(rh.walletIndex) === Number(wallet.index) ? (rh.tokens || []).filter((token) => Number(token.uiAmount || 0) > 0 && !tokenIsHidden(token.address)).map((token) => {
         const pnl = positionNumber(token.pnlPercent), pnlClass = pnl == null ? "" : pnl >= 0 ? "up" : "down";
         return `<button class="wallet-route-asset-row" type="button" data-open-coin="${escapeHtml(token.address)}" data-chain-kind="robinhood"><img ${coinImageAttrs({ ...token, chain: "robinhood", tokenMint: token.address, imageUrl: token.iconUrl })} alt=""><span><b>${escapeHtml(token.symbol || short(token.address))}</b><small>${escapeHtml(formatTokenQuantity(token.uiAmount))} tokens · RH</small></span><strong>${token.valueUsd == null ? "Pricing…" : escapeHtml(formatWalletUsd(token.valueUsd))}<small class="${pnlClass}">${pnl == null ? "PnL —" : escapeHtml(formatPct(pnl))}</small></strong><i>›</i></button>`;
       }).join("") : "";
@@ -1278,7 +1431,7 @@
     const rh = state.rhWalletPosition;
     const active = activeWallet();
     const rhRows = rh && active && Number(rh.walletIndex) === Number(active.index)
-      ? (rh.tokens || []).filter((token) => Number(token.uiAmount || 0) > 0).map((token) => {
+      ? (rh.tokens || []).filter((token) => Number(token.uiAmount || 0) > 0 && !tokenIsHidden(token.address)).map((token) => {
           const pnl = positionNumber(token.pnlPercent);
           const pnlClass = pnl == null ? "" : (pnl >= 0 ? "up" : "down");
           return `<article class="fun-wallet-position-row">
@@ -1648,7 +1801,10 @@
     renderSearchMatches(content, matches, trimmed, false);
   }
 
-  function openSheet(html) { $("[data-sheet-content]").innerHTML = html; $("[data-sheet-overlay]").hidden = false; }
+  function openSheet(html) {
+    $("[data-sheet-content]").innerHTML = `<button class="sheet-close-button" type="button" data-close-sheet aria-label="Close">×</button>${html}`;
+    $("[data-sheet-overlay]").hidden = false;
+  }
   function closeSheet() { clearTimeout(state.volumePoll); state.volumePoll = null; clearTimeout(state.seasonPoll); state.seasonPoll = null; $("[data-sheet-overlay]").hidden = true; $("[data-sheet-content]").innerHTML = ""; }
 
   function funSeasonStage(run = {}) {
@@ -2115,7 +2271,7 @@
     openSheet(`<div class="sheet-title"><img src="${escapeHtml(coinImage(coin))}" alt=""><div><h2>${escapeHtml(coin.symbol || short(key))}</h2><p>${rh ? "Robinhood · one SOL wallet" : "Solana"} · ${escapeHtml(short(key))}</p></div></div>
       <div class="trade-toggle"><button class="${side === "buy" ? "active buy" : ""}" type="button" data-sheet-side="buy">Buy</button><button class="${side === "sell" ? "active sell" : ""}" type="button" data-sheet-side="sell">Sell</button></div>
       <div class="field"><label>Wallet</label><select data-trade-wallet>${wallets}</select></div>${side === "buy" ? buyFields : sellFields}
-      <button class="submit-trade ${side}" type="button" ${wallet ? `data-submit-trade data-side="${side}"` : "data-wallet-entry"}>${wallet ? `${side === "buy" ? "Buy" : "Sell"} ${escapeHtml(coin.symbol || "coin")}` : "Fund wallet to trade"}</button><p class="fineprint">Review before submitting. Automated exits keep running on the server after this page closes.</p>`);
+      <button class="submit-trade ${side}" type="button" ${wallet ? `data-submit-trade data-side="${side}"` : "data-wallet-entry"}>${wallet ? `Review ${side} ${escapeHtml(coin.symbol || "coin")}` : "Fund wallet to trade"}</button><p class="fineprint">SlimeWallet builds the route and simulates it before the confirm button appears. Automated exits keep running after this page closes.</p>`);
   }
   function openExitSheet() {
     const coin = state.selected || {};
@@ -2235,7 +2391,7 @@
     }).filter(Boolean);
   }
   function walletAssetSummary(wallet = {}) {
-    const assets = walletPositionAssets(wallet);
+    const assets = walletPositionAssets(wallet).filter((asset) => !tokenIsHidden(asset.tokenMint));
     const liquidSol = Math.max(0, Number(wallet.sol) || 0);
     const coinsSol = assets.reduce((sum, asset) => sum + (asset.valueSol == null ? 0 : asset.valueSol), 0);
     const hasPendingValue = assets.some((asset) => asset.valueSol == null);
@@ -2475,6 +2631,17 @@
   async function executeFunQuickBuy(button, rawAmount) {
     const amount = String(rawAmount || "").trim(), coin = state.selected || {}, key = coinKey(coin), preset = activePreset();
     if (!(Number(amount) > 0) || !key) { toast("Enter a valid SOL amount.", true); return; }
+    const quickWalletIndex = Number(state.activeWallet), quickRh = coin.chain === "robinhood", quickTp = preset?.takeProfitPct || "", quickSl = preset?.stopLossPct || "";
+    const quickBody = quickRh
+      ? { walletIndex: quickWalletIndex, side: "buy", tokenAddress: key, payCurrency: "SOL", amountSol: amount, tradeAttemptId: attemptId("fun-quick-rh") }
+      : { tokenMint: key, walletIndex: quickWalletIndex, amountSol: amount, slippageBps: preset?.slippageBps || "400", tradeAttemptId: attemptId("fun-quick-sol") };
+    if (!quickRh) {
+      const ladder = Array.isArray(preset?.takeProfitLadder) ? preset.takeProfitLadder : [];
+      if (quickTp || quickSl || ladder.length) Object.assign(quickBody, { autoExit: true, takeProfitPct: quickTp, stopLossPct: quickSl, sellPercent: preset?.sellPercent || "100", sellDelay: preset?.sellDelay || "off", takeProfitLadder: ladder });
+      else quickBody.disableAutoExit = true;
+    }
+    await reviewTradePayload(button, { kind: "trade", chain: quickRh ? "robinhood" : "solana", side: "buy", body: quickBody, guard: { takeProfitPct: quickTp, stopLossPct: quickSl }, coin: { key, symbol: coin.symbol || "coin", priceUsd: coin.priceUsd || 0 } });
+    return;
     const lockKey = `${key.toLowerCase()}:${state.activeWallet || "wallet"}`;
     if (state.quickBuyKey || state.tradeBusy) return;
     state.quickBuyKey = lockKey; state.tradeBusy = true; button.disabled = true; const oldText = button.textContent; button.textContent = "Buying…";
@@ -2498,8 +2665,59 @@
       else toast(result.data?.message || result.data?.error || "Quick buy failed", true);
     } finally { stopRhProgress(); state.quickBuyKey = ""; state.tradeBusy = false; button.disabled = false; button.textContent = oldText; }
   }
+  function tradePayloadFromSheet(side) {
+    const coin = state.selected || {}, key = coinKey(coin), walletIndex = Number($("[data-trade-wallet]")?.value || state.activeWallet), rh = coin.chain === "robinhood";
+    const body = rh
+      ? { walletIndex, side, tokenAddress: key, tradeAttemptId: attemptId("fun-rh") }
+      : { tokenMint: key, walletIndex, tradeAttemptId: attemptId("fun-sol"), slippageBps: side === "sell" ? "1200" : "500" };
+    const guard = { takeProfitPct: "", stopLossPct: "" };
+    if (side === "buy") {
+      body.amountSol = String($("[data-trade-amount]")?.value || "");
+      if (rh) body.payCurrency = "SOL";
+      const tp = $("[data-trade-tp]")?.value || "", sl = $("[data-trade-sl]")?.value || "", trail = $("[data-trade-trail]")?.value || "", ladder = $("[data-trade-ladder]")?.value || "";
+      guard.takeProfitPct = tp; guard.stopLossPct = sl;
+      if (!rh) {
+        if (tp || sl || Number(trail) > 0 || ladder) {
+          body.autoExit = true; body.takeProfitPct = tp; body.stopLossPct = sl; body.sellPercent = "100"; body.sellDelay = "off";
+          if (ladder === "custom") body.takeProfitLadder = activePreset()?.takeProfitLadder || [];
+          if (ladder === "smart") body.takeProfitLadder = [{ pct: 50, sellPercent: 25 }, { pct: 100, sellPercent: 25 }, { pct: 200, sellPercent: 25 }];
+          if (ladder === "fast") body.takeProfitLadder = [{ pct: 25, sellPercent: 40 }, { pct: 50, sellPercent: 35 }, { pct: 100, sellPercent: 25 }];
+          if (Number(trail) > 0) { body.trailingStopPct = trail; body.trailingActivatePct = $("[data-trade-trail-arm]")?.value || ""; }
+          if ($("[data-trade-be]")?.checked) body.breakEvenAfterTp1 = true;
+        } else body.disableAutoExit = true;
+      }
+    } else body.percent = String($("[data-trade-percent]")?.value || "100");
+    return { kind: "trade", chain: rh ? "robinhood" : "solana", side, body, guard, coin: { key, symbol: coin.symbol || "coin", priceUsd: coin.priceUsd || 0 } };
+  }
+  function transactionPreviewHtml(preview = {}) {
+    const impact = Number(preview.priceImpactPct), impactText = Number.isFinite(impact) ? `${impact.toFixed(2)}%` : "Provider did not expose it";
+    const warnings = (preview.warnings || []).map((warning) => `<li>${escapeHtml(warning)}</li>`).join("");
+    const status = preview.simulation?.status === "passed" ? "SIMULATION PASSED" : "ROUTE PREFLIGHT PASSED";
+    const confirmControl = preview.kind === "send"
+      ? `<button class="submit-trade" type="button" data-confirm-sol-send>Confirm send</button>`
+      : `<button class="submit-trade ${preview.side === "sell" ? "sell" : ""}" type="button" data-submit-trade data-preview-confirmed="true" data-side="${escapeHtml(preview.side || "buy")}">Confirm ${escapeHtml(preview.side || "transaction")}</button>`;
+    return `<div class="sheet-title transaction-preview-title"><img src="${escapeHtml(preview.kind === "send" ? slimePfp(preview.walletPublicKey) : coinImage(state.selected || {}))}" alt=""><div><h2>Review ${escapeHtml(preview.side || "transaction")}</h2><p>${escapeHtml(preview.walletLabel || "Slime wallet")} · live quote</p></div></div>
+      <div class="simulation-status ${preview.simulation?.status === "passed" ? "passed" : "verified"}"><span>✓</span><div><b>${status}</b><p>${escapeHtml(preview.simulation?.message || "Live route checks passed. Nothing was broadcast.")}</p></div></div>
+      <section class="transaction-preview-card"><div><span>You send</span><b>${escapeHtml(preview.inputAmount)} ${escapeHtml(preview.inputLabel)}</b></div><div><span>Estimated receive</span><b>${escapeHtml(preview.estimatedOutput)} ${escapeHtml(preview.outputLabel)}</b></div><div><span>Minimum received</span><b>${escapeHtml(preview.minimumReceived)} ${escapeHtml(preview.outputLabel)}</b></div><div><span>Price impact</span><b>${escapeHtml(impactText)}</b></div><div><span>App fee</span><b>${escapeHtml(preview.appFee || "Included")}</b></div><div><span>Network fee</span><b>${escapeHtml(preview.networkFee || "Estimated at submit")}</b></div><div><span>Balance after</span><b>${escapeHtml(preview.balanceAfter || "Recalculated at submit")}</b></div><div><span>Route</span><b>${escapeHtml(preview.route || preview.chain || "Live route")}</b></div></section>
+      ${warnings ? `<div class="transaction-warning"><b>Before you confirm</b><ul>${warnings}</ul></div>` : ""}
+      ${confirmControl}
+      <button class="sheet-secondary" type="button" data-edit-trade-preview>Edit transaction</button><p class="fineprint">The quote and simulation do not move funds. SlimeWallet performs safety checks again immediately before submission.</p>`;
+  }
+  async function reviewTradePayload(button, pending) {
+    if (!(await ensureTradeReady())) return false;
+    button.disabled = true; const oldText = button.textContent; button.textContent = "Simulating…";
+    const result = await post("/api/web/transaction/preview", { kind: pending.kind, chain: pending.chain, side: pending.side, ...pending.body }, { timeout: 30_000 });
+    button.disabled = false; button.textContent = oldText;
+    if (!result.ok || !result.data?.ok || !result.data?.preview) { toast(apiMessage(result.data, "This transaction did not pass preflight."), true); return false; }
+    state.pendingTradePreview = { ...pending, preview: result.data.preview };
+    openSheet(transactionPreviewHtml(result.data.preview));
+    return true;
+  }
   async function submitTrade(button) {
-    const side = button.dataset.side, coin = state.selected || {}, key = coinKey(coin), walletIndex = Number($("[data-trade-wallet]")?.value || state.activeWallet), rh = coin.chain === "robinhood";
+    if (button.dataset.previewConfirmed !== "true") { await reviewTradePayload(button, tradePayloadFromSheet(button.dataset.side)); return; }
+    const pending = state.pendingTradePreview;
+    if (!pending) { toast("That quote expired. Review the trade again.", true); return; }
+    const side = pending.side, coin = state.selected || {}, key = pending.coin?.key || coinKey(coin), walletIndex = Number(pending.body.walletIndex || state.activeWallet), rh = pending.chain === "robinhood";
     if (state.tradeBusy) return;
     state.tradeBusy = true; button.disabled = true; button.textContent = "Submitting…";
     let result;
@@ -2508,22 +2726,12 @@
       if (!(await ensureTradeReady())) return;
       if (rh) {
         stopRhProgress = startRhTradeProgress(button, side);
-        const body = { walletIndex, side, tokenAddress: key, tradeAttemptId: attemptId("fun-rh") };
-        if (side === "buy") { body.payCurrency = "SOL"; body.amountSol = $("[data-trade-amount]").value; }
-        else body.percent = $("[data-trade-percent]").value;
-        result = await post("/api/web/rh/trade", body);
-        if (result.ok && result.data?.ok && side === "buy" && (Number($("[data-trade-tp]")?.value) > 0 || Number($("[data-trade-sl]")?.value) > 0)) await post("/api/web/rh/guards", { walletIndex, tokenAddress: key, symbol: coin.symbol || "", takeProfitPct: $("[data-trade-tp]").value, stopLossPct: $("[data-trade-sl]").value, sellPercent: "100", entryPriceUsd: coin.priceUsd || 0 });
+        result = await post("/api/web/rh/trade", pending.body, { timeout: 90_000 });
+        if (result.ok && result.data?.ok && side === "buy" && (Number(pending.guard?.takeProfitPct) > 0 || Number(pending.guard?.stopLossPct) > 0)) await post("/api/web/rh/guards", { walletIndex, tokenAddress: key, symbol: pending.coin?.symbol || coin.symbol || "", takeProfitPct: pending.guard.takeProfitPct, stopLossPct: pending.guard.stopLossPct, sellPercent: "100", entryPriceUsd: pending.coin?.priceUsd || coin.priceUsd || 0 });
       } else {
-        const body = { tokenMint: key, walletIndex, tradeAttemptId: attemptId("fun-sol"), slippageBps: side === "sell" ? "1200" : "500" };
-        if (side === "buy") {
-          body.amountSol = $("[data-trade-amount]").value;
-          const tp = $("[data-trade-tp]")?.value || "", sl = $("[data-trade-sl]")?.value || "", trail = $("[data-trade-trail]")?.value || "", ladder = $("[data-trade-ladder]")?.value || "";
-          if (tp || sl || Number(trail) > 0 || ladder) { body.autoExit = true; body.takeProfitPct = tp; body.stopLossPct = sl; body.sellPercent = "100"; body.sellDelay = "off"; if (ladder === "custom") body.takeProfitLadder = activePreset()?.takeProfitLadder || []; if (ladder === "smart") body.takeProfitLadder = [{ pct: 50, sellPercent: 25 }, { pct: 100, sellPercent: 25 }, { pct: 200, sellPercent: 25 }]; if (ladder === "fast") body.takeProfitLadder = [{ pct: 25, sellPercent: 40 }, { pct: 50, sellPercent: 35 }, { pct: 100, sellPercent: 25 }]; if (Number(trail) > 0) { body.trailingStopPct = trail; body.trailingActivatePct = $("[data-trade-trail-arm]")?.value || ""; } if ($("[data-trade-be]")?.checked) body.breakEvenAfterTp1 = true; }
-          else body.disableAutoExit = true;
-        } else body.percent = $("[data-trade-percent]").value;
-        result = await post(`/api/web/trade/${side}`, body);
+        result = await post(`/api/web/trade/${side}`, pending.body, { timeout: 75_000 });
       }
-      if (result.ok && result.data?.ok) { toast(side === "sell" && rh && result.data?.solCashout?.outSol ? `Sold · ${result.data.solCashout.outSol} SOL returned` : `${side === "buy" ? "Buy" : "Sell"} submitted`); closeSheet(); setTimeout(async () => { await loadPortfolioSnapshot({ force: true }); renderCoinShell(); }, 900); }
+      if (result.ok && result.data?.ok) { toast(side === "sell" && rh && result.data?.solCashout?.outSol ? `Sold · ${result.data.solCashout.outSol} SOL returned` : `${side === "buy" ? "Buy" : "Sell"} submitted`); state.pendingTradePreview = null; closeSheet(); setTimeout(async () => { await loadPortfolioSnapshot({ force: true }); if (state.view === "wallet-asset") renderWalletAsset(); else renderCoinShell(); }, 900); }
       else toast(result.data?.message || result.data?.error || `${side} failed`, true);
     } finally { stopRhProgress(); state.tradeBusy = false; button.disabled = false; button.textContent = `${side === "buy" ? "Buy" : "Sell"} ${coin.symbol || "coin"}`; }
   }
@@ -2808,7 +3016,7 @@
     if (status) status.textContent = "All available SOL selected. Final transferable amount is calculated at confirmation.";
   }
 
-  function reviewFunSolSend() {
+  async function reviewFunSolSend(button = null) {
     const destination = String($("[data-send-sol-destination]")?.value || "").trim();
     const amountInput = $("[data-send-sol-amount]");
     const amountSol = String(amountInput?.value || "").trim();
@@ -2820,11 +3028,12 @@
     const wallet = state.wallets.find((item) => Number(item.index) === walletIndex);
     if (!wallet) { toast("Choose a wallet.", true); return; }
     state.pendingSolSend = { destination, amountSol, sendAll, walletIndex, spendPin, sendAttemptId: attemptId("fun-send-sol") };
-    openSheet(`<div class="sheet-title"><img src="${slimePfp(wallet.publicKey)}" alt=""><div><h2>Confirm send</h2><p>${escapeHtml(wallet.label || `Wallet ${walletIndex}`)}</p></div></div>
-      <div class="read-card"><h3>${sendAll ? "All available SOL" : `${escapeHtml(amountSol)} SOL`}</h3><p>To ${escapeHtml(short(destination))}</p></div>
-      <button class="submit-trade" type="button" data-confirm-sol-send>Send SOL</button>
-      <button class="sheet-secondary" type="button" data-send-sol>Edit</button>
-      <p class="fineprint">This is an on-chain transfer and cannot be reversed. All is fee-aware and drains the transferable balance.</p>`);
+    if (button) { button.disabled = true; button.textContent = "Simulating…"; }
+    const result = await post("/api/web/transaction/preview", { kind: "send", chain: "solana", walletIndex, destination, amountSol, sendAll }, { timeout: 20_000 });
+    if (button) { button.disabled = false; button.textContent = "Review send"; }
+    if (!result.ok || !result.data?.ok || !result.data?.preview) { toast(apiMessage(result.data, "This send did not pass simulation."), true); return; }
+    state.pendingTradePreview = { kind: "send", chain: "solana", side: "send", body: { destination, amountSol, sendAll, walletIndex }, preview: result.data.preview };
+    openSheet(transactionPreviewHtml(result.data.preview));
   }
 
   async function confirmFunSolSend(button) {
@@ -2848,6 +3057,7 @@
     }
     const sent = Number(result.data.amountSol || 0);
     state.pendingSolSend = null;
+    state.pendingTradePreview = null;
     await loadWallets(true);
     await loadPositions();
     renderWalletHero();
@@ -2953,7 +3163,7 @@
     if (event.target.closest("[data-send-sol]")) { await openSendSolSheet(); return; }
     if (event.target.closest("[data-send-sol-all]")) { selectFunSendAll(); return; }
     const sendSolChip = event.target.closest("[data-send-sol-chip]"); if (sendSolChip) { const input = $("[data-send-sol-amount]"); if (input) { input.value = sendSolChip.dataset.sendSolChip; delete input.dataset.sendAll; } $$('[data-send-sol-all]').forEach((button) => button.classList.remove("active")); return; }
-    if (event.target.closest("[data-review-sol-send]")) { reviewFunSolSend(); return; }
+    if (event.target.closest("[data-review-sol-send]")) { await reviewFunSolSend(event.target.closest("[data-review-sol-send]")); return; }
     const confirmSolSend = event.target.closest("[data-confirm-sol-send]"); if (confirmSolSend) { await confirmFunSolSend(confirmSolSend); return; }
     if (event.target.closest("[data-receive]")) { await hydrateFunRhBalances(false); walletReceive(); return; }
     const rhWalletTools = event.target.closest("[data-rh-wallet-tools]"); if (rhWalletTools) { await openFunRhWalletTools(rhWalletTools.dataset.rhWalletTools); return; }
@@ -3006,6 +3216,26 @@
     const amountChip = event.target.closest("[data-amount-chip]"); if (amountChip) { $("[data-trade-amount]").value = amountChip.dataset.amountChip; return; }
     const percentChip = event.target.closest("[data-percent-chip]"); if (percentChip) { $("[data-trade-percent]").value = percentChip.dataset.percentChip; return; }
     const ladder = event.target.closest("[data-ladder-preset]"); if (ladder) { $("[data-trade-ladder]").value = ladder.dataset.ladderPreset; $$("[data-ladder-preset]").forEach((button) => button.classList.toggle("active", button === ladder)); return; }
+    if (event.target.closest("[data-edit-trade-preview]")) {
+      const pending = state.pendingTradePreview;
+      if (pending?.kind === "send") {
+        const send = state.pendingSolSend;
+        await openSendSolSheet();
+        if (send) {
+          const wallet = $("[data-send-sol-wallet]"), destination = $("[data-send-sol-destination]"), amount = $("[data-send-sol-amount]"), pin = $("[data-send-sol-pin]");
+          if (wallet) wallet.value = String(send.walletIndex);
+          if (destination) destination.value = send.destination;
+          if (amount) { amount.value = send.amountSol; if (send.sendAll) amount.dataset.sendAll = "true"; }
+          if (pin) pin.value = send.spendPin || "";
+        }
+        return;
+      }
+      if (pending) {
+        openTradeSheet(pending.side, { amount: pending.body.amountSol || "", tp: pending.guard?.takeProfitPct || "", sl: pending.guard?.stopLossPct || "" });
+        if (pending.side === "sell" && $("[data-trade-percent]")) $("[data-trade-percent]").value = pending.body.percent || "100";
+      }
+      return;
+    }
     const submit = event.target.closest("[data-submit-trade]"); if (submit) { await submitTrade(submit); return; }
     if (event.target.closest("[data-arm-exits]")) { await armExits(); return; }
     const tool = event.target.closest("[data-tool-action]"); if (tool) { handleTool(tool.dataset.toolAction); return; }
@@ -3027,6 +3257,17 @@
     const copyInvite = event.target.closest("[data-copy-invite]"); if (copyInvite) { const link = state.user?.referralLink || location.origin; if (navigator.share) { try { await navigator.share({ title: "SlimeWire", text: "Trade coins with me on SlimeWire", url: link }); return; } catch { /* fell through to copy */ } } navigator.clipboard?.writeText(link).then(() => toast("Invite link copied"), () => toast("Could not copy", true)); return; }
     const saveProfile = event.target.closest("[data-save-social-profile]"); if (saveProfile) { await saveSocialProfile(saveProfile); return; }
     const enablePush = event.target.closest("[data-enable-push]"); if (enablePush) { await enableFunPush(enablePush); return; }
+    if (event.target.closest("[data-wallet-lock-setup]")) { openWalletLockSetup(); return; }
+    const saveLock = event.target.closest("[data-save-wallet-lock]"); if (saveLock) { await saveWalletLock(saveLock); return; }
+    const passkey = event.target.closest("[data-wallet-passkey]"); if (passkey) { await registerWalletPasskey(passkey); return; }
+    if (event.target.closest("[data-disable-wallet-lock]")) { if (confirm("Turn off the local SlimeWallet app lock on this device?")) disableWalletLock(); return; }
+    if (event.target.closest("[data-wallet-lock-now]")) { showWalletLock(); return; }
+    const unlock = event.target.closest("[data-wallet-unlock]"); if (unlock) { await unlockWalletWithPin(unlock); return; }
+    const passkeyUnlock = event.target.closest("[data-wallet-passkey-unlock]"); if (passkeyUnlock) { await unlockWalletWithPasskey(passkeyUnlock); return; }
+    if (event.target.closest("[data-token-controls]")) { openTokenControls(); return; }
+    if (event.target.closest("[data-hidden-token-manager]")) { openHiddenTokenManager(); return; }
+    const hiddenToken = event.target.closest("[data-toggle-hidden-token]"); if (hiddenToken) { const key = hiddenToken.dataset.toggleHiddenToken; setTokenHidden(key, !tokenIsHidden(key)); toast(tokenIsHidden(key) ? "Token hidden from wallet" : "Token visible again"); if (state.view === "wallet-asset") { closeSheet(); setView("wallet"); renderWalletPositions(); } else openHiddenTokenManager(); return; }
+    const reportToken = event.target.closest("[data-report-token]"); if (reportToken) { const key = reportToken.dataset.reportToken; const result = await post("/api/web/token/report", { token: key, reason: "spam_or_scam" }); if (result.ok) { setTokenHidden(key, true); toast("Token reported and hidden"); closeSheet(); setView("wallet"); renderWalletPositions(); } else toast(apiMessage(result.data, "Could not send report."), true); return; }
     if (event.target.closest("[data-create-wallet]")) { if (await createWallet()) { if (state.view === "quick") { closeSheet(); renderQuickRoute(); } else await openWalletManager(); } return; }
     if (event.target.closest("[data-wallet-select-all]")) { setWalletManagerSelection(state.wallets.map((wallet) => wallet.index)); return; }
     if (event.target.closest("[data-wallet-select-none]")) { setWalletManagerSelection([]); return; }
@@ -3159,6 +3400,11 @@
 
   async function init() {
     applyWalletRouteShell();
+    if (IS_WALLET_ROUTE && state.token) {
+      const cachedPortfolio = readWalletPortfolioCache();
+      if (cachedPortfolio) applyPortfolioSnapshot(cachedPortfolio, { saveCache: false });
+    }
+    initWalletSecurity();
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/fun-sw.js", { scope: IS_WALLET_ROUTE ? "/wallet/" : "/fun/", updateViaCache: "none" }).catch(() => {});
     await consumeTelegramLoginTicket();
     paintWalletPill();
