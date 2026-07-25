@@ -33,6 +33,9 @@
     solUsd: 0,
     rhEthUsd: 0,
     rhBalancePromise: null,
+    portfolioPromise: null,
+    portfolioPromiseForced: false,
+    portfolioForceRequested: false,
     activeWallet: Number(localStorage.getItem(ACTIVE_WALLET_KEY)) || null,
     chain: FROM_CASH ? "solana" : "all",
     feed: FROM_CASH ? "new" : "movers",
@@ -86,6 +89,37 @@
     activeTool: "",
     deferredInstall: null
   };
+  let funIndicatorAssetsPromise = null;
+
+  function loadFunScript(src) {
+    const existing = document.querySelector(`script[data-fun-lazy-src="${src}"]`);
+    if (existing?.dataset.loaded === "true") return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const script = existing || document.createElement("script");
+      const finish = () => { script.dataset.loaded = "true"; resolve(); };
+      script.addEventListener("load", finish, { once: true });
+      script.addEventListener("error", () => reject(new Error(`Could not load ${src}`)), { once: true });
+      if (!existing) {
+        script.src = src;
+        script.defer = true;
+        script.dataset.funLazySrc = src;
+        document.head.appendChild(script);
+      }
+    });
+  }
+
+  async function ensureFunIndicatorAssets() {
+    if (!funIndicatorAssetsPromise) {
+      funIndicatorAssetsPromise = (async () => {
+        await loadFunScript("/vendor/lightweight-charts.standalone.production.js");
+        await loadFunScript("/fun-indicators.js?v=7");
+      })().catch((error) => {
+        funIndicatorAssetsPromise = null;
+        throw error;
+      });
+    }
+    return funIndicatorAssetsPromise;
+  }
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
@@ -288,19 +322,54 @@
     return false;
   }
   async function ensureAutomation() { if (!state.token) return; await post("/api/web/profile/automation", { action: "enable" }); }
+  function applyPortfolioSnapshot(data = {}) {
+    state.wallets = (data.balances || []).filter((wallet) => !wallet.volumeBot);
+    state.solUsd = Math.max(0, Number(data.solUsd) || state.solUsd || 0);
+    const rh = data.rhBalances || {};
+    state.rhEthUsd = Math.max(0, Number(rh.ethUsd) || state.rhEthUsd || 0);
+    const rhByIndex = new Map((rh.wallets || []).map((row) => [Number(row.walletIndex), row]));
+    state.wallets = state.wallets.map((wallet) => {
+      const row = rhByIndex.get(Number(wallet.index));
+      return row ? { ...wallet, rhAddress: row.address || "", rhEth: row.available ? Number(row.eth || 0) : null, rhAvailable: Boolean(row.available), rhExplorer: row.explorer || "" } : wallet;
+    });
+    state.positions = displayablePositions(data.positions || state.positions || []);
+    if (!state.activeWallet || !state.wallets.some((wallet) => wallet.index === state.activeWallet)) state.activeWallet = state.wallets[0]?.index || null;
+    if (state.activeWallet) localStorage.setItem(ACTIVE_WALLET_KEY, String(state.activeWallet));
+    paintWalletPill();
+    renderCashHandoff();
+    renderHomeReadiness();
+    return data;
+  }
+  async function loadPortfolioSnapshot(options = {}) {
+    if (!state.token) return null;
+    const requestedForce = Boolean(options.force);
+    if (state.portfolioPromise) {
+      if (requestedForce && !state.portfolioPromiseForced) state.portfolioForceRequested = true;
+      return state.portfolioPromise;
+    }
+    const force = requestedForce || state.portfolioForceRequested;
+    state.portfolioForceRequested = false;
+    const authToken = state.token;
+    const refresh = (async () => {
+      const result = await request(`/api/web/portfolio/snapshot${force ? "?force=true" : ""}`);
+      if (!result.ok || !result.data?.ok || authToken !== state.token) return null;
+      return applyPortfolioSnapshot(result.data);
+    })();
+    state.portfolioPromise = refresh;
+    state.portfolioPromiseForced = force;
+    try {
+      return await refresh;
+    } finally {
+      if (state.portfolioPromise === refresh) {
+        state.portfolioPromise = null;
+        state.portfolioPromiseForced = false;
+      }
+      if (state.portfolioForceRequested && authToken === state.token) void loadPortfolioSnapshot({ force: true });
+    }
+  }
   async function loadWallets(force = false) {
     if (!state.token) return [];
-    const result = await request(`/api/web/balances${force ? "?force=true" : ""}`);
-    if (result.ok && result.data?.ok) {
-      state.wallets = (result.data.balances || []).filter((wallet) => !wallet.volumeBot);
-      state.solUsd = Math.max(0, Number(result.data.solUsd) || state.solUsd || 0);
-      if (!state.activeWallet || !state.wallets.some((wallet) => wallet.index === state.activeWallet)) state.activeWallet = state.wallets[0]?.index || null;
-      if (state.activeWallet) localStorage.setItem(ACTIVE_WALLET_KEY, String(state.activeWallet));
-      paintWalletPill();
-      renderCashHandoff();
-      renderHomeReadiness();
-      void hydrateFunRhBalances();
-    }
+    await loadPortfolioSnapshot({ force });
     return state.wallets;
   }
   async function hydrateFunRhBalances(render = true) {
@@ -838,13 +907,9 @@
   }
   async function loadPositions(options = {}) {
     if (!state.token) return [];
-    const authToken = state.token;
-    const version = ++state.positionLoadVersion;
-    const result = await request(`/api/web/positions?fast=true${options.force ? "&force=true" : ""}`);
-    if (authToken !== state.token || version !== state.positionLoadVersion) return state.positions;
-    if (result.ok && result.data?.ok) state.positions = displayablePositions(result.data.positions);
+    ++state.positionLoadVersion;
+    await loadPortfolioSnapshot({ force: Boolean(options.force) });
     paintPositionSurfaces();
-    void loadValuedPositions(version, { force: Boolean(options.force) });
     return state.positions;
   }
   function currentPosition() { const key = coinKey(state.selected); return state.positions.find((position) => String(position.tokenMint || "").toLowerCase() === key.toLowerCase()) || null; }
@@ -964,14 +1029,21 @@
 
   async function loadWalletView() {
     const panel = $("[data-profile-panel]");
-    if (state.token) await Promise.all([loadWallets(), loadPositions()]);
+    if (state.token) await loadPortfolioSnapshot();
     renderWalletHero();
     if (!state.token && state.profileTab === "social") { renderSocialProfile(); return; }
     if (!state.token) {
       panel.innerHTML = IS_WALLET_ROUTE ? `<div class="wallet-assets-head"><h2>Assets</h2></div><section class="wallet-route-assets"><div class="wallet-empty-assets"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><h3>Your wallet starts here</h3><p>Create a SlimeWire profile and wallet only when you are ready. Nothing runs in the background.</p><button type="button" data-fun-account="create">Create profile</button><button type="button" data-fun-account="login">Log in</button></div></section>` : emptyState("Your mobile wallet starts here", "Tap Deposit or Receive when you are ready. SlimeWire creates the account only when you use it.");
       return;
     }
-    if (state.profileTab === "positions") { renderWalletPositions(); void loadFunRhPositions(); }
+    if (state.profileTab === "positions") {
+      renderWalletPositions();
+      const version = ++state.positionLoadVersion;
+      window.setTimeout(() => {
+        if (version === state.positionLoadVersion && state.profileTab === "positions") void loadValuedPositions(version, { force: false });
+      }, 900);
+      void loadFunRhPositions();
+    }
     else if (state.profileTab === "activity") loadWalletActivity();
     else if (state.profileTab === "created") loadCreatedCoins();
     else renderSocialProfile();
@@ -1256,7 +1328,7 @@
     if (result.ok && result.data?.ok && Number(result.data.bundle?.successCount || 0) > 0) {
       toast(`Sold ${percent}% from ${walletLabel}`);
       closeSheet();
-      await Promise.all([loadWallets(true), loadPositions({ force: true })]);
+      await loadPortfolioSnapshot({ force: true });
       renderWalletPositions();
     } else {
       const failure = result.data?.bundle?.results?.find((row) => !row.ok)?.message;
@@ -1345,7 +1417,7 @@
     }
     const sent = result.data.transfer?.amount || pending.amount;
     state.pendingTokenSend = null;
-    await Promise.all([loadWallets(true), loadPositions({ force: true }), isRh ? loadFunRhPositions(true) : Promise.resolve(null)]);
+    await Promise.all([loadPortfolioSnapshot({ force: true }), isRh ? loadFunRhPositions(true) : Promise.resolve(null)]);
     renderWalletHero();
     renderWalletPositions();
     closeSheet();
@@ -1365,17 +1437,22 @@
     const panel = $("[data-profile-panel]"); panel.innerHTML = '<div class="skeleton-list"></div>';
     const result = await request("/api/web/launches"); state.launches = result.ok ? (result.data?.coins || []) : [];
     if (!state.launches.length) { panel.innerHTML = emptyState("No launches yet", "Coins launched through SlimeWire appear here with creator-only controls."); return; }
-    const pumpLaunches = state.launches.filter((coin) => String(coin.rail || "pump").toLowerCase() === "pump" && coin.devWalletIndex);
+    const pumpLaunches = state.launches.filter((coin) => String(coin.rail || "pump").toLowerCase() === "pump" && coin.devWalletIndex && !coin.pumpCashback);
     const lastClaim = pumpLaunches.find((coin) => Number(coin.creatorFeeClaimedSol || 0) > 0);
     const pendingVolume = pumpLaunches.reduce((sum, coin) => sum + Number(coin.creatorFeePendingVolumeSol || 0), 0);
     const manualLaunches = pumpLaunches.filter((coin) => coin.creatorFeeClaimMode === "manual");
     const feeCard = pumpLaunches.length ? `<div class="read-card account-status"><span>PUMP CREATOR FEES</span><h3>${lastClaim ? `${Number(lastClaim.creatorFeeClaimedSol).toFixed(6)} SOL claimed last` : "Accruing on-chain"}</h3><p>${manualLaunches.length ? `${manualLaunches.length} launch${manualLaunches.length === 1 ? " is" : "es are"} set to accumulate until you claim.` : "Auto-claim watches new activity."} ${pendingVolume > 0 ? `${pendingVolume.toFixed(3)} SOL of new trade volume is waiting for the next automatic check.` : "An empty claim is never shown as earnings."}</p></div>` : "";
     panel.innerHTML = feeCard + state.launches.map((coin) => {
       const key = coin.mint || coin.tokenAddress || coin.address || "", rh = ["robinhood", "rh"].includes(String(coin.rail || "").toLowerCase()) || isRh(key);
-      const feeStatus = rh ? ({ claimed: "Sushi fees sent to creator", watching: "Sushi fees auto-collecting", nothing_to_claim: "No Sushi fees yet", failed: "Sushi fee retry queued", creator_wallet_missing: "Creator wallet unavailable" }[String(coin.rhPoolFeeStatus || "watching")] || "Sushi fees auto-collecting") : ({ claimed: "Claimed", accruing: "Accumulating until claimed", watching: "Watching", nothing_to_claim: "No fees yet", failed: "Claim retry available", activity_unavailable: "Checking activity" }[String(coin.creatorFeeStatus || "watching")] || "Watching");
-      const claim = !rh && coin.devWalletIndex ? `<button class="recovery-button" type="button" data-claim-creator-fees="${Number(coin.devWalletIndex)}" data-claim-creator-mint="${escapeHtml(key)}">Claim fees</button>` : "";
+      const feeStatus = rh ? ({ claimed: "Sushi fees sent to creator", watching: "Sushi fees auto-collecting", nothing_to_claim: "No Sushi fees yet", failed: "Sushi fee retry queued", creator_wallet_missing: "Creator wallet unavailable" }[String(coin.rhPoolFeeStatus || "watching")] || "Sushi fees auto-collecting") : coin.pumpCashback ? "Pump Cash back enabled · trader rewards" : ({ claimed: "Claimed", accruing: "Accumulating until claimed", watching: "Watching", nothing_to_claim: "No fees yet", failed: "Claim retry available", activity_unavailable: "Checking activity" }[String(coin.creatorFeeStatus || "watching")] || "Watching");
+      const holderStatus = !rh && coin.holderRewards?.enabled
+        ? Number(coin.holderRewardPendingSol || 0) > 0
+          ? `${Number(coin.holderRewardPendingSol).toFixed(4)} SOL pending for holders`
+          : Number(coin.holderRewardPaidSol || 0) > 0 ? `${Number(coin.holderRewardPaidSol).toFixed(4)} SOL paid to holders` : "Holder rewards accruing"
+        : "";
+      const claim = !rh && !coin.pumpCashback && coin.devWalletIndex ? `<button class="recovery-button" type="button" data-claim-creator-fees="${Number(coin.devWalletIndex)}" data-claim-creator-mint="${escapeHtml(key)}">Claim fees</button>` : "";
       const backup = !rh && coin.devWalletIndex ? `<button class="recovery-button" type="button" data-pump-wallet-backup data-wallet-index="${Number(coin.devWalletIndex)}" data-wallet-key="${escapeHtml(coin.devWallet || "")}">Pump wallet backup</button>` : "";
-      return `<div class="created-coin-wrap"><button class="coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="${rh ? "rh" : "sol"}"><span class="coin-avatar"><img src="${escapeHtml(coin.imageUri || mascot(key))}" alt=""></span><span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span></span><span class="coin-meta"><i>${escapeHtml(coin.rail || "Solana")}</i><i>${escapeHtml(feeStatus)}</i></span></span><span class="coin-value"><b>Open</b><span>CREATOR</span></span></button>${claim}${backup}</div>`;
+      return `<div class="created-coin-wrap"><button class="coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="${rh ? "rh" : "sol"}"><span class="coin-avatar"><img src="${escapeHtml(coin.imageUri || mascot(key))}" alt=""></span><span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span></span><span class="coin-meta"><i>${escapeHtml(coin.rail || "Solana")}</i><i>${escapeHtml(feeStatus)}</i>${holderStatus ? `<i>${escapeHtml(holderStatus)}</i>` : ""}</span></span><span class="coin-value"><b>Open</b><span>CREATOR</span></span></button>${claim}${backup}</div>`;
     }).join("");
   }
 
@@ -2383,17 +2460,30 @@
     state.activeWallet = state.wallets[0]?.index || null;if(state.activeWallet)localStorage.setItem(ACTIVE_WALLET_KEY,String(state.activeWallet));else localStorage.removeItem(ACTIVE_WALLET_KEY); paintWalletPill(); renderWalletHero(); toast("Wallet backed up and removed"); await openWalletManager();
   }
   async function ensureTradeReady() { if (!(await ensureAccount())) return false; if (!state.wallets.length) await loadWallets(); if (!state.wallets.length) { closeSheet(); setView("wallet"); toast("Create a wallet first.", true); return false; } await ensureAutomation(); return true; }
+  function startRhTradeProgress(button, side) {
+    const steps = side === "sell"
+      ? [[0, "Finding fastest route…"], [4_000, "Selling on Robinhood…"], [10_000, "Returning proceeds to SOL…"]]
+      : [[0, "Converting SOL…"], [2_500, "Funding Robinhood…"], [7_000, "Finding fastest route…"], [13_000, "Buying coin…"]];
+    const timers = [];
+    for (const [delay, text] of steps) {
+      if (!delay) button.textContent = text;
+      else timers.push(window.setTimeout(() => { if (button.disabled) button.textContent = text; }, delay));
+    }
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }
   async function executeFunQuickBuy(button, rawAmount) {
     const amount = String(rawAmount || "").trim(), coin = state.selected || {}, key = coinKey(coin), preset = activePreset();
     if (!(Number(amount) > 0) || !key) { toast("Enter a valid SOL amount.", true); return; }
     const lockKey = `${key.toLowerCase()}:${state.activeWallet || "wallet"}`;
     if (state.quickBuyKey || state.tradeBusy) return;
     state.quickBuyKey = lockKey; state.tradeBusy = true; button.disabled = true; const oldText = button.textContent; button.textContent = "Buying…";
+    let stopRhProgress = () => {};
     try {
       if (!(await ensureTradeReady())) return;
       const walletIndex = Number(state.activeWallet), rh = coin.chain === "robinhood", tp = preset?.takeProfitPct || "", sl = preset?.stopLossPct || "";
       let result;
       if (rh) {
+        stopRhProgress = startRhTradeProgress(button, "buy");
         result = await post("/api/web/rh/trade", { walletIndex, side: "buy", tokenAddress: key, payCurrency: "SOL", amountSol: amount, tradeAttemptId: attemptId("fun-quick-rh") });
         if (result.ok && result.data?.ok && (Number(tp) > 0 || Number(sl) > 0)) await post("/api/web/rh/guards", { walletIndex, tokenAddress: key, symbol: coin.symbol || "", takeProfitPct: tp, stopLossPct: sl, sellPercent: "100", entryPriceUsd: coin.priceUsd || 0 });
       } else {
@@ -2403,18 +2493,20 @@
         else body.disableAutoExit = true;
         result = await post("/api/web/trade/buy", body);
       }
-      if (result.ok && result.data?.ok) { toast(`Bought ${coin.symbol || "coin"} · ${amount} SOL`); setTimeout(async () => { await Promise.all([loadWallets(true), loadPositions({ force: true })]); renderCoinShell(); }, 1600); }
+      if (result.ok && result.data?.ok) { toast(`Bought ${coin.symbol || "coin"} · ${amount} SOL`); setTimeout(async () => { await loadPortfolioSnapshot({ force: true }); renderCoinShell(); }, 900); }
       else toast(result.data?.message || result.data?.error || "Quick buy failed", true);
-    } finally { state.quickBuyKey = ""; state.tradeBusy = false; button.disabled = false; button.textContent = oldText; }
+    } finally { stopRhProgress(); state.quickBuyKey = ""; state.tradeBusy = false; button.disabled = false; button.textContent = oldText; }
   }
   async function submitTrade(button) {
     const side = button.dataset.side, coin = state.selected || {}, key = coinKey(coin), walletIndex = Number($("[data-trade-wallet]")?.value || state.activeWallet), rh = coin.chain === "robinhood";
     if (state.tradeBusy) return;
     state.tradeBusy = true; button.disabled = true; button.textContent = "Submitting…";
     let result;
+    let stopRhProgress = () => {};
     try {
       if (!(await ensureTradeReady())) return;
       if (rh) {
+        stopRhProgress = startRhTradeProgress(button, side);
         const body = { walletIndex, side, tokenAddress: key, tradeAttemptId: attemptId("fun-rh") };
         if (side === "buy") { body.payCurrency = "SOL"; body.amountSol = $("[data-trade-amount]").value; }
         else body.percent = $("[data-trade-percent]").value;
@@ -2430,9 +2522,9 @@
         } else body.percent = $("[data-trade-percent]").value;
         result = await post(`/api/web/trade/${side}`, body);
       }
-      if (result.ok && result.data?.ok) { toast(side === "sell" && rh && result.data?.solCashout?.outSol ? `Sold · ${result.data.solCashout.outSol} SOL returned` : `${side === "buy" ? "Buy" : "Sell"} submitted`); closeSheet(); setTimeout(async () => { await Promise.all([loadWallets(true), loadPositions({ force: true })]); renderCoinShell(); }, 2200); }
+      if (result.ok && result.data?.ok) { toast(side === "sell" && rh && result.data?.solCashout?.outSol ? `Sold · ${result.data.solCashout.outSol} SOL returned` : `${side === "buy" ? "Buy" : "Sell"} submitted`); closeSheet(); setTimeout(async () => { await loadPortfolioSnapshot({ force: true }); renderCoinShell(); }, 900); }
       else toast(result.data?.message || result.data?.error || `${side} failed`, true);
-    } finally { state.tradeBusy = false; button.disabled = false; button.textContent = `${side === "buy" ? "Buy" : "Sell"} ${coin.symbol || "coin"}`; }
+    } finally { stopRhProgress(); state.tradeBusy = false; button.disabled = false; button.textContent = `${side === "buy" ? "Buy" : "Sell"} ${coin.symbol || "coin"}`; }
   }
   async function armExits() {
     if (!(await ensureTradeReady())) return;
@@ -2664,7 +2756,7 @@
     state.activeTool = "";
     history.replaceState(null, "", "#");
     setView(state.toolReturnView && state.toolReturnView !== "tool" ? state.toolReturnView : "home");
-    if (state.token) Promise.all([loadWallets(true), loadPositions({ force: true })]).catch(() => {});
+    if (state.token) loadPortfolioSnapshot({ force: true }).catch(() => {});
   }
 
   function openFunLaunch() {
@@ -2685,7 +2777,7 @@
   function closeFunLaunch() {
     history.replaceState(null, "", "#");
     setView(state.launchReturnView && state.launchReturnView !== "launch" ? state.launchReturnView : "home");
-    if (state.token) Promise.all([loadWallets(true), loadPositions({ force: true }), loadCreatedCoinsSilently()]).catch(() => {});
+    if (state.token) Promise.all([loadPortfolioSnapshot({ force: true }), loadCreatedCoinsSilently()]).catch(() => {});
   }
 
   async function openSendSolSheet() {
@@ -2822,6 +2914,21 @@
   }
 
   document.addEventListener("click", async (event) => {
+    const indicatorToggle = event.target.closest("[data-indicators-toggle]");
+    if (indicatorToggle && !indicatorToggle.dataset.assetsReady) {
+      event.preventDefault();
+      indicatorToggle.disabled = true;
+      try {
+        await ensureFunIndicatorAssets();
+        indicatorToggle.dataset.assetsReady = "true";
+        indicatorToggle.disabled = false;
+        indicatorToggle.click();
+      } catch {
+        indicatorToggle.disabled = false;
+        toast("Indicators could not load. Check your connection and try again.", true);
+      }
+      return;
+    }
     const walletRouteTab = event.target.closest("[data-wallet-route-tab]"); if (walletRouteTab) { closeSearch(); closeSheet(); state.profileTab = walletRouteTab.dataset.walletRouteTab || "positions"; $$('[data-profile]').forEach((button) => button.classList.toggle("active", button.dataset.profile === state.profileTab)); setView("wallet"); return; }
     if (event.target.closest("[data-wallet-route-back]")) { closeSearch(); closeSheet(); setView("wallet"); return; }
     if (event.target.closest("[data-wallet-swap]")) { closeSearch(); closeSheet(); setView("wallet-swap"); return; }

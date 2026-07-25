@@ -725,6 +725,7 @@ export class PumpLaunchService {
       tokenName: basePayload?.name || "",
       symbol: basePayload?.symbol || "",
       holderRewards: basePayload?.holderRewards || { enabled: false },
+      pumpCashback: Boolean(basePayload?.pumpCashback),
       creatorFeeClaimMode: basePayload?.creatorFeeClaimMode === "manual" ? "manual" : "auto",
       mintPublicKey,
       mintSecretStored: Boolean(this.encryptMintSecret),
@@ -760,7 +761,7 @@ export class PumpLaunchService {
     });
 
     try {
-      validatePumpPortalLocalApiUrl(config.apiUrl);
+      if (!config.skipLocalApiValidation) validatePumpPortalLocalApiUrl(config.apiUrl);
       await this.saveAttempt({
         id: attemptId,
         status: PUMP_LAUNCH_STATUS.VALIDATING,

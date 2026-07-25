@@ -11,6 +11,9 @@ const debugWalletSource = fs.readFileSync(new URL("../scripts/debug-wallet-refre
 const debugPositionsSource = fs.readFileSync(new URL("../scripts/debug-positions-refresh.js", import.meta.url), "utf8");
 const debugFrontendPerfSource = fs.readFileSync(new URL("../scripts/debug-frontend-perf.js", import.meta.url), "utf8");
 const profileTerminalSource = fs.readFileSync(new URL("../scripts/profile-terminal.js", import.meta.url), "utf8");
+const funSource = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "utf8");
+const funHtmlSource = fs.readFileSync(new URL("../web/public/fun.html", import.meta.url), "utf8");
+const cashSource = fs.readFileSync(new URL("../web/public/cash/cash.js", import.meta.url), "utf8");
 
 function functionBody(name, source = appSource) {
   const syncMatch = new RegExp(`function\\s+${name}\\s*\\(`).exec(source);
@@ -134,8 +137,8 @@ test("backend performance event logging is sanitized and read-only summary endpo
   assert.match(serverSource, /webPositionSummary/);
   assert.match(serverSource, /connectedScope/);
   assert.match(serverSource, /cachedWebSummary\("web:pnl"/);
-  assert.match(serverSource, /Math\.min\(CONFIG\.displayCacheFreshMs, 1_000\)/);
-  assert.match(serverSource, /Math\.min\(CONFIG\.displayCacheFreshMs, fast \? 750 : 1_000\)/);
+  assert.match(serverSource, /WEB_BALANCE_FRESH_MS/);
+  assert.match(serverSource, /fast \? WEB_POSITION_FAST_FRESH_MS : WEB_POSITION_FRESH_MS/);
   assert.match(serverSource, /cacheHit: summary\.cacheHit/);
   assert.match(serverSource, /refreshDurationMs: summary\.durationMs/);
   assert.doesNotMatch(functionBody("recordPerformanceEvent", serverSource), /privateKey|seed|Authorization|password/i);
@@ -171,4 +174,31 @@ test("mobile terminal smoothness keeps long rows cheap to paint", () => {
   assert.match(cssSource, /backdrop-filter: none !important/);
   assert.match(cssSource, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(cssSource, /animation-duration: 0\.01ms !important/);
+});
+
+test("interactive wallet reads use a cached unified snapshot on a reserved RPC lane", () => {
+  assert.match(serverSource, /pathname === "\/api\/web\/portfolio\/snapshot"/);
+  assert.match(functionBody("handleWebApiRequest", serverSource), /pathname === "\/api\/web\/portfolio\/snapshot"/);
+  assert.match(serverSource, /cachedWebSummary\(`web:portfolio:v1:/);
+  assert.match(serverSource, /WEB_PORTFOLIO_FRESH_MS/);
+  assert.match(functionBody("webBalanceRows", serverSource), /const priority = Boolean\(options\.priority\)/);
+  assert.match(functionBody("webBalanceRows", serverSource), /getSolBalanceCached\([^\n]+\{ force: false, priority \}\)/);
+  assert.match(functionBody("primeSolBalancesBatch", serverSource), /priority: Boolean\(options\.priority\)/);
+  assert.match(functionBody("loadWalletCore"), /\/api\/web\/portfolio\/snapshot/);
+  assert.match(functionBody("loadWalletView", funSource), /loadPortfolioSnapshot/);
+  assert.match(functionBody("refreshBalance", cashSource), /\/api\/web\/portfolio\/snapshot/);
+});
+
+test("wallet surfaces do not issue immediate fast then forced full position cascades", () => {
+  assert.doesNotMatch(functionBody("loadWalletView", funSource), /Promise\.all\(\[loadWallets\(\), loadPositions\(\)\]\)/);
+  assert.doesNotMatch(functionBody("loadPositions", funSource), /positions\?fast=true/);
+  assert.doesNotMatch(functionBody("refreshWalletState"), /reason: `\$\{reason\}-positions-values`/);
+});
+
+test("wallet-only startup lazy-loads technical chart assets on demand", () => {
+  assert.doesNotMatch(funHtmlSource, /<script defer src="\/vendor\/lightweight-charts/);
+  assert.doesNotMatch(funHtmlSource, /<script defer src="\/fun-indicators/);
+  assert.match(funSource, /async function ensureFunIndicatorAssets/);
+  assert.match(functionBody("ensureFunIndicatorAssets", funSource), /lightweight-charts\.standalone\.production\.js/);
+  assert.match(functionBody("ensureFunIndicatorAssets", funSource), /fun-indicators\.js/);
 });

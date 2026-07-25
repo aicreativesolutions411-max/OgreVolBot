@@ -554,7 +554,7 @@ test("/fun paints real token quantities and asynchronously replaces pending SOL 
   assert.equal(positionEstimatedSol({ estimatedValueSol: null }), null);
 
   const loads = js.slice(js.indexOf("function paintPositionSurfaces"), js.indexOf("function currentPosition"));
-  assert.match(loads, /request\(`\/api\/web\/positions\?fast=true\$\{options\.force/);
+  assert.match(loads, /loadPortfolioSnapshot\(\{ force: Boolean\(options\.force\) \}\)/);
   assert.match(loads, /request\(`\/api\/web\/positions\$\{force \? "\?force=true"/);
   assert.match(loads, /state\.positionValuePromise/);
   assert.match(loads, /state\.positionValueForceRequested = true/);
@@ -573,7 +573,7 @@ test("/fun paints real token quantities and asynchronously replaces pending SOL 
   assert.match(js, /pendingText = "Value updating…"/);
   assert.match(portfolio, /"Pricing…"/);
   assert.match(js, /position\?\.source !== "connected-wallet" && positionQuantity\(position\) != null/);
-  assert.match(js, /loadPositions\(\{ force: true \}\)/);
+  assert.match(js, /loadPortfolioSnapshot\(\{ force: true \}\)/);
 });
 
 test("/fun reuses authenticated money APIs with idempotency and lazy user actions", () => {
@@ -759,9 +759,10 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, MACD, and 
   for (const marker of ['data-indicators-toggle', 'data-indicator-kind="fib"', 'data-indicator-kind="rsi"', 'data-indicator-kind="macd"', 'data-indicator-kind="harmonics"', 'data-indicator-panels']) assert.match(html, new RegExp(marker));
   assert.match(html, /aria-controls="slimeIndicatorDrawer"/);
   assert.match(html, /data-indicator-status role="status" aria-live="polite"/);
-  assert.match(html, /vendor\/lightweight-charts\.standalone\.production\.js/);
-  assert.ok(html.indexOf("lightweight-charts.standalone.production.js") < html.indexOf("fun-indicators.js"));
-  assert.match(html, /fun-indicators\.js\?v=7/);
+  assert.doesNotMatch(html, /vendor\/lightweight-charts\.standalone\.production\.js/);
+  assert.doesNotMatch(html, /fun-indicators\.js\?v=7/);
+  assert.match(js, /loadFunScript\("\/vendor\/lightweight-charts\.standalone\.production\.js"\)/);
+  assert.match(js, /loadFunScript\("\/fun-indicators\.js\?v=7"\)/);
   assert.match(funWorker, /fun-indicators\.js\?v=7/);
   assert.match(funWorker, /fun\.css\?v=42/);
   assert.match(indicators, /new URLSearchParams\(\{ ca: key, tf: timeframe \}\)/);

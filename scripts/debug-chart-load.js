@@ -87,7 +87,7 @@ console.log(JSON.stringify({
   stale: Boolean(chart.stale),
   requestsFiredOnRouteOpen: [
     "/api/web/chart/bootstrap",
-    smartChartBranchUsesWallet ? "/api/web/wallets|balances|positions when logged in only" : ""
+    smartChartBranchUsesWallet ? "/api/web/wallets|portfolio/snapshot when logged in only" : ""
   ].filter(Boolean),
   unrelatedFeedRefreshesTriggered: smartChartBranchRefreshesFeeds,
   backendEndpointPresent: /pathname === "\/api\/web\/chart\/bootstrap"/.test(serverSource),

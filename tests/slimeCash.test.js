@@ -127,7 +127,9 @@ test("SlimeCash exposes explicit cash assets and routes sends through the idempo
 });
 
 test("USDC funding and sending stay explicit in the SlimeCash client", () => {
-  assert.match(cash, /get\(`\/api\/web\/cash\/assets\$\{walletIndex\}`\)/);
+  assert.match(cash, /get\("\/api\/web\/portfolio\/snapshot"\)/);
+  assert.match(cash, /active\?\.cashAssets/);
+  assert.match(cash, /assets\.USDC\?\.rawAmount/);
   assert.match(cash, /asset: state\.sendAsset/);
   assert.match(html, /data-send-asset="USDC"/);
   assert.match(html, />USD</);

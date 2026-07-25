@@ -74,7 +74,7 @@ const events = Array.isArray(perfStore.events) ? perfStore.events : [];
 const walletEvents = events.filter((event) => /wallet-refresh|load-all/.test(event.action || "") || event.component === "wallet");
 const cacheHitEvents = walletEvents.filter((event) => event.cacheHit);
 const networkRefreshEvents = walletEvents.filter((event) => !event.cacheHit && /wallet-refresh|load-all/.test(event.action || ""));
-const balanceRouteSource = serverSource.slice(serverSource.indexOf('pathname === "/api/web/balances"'), serverSource.indexOf('pathname === "/api/web/positions"'));
+const balanceRouteSource = serverSource.slice(serverSource.indexOf('pathname === "/api/web/portfolio/snapshot"'), serverSource.indexOf('pathname === "/api/web/positions"'));
 const webBalanceRowsSource = functionSource(serverSource, "webBalanceRows");
 const report = {
   latestWalletRefresh: walletEvents.at(-1) || null,
@@ -92,8 +92,8 @@ const report = {
     secretsLogged: false
   },
   refreshPath: {
-    endpoint: "/api/web/balances",
-    backendSummaryCache: bool(balanceRouteSource, /cachedWebSummary\("web:balances"/),
+    endpoint: "/api/web/portfolio/snapshot",
+    backendSummaryCache: bool(balanceRouteSource, /cachedWebSummary\(`web:portfolio:v1:/),
     frontendInFlightDedupe: bool(appSource, /let walletRefreshPromise = null/) && bool(functionSource(appSource, "refreshWalletState"), /walletRefreshPromise/),
     getRequestDedupe: bool(functionSource(appSource, "api"), /apiInFlight/),
     cachedUiKeptDuringRefresh: !/state\.balances\s*=\s*\[\][\s\S]{0,200}walletRefreshing/.test(functionSource(appSource, "refreshWalletState")),
@@ -103,7 +103,7 @@ const report = {
     solBalanceCalls: (webBalanceRowsSource.match(/getSolBalanceCached/g) || []).length,
     tokenAccountCalls: (webBalanceRowsSource.match(/getOwnedTokenAccountsWithWarningsCached/g) || []).length,
     rpcCalls: (webBalanceRowsSource.match(/rpcWithRetry/g) || []).length,
-    callsRunInParallel: bool(balanceRouteSource, /Promise\.all/) && bool(webBalanceRowsSource, /runWithConcurrency/),
+    callsRunInParallel: bool(functionSource(serverSource, "webPortfolioSnapshot"), /Promise\.all/) && bool(webBalanceRowsSource, /runWithConcurrency/),
     tokenMetadataSeparateFromBalances: !/tokenMetadataMapForMints/.test(webBalanceRowsSource)
   },
   cacheBehavior: {

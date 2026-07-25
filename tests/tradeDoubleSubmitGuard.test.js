@@ -24,6 +24,20 @@ const indexSource = fs.readFileSync(new URL("../web/public/index.html", import.m
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
 const polyTradingSource = fs.readFileSync(new URL("../src/lib/polymarketTrading.js", import.meta.url), "utf8");
 const polyHubSource = fs.readFileSync(new URL("../web/public/polymarket.html", import.meta.url), "utf8");
+const pumpCashbackSource = fs.readFileSync(new URL("../src/lib/pumpCashback.js", import.meta.url), "utf8");
+
+test("Pump native Cash back uses official create_v2 and stays distinct from holder rewards", () => {
+  assert.match(pumpCashbackSource, /createV2Instruction/);
+  assert.match(pumpCashbackSource, /cashback:\s*true/);
+  assert.match(serverSource, /PUMP_CASHBACK_HOLDER_REWARDS_CONFLICT/);
+  assert.match(serverSource, /buildPumpCashbackCreateTransaction/);
+  assert.match(serverSource, /pump-official-create-v2/);
+  assert.match(serverSource, /normalizePumpCashback\(attempt\.pumpCashback\)\) continue/);
+  assert.match(appSource, /data-launch-coin-pump-cashback/);
+  assert.match(appSource, /shows as enabled on Pump/);
+  assert.match(appSource, /there is no fixed wallet count/);
+  assert.match(appSource, /cannot be combined with SlimeWire holder rewards/);
+});
 
 test("main website mirrors stay identical", () => {
   assert.equal(indexSource, ggSource, "index.html and gg.html drifted; shared site fixes must ship together");
@@ -2210,6 +2224,19 @@ test("settings menu is multi-level: home -> per-bot sub-menus, clickable toggles
   assert.match(cb, /gb:media:\(buy\|raid\)/);           // media hint
   assert.match(serverSource, /async function applyGbInput\(/);
   assert.match(serverSource, /if \(await applyGbInput\(message, userId\)/); // wired into the router
+});
+
+test("group admins can remove the Buy Bot CA without resetting its other settings", () => {
+  const view = functionBody(serverSource, "groupBotModuleView");
+  const command = functionBody(serverSource, "handleGroupBotCommand");
+  const callback = functionBody(serverSource, "handleGroupBotCallback");
+  const changed = functionBody(serverSource, "onGroupBotTokenChanged");
+  assert.match(view, /gb:buy:clear/);
+  assert.match(command, /untrack\|cleartrack/);
+  assert.match(command, /setGroupBotToken\(chatId, null\)/);
+  assert.match(callback, /data === "gb:buy:clear"/);
+  assert.match(callback, /setGroupBotToken\(chatId, null\)/);
+  assert.match(changed, /buyWsSync/);
 });
 
 test("group Buy Bot settings load once and recover without destructive empty-store fallback", () => {
@@ -4976,4 +5003,23 @@ test("Pump launches can keep creator fees accrued for a later SlimeWire or walle
     assert.match(html, /Download Pump wallet backup/);
     assert.match(html, /GG\.claimFees/);
   }
+});
+
+test("Solana holder rewards accumulate creator fees until an economical atomic payout", () => {
+  const normalize = functionBody(serverSource, "normalizeHolderRewardPolicy");
+  const distribute = functionBody(serverSource, "distributeSolHolderRewards");
+  const autoClaim = functionBody(serverSource, "processHolderRewardAutoClaims");
+  const claim = functionBody(serverSource, "webClaimCreatorFeesCore");
+  assert.match(normalize, /minPayoutSol/);
+  assert.match(normalize, /minWalletPayoutSol/);
+  assert.match(distribute, /pendingLamports/);
+  assert.match(distribute, /accumulating\("accumulating"\)/);
+  assert.match(distribute, /slice\(0, Math\.min\(18/);
+  assert.match(autoClaim, /pumpCreatorFeeTradeDelta/);
+  assert.match(autoClaim, /holderRewardAutoClaimMinVolumeSol/);
+  assert.match(autoClaim, /holderRewardsPendingVolumeSol/);
+  assert.match(claim, /holderRewardsPendingLamports/);
+  assert.match(claim, /holderRewardsPaidLamports/);
+  assert.match(appSource, /data-launch-coin-holder-reward-min-payout/);
+  assert.match(appSource, /fees stay in Pump's creator-fee vault/);
 });

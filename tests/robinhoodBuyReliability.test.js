@@ -76,3 +76,19 @@ test("automatic Robinhood launch waits on the bridge quote, not an unreachable f
   assert.doesNotMatch(server, /Math\.max\(requiredEthFloor, quotedEth \* 0\.72\)/);
   assert.match(server, /rhLaunchTokenOnSushi/);
 });
+
+test("SOL-funded Robinhood trades avoid duplicate Relay waits and race read-only quote providers", () => {
+  assert.match(server, /waitForDelivery: false/);
+  assert.match(server, /async function firstSuccessfulRhQuote/);
+  assert.match(server, /Promise\.any/);
+  assert.match(server, /firstSuccessfulRhQuote\(quoteAttempts/);
+});
+
+test("web Solana buys acknowledge without nine-round token-delta polling", () => {
+  const start = server.indexOf("async function webTradeBuyCore");
+  const end = server.indexOf("async function webTradeSell", start);
+  const body = server.slice(start, end);
+  assert.match(body, /trackTokenDelta: false/);
+  assert.match(body, /priority: true/);
+  assert.doesNotMatch(body, /readTokenDeltaAfterBuy/);
+});

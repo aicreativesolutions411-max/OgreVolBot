@@ -119,7 +119,7 @@ test("core terminal tabs map to the requested feed categories", () => {
 });
 
 test("smart chart refresh stays selected-token scoped", () => {
-  assert.equal(byTab("smartChart").endpoint, "composite:/api/web/positions");
+  assert.equal(byTab("smartChart").endpoint, "composite:/api/web/portfolio/snapshot");
   const refreshBody = functionBody("refreshTerminalFeed");
   assert.match(refreshBody, /tabKey === "smartChart"[\s\S]*refreshWalletState\(\{ force: Boolean\(options\.force\), deep: false \}\)/);
   assert.doesNotMatch(refreshBody.match(/tabKey === "smartChart"[\s\S]*?\} else if/)?.[0] || "", /refreshLivePairBuckets/);

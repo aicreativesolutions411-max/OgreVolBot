@@ -81,7 +81,7 @@ test("backend manual sell uses critical attempt idempotency without changing sel
   assert.match(serverSource, /if \(manualSellResultSubmitted\(result\)\) \{\s*await idemResultSet/);
   assert.match(functionBody(serverSource, "webBundleSellCore"), /sellTokenFromWallet\(wallet, tokenMint, percent, slippageBps, \{ userId \}\)/);
   // webTradeSellCore now sells via sellWithFeeRetry (adds a fee-top-up retry); the unchanged sell call lives there.
-  assert.match(functionBody(serverSource, "sellWithFeeRetry"), /sellTokenFromWallet\(wallet, tokenMint, percent, slippageBps, \{ userId \}\)/);
+  assert.match(functionBody(serverSource, "sellWithFeeRetry"), /sellTokenFromWallet\(wallet, tokenMint, percent, slippageBps, \{ userId, priority: true \}\)/);
   assert.match(functionBody(serverSource, "webTradeSellCore"), /sellWithFeeRetry\(store, userId, wallet, tokenMint, percent, slippageBps\)/);
 });
 

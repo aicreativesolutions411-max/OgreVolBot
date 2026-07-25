@@ -940,14 +940,14 @@ const TERMINAL_FEEDS = [
   { tabKey: "slimeScope", label: "Slime Scope - Scanner Picks", component: "slimeScopeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/sniper/scan", category: "scanner:slime-scope", refreshMs: 10_000, staleMs: 30_000, cacheKey: "scanner:slime-scope:{scopeMode}", pageSize: 30, maxPageSize: 120, previewLimit: 30, supportsPagination: true },
   { tabKey: "kol", label: "KOL Tracker - Social/KOL Signals", component: "kolHtml", endpoint: "/api/web/kol/scan", category: "signals:kol", refreshMs: 10_000, staleMs: 30_000, cacheKey: "signals:kol:{kolMode}:{kolWallet}", pageSize: 36, maxPageSize: 72, previewLimit: 12, supportsPagination: true },
   { tabKey: "watchlist", label: "Watchlist - Your Saved Pairs", component: "watchlistHtml", endpoint: "/api/web/watchlist", category: "user:watchlist", refreshMs: 20_000, staleMs: 45_000, cacheKey: "user:watchlist", pageSize: 30, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
-  { tabKey: "smartChart", label: "Smart Chart - Selected Token", component: "smartChartHtml", endpoint: "composite:/api/web/positions", category: "token:selected-chart", refreshMs: 30_000, staleMs: 60_000, cacheKey: "token:selected-chart:{tokenMint}", pageSize: 5, maxPageSize: 10, previewLimit: 5, supportsPagination: false },
-  { tabKey: "trade", label: "Slime Swap - Selected Token Panel", component: "tradeHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "trade:selected-token", refreshMs: 20_000, staleMs: 45_000, cacheKey: "trade:selected-token:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
-  { tabKey: "bundle", label: "Bundle Volume - Bundle Actions", component: "bundleHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "bundle:volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "bundle:volume:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
-  { tabKey: "volume", label: "Bundle Volume - Volume Flags", component: "volumeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/balances", category: "signals:bundle-volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "signals:bundle-volume:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
+  { tabKey: "smartChart", label: "Smart Chart - Selected Token", component: "smartChartHtml", endpoint: "composite:/api/web/portfolio/snapshot", category: "token:selected-chart", refreshMs: 30_000, staleMs: 60_000, cacheKey: "token:selected-chart:{tokenMint}", pageSize: 5, maxPageSize: 10, previewLimit: 5, supportsPagination: false },
+  { tabKey: "trade", label: "Slime Swap - Selected Token Panel", component: "tradeHtml", endpoint: "composite:/api/web/portfolio/snapshot", category: "trade:selected-token", refreshMs: 20_000, staleMs: 45_000, cacheKey: "trade:selected-token:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
+  { tabKey: "bundle", label: "Bundle Volume - Bundle Actions", component: "bundleHtml", endpoint: "composite:/api/web/portfolio/snapshot", category: "bundle:volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "bundle:volume:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
+  { tabKey: "volume", label: "Bundle Volume - Volume Flags", component: "volumeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/portfolio/snapshot", category: "signals:bundle-volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "signals:bundle-volume:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
   { tabKey: "sniper", label: "Sniper - Launch Snipe Candidates", component: "sniperHtml", endpoint: "/api/web/sniper/scan", category: "scanner:launch-snipe", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:launch-snipe:{scanMode}", pageSize: 36, maxPageSize: 72, previewLimit: 12, supportsPagination: true },
   { tabKey: "launch", label: "Launch Snipe - Launch Watches", component: "launchHtml", endpoint: "/api/web/launch/watches", category: "launch:watches", refreshMs: 6_000, staleMs: 12_000, cacheKey: "launch:watches", pageSize: 20, maxPageSize: 40, previewLimit: 8, supportsPagination: false },
   { tabKey: "launchCoin", label: "Pump Launch - Launch Status", component: "launchCoinHtml", endpoint: "/api/web/launch/watches", category: "pump-launch:status", refreshMs: 20_000, staleMs: 60_000, cacheKey: "pump-launch:status", pageSize: 10, maxPageSize: 20, previewLimit: 5, supportsPagination: false },
-  { tabKey: "wallets", label: "Wallets/Balances", component: "walletsHtml", endpoint: "composite:/api/web/wallets+/api/web/balances", category: "portfolio:wallets-balances", refreshMs: 20_000, staleMs: 45_000, cacheKey: "portfolio:wallets-balances", pageSize: 25, maxPageSize: 50, previewLimit: 8, supportsPagination: false },
+  { tabKey: "wallets", label: "Wallets/Balances", component: "walletsHtml", endpoint: "composite:/api/web/wallets+/api/web/portfolio/snapshot", category: "portfolio:wallets-balances", refreshMs: 20_000, staleMs: 45_000, cacheKey: "portfolio:wallets-balances", pageSize: 25, maxPageSize: 50, previewLimit: 8, supportsPagination: false },
   { tabKey: "positions", label: "Positions", component: "positionsHtml", endpoint: "/api/web/positions", category: "portfolio:positions", refreshMs: 12_000, staleMs: 30_000, cacheKey: "portfolio:positions", pageSize: 25, maxPageSize: 50, previewLimit: 8, supportsPagination: false },
   { tabKey: "pnl", label: "PnL", component: "pnlHtml", endpoint: "/api/web/pnl", category: "portfolio:pnl", refreshMs: 20_000, staleMs: 45_000, cacheKey: "portfolio:pnl", pageSize: 50, maxPageSize: 100, previewLimit: 10, supportsPagination: false },
   { tabKey: "ogreAi", label: "Ogre A.I.", component: "ogreAiHtml", endpoint: "local:ogre-ai-results", category: "tool:ogre-ai", refreshMs: 30_000, staleMs: 90_000, cacheKey: "tool:ogre-ai", pageSize: 10, maxPageSize: 20, previewLimit: 5, supportsPagination: false },
@@ -3051,10 +3051,9 @@ async function loadAll(options = {}) {
       ensureAutoExitWatchForActivePlans();
       return;
     }
-    const [wallets, balances, positions, pnl, launchWatches, presets, watchlist, tradePlans, seasonStatus] = await Promise.all([
+    const [wallets, balances, pnl, launchWatches, presets, watchlist, tradePlans, seasonStatus] = await Promise.all([
       api("/api/web/wallets"),
-      api(`/api/web/balances${forceQuery}`),
-      api(`/api/web/positions${forceQuery}`),
+      api(`/api/web/portfolio/snapshot${forceQuery}`),
       api("/api/web/pnl"),
       api("/api/web/launch/watches"),
       api("/api/web/presets"),
@@ -3064,8 +3063,8 @@ async function loadAll(options = {}) {
     ]);
     state.wallets = wallets.wallets || [];
     state.balances = balances.balances || [];
-    state.connectedWalletBalance = balances.connectedWallet || positions.connectedWallet || null;
-    state.positions = positions.positions || [];
+    state.connectedWalletBalance = balances.connectedWallet || null;
+    state.positions = balances.positions || [];
     state.pnl = pnl.pnl || null;
     state.launchWatches = launchWatches.watches || [];
     state.presets = presets.presets || { trade: [], bundle: [] };
@@ -3101,13 +3100,14 @@ async function loadWalletCore(options = {}) {
   const positionsForceQuery = options.force || options.deep ? "?force=true" : "";
   const timeoutMs = options.timeoutMs || API_CONNECT_TIMEOUT_MS;
   const walletsPromise = api("/api/web/wallets", { timeoutMs });
-  const balancesPromise = api(`/api/web/balances${forceQuery}`, { timeoutMs });
+  const balancesPromise = api(`/api/web/portfolio/snapshot${forceQuery}`, { timeoutMs });
   const tradePlansPromise = api("/api/web/trade/plans", { timeoutMs });
   const seasonStatusPromise = api("/api/web/season/status", { timeoutMs });
   const balances = await balancesPromise;
   if (isStaleWalletRefresh()) return;
   state.balances = balances.balances || [];
   state.connectedWalletBalance = balances.connectedWallet || null;
+  state.positions = mergePositionRefreshRows(balances.positions || state.positions || [], state.positions || [], { fast: true });
   state.lastWalletRefreshAt = new Date().toISOString();
   state.walletRefreshError = "";
   perfMeasure("wallet-refresh", startedAt, {
@@ -3238,7 +3238,7 @@ function refreshPortfolioSupplemental(reason = "portfolio-supplemental") {
   if (!state.user || !state.token) return;
   const startedAt = perfNow();
   Promise.allSettled([
-    api("/api/web/balances?force=true", { timeoutMs: POSITIONS_REFRESH_TIMEOUT_MS }),
+    api("/api/web/portfolio/snapshot?force=true", { timeoutMs: POSITIONS_REFRESH_TIMEOUT_MS }),
     api("/api/web/pnl?force=true", { timeoutMs: POSITIONS_REFRESH_TIMEOUT_MS, dedupe: false })
   ]).then(([balancesResult, pnlResult]) => {
     if (balancesResult.status === "fulfilled") {
@@ -4619,7 +4619,7 @@ function scheduleWalletBackgroundRefresh(delayMs = 350, options = {}) {
       if (options.reason === "post-trade") {
         await Promise.all([
           loadPostTradeSupplemental(),
-          refreshWalletPositions({ force: true, fast: false, silent: true, syncPnl: true, reason: "post-trade-background-values" })
+          refreshWalletPositions({ force: false, fast: false, silent: true, syncPnl: false, reason: "post-trade-background-values" })
         ]);
       } else {
         await Promise.all([
@@ -4747,21 +4747,7 @@ async function refreshWalletState({ force = false, deep = false, reason = "manua
       if (deep) {
         await loadAll({ force, skipCore: true, silent: true });
       } else {
-        if (isManualHeaderRefresh || isPostTradeRefresh) {
-          void refreshWalletPositions({
-            force: true,
-            fast: false,
-            silent: true,
-            followUpValues: false,
-            syncPnl: true,
-            reason: `${reason}-positions-values`,
-            timeoutMs: POSITIONS_REFRESH_TIMEOUT_MS
-          }).then((refreshed) => {
-            if (refreshed) render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
-            else clearPendingPositionValues(`${reason}-positions-values-failed`);
-          }).catch(() => clearPendingPositionValues(`${reason}-positions-values-failed`));
-        }
-        scheduleWalletBackgroundRefresh(isPostTradeRefresh ? 200 : 350, { reason });
+        scheduleWalletBackgroundRefresh(isPostTradeRefresh ? 900 : 500, { reason });
       }
       perfMeasure("wallet-refresh-total", startedAt, {
         component: "wallet",
@@ -11213,8 +11199,13 @@ function launchCoinHtml() {
               <span>Burn creator fees when supported by the launch connector</span>
             </label>
             <label class="switch-row full-span">
+              <input data-launch-coin-pump-cashback type="checkbox" ${draft.pumpCashback ? "checked" : ""}>
+              <span><strong>Pump Cash back — shows as enabled on Pump.</strong> Pump permanently redirects creator rewards to eligible traders based on each trader's own volume.</span>
+            </label>
+            <p class="muted full-span">Exact Pump behavior: there is no fixed wallet count. Every eligible trader gets an individual on-chain reward accumulator and claims their own Cash back. This is permanent at creation and cannot be combined with SlimeWire holder rewards.</p>
+            <label class="switch-row full-span">
               <input data-launch-coin-holder-rewards type="checkbox" ${draft.holderRewards?.enabled ? "checked" : ""}>
-              <span>Holder rewards from creator fees - split fee rewards to holders instead of only the dev wallet.</span>
+              <span>Share creator fees with token holders — SlimeWire accrues and batch-pays eligible Solana holders.</span>
             </label>
             <label>
               Holder reward split
@@ -11232,10 +11223,14 @@ function launchCoinHtml() {
               <input data-launch-coin-holder-reward-min-hours type="number" min="0" max="720" step="1" value="${escapeHtml(String(draft.holderRewards?.minHoldHours ?? 4))}">
             </label>
             <label>
-              Recipients per payout
-              <input data-launch-coin-holder-reward-max type="number" min="1" max="100" step="1" value="${escapeHtml(String(draft.holderRewards?.maxRecipients || 100))}">
+              Holders per payout
+              <input data-launch-coin-holder-reward-max type="number" min="1" max="18" step="1" value="${escapeHtml(String(Math.min(18, draft.holderRewards?.maxRecipients || 18)))}">
             </label>
-            <p class="muted full-span">Optional launch hook: holders above the token threshold and observed for the hold window can receive creator-fee rewards. This is not a token tax and does not add transfer restrictions.</p>
+            <label>
+              Distribute after rewards reach (SOL)
+              <input data-launch-coin-holder-reward-min-payout type="number" min="0.005" max="10" step="0.005" value="${escapeHtml(String(draft.holderRewards?.minPayoutSol || 0.01))}">
+            </label>
+            <p class="muted full-span">In automatic mode, fees stay in Pump's creator-fee vault while they accrue toward this amount, then SlimeWire claims once and sends one atomic holder batch. Payouts are proportional to eligible balances; any shortfall remains pending. Pump's native Cash back is different: it rewards traders by their own volume, not holders. This option is not a token tax and adds no transfer restrictions.</p>
           </div>`
     },
     {
@@ -11426,12 +11421,16 @@ function readLaunchCoinDraft() {
     feeMode: $("[data-launch-coin-fee-mode]")?.value || draft.feeMode || "dev",
     buybackWallet: ($("[data-launch-coin-buyback-wallet]")?.value || "").trim(),
     burnCreatorFees: Boolean($("[data-launch-coin-burn-creator-fees]")?.checked),
+    pumpCashback: Boolean($("[data-launch-coin-pump-cashback]")?.checked),
     holderRewards: {
       enabled: Boolean($("[data-launch-coin-holder-rewards]")?.checked),
       shareBps: Number($("[data-launch-coin-holder-reward-share]")?.value || 5000),
       minTokens: Number($("[data-launch-coin-holder-reward-min-tokens]")?.value || 3000000) || 3000000,
       minHoldHours: Number($("[data-launch-coin-holder-reward-min-hours]")?.value ?? 4),
-      maxRecipients: Number($("[data-launch-coin-holder-reward-max]")?.value || 100) || 100
+      maxRecipients: Number($("[data-launch-coin-holder-reward-max]")?.value || 18) || 18,
+      minPayoutSol: Number($("[data-launch-coin-holder-reward-min-payout]")?.value || 0.01) || 0.01,
+      minWalletPayoutSol: 0.0001,
+      weighting: "balance"
     },
     nftCollection: {
       enabled: Boolean($("[data-launch-coin-nft-enabled]")?.checked),
@@ -11864,6 +11863,23 @@ async function submitLaunchCoin() {
     const draft = saveLaunchCoinDraft({ silent: true });
     if (!draft.name || String(draft.name).trim().length < 2) throw new Error("Enter a token name (2+ characters) before launching.");
     if (!draft.symbol || String(draft.symbol).trim().length < 2) throw new Error("Enter a ticker (2+ characters) before launching.");
+    if (draft.pumpCashback) {
+      const enableNativeCashback = await slimeConfirm({
+        title: "Enable Pump Cash back permanently?",
+        lines: [
+          "Pump will show Cash back as enabled for this coin.",
+          "Creator rewards go to eligible traders based on each trader's volume; there is no fixed wallet count.",
+          "This setting is permanent at coin creation and cannot be changed later."
+        ],
+        confirmLabel: "Enable Pump Cash back",
+        cancelLabel: "Review rewards"
+      });
+      if (!enableNativeCashback) {
+        state.launchCoinStatus = "Launch paused — review the reward choice, then launch again.";
+        writeText(status, state.launchCoinStatus);
+        return;
+      }
+    }
 
     // No image = the backend silently launches with the default SlimeWire logo on
     // pump.fun. That is almost never what the user wants, so make it an explicit choice.
@@ -26772,6 +26788,14 @@ let launchDraftSaveTimer = null;
 const queueLaunchDraftSave = (event) => {
   const launchField = event.target?.closest?.(".launch-coin-card");
   if (launchField && String(event.target?.tagName || "").match(/INPUT|TEXTAREA|SELECT/) && !event.target.matches("[data-launch-coin-image]") && !event.target.matches("[data-launch-coin-banner]")) {
+    if (event.target.matches("[data-launch-coin-pump-cashback]") && event.target.checked) {
+      const holderRewards = $("[data-launch-coin-holder-rewards]");
+      if (holderRewards) holderRewards.checked = false;
+    }
+    if (event.target.matches("[data-launch-coin-holder-rewards]") && event.target.checked) {
+      const pumpCashback = $("[data-launch-coin-pump-cashback]");
+      if (pumpCashback) pumpCashback.checked = false;
+    }
     // Sanitize SOL-amount fields live so a stray double-dot ("0..02") can't sit
     // there and silently fall back to the 0.1 default at launch time.
     if (event.target.matches("[data-launch-coin-amount], [data-launch-coin-dev-buy-sol]")) {

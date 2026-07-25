@@ -75,6 +75,7 @@ const positionEvents = events.filter((event) => /positions-refresh/.test(event.a
 const cacheHitEvents = positionEvents.filter((event) => event.cacheHit);
 const networkRefreshEvents = positionEvents.filter((event) => !event.cacheHit && /positions-refresh/.test(event.action || ""));
 const positionsRouteSource = serverSource.slice(serverSource.indexOf('pathname === "/api/web/positions"'), serverSource.indexOf('pathname === "/api/web/pnl"'));
+const portfolioRouteSource = serverSource.slice(serverSource.indexOf('pathname === "/api/web/portfolio/snapshot"'), serverSource.indexOf('pathname === "/api/web/positions"'));
 const buildPositionsSource = functionSource(serverSource, "buildPositionsOverview");
 const webPositionRowsSource = functionSource(serverSource, "webPositionRows");
 const appLoadWalletCoreSource = functionSource(appSource, "loadWalletCore");
@@ -96,17 +97,17 @@ const report = {
     secretsLogged: false
   },
   refreshPath: {
-    endpoint: "/api/web/positions",
-    backendSummaryCache: bool(positionsRouteSource, /cachedWebSummary\("web:positions"/),
-    frontendRunsAlongsideWalletRefresh: bool(appLoadWalletCoreSource, /positionsPromise = api/) && bool(appLoadWalletCoreSource, /Promise\.all/),
+    endpoint: "/api/web/portfolio/snapshot -> /api/web/positions (deferred values)",
+    backendSummaryCache: bool(positionsRouteSource, /cachedWebSummary\(`/) && bool(portfolioRouteSource, /cachedWebSummary\(`web:portfolio:v1:/),
+    frontendRunsAlongsideWalletRefresh: bool(appLoadWalletCoreSource, /portfolio\/snapshot/) && !bool(appLoadWalletCoreSource, /positionsPromise = api/),
     cachedUiKeptDuringRefresh: !/state\.positions\s*=\s*\[\][\s\S]{0,200}walletRefreshing/.test(functionSource(appSource, "refreshWalletState")),
     positionRefreshTimedSeparately: bool(appLoadWalletCoreSource, /perfMeasure\("positions-refresh"/)
   },
   backendCalls: {
     walletTokenAccountsUseConcurrency: bool(buildPositionsSource, /runWithConcurrency\(wallets/),
-    valueEstimatesLimitedToTopOpenRows: bool(buildPositionsSource, /rows\.slice\(0, 5\)/),
+    valueEstimatesLimitedToTopOpenRows: bool(webPositionRowsSource, /slice\(0, 25\)/),
     metadataResolvedAfterPositionMath: bool(webPositionRowsSource, /tokenMetadataMapForMints/) && bool(webPositionRowsSource, /estimatedValueLamports/),
-    metadataTimeoutBounded: bool(webPositionRowsSource, /timeoutMs:\s*2_000/) && bool(webPositionRowsSource, /pumpTimeoutMs:\s*1_000/)
+    metadataTimeoutBounded: bool(webPositionRowsSource, /timeoutMs:\s*options\.fast \? 900 : 2_000/) && bool(webPositionRowsSource, /pumpTimeoutMs:\s*options\.fast \? 650 : 1_000/)
   },
   cacheBehavior: {
     cacheHitEvents: positionEvents.filter((event) => event.cacheHit).length,

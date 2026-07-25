@@ -707,18 +707,32 @@
   /* ---------------- balance ---------------- */
   async function refreshBalance({ silent = false } = {}) {
     if (!state.token) return;
-    const walletIndex = state.wallet?.index ? `?walletIndex=${encodeURIComponent(state.wallet.index)}` : "";
-    const result = await get(`/api/web/cash/assets${walletIndex}`);
+    const result = await get("/api/web/portfolio/snapshot");
     if (result.status === 401) { setToken(""); showOnboard(); return; }
     if (!result.ok) { if (!silent) toast(result.data.error || "Could not load balance.", true); return; }
+    const snapshotWallets = (result.data.balances || []).filter((row) => !row.volumeBot);
+    const rh = result.data.rhBalances || {};
+    state.rhEthUsd = Number(rh.ethUsd || state.rhEthUsd || 0);
+    const rhByIndex = new Map((rh.wallets || []).map((row) => [Number(row.walletIndex), row]));
+    state.wallets = snapshotWallets.map((wallet) => {
+      const row = rhByIndex.get(Number(wallet.index));
+      return row ? { ...wallet, rhAddress: row.address || "", rhEth: row.available ? Number(row.eth || 0) : null, rhAvailable: Boolean(row.available), rhExplorer: row.explorer || "" } : wallet;
+    });
+    const active = state.wallets.find((row) => Number(row.index) === Number(state.wallet?.index)) || state.wallets[0];
+    const assets = active?.cashAssets || {};
     const previousSol = state.lamports;
     const previousUsdc = state.usdcRaw;
-    state.lamports = Number(result.data.assets?.SOL?.rawAmount || 0);
-    state.usdcRaw = Number(result.data.assets?.USDC?.rawAmount || 0);
-    state.usdc = Number(result.data.assets?.USDC?.uiAmount || 0);
-    if (result.data.wallet?.address) state.wallet = { index: result.data.wallet.index, publicKey: result.data.wallet.address, label: result.data.wallet.label || "" };
+    state.lamports = Number(assets.SOL?.rawAmount || active?.lamports || 0);
+    state.usdcRaw = Number(assets.USDC?.rawAmount || 0);
+    state.usdc = Number(assets.USDC?.uiAmount || 0);
+    if (active?.publicKey) state.wallet = { index: active.index, publicKey: active.publicKey, label: active.label || "" };
+    const activeRh = rhByIndex.get(Number(state.wallet?.index));
+    if (activeRh) {
+      state.rhAddress = activeRh.address || "";
+      state.rhEth = activeRh.available ? Number(activeRh.eth || 0) : null;
+    }
     renderBalance();
-    void refreshCashRhBalances({ walletIndex: state.wallet?.index });
+    renderCashWallets();
     if (previousUsdc !== null && state.usdcRaw > previousUsdc) {
       const gainedUsdc = (state.usdcRaw - previousUsdc) / 1e6;
       addActivity({ type: "in", title: "USDC arrived", sub: "Digital dollars landed on Solana", amountUsd: gainedUsdc, at: Date.now() });
