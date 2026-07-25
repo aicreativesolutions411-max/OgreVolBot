@@ -1070,6 +1070,7 @@
     if (brand) { brand.dataset.nav = "wallet"; const name = $("span", brand), mode = $("b", brand); if (name) name.textContent = "SLIME"; if (mode) mode.textContent = "WALLET"; }
     const intro = $("[data-wallet-route-intro]"); if (intro) intro.hidden = false;
     const terminal = $(".wallet-terminal-link"); if (terminal) terminal.hidden = false;
+    const install = $(".wallet-install-card"); if (install) install.hidden = runningStandalone();
     const buy = $(".wallet-actions [data-deposit]"); if (buy) buy.textContent = "Buy";
     const send = $(".wallet-actions [data-send-sol]"); if (send) send.textContent = "Send";
   }
@@ -1154,7 +1155,7 @@
     try {
       const key = await request("/api/web/push/key");
       if (!key.ok || !key.data?.enabled || !key.data.publicKey) { toast("Push alerts are not configured yet.", true); return; }
-      const registration = await navigator.serviceWorker.register("/fun-sw.js", { scope: "/fun/", updateViaCache: "none" }); await navigator.serviceWorker.ready;
+      const registration = await navigator.serviceWorker.register("/fun-sw.js", { scope: IS_WALLET_ROUTE ? "/wallet/" : "/fun/", updateViaCache: "none" }); await navigator.serviceWorker.ready;
       if (await Notification.requestPermission() !== "granted") { toast("Notification permission was not granted.", true); return; }
       const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(key.data.publicKey) });
       const result = await post("/api/web/push/subscribe", { subscription: subscription.toJSON() });
@@ -1935,33 +1936,38 @@
   }
   function runningStandalone() { return window.matchMedia?.("(display-mode: standalone)")?.matches || navigator.standalone === true; }
   const FUN_INSTALL_HOST = "app.slimewire.org";
-  function funInstallOrigin() { return `https://${FUN_INSTALL_HOST}/fun/?install=1`; }
+  function funInstallOrigin() { return `https://${FUN_INSTALL_HOST}/${IS_WALLET_ROUTE ? "wallet" : "fun"}/?install=1`; }
   function showFunInstallGuide() {
     const dedicated = location.hostname === FUN_INSTALL_HOST;
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent || "");
+    const appName = IS_WALLET_ROUTE ? "SlimeWallet" : "SlimeWire Go";
     const steps = dedicated
       ? (ios
-        ? ["Tap Share in Safari.", "Choose Add to Home Screen.", "Confirm Add for a separate SlimeWire Go icon."]
-        : ["Tap Install SlimeWire Go below.", "Confirm the browser prompt.", "Go appears as the focused mobile SlimeWire app."])
-      : ["Open the mobile install page below.", "Your browser will open SlimeWire Go.", "Install it for a focused mobile trading layout."];
-    openSheet(`<div class="sheet-title"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><div><h2>Install SlimeWire Go</h2><p>Keep this focused mobile layout as its own app.</p></div></div><div class="read-card"><h3>Mobile app install</h3>${steps.map((step, index) => `<p>${index + 1}. ${escapeHtml(step)}</p>`).join("")}</div><button class="submit-trade" type="button" data-install-fun>${dedicated ? "Install SlimeWire Go" : "Open mobile install page"}</button><p class="fineprint">Browsers always require your confirmation; a website cannot silently force an install.</p>`);
+        ? ["Tap Share in Safari.", "Choose Add to Home Screen.", `Confirm Add for a separate ${appName} icon.`]
+        : [`Tap Install ${appName} below.`, "Confirm the browser prompt.", `${appName} opens directly into this focused wallet.`])
+      : ["Open the mobile install page below.", `Your browser will open ${appName}.`, "Install it for a focused mobile wallet experience."];
+    openSheet(`<div class="sheet-title"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><div><h2>Install ${appName}</h2><p>Keep this focused mobile layout as its own app.</p></div></div><div class="read-card"><h3>Mobile app install</h3>${steps.map((step, index) => `<p>${index + 1}. ${escapeHtml(step)}</p>`).join("")}</div><button class="submit-trade" type="button" data-install-fun>${dedicated ? `Install ${appName}` : "Open mobile install page"}</button><p class="fineprint">Browsers always require your confirmation; a website cannot silently force an install.</p>`);
   }
   async function openFunInstall() {
+    if (location.hostname !== FUN_INSTALL_HOST) {
+      if (/android/i.test(navigator.userAgent || "")) location.href = `intent://${FUN_INSTALL_HOST}/${IS_WALLET_ROUTE ? "wallet" : "fun"}/?install=1#Intent;scheme=https;package=com.android.chrome;end`;
+      else window.open(funInstallOrigin(), "_blank", "noopener");
+      return;
+    }
+    if (IS_WALLET_ROUTE && location.pathname === "/wallet") {
+      location.assign("/wallet/?install=1");
+      return;
+    }
     if (state.deferredInstall) {
       const promptEvent = state.deferredInstall;
       state.deferredInstall = null;
       await promptEvent.prompt();
       const choice = await promptEvent.userChoice.catch(() => null);
-      if (choice?.outcome === "accepted") { toast("SlimeWire Go installed"); closeSheet(); }
-      return;
-    }
-    if (location.hostname !== FUN_INSTALL_HOST) {
-      if (/android/i.test(navigator.userAgent || "")) location.href = `intent://${FUN_INSTALL_HOST}/fun/?install=1#Intent;scheme=https;package=com.android.chrome;end`;
-      else window.open(funInstallOrigin(), "_blank", "noopener");
+      if (choice?.outcome === "accepted") { toast(`${IS_WALLET_ROUTE ? "SlimeWallet" : "SlimeWire Go"} installed`); closeSheet(); }
       return;
     }
     showFunInstallGuide();
-    toast(runningStandalone() ? "SlimeWire Go is already open as an app" : "Use your browser menu if the prompt is not ready");
+    toast(runningStandalone() ? `${IS_WALLET_ROUTE ? "SlimeWallet" : "SlimeWire Go"} is already open as an app` : "Use your browser menu if the prompt is not ready");
   }
   function toolCard(icon, label, note, action, attr = "data-tool-action") { return `<button class="tool-card" type="button" ${attr}="${escapeHtml(action)}"><img src="${TOOL_ICONS}${escapeHtml(icon)}.png" alt=""><b>${escapeHtml(label)}</b><span>${escapeHtml(note)}</span></button>`; }
   async function openTools(global = false) {
@@ -3039,13 +3045,13 @@
   });
   window.addEventListener("appinstalled", () => {
     state.deferredInstall = null;
-    toast("SlimeWire Go installed");
+    toast(`${IS_WALLET_ROUTE ? "SlimeWallet" : "SlimeWire Go"} installed`);
     closeSheet();
   });
 
   async function init() {
     applyWalletRouteShell();
-    if (!IS_WALLET_ROUTE && "serviceWorker" in navigator) navigator.serviceWorker.register("/fun-sw.js", { scope: "/fun/", updateViaCache: "none" }).catch(() => {});
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/fun-sw.js", { scope: IS_WALLET_ROUTE ? "/wallet/" : "/fun/", updateViaCache: "none" }).catch(() => {});
     await consumeTelegramLoginTicket();
     paintWalletPill();
     renderCashHandoff();
@@ -3070,7 +3076,8 @@
     resumePendingFunFunding();
     if (IS_WALLET_ROUTE) {
       state.profileTab = "positions";
-      setView("wallet");
+      if (routeParams.get("tab") === "activity") state.profileTab = "activity";
+      setView(routeParams.get("swap") === "1" ? "wallet-swap" : "wallet");
     } else if (IS_QUICK_ROUTE) {
       setView("quick", { hideNav: true });
       renderQuickRoute();

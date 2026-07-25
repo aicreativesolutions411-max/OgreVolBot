@@ -9,6 +9,7 @@ const js = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "ut
 const indicators = fs.readFileSync(new URL("../web/public/fun-indicators.js", import.meta.url), "utf8");
 const redirects = fs.readFileSync(new URL("../web/public/_redirects", import.meta.url), "utf8");
 const manifest = JSON.parse(fs.readFileSync(new URL("../web/public/fun-manifest.webmanifest", import.meta.url), "utf8"));
+const walletManifest = JSON.parse(fs.readFileSync(new URL("../web/public/wallet-manifest.webmanifest", import.meta.url), "utf8"));
 const funWorker = fs.readFileSync(new URL("../web/public/fun-sw.js", import.meta.url), "utf8");
 const rhChain = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
 const terminalApp = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
@@ -20,7 +21,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "66", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "67", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -36,7 +37,16 @@ test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH tr
   assert.match(html, /aria-label="Wallet navigation"/);
   assert.match(js, /const IS_WALLET_ROUTE/);
   assert.match(js, /!IS_QUICK_ROUTE && !IS_WALLET_ROUTE/);
-  assert.match(js, /!IS_WALLET_ROUTE && "serviceWorker" in navigator/);
+  assert.match(js, /scope: IS_WALLET_ROUTE \? "\/wallet\/" : "\/fun\/"/);
+  assert.equal(walletManifest.id, "/slimewallet-app");
+  assert.equal(walletManifest.name, "SlimeWallet");
+  assert.equal(walletManifest.start_url, "/wallet/?src=slimewallet-pwa");
+  assert.equal(walletManifest.scope, "/wallet/");
+  assert.match(html, /wallet-manifest\.webmanifest\?v=1/);
+  assert.match(html, /data-install-fun hidden><span>Install SlimeWallet/);
+  assert.match(funWorker, /IS_WALLET_WORKER/);
+  assert.match(funWorker, /slimewallet-v1/);
+  assert.match(js, /FUN_INSTALL_HOST\}\/\$\{IS_WALLET_ROUTE \? "wallet" : "fun"\}/);
   assert.match(js, /Robinhood trades convert automatically\. Sells return SOL\./);
   assert.match(js, /\/chart-lab\?ca=\$\{encodeURIComponent\(key\)\}/);
   assert.match(css, /body\.wallet-only/);
@@ -52,8 +62,8 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /beforeinstallprompt/);
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
-  assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v57/);
+  assert.match(js, /register\("\/fun-sw\.js", \{ scope: IS_WALLET_ROUTE \? "\/wallet\/" : "\/fun\/", updateViaCache: "none" \}\)/);
+  assert.match(funWorker, /slimewire-fun-v58/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -109,9 +119,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=41/);
-  assert.match(funWorker, /slimewire-fun-v57/);
-  assert.match(funWorker, /fun\.css\?v=41/);
+  assert.match(html, /fun\.css\?v=42/);
+  assert.match(funWorker, /slimewire-fun-v58/);
+  assert.match(funWorker, /fun\.css\?v=42/);
 });
 
 test("/fun keeps the wallet funding card compact and scannable", () => {
@@ -120,8 +130,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=66/);
-  assert.match(funWorker, /fun\.js\?v=66/);
+  assert.match(html, /fun\.js\?v=67/);
+  assert.match(funWorker, /fun\.js\?v=67/);
 });
 
 test("Fun volume switches pasted contracts to their authoritative chain", () => {
@@ -185,13 +195,13 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v57"/);
+  assert.match(funWorker, /"slimewire-fun-v58"/);
   assert.match(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
   assert.match(funWorker, /self\.clients\.claim\(\)/);
-  assert.match(funWorker, /key\.startsWith\("slimewire-fun-"\) && key !== FUN_CACHE/);
+  assert.match(funWorker, /key\.startsWith\(FUN_CACHE_PREFIX\) && key !== FUN_CACHE/);
   assert.doesNotMatch(funWorker, /slimewire-mwa/i);
-  assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
+  assert.match(js, /register\("\/fun-sw\.js", \{ scope: IS_WALLET_ROUTE \? "\/wallet\/" : "\/fun\/", updateViaCache: "none" \}\)/);
 });
 
 test("connected funding wallets stay separate from managed positions", () => {
@@ -753,7 +763,7 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, MACD, and 
   assert.ok(html.indexOf("lightweight-charts.standalone.production.js") < html.indexOf("fun-indicators.js"));
   assert.match(html, /fun-indicators\.js\?v=7/);
   assert.match(funWorker, /fun-indicators\.js\?v=7/);
-  assert.match(funWorker, /fun\.css\?v=41/);
+  assert.match(funWorker, /fun\.css\?v=42/);
   assert.match(indicators, /new URLSearchParams\(\{ ca: key, tf: timeframe \}\)/);
   assert.match(indicators, /`\$\{API_BASE\}\/api\/chart\?\$\{query\.toString\(\)\}`/);
   assert.match(indicators, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/pools/);

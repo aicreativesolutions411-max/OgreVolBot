@@ -12,12 +12,13 @@
   <meta name="description" content="A clean mobile-first SlimeWire terminal for Solana and Robinhood Chain coins, wallets, positions, charts, safety, and trading tools.">
   <link rel="icon" href="/icons/icon-192.png">
   <link rel="apple-touch-icon" href="/assets/slimewire/fun-app-icon-180.png">
-  <link rel="manifest" href="/fun-manifest.webmanifest?v=2">
-  <link rel="stylesheet" href="/fun.css?v=41">
+  <link id="slimeAppManifest" rel="manifest" href="/fun-manifest.webmanifest?v=2">
+  <script>if(/^\/wallet(?:\/|\.html|$)/i.test(location.pathname)){document.getElementById("slimeAppManifest").href="/wallet-manifest.webmanifest?v=1";document.querySelector('meta[name="apple-mobile-web-app-title"]').content="SlimeWallet"}</script>
+  <link rel="stylesheet" href="/fun.css?v=42">
   <script src="/config.js"></script>
   <script defer src="/slimewire-funding.js?v=8"></script>
   <script defer src="/vendor/lightweight-charts.standalone.production.js"></script>
-  <script defer src="/fun.js?v=66"></script>
+  <script defer src="/fun.js?v=67"></script>
   <script defer src="/fun-indicators.js?v=7"></script>
 </head>
 <body>
@@ -73,6 +74,7 @@
         <div class="wallet-hero" data-wallet-hero></div>
         <div class="wallet-actions"><button class="primary wallet-swap" type="button" data-wallet-swap>Swap</button><button type="button" data-deposit>Deposit</button><button type="button" data-send-sol>Send SOL</button><button type="button" data-receive>Receive</button><button class="season" type="button" data-season-open>Season</button><button type="button" data-manage-wallets>Manage</button></div>
         <button class="wallet-preset-strip" type="button" data-manage-presets hidden><span>Buy preset</span><b data-wallet-preset-copy>Manual entry</b><i>›</i></button>
+        <button class="wallet-install-card" type="button" data-install-fun hidden><span>Install SlimeWallet</span><b>Add it to your home screen</b><i>↓</i></button>
         <div class="profile-tabs" role="tablist"><button class="active" type="button" data-profile="positions">Positions</button><button type="button" data-profile="activity">Activity</button><button type="button" data-profile="created">Created</button><button type="button" data-profile="social">Profile</button></div>
         <div data-profile-panel><div class="skeleton-list"></div></div>
       </section>

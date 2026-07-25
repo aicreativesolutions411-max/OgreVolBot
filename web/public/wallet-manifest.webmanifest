@@ -1,0 +1,25 @@
+{
+  "id": "/slimewallet-app",
+  "name": "SlimeWallet",
+  "short_name": "SlimeWallet",
+  "description": "A focused SOL and ETH wallet with in-app swaps, charts, positions, presets, and SlimeWire account recovery.",
+  "start_url": "/wallet/?src=slimewallet-pwa",
+  "scope": "/wallet/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#020502",
+  "theme_color": "#050805",
+  "categories": ["finance"],
+  "prefer_related_applications": false,
+  "launch_handler": { "client_mode": "navigate-new" },
+  "icons": [
+    { "src": "/assets/slimewire/fun-app-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/slimewire/fun-app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/slimewire/fun-app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Swap", "url": "/wallet/?swap=1", "icons": [{ "src": "/assets/slimewire/fun-app-icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Activity", "url": "/wallet/?tab=activity", "icons": [{ "src": "/assets/slimewire/fun-app-icon-192.png", "sizes": "192x192", "type": "image/png" }] }
+  ]
+}

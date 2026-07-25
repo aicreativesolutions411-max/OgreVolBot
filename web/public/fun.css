@@ -145,3 +145,6 @@ html:has(body.wallet-only)::-webkit-scrollbar,body.wallet-only::-webkit-scrollba
   .wallet-swap-side.receive{grid-template-columns:1fr}
   .wallet-swap-side.receive strong{justify-self:end}
 }
+.wallet-install-card{width:calc(100% - 36px);margin:0 18px 17px;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:13px 16px;border:1px solid rgba(127,255,61,.22);border-radius:17px;background:linear-gradient(120deg,#111d10,#070c07);color:#fff;text-align:left}
+.wallet-install-card[hidden]{display:none}.wallet-install-card:before{content:"▣";display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:#8fff49;color:#071006;font-size:17px;font-weight:950}.wallet-install-card span,.wallet-install-card b{display:block}.wallet-install-card span{font-size:11px;font-weight:900}.wallet-install-card b{margin-top:3px;color:#8e9b89;font-size:8px}.wallet-install-card i{color:#9eff68;font-size:20px;font-style:normal}
+@media(max-width:460px){.wallet-install-card{width:calc(100% - 24px);margin-inline:12px}}
