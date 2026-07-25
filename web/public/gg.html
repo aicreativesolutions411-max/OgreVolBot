@@ -1028,6 +1028,15 @@
       toast("Solana + Robinhood/EVM backups downloaded — store them safe.");
     }else toast((d&&d.error)||"Export failed",true);
   }
+  async function exportPumpCreatorWallet(walletIndex,walletPublicKey){
+    const wallet=(state.wallets||[]).find(w=>Number(w.index)===Number(walletIndex)||String(w.publicKey||"")===String(walletPublicKey||""));
+    if(!wallet){toast("Creator wallet is unavailable. Refresh Wallets and try again.",true);return;}
+    if(!confirm("Download this Pump creator wallet backup? The file contains the private recovery key. Anyone with it can move funds or claim fees, so keep it private."))return;
+    const {ok,d}=await jpost("/api/web/wallets/export",{walletIndex:Number(wallet.index),publicKey:String(wallet.publicKey||"")});
+    const file=d&&d.backup&&d.backup.downloads&&d.backup.downloads.recoveryKeys;
+    if(ok&&d&&d.ok&&file&&file.text){downloadText(file.filename,file.text);toast("Pump wallet backup downloaded. Open it for Phantom / Solflare load steps.");}
+    else toast((d&&d.error)||"Pump wallet backup failed",true);
+  }
   async function exportEvmKeys(walletIndex){
     const wallet=(state.wallets||[]).find(w=>Number(w.index)===Number(walletIndex));
     if(!wallet||!confirm("Download this wallet's Robinhood/EVM private key? Anyone with this file can move its ETH and Robinhood coins."))return;
@@ -3589,12 +3598,12 @@
   // pump.fun outside this site — so we list every one of your wallets with a claim button, not just
   // coins we have a launch record for. The record list below is a bonus (per-coin Meteora claims live there).
   async function launchesModal(){
-    openModal('<h3>Your launches</h3><p class="sub mut" style="font-size:12px">Coins launched from your managed wallets. Pump creator fees and locked Sushi V3 pool fees are collected automatically to the original creator wallet.</p><div id="lchSimple"><div class="loading"><span class="spin"></span></div></div>');
+    openModal('<h3>Your launches &amp; fees</h3><p class="sub mut" style="font-size:12px">Automatic launches collect in the background. If you chose accumulation, fees stay in the Pump creator vault until you claim them here or with the backed-up creator wallet.</p><div id="lchSimple"><div class="loading"><span class="spin"></span></div></div>');
     const body=$("#lchSimple");if(!body)return;
     const {ok,d}=await api("/api/web/launches").catch(()=>({}));const coins=(ok&&d&&d.coins)||[];
     if(!coins.length){body.innerHTML='<div class="launch-summary"><span class="mark">🚀</span><div><b>No launches yet.</b><br><span class="mut">Complete the three short launch tabs and your coins will appear here.</span></div></div>';return;}
-    body.innerHTML=coins.map(c=>{const rh=c.rail==="robinhood";const status=String(c.status||"live").toLowerCase();return '<div class="walletrow" style="align-items:center;margin-bottom:7px"><div class="ico">'+(rh?'🪶':'💊')+'</div><div class="info" style="min-width:0"><b>'+esc(c.symbol||c.name||short(c.mint))+'</b><div class="addr mut">'+esc(rh?'Robinhood Chain':'Pump · Solana')+' · '+esc(c.devWalletShort||"creator wallet")+' · '+esc(status)+'</div></div><button class="wbtn ghost" style="padding:7px 10px" onclick="'+(rh?'GG.rhTrade':'GG.open')+'(\''+esc(c.mint)+'\')">Open</button></div>';}).join("")+
-      '<div class="launch-summary" style="margin-top:10px;margin-bottom:0"><span class="mark">✓</span><div><b>No fee-claim button needed.</b><br><span class="mut">Eligible Pump claims run in the background and route to the same creator wallet used at launch.</span></div></div>';
+    body.innerHTML=coins.map(c=>{const rh=c.rail==="robinhood";const pump=!rh&&c.rail!=="meteora";const manual=pump&&c.creatorFeeClaimMode==="manual";const status=String(c.status||"live").toLowerCase();const actions='<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="wbtn ghost" style="padding:7px 10px" onclick="'+(rh?'GG.rhTrade':'GG.open')+'(\''+esc(c.mint)+'\')">Open</button>'+(manual&&c.devWalletIndex?'<button class="wbtn" style="padding:7px 10px" onclick="GG.claimFees('+Number(c.devWalletIndex)+',\'pump\',\''+esc(c.mint)+'\')">Claim fees</button>':'')+(pump&&c.devWalletIndex?'<button class="wbtn ghost" style="padding:7px 10px" onclick="GG.exportPumpCreatorWallet('+Number(c.devWalletIndex)+',\''+esc(c.devWallet||'')+'\')">Backup wallet</button>':'')+'</div>';return '<div class="walletrow" style="align-items:center;margin-bottom:7px;flex-wrap:wrap"><div class="ico">'+(rh?'🪶':'💊')+'</div><div class="info" style="min-width:150px"><b>'+esc(c.symbol||c.name||short(c.mint))+'</b><div class="addr mut">'+esc(rh?'Robinhood Chain':manual?'Pump · fees accumulating':'Pump · automatic claims')+' · '+esc(c.devWalletShort||"creator wallet")+' · '+esc(status)+'</div></div>'+actions+'</div>';}).join("")+
+      '<div class="launch-summary" style="margin-top:10px;margin-bottom:0"><span class="mark">🔐</span><div><b>The creator wallet controls each claim.</b><br><span class="mut">Backups are downloaded only after your confirmation and contain a private recovery key. Never share the file.</span></div></div>';
   }
   async function launchesModalLegacy(){
     openModal('<h3>💰 Creator fees &amp; launches</h3><p class="sub mut" style="font-size:12px">Pump fees <b>accrue but aren\'t auto-sent</b> — you claim them. This claims every fee a wallet earned across <b>all</b> its pump coins (even ones launched on pump.fun directly), straight to that wallet. No pump.fun trip.</p><div id="lchBody"><div class="loading"><span class="spin"></span></div></div>');
@@ -4825,6 +4834,9 @@
   }
   async function pollLaunchProgress(aid,btn){
     const out=$("#lcOut");let tries=0;
+    const manualCreatorFees=!!($("#lcCreatorFeesManual")&&$("#lcCreatorFeesManual").checked);
+    const creatorWalletIndex=String(($("#lcDevWallet")||{}).value||state.activeWallet||"");
+    const creatorWallet=(state.wallets||[]).find(w=>String(w.index)===creatorWalletIndex);
     const tick=async()=>{
       tries++;
       const {d}=await api("/api/web/launch/progress?launchAttemptId="+encodeURIComponent(aid)).catch(()=>({}));
@@ -4834,7 +4846,7 @@
         const entries=pr.launch&&pr.launch.participantEntries;
         if(btn){btn.disabled=false;btn.textContent="Review & launch";}
         state.launchedMint=mint;
-        if(out)out.innerHTML='<div class="wbox" style="margin:0"><b style="color:var(--green)">✓ Launched!</b>'+(entries&&entries.requested?'<div class="ln">Participant entries: <b>'+esc(entries.completed||0)+'/'+esc(entries.requested)+'</b> entered'+(entries.failed?' · '+esc(entries.failed)+' need attention':'')+'</div>':'')+(mint?'<div class="addr mut" style="margin-top:6px;word-break:break-all">'+esc(mint)+' <button onclick="GG.copy(\''+esc(mint)+'\')">⧉</button></div><div style="display:flex;gap:9px;margin-top:10px;flex-wrap:wrap"><button class="wbtn" onclick="GG.open(\''+esc(mint)+'\')">Open &amp; trade</button><button class="wbtn ghost" onclick="GG.launchChat(\''+esc(mint)+'\')">💬 Chat &amp; Live</button></div>':'')+'</div>';
+        if(out)out.innerHTML='<div class="wbox" style="margin:0"><b style="color:var(--green)">✓ Launched!</b>'+(entries&&entries.requested?'<div class="ln">Participant entries: <b>'+esc(entries.completed||0)+'/'+esc(entries.requested)+'</b> entered'+(entries.failed?' · '+esc(entries.failed)+' need attention':'')+'</div>':'')+(mint?'<div class="addr mut" style="margin-top:6px;word-break:break-all">'+esc(mint)+' <button onclick="GG.copy(\''+esc(mint)+'\')">⧉</button></div><div style="display:flex;gap:9px;margin-top:10px;flex-wrap:wrap"><button class="wbtn" onclick="GG.open(\''+esc(mint)+'\')">Open &amp; trade</button><button class="wbtn ghost" onclick="GG.launchChat(\''+esc(mint)+'\')">💬 Chat &amp; Live</button>'+(manualCreatorFees&&creatorWallet?'<button class="wbtn ghost" onclick="GG.exportPumpCreatorWallet('+Number(creatorWallet.index)+',\''+esc(creatorWallet.publicKey||'')+'\')">Download Pump wallet backup</button><button class="wbtn ghost" onclick="GG.launchesModal()">Claim later in SlimeWire</button>':'')+'</div>':'')+(manualCreatorFees?'<div class="ln mut" style="font-size:11px;margin-top:8px">Creator fees will remain in the Pump vault until you claim them. The wallet backup is optional recovery access; keep it private.</div>':'')+'</div>';
         toast("Token launched!");refreshWallets();return;
       }
       if(pr.status==="FAILED"){if(btn){btn.disabled=false;btn.textContent="Review & launch";}if(out)out.innerHTML='<div class="mut" style="color:var(--red);font-size:12px">Launch failed: '+esc(pr.failureReason||"unknown error")+'</div>';return;}
@@ -5017,7 +5029,8 @@
       '<div data-lpanel="dev"'+show("dev")+'>'+
         '<div class="field"><label>Creator / dev wallet</label>'+walletSelectHtml("lcDevWallet")+'<span class="mut" style="font-size:10px">This wallet creates the coin, receives creator fees, and pays launch costs.</span></div><div id="lcDevRhNote" style="display:none"></div>'+
         '<div id="lcDevSol">'+
-        '<div class="launch-summary"><span class="mark">✓</span><div><b>Creator fees are automatic.</b><br><span class="mut">The selected wallet is assigned as creator and SlimeWire automatically claims eligible Pump fees after trading activity.</span></div></div>'+
+        '<div class="launch-summary"><span class="mark">✓</span><div><b>Creator fees are automatic by default.</b><br><span class="mut">They go to this wallet, and SlimeWire claims eligible Pump fees after trading activity.</span></div></div>'+
+        '<label class="lcheck"><input type="checkbox" id="lcCreatorFeesManual"> <span><b>Let Pump creator fees accumulate</b> — skip automatic claims for this launch. Claim later in SlimeWire, and download the creator-wallet backup if you want direct pump.fun recovery access.</span></label>'+
         '<div class="field"><label>Dev buy (SOL) <span style="text-transform:none">(optional)</span></label><input id="lcDevBuy" inputmode="decimal" placeholder="0.1"><span class="mut" style="font-size:10px">Your first position in the coin. Leave blank to launch without buying.</span></div>'+
         lcExitStrategyHtml("lcDev","Dev wallet exit preset")+
         '<label class="lcheck"><input type="checkbox" id="lcBundle" checked> <span><b>Bundle my dev buy with launch</b> — it lands with the create transaction. If the Jito bundle does not land, SlimeWire retries and falls back to an immediate standard launch + buy.</span></label>'+
@@ -5125,7 +5138,7 @@
       const proceedsRouting=lcReadProceedsRouting(devIdx);
       // Creator fee is now a simple toggle: checked = MAX (1000 bps) to the dev wallet, unchecked = none.
       const creatorFeeBps="1000";
-      const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps,holderRewards:lcReadHolderRewards("lc"),rail:state.launchRail||"pump",nftCollection:{enabled:!!($("#lcNftEnabled")&&$("#lcNftEnabled").checked),name:String(($("#lcNftName")||{}).value||"").trim(),description:String(($("#lcNftDescription")||{}).value||"").trim(),useCoinArt:true,supplyMode:String(($("#lcNftSupplyMode")||{}).value||"expandable"),supplyCap:Math.max(1,Math.min(500,Number(($("#lcNftSupplyCap")||{}).value||500))),royaltyBps:Math.max(0,Math.min(1000,Number(($("#lcNftRoyalty")||{}).value||500)))}};
+      const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps,creatorFeeClaimMode:($("#lcCreatorFeesManual")&&$("#lcCreatorFeesManual").checked)?"manual":"auto",holderRewards:lcReadHolderRewards("lc"),rail:state.launchRail||"pump",nftCollection:{enabled:!!($("#lcNftEnabled")&&$("#lcNftEnabled").checked),name:String(($("#lcNftName")||{}).value||"").trim(),description:String(($("#lcNftDescription")||{}).value||"").trim(),useCoinArt:true,supplyMode:String(($("#lcNftSupplyMode")||{}).value||"expandable"),supplyCap:Math.max(1,Math.min(500,Number(($("#lcNftSupplyCap")||{}).value||500))),royaltyBps:Math.max(0,Math.min(1000,Number(($("#lcNftRoyalty")||{}).value||500)))}};
       if(devW&&devW.publicKey)body.creatorFeeRecipient=devW.publicKey;
       // Promoter fee-split (up to 4 wallets + %) stored on the coin; paid out via "Pay promoters".
       if($("#lcPromo")&&$("#lcPromo").checked){const sp=[0,1,2,3].map(i=>({wallet:(($("#lcPmW"+i)||{}).value||"").trim(),pct:Number((($("#lcPmP"+i)||{}).value||"").trim())})).filter(r=>r.wallet&&r.pct>0);if(sp.length)body.creatorFeeSplit=sp;}
@@ -5338,7 +5351,7 @@
 
   // ---------- expose + boot ----------
   window.GG={open:openCoinRoute,openSell:(m)=>{state.pendingSell=m;go("trade",m);},sellPos:(m,s)=>quickSellModal(m,s),sendPos:(m,s)=>sendTokenModal(m,s),armPos:(m,s)=>armExitsModal(m,s),go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,setMarketChain,
-    escrowModal,renderEscrow,escrowFinalize,escrowRefund,launchesModal,claimFees,toast,
+    escrowModal,renderEscrow,escrowFinalize,escrowRefund,launchesModal,claimFees,exportPumpCreatorWallet,toast,
     launchRh:()=>{state.launchRail="robinhood";state.launchTab="coin";go("launch");},
     rhTrade:(a)=>rhTradeModal(a),rhBuy:(a,amt)=>rhBuyAmount(a,amt),rhBuyAmount:(a,amt)=>rhBuyAmount(a,amt),rhSell:(a,p)=>rhTrade(a,"sell",{percent:p}),rhQuick:(a)=>rhBuyAmount(a,rhQuickEth()),
     rhSellPos:async(a,p,w)=>{await rhTrade(a,"sell",{percent:p,walletIndex:w});loadRhPositions();},rhSendToken:(a,s,b,w)=>rhSendTokenModal(a,s,b,w),rhUseWallet:(w)=>rhUseWallet(w),rhOpenWalletCoin:(w,a)=>rhOpenWalletCoin(w,a),rhAvTile:(s,z,r,k)=>rhAvTileHtml(s,z,r,k),rhAvatarFail:(img)=>imgNext(img),imgNext:(img)=>imgNext(img),rhPresetModal:()=>rhPresetModal(),

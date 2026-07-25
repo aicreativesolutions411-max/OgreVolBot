@@ -87,10 +87,11 @@ function render(){
   const kinds = (payload && payload.kinds) || [];
   state.humanNeeded = kinds.includes("human");
   state.whalesNeeded = kinds.includes("whales");
-  const preEntry = Boolean(payload && payload.joinRequest);
-  let html = `<h1>${preEntry?'Verify before entering':'Verify to chat'}</h1><p>${preEntry?'Complete this private check and SlimeWire will approve your Telegram join request automatically.':'Finish the step(s) below to unlock chatting in the group.'}</p>`;
+  const portalGate = Boolean(payload && payload.portalGate);
+  const preEntry = Boolean(payload && (payload.joinRequest || portalGate));
+  let html = `<h1>${preEntry?'Verify before entering':'Verify to chat'}</h1><p>${portalGate?'Complete one private check. Your Telegram group Join button appears after it passes.':preEntry?'Complete this private check and SlimeWire will approve your Telegram join request automatically.':'Finish the step(s) below to unlock chatting in the group.'}</p>`;
   if(preEntry && !telegramInitData){
-    html += '<div class="step"><h3 class="bad">Open inside Telegram</h3><div class="s">Return to the bot\'s join-request message and tap <b>Open Verify Portal</b>. Forwarded browser links cannot approve entry.</div></div>';
+    html += '<div class="step"><h3 class="bad">Open inside Telegram</h3><div class="s">Return to the SlimeWire bot message and tap its Verify button. Forwarded browser links cannot reveal group access.</div></div>';
   }
   if(state.humanNeeded){
     html += `<div class="step"><h3>🌐 Human check ${state.human?'<span class="ok">✓</span>':''}</h3>
@@ -122,13 +123,18 @@ async function submit(){
       body: JSON.stringify({ token, telegramInitData, fingerprint: state.fingerprint||"", wallet: state.wallet||"", signature: state.signature||"" }) });
     const j = await r.json();
     if(j.ok){
-      $("body").innerHTML = `<div class="done"><div class="big">✅</div><h1>${payload.joinRequest?'Entry approved!':'You\'re verified!'}</h1><p>${payload.joinRequest?'You are now inside the group.':'Head back to the group — you can chat now.'}</p><button id="btnClose">Back to Telegram</button></div>`;
+      if(payload.portalGate && /^https:\/\/t\.me\//i.test(String(j.joinUrl||""))){
+        $("body").innerHTML = `<div class="done"><div class="big">✅</div><h1>Verified!</h1><p>Your private entry button for <b>${esc(j.groupTitle||"the group")}</b> is ready.</p><button id="btnJoin">Join Telegram Group</button><button class="sec" id="btnClose">Close portal</button></div>`;
+        $("btnJoin").onclick=()=>{ if(tg && tg.openTelegramLink) tg.openTelegramLink(j.joinUrl); else location.href=j.joinUrl; };
+      }else{
+        $("body").innerHTML = `<div class="done"><div class="big">✅</div><h1>${payload.joinRequest?'Entry approved!':'You\'re verified!'}</h1><p>${payload.joinRequest?'You are now inside the group.':'Head back to the group — you can chat now.'}</p><button id="btnClose">Back to Telegram</button></div>`;
+      }
       $("btnClose").onclick=()=>{ if(tg) Telegram.WebApp.close(); else history.back(); };
     }
     else { $("msg").innerHTML='<span class="bad">'+(j.error||"Verification failed")+'</span>'; btn.disabled=false; }
   }catch(e){ $("msg").innerHTML='<span class="bad">Network error — try again.</span>'; btn.disabled=false; }
 }
-if(!token || !payload){ $("body").innerHTML='<h1>Invalid link</h1><p>This verification link is missing or expired. Re-join the group to get a fresh one.</p>'; }
+if(!token || !payload){ $("body").innerHTML='<h1>Invalid link</h1><p>Return to the SlimeWire bot and reopen the Verify Portal.</p>'; }
 else render();
 </script>
 </body>

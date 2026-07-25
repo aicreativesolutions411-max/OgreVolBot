@@ -725,6 +725,7 @@ export class PumpLaunchService {
       tokenName: basePayload?.name || "",
       symbol: basePayload?.symbol || "",
       holderRewards: basePayload?.holderRewards || { enabled: false },
+      creatorFeeClaimMode: basePayload?.creatorFeeClaimMode === "manual" ? "manual" : "auto",
       mintPublicKey,
       mintSecretStored: Boolean(this.encryptMintSecret),
       encryptedMintSecret: this.encryptMintSecret ? this.encryptMintSecret(mintKeypair) : null,

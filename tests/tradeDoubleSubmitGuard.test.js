@@ -2430,12 +2430,24 @@ test("Rose captcha offers a quiet pre-entry Telegram verification portal", () =>
   const invite = functionBody(serverSource, "ensureRosePortalInviteLink");
   assert.match(invite, /createChatInviteLink/);
   assert.match(invite, /creates_join_request:\s*true/);
+  assert.match(invite, /start=portal_/);                         // shared link opens the bot first
+  assert.match(invite, /portalJoinLink/);                        // real group link stays behind captcha
+  const message = functionBody(serverSource, "handleMessage");
+  assert.match(message, /deepLinkPortal/);
+  assert.match(message, /portalGate:\s*true/);
+  assert.match(message, /web_app:\s*\{\s*url:/);
+  assert.doesNotMatch(message, /portalGate[\s\S]{0,300}exp:/);   // reusable portal has no countdown
+  const submit = functionBody(serverSource, "handleTgVerifySubmit");
+  assert.match(submit, /p\.portalGate/);
+  assert.match(submit, /joinUrl/);                               // group button appears only after pass
   const request = functionBody(serverSource, "handleChatJoinRequest");
   assert.match(request, /user_chat_id/);
   assert.match(request, /web_app:\s*\{\s*url:/);
   assert.match(request, /slimewire\.org/);
   assert.match(request, /joinRequest:\s*true/);
-  assert.doesNotMatch(request, /approveChatJoinRequest/);
+  assert.match(request, /approveChatJoinRequest/);               // previously portal-verified users enter immediately
+  assert.match(verifyHtml, /j\.joinUrl/);
+  assert.match(verifyHtml, /Join Telegram Group/);
   assert.match(functionBody(serverSource, "handleGroupRose"), /cfg\.captcha/); // old/public links remain safely muted
 });
 
@@ -4942,4 +4954,26 @@ test("launch participant invites are non-custodial, durable, idempotent, and res
   assert.match(routing, /SystemProgram\.transfer/);
   assert.doesNotMatch(routing, /buyTokenForPlan/);
   assert.match(serverSource, /proceedsRouting = await resolveWebProceedsRouting/);
+});
+
+test("Pump launches can keep creator fees accrued for a later SlimeWire or wallet claim", () => {
+  assert.match(serverSource, /function normalizeCreatorFeeClaimMode/);
+  assert.match(serverSource, /const creatorFeeClaimMode = normalizeCreatorFeeClaimMode\(body\.creatorFeeClaimMode\)/);
+  assert.match(serverSource, /creatorFeeClaimMode,/);
+  const autoClaim = functionBody(serverSource, "processCreatorFeeAutoClaims");
+  assert.match(autoClaim, /normalizeCreatorFeeClaimMode\(attempt\.creatorFeeClaimMode\) === "manual"/);
+  const holderAutoClaim = functionBody(serverSource, "processHolderRewardAutoClaims");
+  assert.match(holderAutoClaim, /normalizeCreatorFeeClaimMode\(attempt\.creatorFeeClaimMode\) === "manual"/);
+  assert.match(serverSource, /creatorFeeClaimMode: normalizeCreatorFeeClaimMode\(a\.creatorFeeClaimMode\)/);
+
+  for (const file of ["gg.html", "index.html"]) {
+    const html = fs.readFileSync(new URL(`../web/public/${file}`, import.meta.url), "utf8");
+    assert.match(html, /id="lcCreatorFeesManual"/);
+    assert.match(html, /Let Pump creator fees accumulate/);
+    assert.match(html, /creatorFeeClaimMode:\(\$\("#lcCreatorFeesManual"\)/);
+    assert.match(html, /async function exportPumpCreatorWallet/);
+    assert.match(html, /\/api\/web\/wallets\/export/);
+    assert.match(html, /Download Pump wallet backup/);
+    assert.match(html, /GG\.claimFees/);
+  }
 });
