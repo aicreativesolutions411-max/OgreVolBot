@@ -1,19 +1,25 @@
 /* SlimeWire Go + SlimeWallet: isolated installable shells and push worker. */
 const IS_WALLET_WORKER = new URL(self.registration.scope).pathname.startsWith("/wallet/");
-const FUN_CACHE = IS_WALLET_WORKER ? "slimewallet-v1" : "slimewire-fun-v58";
+const FUN_CACHE = IS_WALLET_WORKER ? "slimewallet-v5" : "slimewire-fun-v62";
 const FUN_CACHE_PREFIX = IS_WALLET_WORKER ? "slimewallet-" : "slimewire-fun-";
 const FUN_SHELL = [
   IS_WALLET_WORKER ? "/wallet/" : "/fun/",
   "/fun.html",
-  "/fun.css?v=42",
+  "/fun.css?v=46",
   "/slimewire-funding.js?v=8",
   "/vendor/lightweight-charts.standalone.production.js",
-  "/fun.js?v=67",
+  "/fun.js?v=68",
   "/fun-indicators.js?v=7",
-  IS_WALLET_WORKER ? "/wallet-manifest.webmanifest?v=1" : "/fun-manifest.webmanifest?v=2",
+  IS_WALLET_WORKER ? "/wallet-manifest.webmanifest?v=2" : "/fun-manifest.webmanifest?v=2",
   "/config.js",
   "/assets/slimewire/fun-app-icon-192.png",
-  "/assets/slimewire/fun-app-icon-512.png"
+  "/assets/slimewire/fun-app-icon-512.png",
+  ...(IS_WALLET_WORKER ? [
+    "/assets/slimewire/slimewallet-pfp.png",
+    "/assets/slimewire/slimewallet-icon-192.png",
+    "/assets/slimewire/slimewallet-icon-512.png",
+    "/assets/slimewire/slimewallet-vault-bg.webp"
+  ] : [])
 ];
 
 self.addEventListener("install", (event) => {
@@ -49,8 +55,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(self.registration.showNotification(payload.title || (IS_WALLET_WORKER ? "SlimeWallet" : "SlimeWire Go"), {
     body: payload.body || "",
     tag: payload.tag || "slimewire-fun",
-    icon: "/assets/slimewire/fun-app-icon-192.png",
-    badge: "/assets/slimewire/png/slimewire-mark.png",
+    icon: IS_WALLET_WORKER ? "/assets/slimewire/slimewallet-icon-192.png" : "/assets/slimewire/fun-app-icon-192.png",
+    badge: IS_WALLET_WORKER ? "/assets/slimewire/slimewallet-icon-192.png" : "/assets/slimewire/png/slimewire-mark.png",
     data: { url: payload.url || (IS_WALLET_WORKER ? "/wallet/" : "/fun/") },
     renotify: true
   }));

@@ -12,6 +12,7 @@
   const WALLET_BACKUP_MARK_PREFIX = "slimewireFunWalletBackedUp:v1:";
   const WALLET_BACKUP_REMINDER_KEY = "slimewireFunWalletBackupReminder:v1";
   const TOKEN_FALLBACK = "/assets/slimewire/png/slimewire-mark.png";
+  const WALLET_BRAND_ASSET = "/assets/slimewire/slimewallet-pfp.png";
   const SLIME_PFPS = [
     "f_f648203a.png", "f_cc8f54e4.png", "f_c9dc667d.png", "f_c4f3d050.png", "f_c20374ef.png",
     "f_bb7b4bd6.png", "f_959b04a3.png", "f_94d9b765.png", "f_874a4027.png", "f_83fe78aa.png",
@@ -1074,7 +1075,7 @@
     const wallet = activeWallet(), hero = $("[data-wallet-hero]");
     renderWalletPresetStrip();
     if (!wallet) {
-      hero.innerHTML = IS_WALLET_ROUTE ? `<button class="wallet-account-switcher" type="button" data-fun-account="create"><img src="${slimePfp("guest")}" alt=""><span><small>SLIMEWALLET</small><b>Set up wallet</b></span><i>›</i></button><div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>$0.00</h1><p>Ready when you are</p></div><div class="wallet-chain-cards"><button type="button" data-fun-account="create"><i class="solana-glyph">S</i><span><b>SOL</b><small>0.0000 SOL</small></span><em>Set up</em></button><button type="button" data-fun-account="create"><i class="eth-glyph">◆</i><span><b>ETH</b><small>0.000000 ETH</small></span><em>Set up</em></button></div>` : `<img class="wallet-pfp" src="${slimePfp("guest")}" alt=""><h1>Slime guest</h1><p>No wallet created yet</p><div class="wallet-total">Ready when you are</div>`;
+      hero.innerHTML = IS_WALLET_ROUTE ? `<button class="wallet-account-switcher" type="button" data-fun-account="create"><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>SLIMEWALLET</small><b>Set up wallet</b></span><i>›</i></button><div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>$0.00</h1><p>Ready when you are</p></div><div class="wallet-chain-cards"><button type="button" data-fun-account="create"><i class="solana-glyph">S</i><span><b>SOL</b><small>0.0000 SOL</small></span><em>Set up</em></button><button type="button" data-fun-account="create"><i class="eth-glyph">◆</i><span><b>ETH</b><small>0.000000 ETH</small></span><em>Set up</em></button></div>` : `<img class="wallet-pfp" src="${slimePfp("guest")}" alt=""><h1>Slime guest</h1><p>No wallet created yet</p><div class="wallet-total">Ready when you are</div>`;
       return;
     }
     const sol = positionNumber(wallet.sol) ?? 0;
@@ -1082,7 +1083,7 @@
     if (IS_WALLET_ROUTE) {
       const total = walletRouteTotal();
       const totalLabel = total.totalUsd == null ? `${formatPositionSol(total.totalSol)} SOL` : formatWalletUsd(total.totalUsd);
-      hero.innerHTML = `<button class="wallet-account-switcher" type="button" data-manage-wallets><img src="${slimePfp(wallet.publicKey)}" alt=""><span><small>ACTIVE WALLET</small><b>${escapeHtml(wallet.label || "Main Slime")}</b></span><i>⌄</i></button><div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>${escapeHtml(totalLabel)}</h1><p>${escapeHtml(formatPositionSol(total.totalSol))} SOL equivalent</p></div><div class="wallet-chain-cards"><button type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><i class="solana-glyph">S</i><span><b>SOL</b><small>${sol.toFixed(4)} SOL</small></span><em>${state.solUsd > 0 ? escapeHtml(formatWalletUsd(sol * state.solUsd)) : "Copy"}</em></button><button type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress || "")}"><i class="eth-glyph">◆</i><span><b>ETH</b><small>${rhEth == null ? "Loading…" : `${rhEth.toFixed(6)} ETH`}</small></span><em>${rhEth != null && state.rhEthUsd > 0 ? escapeHtml(formatWalletUsd(rhEth * state.rhEthUsd)) : "Copy"}</em></button></div>`;
+      hero.innerHTML = `<button class="wallet-account-switcher" type="button" data-manage-wallets><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>ACTIVE WALLET</small><b>${escapeHtml(wallet.label || "Main Slime")}</b></span><i>⌄</i></button><div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>${escapeHtml(totalLabel)}</h1><p>${escapeHtml(formatPositionSol(total.totalSol))} SOL equivalent</p></div><div class="wallet-chain-cards"><button type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><i class="solana-glyph">S</i><span><b>SOL</b><small>${sol.toFixed(4)} SOL</small></span><em>${state.solUsd > 0 ? escapeHtml(formatWalletUsd(sol * state.solUsd)) : "Copy"}</em></button><button type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress || "")}"><i class="eth-glyph">◆</i><span><b>ETH</b><small>${rhEth == null ? "Loading…" : `${rhEth.toFixed(6)} ETH`}</small></span><em>${rhEth != null && state.rhEthUsd > 0 ? escapeHtml(formatWalletUsd(rhEth * state.rhEthUsd)) : "Copy"}</em></button></div>`;
       return;
     }
     const rhAddress = wallet.rhAddress ? `<button class="wallet-hero-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress)}" aria-label="Copy full Robinhood address"><b>RH ${escapeHtml(short(wallet.rhAddress))}</b><span>Tap to copy ETH address</span></button>` : "";
@@ -1139,7 +1140,7 @@
     document.body.classList.add("wallet-only");
     document.title = "SlimeWallet — SOL + ETH Wallet";
     const brand = $(".fun-header .brand");
-    if (brand) { brand.dataset.nav = "wallet"; const name = $("span", brand), mode = $("b", brand); if (name) name.textContent = "SLIME"; if (mode) mode.textContent = "WALLET"; }
+    if (brand) { brand.dataset.nav = "wallet"; const image = $("img", brand), name = $("span", brand), mode = $("b", brand); if (image) { image.src = WALLET_BRAND_ASSET; image.alt = "SlimeWallet"; } if (name) name.textContent = "SLIME"; if (mode) mode.textContent = "WALLET"; }
     const intro = $("[data-wallet-route-intro]"); if (intro) intro.hidden = false;
     const terminal = $(".wallet-terminal-link"); if (terminal) terminal.hidden = false;
     const install = $(".wallet-install-card"); if (install) install.hidden = runningStandalone();

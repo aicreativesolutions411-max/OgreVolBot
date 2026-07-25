@@ -148,3 +148,156 @@ html:has(body.wallet-only)::-webkit-scrollbar,body.wallet-only::-webkit-scrollba
 .wallet-install-card{width:calc(100% - 36px);margin:0 18px 17px;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:13px 16px;border:1px solid rgba(127,255,61,.22);border-radius:17px;background:linear-gradient(120deg,#111d10,#070c07);color:#fff;text-align:left}
 .wallet-install-card[hidden]{display:none}.wallet-install-card:before{content:"▣";display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:#8fff49;color:#071006;font-size:17px;font-weight:950}.wallet-install-card span,.wallet-install-card b{display:block}.wallet-install-card span{font-size:11px;font-weight:900}.wallet-install-card b{margin-top:3px;color:#8e9b89;font-size:8px}.wallet-install-card i{color:#9eff68;font-size:20px;font-style:normal}
 @media(max-width:460px){.wallet-install-card{width:calc(100% - 24px);margin-inline:12px}}
+
+/* SlimeWallet premium vault skin. Wallet-only so the original SlimeWire surfaces keep their identity. */
+body.wallet-only{background:#010201}
+.wallet-only .fun-app{position:relative;isolation:isolate;background:#020402;box-shadow:0 0 110px rgba(91,255,19,.08)}
+.wallet-only .fun-app:before{content:"";position:fixed;z-index:-2;top:0;left:50%;width:min(100vw,540px);height:100dvh;transform:translateX(-50%);background:linear-gradient(180deg,rgba(0,0,0,.05),rgba(1,4,1,.62) 47%,#020402 88%),url('/assets/slimewire/slimewallet-vault-bg.webp') center top/cover no-repeat;opacity:.42;pointer-events:none}
+.wallet-only .fun-app:after{content:"";position:fixed;z-index:-1;inset:0;pointer-events:none;background:radial-gradient(circle at 50% 13%,rgba(139,255,66,.13),transparent 27%),linear-gradient(90deg,transparent 49.7%,rgba(139,255,66,.025) 50%,transparent 50.3%)}
+.wallet-only .fun-header{background:linear-gradient(180deg,rgba(2,4,2,.94),rgba(2,5,2,.72));border-bottom:1px solid rgba(158,255,99,.08);backdrop-filter:blur(22px) saturate(1.25)}
+.wallet-only .brand img{width:46px;height:46px;padding:2px;border:1px solid rgba(153,255,89,.35);border-radius:15px;background:#020402;box-shadow:inset 0 0 18px rgba(124,255,48,.08),0 0 22px rgba(111,255,34,.13);object-fit:cover}
+.wallet-only .brand span{background:linear-gradient(180deg,#fff,#9dff64);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:950}
+.wallet-only .brand b{color:#b7c2b3}
+.wallet-only .wallet-pill:before{background-image:url('/assets/slimewire/slimewallet-pfp.png');background-size:88%;filter:drop-shadow(0 0 9px rgba(129,255,50,.35))}
+.wallet-only .wallet-terminal-link{border-color:rgba(145,255,76,.38);background:linear-gradient(145deg,rgba(26,45,22,.82),rgba(7,13,7,.88));box-shadow:inset 0 1px rgba(255,255,255,.06),0 10px 30px rgba(0,0,0,.3);backdrop-filter:blur(12px)}
+.wallet-only .wallet-hero{position:relative;padding-top:28px}
+.wallet-only .wallet-account-switcher{position:relative;overflow:hidden;border-color:rgba(159,255,99,.34);background:linear-gradient(135deg,rgba(27,40,26,.86),rgba(5,10,6,.78));box-shadow:inset 0 1px rgba(255,255,255,.08),inset 0 -14px 28px rgba(0,0,0,.19),0 18px 50px rgba(0,0,0,.42);backdrop-filter:blur(16px) saturate(1.2)}
+.wallet-only .wallet-account-switcher:before{content:"";position:absolute;inset:-80% 55% -80% -25%;background:linear-gradient(100deg,transparent,rgba(181,255,135,.11),transparent);transform:rotate(15deg);pointer-events:none}
+.wallet-only .wallet-account-switcher img{padding:2px;border-color:rgba(153,255,89,.48);background:#010201;box-shadow:0 0 22px rgba(123,255,46,.18)}
+.wallet-only .wallet-account-switcher span small{color:#9dff68}
+.wallet-only .wallet-balance-hero>span{color:#a9b9a3}
+.wallet-only .wallet-balance-hero h1{background:linear-gradient(180deg,#fff 18%,#c8d3c4 80%);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:0 18px 46px rgba(0,0,0,.42)}
+.wallet-only .wallet-balance-hero p{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid rgba(144,255,77,.15);border-radius:999px;background:rgba(6,16,6,.5);backdrop-filter:blur(10px)}
+.wallet-only .wallet-balance-hero p:before{content:"";width:5px;height:5px;border-radius:50%;background:#8fff49;box-shadow:0 0 10px #8fff49}
+.wallet-only .wallet-chain-cards button{position:relative;overflow:hidden;border-color:rgba(156,255,95,.2);background:linear-gradient(145deg,rgba(24,37,23,.82),rgba(5,10,6,.9));box-shadow:inset 0 1px rgba(255,255,255,.055),0 13px 35px rgba(0,0,0,.24);backdrop-filter:blur(15px)}
+.wallet-only .wallet-chain-cards button:after{content:"";position:absolute;right:-16px;bottom:-23px;width:72px;height:72px;border:1px solid rgba(139,255,75,.11);border-radius:50%;box-shadow:0 0 0 11px rgba(139,255,75,.025),0 0 0 22px rgba(139,255,75,.015)}
+.wallet-only .wallet-chain-cards button:last-child:after{border-color:rgba(151,131,255,.15);box-shadow:0 0 0 11px rgba(130,106,255,.03),0 0 0 22px rgba(130,106,255,.015)}
+.wallet-only .solana-glyph,.wallet-only .eth-glyph{box-shadow:inset 0 1px rgba(255,255,255,.36),0 7px 18px rgba(0,0,0,.34)}
+.wallet-only .wallet-actions button{position:relative;overflow:hidden;border-color:rgba(155,255,95,.18);background:linear-gradient(150deg,rgba(25,38,23,.8),rgba(5,9,5,.9));box-shadow:inset 0 1px rgba(255,255,255,.055),0 12px 30px rgba(0,0,0,.23);backdrop-filter:blur(14px);transition:transform .16s ease,border-color .16s ease,background .16s ease}
+.wallet-only .wallet-actions button:after{content:"";position:absolute;inset:auto 14px 0;height:1px;background:linear-gradient(90deg,transparent,rgba(145,255,82,.48),transparent)}
+.wallet-only .wallet-actions button:active{transform:scale(.96);border-color:rgba(154,255,93,.46);background:linear-gradient(150deg,rgba(38,60,34,.88),rgba(8,15,8,.94))}
+.wallet-only .wallet-actions button:before{text-shadow:0 0 18px rgba(132,255,59,.34)}
+.wallet-only .wallet-preset-strip,.wallet-only .wallet-install-card{border-color:rgba(157,255,96,.25);background:linear-gradient(120deg,rgba(24,38,22,.78),rgba(5,10,5,.9));box-shadow:inset 0 1px rgba(255,255,255,.055),0 15px 38px rgba(0,0,0,.28);backdrop-filter:blur(16px)}
+.wallet-only .wallet-assets-head h2:after{content:"LIVE";display:inline-flex;margin-left:9px;padding:4px 7px;border:1px solid rgba(143,255,76,.25);border-radius:999px;background:rgba(120,255,45,.08);color:#a0ff68;font-size:6px;letter-spacing:.14em;vertical-align:middle}
+.wallet-only .wallet-route-assets{border-color:rgba(255,255,255,.095);background:linear-gradient(155deg,rgba(18,28,17,.82),rgba(4,8,4,.94));box-shadow:inset 0 1px rgba(255,255,255,.04),0 23px 60px rgba(0,0,0,.34);backdrop-filter:blur(18px)}
+.wallet-only .wallet-route-asset-row{transition:background .15s ease,transform .15s ease}
+.wallet-only .wallet-route-asset-row:active{background:rgba(142,255,75,.06);transform:scale(.99)}
+.wallet-only .wallet-route-asset-row>img,.wallet-only .wallet-route-asset-row.native>i{box-shadow:0 8px 22px rgba(0,0,0,.32),0 0 0 1px rgba(255,255,255,.07)}
+.wallet-only .wallet-bottom-nav{background:linear-gradient(180deg,rgba(5,9,5,.83),rgba(3,6,3,.97));border-top-color:rgba(159,255,99,.1);box-shadow:0 -16px 45px rgba(0,0,0,.3);backdrop-filter:blur(24px) saturate(1.3)}
+.wallet-only .wallet-bottom-nav button.active span{filter:drop-shadow(0 0 9px rgba(139,255,73,.5))}
+.wallet-only .wallet-product-view{background:linear-gradient(180deg,rgba(2,5,2,.44),rgba(2,5,2,.91) 65%),url('/assets/slimewire/slimewallet-vault-bg.webp') center top/cover fixed no-repeat}
+.wallet-only .wallet-swap-card,.wallet-only .wallet-inline-chart,.wallet-only .wallet-market-cards,.wallet-only .wallet-auto-exits{box-shadow:inset 0 1px rgba(255,255,255,.055),0 24px 65px rgba(0,0,0,.34);backdrop-filter:blur(18px)}
+@media(prefers-reduced-motion:no-preference){.wallet-only .wallet-account-switcher img{animation:slimewalletGlow 3.8s ease-in-out infinite}@keyframes slimewalletGlow{50%{box-shadow:0 0 30px rgba(127,255,47,.34)}}}
+@media(max-width:390px){.wallet-only .brand span,.wallet-only .brand b{font-size:15px}.wallet-only .brand img{width:42px;height:42px}.wallet-only .wallet-balance-hero{padding-top:22px}.wallet-only .wallet-balance-hero h1{font-size:40px}}
+
+/* SlimeWallet chrome controls: floating bars and tactile hardware-style buttons. */
+.wallet-only .fun-header{top:8px;width:calc(100% - 24px);height:66px;margin:8px 12px 0;padding:9px 11px;border:1px solid rgba(177,255,128,.18);border-radius:22px;background:linear-gradient(145deg,rgba(15,23,14,.88),rgba(3,7,3,.94));box-shadow:inset 0 1px rgba(255,255,255,.09),inset 0 -1px rgba(0,0,0,.8),0 18px 50px rgba(0,0,0,.5),0 0 0 1px rgba(0,0,0,.5);backdrop-filter:blur(26px) saturate(1.35)}
+.wallet-only .fun-header:after{content:"";position:absolute;right:18%;bottom:-1px;left:18%;height:1px;background:linear-gradient(90deg,transparent,rgba(144,255,75,.6),transparent);pointer-events:none}
+.wallet-only .brand{gap:8px}
+.wallet-only .brand img{width:42px;height:42px;border-radius:13px}
+.wallet-only .brand span{font-size:14px;letter-spacing:.12em}
+.wallet-only .brand b{margin-left:-4px;padding:0;border:0;border-radius:0;background:none;color:#a7b4a2;font-size:14px;font-weight:650;letter-spacing:.06em;box-shadow:none}
+.wallet-only .wallet-terminal-link{min-width:72px;padding:9px 12px;border-color:rgba(166,255,109,.22);background:linear-gradient(180deg,rgba(31,46,29,.8),rgba(8,14,8,.9));color:#c7ff9f;box-shadow:inset 0 1px rgba(255,255,255,.08),0 7px 19px rgba(0,0,0,.3);letter-spacing:.05em}
+.wallet-only .wallet-pill{width:40px;height:40px;border-color:rgba(166,255,106,.2);background:radial-gradient(circle at 50% 35%,rgba(132,255,55,.13),rgba(3,7,3,.95));box-shadow:inset 0 1px rgba(255,255,255,.08),0 7px 20px rgba(0,0,0,.32)}
+.wallet-only .fun-main{padding-top:28px;padding-bottom:118px}
+.wallet-only .wallet-actions{gap:10px;padding:13px 18px 17px}
+.wallet-only .wallet-actions button{min-height:96px;gap:9px;padding:10px 5px 11px;border-color:rgba(183,255,137,.13);border-radius:24px;background:linear-gradient(155deg,rgba(27,40,25,.82),rgba(5,10,5,.95));box-shadow:inset 0 1px rgba(255,255,255,.08),inset 0 -14px 26px rgba(0,0,0,.2),0 14px 32px rgba(0,0,0,.31);font-size:9px;letter-spacing:.055em;text-transform:uppercase}
+.wallet-only .wallet-actions button:before{display:grid;width:45px;height:45px;place-items:center;border:1px solid rgba(169,255,113,.23);border-radius:16px;background:radial-gradient(circle at 38% 25%,rgba(170,255,111,.19),rgba(9,17,8,.96) 67%);box-shadow:inset 0 1px rgba(255,255,255,.12),inset 0 -8px 15px rgba(0,0,0,.27),0 8px 22px rgba(0,0,0,.35),0 0 18px rgba(124,255,48,.08);color:#a4ff69;font-size:23px;text-shadow:0 0 14px rgba(139,255,72,.42)}
+.wallet-only .wallet-actions button:after{top:0;right:21%;bottom:auto;left:21%;height:1px;background:linear-gradient(90deg,transparent,rgba(204,255,172,.4),transparent)}
+.wallet-only .wallet-actions .wallet-swap:before{border-color:rgba(147,255,83,.42);background:radial-gradient(circle at 38% 25%,rgba(170,255,103,.3),rgba(10,23,8,.97) 68%);color:#b5ff7d;box-shadow:inset 0 1px rgba(255,255,255,.16),0 8px 24px rgba(0,0,0,.38),0 0 22px rgba(126,255,49,.16)}
+.wallet-only .wallet-actions [data-receive]:before{color:#8dffd4;border-color:rgba(115,255,209,.25);background:radial-gradient(circle at 38% 25%,rgba(99,255,205,.17),rgba(7,19,15,.97) 68%)}
+.wallet-only .wallet-actions [data-send-sol]:before{color:#d4dfcf;border-color:rgba(225,239,218,.18);background:radial-gradient(circle at 38% 25%,rgba(230,255,219,.13),rgba(11,17,10,.97) 68%)}
+.wallet-only .wallet-actions [data-deposit]:before{color:#071006;border-color:#b6ff89;background:linear-gradient(145deg,#c8ffa5,#7cf32f);box-shadow:inset 0 1px rgba(255,255,255,.65),0 8px 25px rgba(111,255,31,.24)}
+.wallet-only .wallet-actions button:active{transform:translateY(2px) scale(.97);box-shadow:inset 0 1px rgba(255,255,255,.07),0 6px 15px rgba(0,0,0,.3)}
+.wallet-only .wallet-preset-strip,.wallet-only .wallet-install-card{min-height:68px;grid-template-columns:46px minmax(0,1fr) 32px;gap:12px;padding:10px 12px;border-color:rgba(183,255,138,.15);border-radius:22px;background:linear-gradient(145deg,rgba(24,37,22,.81),rgba(5,10,5,.94));box-shadow:inset 0 1px rgba(255,255,255,.075),0 16px 38px rgba(0,0,0,.31)}
+.wallet-only .wallet-preset-strip span{display:grid;grid-template-columns:46px minmax(0,1fr);align-items:center;font-size:10px;letter-spacing:.04em}
+.wallet-only .wallet-preset-strip span:before,.wallet-only .wallet-install-card:before{display:grid;width:44px;height:44px;margin:0;place-items:center;border:1px solid rgba(163,255,105,.25);border-radius:15px;background:radial-gradient(circle at 35% 25%,rgba(155,255,92,.22),rgba(8,17,7,.96));box-shadow:inset 0 1px rgba(255,255,255,.1),0 7px 19px rgba(0,0,0,.3);color:#a9ff70;font-size:18px}
+.wallet-only .wallet-preset-strip span:before{content:"↯"}
+.wallet-only .wallet-preset-strip b{font-size:8px;color:#8f9d8b}
+.wallet-only .wallet-preset-strip i,.wallet-only .wallet-install-card i{display:grid;width:28px;height:28px;place-items:center;border:1px solid rgba(166,255,105,.15);border-radius:50%;background:#0b130a;color:#9cff62;font-size:15px}
+.wallet-only .wallet-install-card{grid-template-columns:46px minmax(0,1fr) 32px}
+.wallet-only .wallet-install-card:before{content:"▣";grid-column:1;grid-row:1/3}
+.wallet-only .wallet-install-card span{grid-column:2;font-size:10px;letter-spacing:.04em}
+.wallet-only .wallet-install-card b{grid-column:2;color:#899684}
+.wallet-only .wallet-install-card i{grid-column:3;grid-row:1/3}
+.wallet-only .wallet-bottom-nav{right:auto;bottom:calc(10px + env(safe-area-inset-bottom));left:50%;width:min(calc(100% - 24px),516px);height:72px;padding:7px 8px;border:1px solid rgba(182,255,133,.16);border-radius:25px;background:linear-gradient(160deg,rgba(17,26,16,.91),rgba(3,7,3,.97));box-shadow:inset 0 1px rgba(255,255,255,.085),0 20px 55px rgba(0,0,0,.58),0 0 0 1px rgba(0,0,0,.42);transform:translateX(-50%);backdrop-filter:blur(28px) saturate(1.4)}
+.wallet-only .wallet-bottom-nav:before{content:"";position:absolute;top:-1px;right:24%;left:24%;height:1px;background:linear-gradient(90deg,transparent,rgba(159,255,99,.55),transparent)}
+.wallet-only .wallet-bottom-nav button{position:relative;gap:3px;border-radius:18px;color:#6f7c6b;transition:color .16s ease,transform .16s ease}
+.wallet-only .wallet-bottom-nav button span{display:grid;width:34px;height:34px;place-items:center;border:1px solid transparent;border-radius:13px;font-size:18px}
+.wallet-only .wallet-bottom-nav button b{font-size:7px;letter-spacing:.04em;text-transform:uppercase}
+.wallet-only .wallet-bottom-nav button.active{color:#d8ffc2;transform:translateY(-1px)}
+.wallet-only .wallet-bottom-nav button.active span{border-color:rgba(172,255,117,.42);background:linear-gradient(145deg,#baff8d,#72ed2a);box-shadow:inset 0 1px rgba(255,255,255,.6),0 7px 20px rgba(106,255,28,.2);color:#071006;filter:none}
+@media(max-width:390px){.wallet-only .fun-header{width:calc(100% - 18px);margin-inline:9px}.wallet-only .brand span,.wallet-only .brand b{font-size:12px}.wallet-only .wallet-terminal-link{min-width:64px;padding-inline:10px}.wallet-only .wallet-actions{gap:7px;padding-inline:12px}.wallet-only .wallet-actions button{min-height:91px;border-radius:21px}.wallet-only .wallet-actions button:before{width:42px;height:42px;border-radius:14px}.wallet-only .wallet-preset-strip,.wallet-only .wallet-install-card{width:calc(100% - 24px);margin-inline:12px}.wallet-only .wallet-bottom-nav{width:calc(100% - 18px)}}
+.wallet-only .wallet-preset-strip:before{content:"↯";display:grid;width:44px;height:44px;grid-column:1;grid-row:1/3;place-items:center;border:1px solid rgba(163,255,105,.25);border-radius:15px;background:radial-gradient(circle at 35% 25%,rgba(155,255,92,.22),rgba(8,17,7,.96));box-shadow:inset 0 1px rgba(255,255,255,.1),0 7px 19px rgba(0,0,0,.3);color:#a9ff70;font-size:18px}
+.wallet-only .wallet-preset-strip span{display:block;grid-column:2;grid-row:1;align-self:end}
+.wallet-only .wallet-preset-strip span:before{content:none;display:none}
+.wallet-only .wallet-preset-strip b{grid-column:2;grid-row:2;align-self:start}
+.wallet-only .wallet-preset-strip i{grid-column:3;grid-row:1/3}
+
+/* Final lighting pass: luminous rails and subtle motion, with no extra controls or copy. */
+.wallet-only .fun-header{overflow:hidden;border-color:rgba(184,255,139,.24);box-shadow:inset 0 1px rgba(255,255,255,.12),inset 0 -1px rgba(0,0,0,.82),0 18px 50px rgba(0,0,0,.52),0 0 30px rgba(114,255,35,.08)}
+.wallet-only .fun-header:before{content:"";position:absolute;inset:-70% auto -70% -28%;width:34%;background:linear-gradient(100deg,transparent,rgba(199,255,164,.12),transparent);transform:skewX(-18deg);pointer-events:none}
+.wallet-only .wallet-account-switcher{border-color:rgba(174,255,121,.41);box-shadow:inset 0 1px rgba(255,255,255,.1),inset 0 -14px 28px rgba(0,0,0,.19),0 18px 50px rgba(0,0,0,.44),0 0 28px rgba(116,255,40,.08)}
+.wallet-only .wallet-preset-strip,.wallet-only .wallet-install-card{position:relative;overflow:hidden}
+.wallet-only .wallet-preset-strip{border-color:rgba(168,255,108,.27);box-shadow:inset 3px 0 rgba(126,255,48,.72),inset 0 1px rgba(255,255,255,.085),0 16px 38px rgba(0,0,0,.34),0 0 24px rgba(113,255,32,.055)}
+.wallet-only .wallet-preset-strip:after{content:"";position:absolute;top:0;right:11%;left:11%;height:1px;background:linear-gradient(90deg,transparent,rgba(186,255,142,.72),transparent);pointer-events:none}
+.wallet-only .wallet-install-card{border-color:rgba(151,255,83,.34);background:radial-gradient(circle at 8% 45%,rgba(126,255,44,.14),transparent 31%),linear-gradient(145deg,rgba(27,43,24,.86),rgba(5,10,5,.95));box-shadow:inset 3px 0 rgba(143,255,73,.85),inset 0 1px rgba(255,255,255,.095),0 17px 42px rgba(0,0,0,.36),0 0 30px rgba(116,255,39,.075)}
+.wallet-only .wallet-install-card:after{content:"";position:absolute;inset:-70% auto -70% -24%;width:22%;background:linear-gradient(100deg,transparent,rgba(208,255,179,.13),transparent);transform:skewX(-18deg);pointer-events:none}
+.wallet-only .wallet-install-card:before{border-color:rgba(181,255,133,.44);box-shadow:inset 0 1px rgba(255,255,255,.16),0 7px 19px rgba(0,0,0,.34),0 0 22px rgba(123,255,46,.13)}
+.wallet-only .wallet-bottom-nav{border-color:rgba(185,255,141,.22);box-shadow:inset 0 1px rgba(255,255,255,.1),0 20px 55px rgba(0,0,0,.61),0 0 32px rgba(112,255,31,.07)}
+.wallet-only .wallet-bottom-nav:after{content:"";position:absolute;z-index:-1;top:8px;left:2%;width:16%;height:52px;border-radius:50%;background:radial-gradient(circle,rgba(125,255,47,.16),transparent 68%);filter:blur(7px);pointer-events:none}
+.wallet-only .wallet-bottom-nav button.active:after{content:"";position:absolute;bottom:-7px;width:18px;height:3px;border-radius:999px;background:#8fff49;box-shadow:0 0 12px #72ff22,0 0 24px rgba(114,255,34,.55)}
+.wallet-only .wallet-actions button{border-color:rgba(183,255,137,.18)}
+.wallet-only .wallet-actions button:hover{border-color:rgba(171,255,116,.31)}
+@media(prefers-reduced-motion:no-preference){
+  .wallet-only .fun-header:before{animation:slimewalletSheen 8s ease-in-out infinite}
+  .wallet-only .wallet-install-card:after{animation:slimewalletSheen 6.5s ease-in-out 1.2s infinite}
+  .wallet-only .wallet-bottom-nav button.active:after{animation:slimewalletPulse 2.2s ease-in-out infinite}
+  @keyframes slimewalletSheen{0%,58%{left:-28%;opacity:0}67%{opacity:1}84%,100%{left:118%;opacity:0}}
+  @keyframes slimewalletPulse{50%{width:25px;opacity:.72}}
+}
+
+/* High-contrast hardware pass: every major wallet bar gets a beveled, illuminated frame. */
+.wallet-only .fun-header{border:1px solid transparent;background:linear-gradient(155deg,rgba(22,33,20,.96),rgba(4,8,4,.98)) padding-box,linear-gradient(110deg,rgba(190,255,146,.72),rgba(83,255,14,.14) 38%,rgba(255,255,255,.12) 62%,rgba(126,255,48,.55)) border-box;box-shadow:inset 0 1px rgba(255,255,255,.15),inset 0 -12px 22px rgba(0,0,0,.24),0 18px 52px rgba(0,0,0,.56),0 0 34px rgba(108,255,27,.13)}
+.wallet-only .wallet-account-switcher{border:1px solid transparent;background:linear-gradient(145deg,rgba(36,53,32,.96),rgba(6,12,6,.98)) padding-box,linear-gradient(110deg,#a7ff6b,rgba(115,255,38,.16) 48%,rgba(205,255,173,.6)) border-box;box-shadow:inset 0 1px rgba(255,255,255,.15),inset 0 -15px 28px rgba(0,0,0,.24),0 18px 48px rgba(0,0,0,.46),0 0 30px rgba(114,255,35,.15)}
+.wallet-only .wallet-chain-cards{gap:11px}
+.wallet-only .wallet-chain-cards button{min-height:82px;padding:14px 13px;border:1px solid transparent;border-radius:21px;box-shadow:inset 0 1px rgba(255,255,255,.16),inset 0 -14px 26px rgba(0,0,0,.22),0 15px 34px rgba(0,0,0,.34);backdrop-filter:blur(18px) saturate(1.35)}
+.wallet-only .wallet-chain-cards button:first-child{background:radial-gradient(circle at 8% 18%,rgba(92,255,202,.24),transparent 42%),linear-gradient(145deg,rgba(21,52,40,.96),rgba(5,14,10,.98)) padding-box,linear-gradient(120deg,#69ffd1,rgba(106,255,201,.13) 42%,#83ff55) border-box;box-shadow:inset 0 1px rgba(255,255,255,.18),inset 0 -14px 26px rgba(0,0,0,.22),0 15px 34px rgba(0,0,0,.34),0 0 28px rgba(67,255,190,.11)}
+.wallet-only .wallet-chain-cards button:last-child{background:radial-gradient(circle at 8% 18%,rgba(145,126,255,.28),transparent 42%),linear-gradient(145deg,rgba(31,27,65,.96),rgba(8,8,20,.98)) padding-box,linear-gradient(120deg,#a28cff,rgba(145,121,255,.15) 44%,#70d8ff) border-box;box-shadow:inset 0 1px rgba(255,255,255,.18),inset 0 -14px 26px rgba(0,0,0,.24),0 15px 34px rgba(0,0,0,.34),0 0 28px rgba(130,108,255,.13)}
+.wallet-only .wallet-chain-cards button:before{content:"";position:absolute;top:0;right:14%;left:14%;height:2px;border-radius:999px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.72),transparent);pointer-events:none}
+.wallet-only .wallet-chain-cards button:first-child:before{box-shadow:0 0 13px rgba(83,255,195,.75)}
+.wallet-only .wallet-chain-cards button:last-child:before{box-shadow:0 0 13px rgba(146,126,255,.8)}
+.wallet-only .wallet-chain-cards span b{font-size:12px;letter-spacing:.05em}
+.wallet-only .wallet-chain-cards span small{color:#a9b7a5;font-size:8px}
+.wallet-only .wallet-chain-cards button:last-child span small{color:#b0abd2}
+.wallet-only .wallet-chain-cards em{padding:5px 7px;border:1px solid rgba(165,255,108,.19);border-radius:999px;background:rgba(3,9,3,.36);font-size:7px;text-transform:uppercase}
+.wallet-only .wallet-chain-cards button:last-child em{border-color:rgba(163,145,255,.24);color:#c7bbff}
+.wallet-only .wallet-actions button{border:1px solid transparent;background:linear-gradient(155deg,rgba(30,45,27,.94),rgba(5,10,5,.98)) padding-box,linear-gradient(130deg,rgba(190,255,148,.48),rgba(93,255,19,.08) 48%,rgba(180,255,129,.28)) border-box;box-shadow:inset 0 1px rgba(255,255,255,.13),inset 0 -15px 27px rgba(0,0,0,.24),0 15px 34px rgba(0,0,0,.35),0 0 20px rgba(109,255,29,.055)}
+.wallet-only .wallet-preset-strip{border:1px solid transparent;background:radial-gradient(circle at 4% 50%,rgba(126,255,43,.2),transparent 29%),linear-gradient(145deg,rgba(31,48,27,.96),rgba(5,10,5,.98)) padding-box,linear-gradient(105deg,#98ff57,rgba(115,255,39,.13) 48%,rgba(203,255,172,.47)) border-box;box-shadow:inset 4px 0 #7dff2d,inset 0 1px rgba(255,255,255,.13),0 17px 42px rgba(0,0,0,.37),0 0 30px rgba(113,255,31,.11)}
+.wallet-only .wallet-install-card{border:1px solid transparent;background:radial-gradient(circle at 5% 50%,rgba(136,255,62,.27),transparent 31%),linear-gradient(145deg,rgba(35,56,29,.98),rgba(5,11,5,.99)) padding-box,linear-gradient(105deg,#b7ff89,rgba(122,255,45,.17) 45%,#71ff22) border-box;box-shadow:inset 4px 0 #8fff49,inset 0 1px rgba(255,255,255,.15),0 18px 46px rgba(0,0,0,.4),0 0 34px rgba(113,255,31,.15)}
+.wallet-only .wallet-route-assets{border:1px solid transparent;background:linear-gradient(155deg,rgba(22,34,20,.94),rgba(4,8,4,.99)) padding-box,linear-gradient(125deg,rgba(185,255,140,.48),rgba(112,255,31,.07) 49%,rgba(175,255,120,.25)) border-box;box-shadow:inset 0 1px rgba(255,255,255,.1),0 24px 62px rgba(0,0,0,.4),0 0 28px rgba(110,255,29,.07)}
+.wallet-only .wallet-bottom-nav{border:1px solid transparent;background:linear-gradient(160deg,rgba(27,40,24,.98),rgba(5,9,5,.99)) padding-box,linear-gradient(110deg,rgba(200,255,169,.66),rgba(111,255,30,.12) 38%,rgba(255,255,255,.14) 62%,rgba(137,255,68,.58)) border-box;box-shadow:inset 0 1px rgba(255,255,255,.16),inset 0 -15px 28px rgba(0,0,0,.26),0 20px 58px rgba(0,0,0,.66),0 0 38px rgba(112,255,31,.13)}
+.wallet-only .wallet-bottom-nav:before{height:2px;background:linear-gradient(90deg,transparent,#a8ff70,transparent);box-shadow:0 0 14px rgba(128,255,53,.68)}
+.wallet-only .wallet-bottom-nav button{color:#9aa795}
+.wallet-only .wallet-bottom-nav button span{border-color:rgba(255,255,255,.055);background:linear-gradient(145deg,rgba(26,38,24,.72),rgba(6,11,6,.88));box-shadow:inset 0 1px rgba(255,255,255,.05)}
+.wallet-only .wallet-bottom-nav button b{font-weight:850}
+.wallet-only .wallet-bottom-nav button.active{background:radial-gradient(circle at 50% 40%,rgba(127,255,49,.13),transparent 70%)}
+.wallet-only .wallet-bottom-nav button.active span{border-color:#b7ff8a;background:linear-gradient(145deg,#d1ffb2,#72ee29);box-shadow:inset 0 1px rgba(255,255,255,.75),inset 0 -6px 11px rgba(68,162,15,.16),0 8px 23px rgba(106,255,27,.31),0 0 24px rgba(115,255,35,.2)}
+
+/* Bespoke SlimeWallet dock icons replace generic text glyphs. */
+.wallet-only .wallet-bottom-nav{height:80px;padding:7px 9px 8px;border-radius:27px;background:radial-gradient(ellipse at 50% 0,rgba(119,255,38,.13),transparent 58%),linear-gradient(160deg,rgba(31,46,28,.99),rgba(5,9,5,.995)) padding-box,linear-gradient(105deg,#bfff96,rgba(105,255,22,.2) 34%,rgba(255,255,255,.19) 62%,#80ff32) border-box;box-shadow:inset 0 1px rgba(255,255,255,.19),inset 0 -18px 30px rgba(0,0,0,.29),0 22px 62px rgba(0,0,0,.7),0 0 44px rgba(111,255,28,.17)}
+.wallet-only .wallet-bottom-nav button{gap:4px;color:#b2bdae}
+.wallet-only .wallet-bottom-nav button span{position:relative;width:40px;height:40px;overflow:hidden;border-color:rgba(211,255,184,.12);border-radius:15px;background:linear-gradient(145deg,rgba(39,57,35,.92),rgba(7,13,7,.96));box-shadow:inset 0 1px rgba(255,255,255,.12),inset 0 -8px 14px rgba(0,0,0,.22),0 7px 18px rgba(0,0,0,.3);color:#9cff64}
+.wallet-only .wallet-bottom-nav button span:after{content:"";position:absolute;top:0;right:16%;left:16%;height:1px;background:linear-gradient(90deg,transparent,rgba(211,255,183,.57),transparent)}
+.wallet-only .wallet-bottom-nav button span svg{width:23px;height:23px;overflow:visible;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 5px rgba(131,255,55,.38))}
+.wallet-only .wallet-bottom-nav button span svg circle{fill:rgba(147,255,80,.15)}
+.wallet-only .wallet-bottom-nav button .wallet-nav-mark{padding:2px;background:radial-gradient(circle at 50% 38%,rgba(133,255,54,.24),rgba(4,9,4,.98));color:inherit}
+.wallet-only .wallet-bottom-nav button .wallet-nav-mark img{width:35px;height:35px;border-radius:11px;object-fit:cover;filter:drop-shadow(0 0 7px rgba(128,255,50,.34))}
+.wallet-only .wallet-bottom-nav button b{color:#a8b5a4;font-size:7px;font-weight:900;letter-spacing:.075em}
+.wallet-only .wallet-bottom-nav button.active{transform:translateY(-4px)}
+.wallet-only .wallet-bottom-nav button.active span{width:43px;height:43px;border-color:#c6ffa4;border-radius:16px;background:radial-gradient(circle at 45% 28%,#dbffc5,#86f83f 54%,#3c9f0c);box-shadow:inset 0 1px rgba(255,255,255,.85),inset 0 -8px 14px rgba(49,133,8,.25),0 10px 26px rgba(106,255,26,.37),0 0 30px rgba(116,255,37,.31)}
+.wallet-only .wallet-bottom-nav button.active .wallet-nav-mark{padding:3px;background:radial-gradient(circle at 50% 38%,rgba(170,255,113,.26),#071006 72%)}
+.wallet-only .wallet-bottom-nav button.active .wallet-nav-mark img{width:36px;height:36px;filter:drop-shadow(0 0 9px rgba(144,255,76,.52))}
+.wallet-only .wallet-bottom-nav button.active b{color:#d9ffc5;text-shadow:0 0 9px rgba(133,255,62,.35)}
+.wallet-only .wallet-bottom-nav button.active:after{bottom:-4px;width:25px;height:3px}
+@media(max-width:360px){.wallet-only .wallet-bottom-nav button span{width:36px;height:36px}.wallet-only .wallet-bottom-nav button.active span{width:40px;height:40px}.wallet-only .wallet-bottom-nav button span svg{width:21px;height:21px}.wallet-only .wallet-bottom-nav button .wallet-nav-mark img,.wallet-only .wallet-bottom-nav button.active .wallet-nav-mark img{width:32px;height:32px}}
