@@ -3018,7 +3018,7 @@ test("OCR image scan: cloud-offloaded, concurrency-capped, gated, delete-only", 
 
 // ---- Scan card buy row: ONE clean Buy button (the 0.5/1/5/custom amount buttons all just opened
 // the site, so they were consolidated). The &amount= deep-link helper still exists for the web preload.
-test("Sol/RH scan cards surface SlimeWire Chart, TG Buy, Web Buy, and categorized More", () => {
+test("Sol/RH scan cards surface an in-chat Slime Chart, TG Buy, Web Buy, and categorized More", () => {
   const kb = functionBody(serverSource, "slimeScanKeyboard");
   assert.match(kb, /compactTradeCardKeyboard\(mint, "s"\)/);
   const gbi = serverSource.indexOf("const groupBuyMarkup =");
@@ -3029,7 +3029,8 @@ test("Sol/RH scan cards surface SlimeWire Chart, TG Buy, Web Buy, and categorize
   const compact = functionBody(serverSource, "compactTradeCardKeyboard");
   assert.match(compact, /TG Quick Buy/);
   assert.match(compact, /Web Quick Buy/);
-  assert.match(compact, /SlimeWire Chart/);
+  assert.match(compact, /Slime Chart/);
+  assert.match(compact, /callback_data: `scchart:\$\{chartNetwork\}:\$\{target\}:30m`/);
   assert.match(compact, /links\.telegramSiteLogin/);
   assert.match(compact, /telegramWebLoginButton/);
   assert.match(compact, /📂 More/);
@@ -4872,8 +4873,8 @@ test("Telegram /c and /chart render CA, crypto, and stock charts in chat with ti
   const messageHandler = functionBody(serverSource, "handleMessage");
 
   assert.match(register, /command: "chart"/);
-  assert.match(command, /sendTokenChart\(chatId, evmCa, "robinhood", "5m"\)/);
-  assert.match(command, /sendTokenChart\(chatId, solCa, "solana", "5m"\)/);
+  assert.match(command, /sendTokenChart\(chatId, evmCa, "robinhood", "30m"\)/);
+  assert.match(command, /sendTokenChart\(chatId, solCa, "solana", "30m"\)/);
   assert.match(command, /resolveYahooStock/);
   assert.match(command, /resolveCoinGeckoId/);
   assert.match(tokenChart, /renderCandleChartPng/);
@@ -4884,9 +4885,24 @@ test("Telegram /c and /chart render CA, crypto, and stock charts in chat with ti
   assert.match(stockChart, /editMessagePhotoBuffer/);
   assert.match(cryptoChart, /editMessagePhotoBuffer/);
   assert.match(callbackHandler, /startsWith\("chartca:"\)/);
+  assert.match(callbackHandler, /startsWith\("scchart:"\)/);
+  assert.match(callbackHandler, /telegramTokenChartRange\(tf\)/);
   assert.match(callbackHandler, /startsWith\("chartst:"\)/);
   assert.doesNotMatch(messageHandler, /query\.data\?\.startsWith\("chart(?:ca|st):"\)/);
   assert.match(functionBody(serverSource, "handleChannelPostCommands"), /\["chart", "c"\]/);
+});
+
+test("Telegram Slime Charts offer compact 10m, 30m, 1h, and 1d ranges", () => {
+  for (const range of ["10m", "30m", "1h", "1d"]) {
+    assert.match(serverSource, new RegExp(`"${range}"\\s*:\\s*\\{ sourceTf:`));
+  }
+  const keyboard = functionBody(serverSource, "tokenChartKeyboard");
+  assert.match(keyboard, /Object\.keys\(TELEGRAM_TOKEN_CHART_RANGES\)/);
+  assert.match(keyboard, /`◷ \$\{range\}`/);
+  const chart = functionBody(serverSource, "sendTokenChart");
+  assert.match(chart, /telegramTokenChartRange\(range\)/);
+  assert.match(chart, /latestSeconds - rangeConfig\.seconds/);
+  assert.match(chart, /slice\(-120\)/);
 });
 
 test("Telegram /i resolves a CA, ticker, or coin name into an in-chat market info card", () => {

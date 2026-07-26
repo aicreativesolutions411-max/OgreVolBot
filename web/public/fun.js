@@ -102,6 +102,7 @@
     walletSwapSide: "buy",
     walletSwapPickerRole: "receive",
     walletSwapSelecting: false,
+    walletSwapAnimate: false,
     pendingSolSend: null,
     pendingTokenSend: null,
     pendingWalletManagerAction: null,
@@ -1761,7 +1762,7 @@
   function walletSwapNativeButton(role) {
     return `<button class="wallet-token-selector native" type="button" data-wallet-pick-asset="${role}">${nativeAssetIcon("sol")}<b>SOL</b><i>⌄</i></button>`;
   }
-  function walletSwapRecentHtml() {
+  function walletSwapRecentHtml(side = "buy") {
     const seen = new Set(), rows = [];
     for (const coin of [state.selected, ...state.recents]) {
       const key = coinKey(coin) || coin?.key || "", normalized = key.toLowerCase();
@@ -1771,7 +1772,8 @@
       if (rows.length >= 5) break;
     }
     if (!rows.length) return "";
-    return `<section class="wallet-swap-recents"><header><span>Recent coins</span><button type="button" data-wallet-pick-asset="receive">View all</button></header><div>${rows.map((coin) => `<button type="button" data-wallet-swap-select-coin="${escapeHtml(coinKey(coin))}" data-chain-kind="${coin.chain === "robinhood" ? "rh" : "sol"}" data-wallet-swap-role="receive"><img ${coinImageAttrs(coin)} alt=""><span><b>${escapeHtml(coin.symbol || short(coinKey(coin)))}</b><small>${coin.chain === "robinhood" ? "RH" : "SOL"}</small></span></button>`).join("")}</div></section>`;
+    const role = side === "sell" ? "pay" : "receive";
+    return `<section class="wallet-swap-recents"><header><span>Recent coins</span><button type="button" data-wallet-pick-asset="${role}">View all</button></header><div>${rows.map((coin) => `<button type="button" data-wallet-swap-select-coin="${escapeHtml(coinKey(coin))}" data-chain-kind="${coin.chain === "robinhood" ? "rh" : "sol"}" data-wallet-swap-role="${role}"><img ${coinImageAttrs(coin)} alt=""><span><b>${escapeHtml(coin.symbol || short(coinKey(coin)))}</b><small>${coin.chain === "robinhood" ? "RH" : "SOL"}</small></span></button>`).join("")}</div></section>`;
   }
   function walletSwapPickerRow(coin, role, balance = "") {
     const key = coinKey(coin);
@@ -1799,7 +1801,7 @@
     const heldKeys = new Set([...solAssets.map((asset) => String(asset.tokenMint || "").toLowerCase()), ...(state.rhWalletPosition?.tokens || []).map((token) => String(token.address || "").toLowerCase())]);
     const recents = state.recents.map((coin) => ({ ...coin, address: coin.address || coin.key, tokenMint: coin.tokenMint || coin.key })).filter((coin) => coinKey(coin) && !heldKeys.has(coinKey(coin).toLowerCase())).slice(0, 8).map((coin) => walletSwapPickerRow(coin, state.walletSwapPickerRole)).join("");
     const title = state.walletSwapPickerRole === "pay" ? "Choose what to sell" : "Choose a coin to buy";
-    openSheet(`<div class="sheet-title wallet-swap-picker-title">${nativeAssetIcon("sol")}<div><h2>${title}</h2><p>Wallet assets, recent coins, or any contract</p></div></div><form class="wallet-swap-picker-search" data-wallet-swap-asset-form><span>⌕</span><input data-wallet-swap-asset-input autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste Solana / 0x CA or search"><button type="submit">Load</button></form><section class="wallet-swap-picker-list"><h3>Native balance</h3><button class="wallet-swap-picker-row native" type="button" data-wallet-swap-select-sol data-wallet-swap-role="${state.walletSwapPickerRole}">${nativeAssetIcon("sol")}<span><b>SOL</b><small>Solana</small></span><em>${wallet ? `${Number(wallet.sol || 0).toFixed(4)} SOL` : "Not funded"}</em><i>›</i></button>${wallet?.rhAddress ? `<button class="wallet-swap-picker-row native" type="button" data-rh-wallet-tools="${wallet.index}">${nativeAssetIcon("eth")}<span><b>ETH</b><small>Robinhood funding controls</small></span><em>${wallet.rhEth == null ? "Loading…" : `${Number(wallet.rhEth).toFixed(5)} ETH`}</em><i>›</i></button>` : ""}${heldSol || heldRh ? `<h3>Coins in this wallet</h3>${heldSol}${heldRh}` : ""}${recents ? `<h3>Recent contracts</h3>${recents}` : ""}</section><button class="sheet-secondary" type="button" data-wallet-swap-search>Search all coins</button><p class="fineprint">Supported routes stay simple: SOL buys a coin; selling a held coin returns SOL automatically.</p>`);
+    openSheet(`<div class="sheet-title wallet-swap-picker-title">${nativeAssetIcon("sol")}<div><h2>${title}</h2><p>Wallet assets, recent coins, or any contract</p></div></div><form class="wallet-swap-picker-search" data-wallet-swap-asset-form data-wallet-swap-role="${state.walletSwapPickerRole}"><span>⌕</span><input data-wallet-swap-asset-input autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste Solana / 0x CA or search"><button type="submit">Load</button></form><section class="wallet-swap-picker-list"><h3>Native balance</h3><button class="wallet-swap-picker-row native" type="button" data-wallet-swap-select-sol data-wallet-swap-role="${state.walletSwapPickerRole}">${nativeAssetIcon("sol")}<span><b>SOL</b><small>Solana</small></span><em>${wallet ? `${Number(wallet.sol || 0).toFixed(4)} SOL` : "Not funded"}</em><i>›</i></button>${wallet?.rhAddress ? `<button class="wallet-swap-picker-row native" type="button" data-rh-wallet-tools="${wallet.index}">${nativeAssetIcon("eth")}<span><b>ETH</b><small>Robinhood funding controls</small></span><em>${wallet.rhEth == null ? "Loading…" : `${Number(wallet.rhEth).toFixed(5)} ETH`}</em><i>›</i></button>` : ""}${heldSol || heldRh ? `<h3>Coins in this wallet</h3>${heldSol}${heldRh}` : ""}${recents ? `<h3>Recent contracts</h3>${recents}` : ""}</section><button class="sheet-secondary" type="button" data-wallet-swap-search>Search all coins</button><p class="fineprint">Supported routes stay simple: SOL buys a coin; selling a held coin returns SOL automatically.</p>`);
   }
   function renderWalletSwap(loading = false) {
     if (!IS_WALLET_ROUTE) return;
@@ -1817,10 +1819,19 @@
     const swapAction = !wallet || loading || (side === "sell" && key && !hasHolding) ? "data-wallet-review-swap disabled" : key ? "data-wallet-review-swap" : 'data-wallet-pick-asset="receive"';
     const swapActionLabel = !wallet ? "Create or fund wallet" : !key ? "Choose a coin" : side === "sell" && !hasHolding ? "No coin balance" : side === "sell" ? `Review sell ${amount}%` : `Review ${amount} SOL swap`;
     panel.innerHTML = `<header class="wallet-swap-head"><button type="button" data-wallet-route-back aria-label="Back to wallet"><img src="${WALLET_BRAND_ASSET}" alt=""></button><h1><span>SWAP</span><small><i aria-hidden="true">&#128274;</i> Secure route</small></h1><button class="wallet-swap-menu" type="button" data-manage-wallets aria-label="Manage wallets"><span></span><span></span><span></span></button></header>
+      <form class="wallet-swap-direct-search" data-wallet-swap-asset-form data-wallet-swap-role="receive"><span>⌕</span><input data-wallet-swap-asset-input autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste CA or search coin"><button type="submit">Load</button></form>
       <section class="wallet-swap-shell ${side === "sell" ? "direction-sell" : "direction-buy"}"><div class="wallet-swap-card ${loading ? "loading" : ""}"><div class="wallet-swap-side pay"><header><span>PAY</span><em>Balance ${escapeHtml(payBalance)}</em></header><div class="wallet-swap-asset-line">${paySelector}<label class="wallet-swap-amount"><input data-wallet-swap-input inputmode="decimal" value="${escapeHtml(amount)}" aria-label="${side === "sell" ? "Sell percent" : "SOL amount"}"><small>${side === "sell" ? "%" : ""}</small></label></div></div><button class="wallet-swap-reverse" type="button" data-wallet-swap-reverse aria-label="Flip pay and receive assets"><span>↑</span><span>↓</span></button><div class="wallet-swap-side receive"><header><span>RECEIVE</span><em>${coin.chain === "robinhood" ? "Robinhood route" : "Best route"}</em></header><div class="wallet-swap-asset-line">${receiveSelector}<strong>${escapeHtml(receiveNote)}</strong></div></div></div>
-      ${walletSwapRecentHtml()}<div class="wallet-swap-presets">${values.map((value) => `<button type="button" data-wallet-swap-amount="${value}" class="${Number(value) === Number(amount) ? "active" : ""}">${value}${side === "sell" ? "%" : ""}</button>`).join("")}<button class="wallet-preset-settings" type="button" data-manage-presets aria-label="Open trade presets"><span aria-hidden="true">&#9881;</span><small>Presets</small></button></div>
+      ${walletSwapRecentHtml(side)}<div class="wallet-swap-presets">${values.map((value) => `<button type="button" data-wallet-swap-amount="${value}" class="${Number(value) === Number(amount) ? "active" : ""}">${value}${side === "sell" ? "%" : ""}</button>`).join("")}<button class="wallet-preset-settings" type="button" data-manage-presets aria-label="Open trade presets"><span aria-hidden="true">&#9881;</span><small>Presets</small></button></div>
       <section class="wallet-swap-details"><div><span>Best route</span><b>${key ? (side === "sell" ? "Coin → SOL" : "SOL → coin") : "Select coin"}</b></div><div><span>Price impact</span><b>${key ? "Checked live" : "—"}</b></div><div><span>Network fee</span><b>Estimated live</b></div></section></section>
       <button class="wallet-review-swap" type="button" ${swapAction}>${escapeHtml(swapActionLabel)}</button><p class="wallet-route-note">✧ SOL buys coins. Flip a held coin above to sell it back to SOL.</p>`;
+    if (state.walletSwapAnimate) {
+      state.walletSwapAnimate = false;
+      const shell = panel.querySelector(".wallet-swap-shell");
+      requestAnimationFrame(() => {
+        shell?.classList.add("is-flipping");
+        setTimeout(() => shell?.classList.remove("is-flipping"), 420);
+      });
+    }
     syncWalletRouteNav();
   }
   function selectedWalletHolding() {
@@ -4126,6 +4137,8 @@
       if (state.walletSwapSide === "sell") state.walletSwapSellPercent = input || state.walletSwapSellPercent;
       else state.walletSwapAmount = input || state.walletSwapAmount;
       state.walletSwapSide = state.walletSwapSide === "sell" ? "buy" : "sell";
+      state.walletSwapPickerRole = state.walletSwapSide === "sell" ? "pay" : "receive";
+      state.walletSwapAnimate = true;
       renderWalletSwap();
       return;
     }
@@ -4377,9 +4390,9 @@
   document.addEventListener("submit", (event) => {
     if (event.target.matches("[data-wallet-swap-asset-form]")) {
       event.preventDefault();
-      const query = String($("[data-wallet-swap-asset-input]")?.value || "").trim();
+      const query = String(event.target.querySelector("[data-wallet-swap-asset-input]")?.value || "").trim();
       if (!query) return;
-      const role = state.walletSwapPickerRole || "receive";
+      const role = event.target.dataset.walletSwapRole || state.walletSwapPickerRole || "receive";
       state.walletSwapSide = role === "pay" ? "sell" : "buy";
       if (/^(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$/.test(query)) { closeSheet(); void openCoin(query, isRh(query) ? "rh" : "sol", { walletSwap: true }); }
       else { state.walletSwapSelecting = true; closeSheet(); openSearch(); const input = $("[data-search-input]"); if (input) { input.value = query; input.placeholder = "Search token or paste Solana / 0x CA"; void runSearch(query); } }

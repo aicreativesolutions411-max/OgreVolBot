@@ -48,7 +48,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "80", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "81", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -74,7 +74,7 @@ test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH tr
   assert.match(html, /wallet-manifest\.webmanifest\?v=2/);
   assert.match(html, /wallet-install-head[^>]+data-install-fun hidden[^>]+><span>Install<\/span>/);
   assert.match(funWorker, /IS_WALLET_WORKER/);
-  assert.match(funWorker, /slimewallet-v20/);
+  assert.match(funWorker, /slimewallet-v21/);
   assert.match(JSON.stringify(walletManifest.icons), /slimewallet-icon-512\.png/);
   assert.match(js, /WALLET_BRAND_ASSET = "\/assets\/slimewire\/slimewallet-icon-192\.png"/);
   assert.match(css, /slimewallet-vault-bg\.webp/);
@@ -99,13 +99,25 @@ test("SlimeWallet Swap matches the premium mockup and supports real asset flippi
   assert.match(swap, /Review sell \$\{amount\}%/);
   assert.match(swap, /walletSwapCoinButton\(coin, "pay"/);
   assert.match(swap, /walletSwapNativeButton\("receive"\)/);
+  assert.match(swap, /data-wallet-swap-asset-form data-wallet-swap-role="receive"/);
+  assert.match(js, /state\.walletSwapPickerRole = state\.walletSwapSide === "sell" \? "pay" : "receive"/);
+  assert.match(js, /state\.walletSwapAnimate = true;[\s\S]{0,80}renderWalletSwap\(\)/);
+  assert.match(js, /event\.target\.querySelector\("\[data-wallet-swap-asset-input\]"\)/);
   assert.match(swap, /class="wallet-preset-settings"/);
   assert.match(swap, /aria-label="Open trade presets"/);
   assert.match(swap, /<small>Presets<\/small>/);
-  assert.match(swap, /walletSwapRecentHtml\(\)/);
+  assert.match(swap, /walletSwapRecentHtml\(side\)/);
   assert.match(css, /Obsidian Glass Swap v2/);
   assert.match(css, /\[data-view="wallet-swap"\] \.wallet-preset-settings/);
   assert.match(css, /\.wallet-swap-card:before[^\n]+content:none/);
+  assert.match(css, /slimewallet-swap-bg-v1\.webp/);
+  assert.match(css, /slimewallet-swap-liquid-v1\.webp/);
+  assert.match(css, /walletSwapEnterFromAbove/);
+  for (const asset of ["slimewallet-swap-bg-v1.webp", "slimewallet-swap-liquid-v1.webp"]) {
+    const size = fs.statSync(new URL(`../web/public/assets/slimewire/${asset}`, import.meta.url)).size;
+    assert.ok(size > 10_000 && size < 100_000, `${asset} should be a real optimized production asset`);
+    assert.match(funWorker, new RegExp(asset.replace(".", "\\.")));
+  }
 });
 
 test("SlimeWallet Swap picker exposes every wallet coin, recent CA, and resilient artwork", () => {
@@ -213,7 +225,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: IS_WALLET_ROUTE \? "\/wallet\/" : "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v77/);
+  assert.match(funWorker, /slimewire-fun-v78/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -278,9 +290,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=59/);
-  assert.match(funWorker, /slimewire-fun-v77/);
-  assert.match(funWorker, /fun\.css\?v=59/);
+  assert.match(html, /fun\.css\?v=60/);
+  assert.match(funWorker, /slimewire-fun-v78/);
+  assert.match(funWorker, /fun\.css\?v=60/);
   assert.match(css, /\.wallet-bottom-nav\[hidden\]\{display:none!important\}/);
   assert.match(js, /walletNav\.hidden = hideWalletNav/);
 });
@@ -291,8 +303,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=80/);
-  assert.match(funWorker, /fun\.js\?v=80/);
+  assert.match(html, /fun\.js\?v=81/);
+  assert.match(funWorker, /fun\.js\?v=81/);
 });
 
 test("Fun volume switches pasted contracts to their authoritative chain", () => {
@@ -358,7 +370,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /"slimewire-fun-v77"/);
+  assert.match(funWorker, /"slimewire-fun-v78"/);
   assert.doesNotMatch(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(js, /loadFunScript\("\/slimewire-funding\.js\?v=8"\)/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
@@ -931,7 +943,7 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, MACD, and 
   assert.match(js, /loadFunScript\("\/vendor\/lightweight-charts\.standalone\.production\.js"\)/);
   assert.match(js, /loadFunScript\("\/fun-indicators\.js\?v=7"\)/);
   assert.doesNotMatch(funWorker, /fun-indicators\.js\?v=7/);
-  assert.match(funWorker, /fun\.css\?v=59/);
+  assert.match(funWorker, /fun\.css\?v=60/);
   assert.match(indicators, /new URLSearchParams\(\{ ca: key, tf: timeframe \}\)/);
   assert.match(indicators, /`\$\{API_BASE\}\/api\/chart\?\$\{query\.toString\(\)\}`/);
   assert.match(indicators, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/pools/);
