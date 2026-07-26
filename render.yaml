@@ -3,7 +3,9 @@ services:
     name: solana-telegram-wallet-ops-bot
     env: node
     plan: standard
-    autoDeploy: true
+    # Deploy completed release batches with scripts/render-release.ps1.
+    # Per-commit auto deploys previously rebuilt this monolith up to three times.
+    autoDeploy: false
     buildCommand: node scripts/render-build.mjs
     startCommand: npm run render-start
     healthCheckPath: /healthz
@@ -339,7 +341,7 @@ services:
     name: solana-telegram-wallet-ops-worker
     env: node
     plan: standard
-    autoDeploy: true
+    autoDeploy: false
     buildCommand: node scripts/render-build.mjs --no-web
     startCommand: npm run worker
     envVars:
@@ -428,7 +430,7 @@ services:
     name: solana-telegram-wallet-ops-worker-wallets
     env: node
     plan: standard
-    autoDeploy: true
+    autoDeploy: false
     buildCommand: node scripts/render-build.mjs --no-web
     startCommand: npm run worker
     envVars:

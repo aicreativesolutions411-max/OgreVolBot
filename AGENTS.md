@@ -18,7 +18,9 @@ via access keys.
   `web/dist/` by `npm run build:web` (minifies `app.js`). Tests are node's built-in runner under
   `tests/` (run with `npm test` — currently ~378 tests, all green).
 - **Hosting:** Cloudflare (`slimewire.org`) proxies to the Render origin
-  (`ogrevolbot.onrender.com`). Render auto-deploys on every push to `main`.
+  (`ogrevolbot.onrender.com`). Render auto-deploy is intentionally **off** to avoid rebuilding
+  the web service and two workers for every intermediate commit. Release completed batches with
+  `scripts/render-release.ps1`.
 - **Data, free only (NO paid RPC / NO Helius credit burn):**
   - `swap-api.pump.fun` — per-trade feed (`/v2/coins/{mint}/trades`) **and** candles
     (`/v1/coins/{mint}/candles?interval=&limit=`). Free, server-side, does NOT rate-limit us.
@@ -100,10 +102,14 @@ Other owner-gated reads: `/api/web/autopilot/status`, `/api/web/autopilot/caller
 1. Make the change. If you touched anything under `web/`, run **`npm run build:web`** (regenerates
    `web/dist/`).
 2. **`npm test`** — must stay green. A fix isn't done until tests fail before it and pass after.
-3. Commit + push to `main`. End commit messages with the project's `Co-Authored-By:` trailer.
-4. Render auto-deploys. **Poll check (A) until `status === "live"`**, then run check (B) and look
-   for errors. A deploy is not "done" on push — only when it's live and the logs are clean.
-5. Do not mark work done based on UI screenshots alone (see trading rules below).
+3. Commit + push the completed batch to `main`. End commit messages with the project's
+   `Co-Authored-By:` trailer. Do not release every intermediate commit.
+4. Run `powershell -ExecutionPolicy Bypass -File scripts\render-release.ps1` for normal web,
+   Telegram, X bot, and static-site releases. Add `-IncludeWorkers` only when worker/runtime code
+   changed (`src/worker.js`, `worker.js`, or worker-used files under `src/lib/`).
+5. The release script polls until the exact commit is live. Then run check (B) and look for
+   errors. A deploy is not "done" on push — only when it is live and the logs are clean.
+6. Do not mark work done based on UI screenshots alone (see trading rules below).
 
 ---
 
