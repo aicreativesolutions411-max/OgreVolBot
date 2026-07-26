@@ -205,6 +205,22 @@ test("Telegram Slime Chart links land on the exact terminal coin route", () => {
 test("Robinhood headers keep Dex market cap instead of relabeling FDV as MC", () => {
   assert.match(gg, /r\._dexMarketResolved=true/);
   assert.match(gg, /if\(!r\._dexMarketResolved\)/);
-  assert.match(fun, /const dexMarketPromise = chain === "robinhood"/);
-  assert.match(fun, /marketCapUsd: dexMarket\?\.mc \|\| raw\.mc/);
+  assert.match(fun, /const dexTask = \(chain === "robinhood" \|\| walletMode/);
+  assert.match(fun, /applySelected\(\{ imageUrl: dexMarket\.img[\s\S]{0,160}\}, dexMarket\)/);
+  assert.match(fun, /const incomingMarketCap = positiveMarketNumber\(snapshot\.marketCap, snapshot\.marketCapUsd, snapshot\.mc, snapshot\.fdv\)/);
+});
+
+test("native chart APIs never relabel quote-side Dex metrics as the requested coin", () => {
+  assert.match(server, /function tokenAddressEquals[\s\S]{0,280}a\.toLowerCase\(\) === b\.toLowerCase\(\)/);
+  assert.match(server, /function metadataFromDexPair[\s\S]{0,220}const baseMatches = tokenAddressEquals/);
+  assert.match(server, /const links = baseMatches \? dexPairLinks\(best\)/);
+  assert.match(server, /marketCap: baseMatches[\s\S]{0,420}: firstMeaningfulNumber\(token\.marketCap, token\.marketCapUsd, token\.fdv\)/);
+  assert.match(server, /priceUsd: baseMatches[\s\S]{0,300}quoteMatches \? dexPairTokenPriceUsd\(best, tokenMint\) : null/);
+  assert.match(server, /const baseMatches = String\(base\.address \|\| ""\) === String\(mint \|\| ""\)/);
+  assert.match(server, /const token = baseMatches \? base : quote/);
+  assert.match(server, /if \(baseMatches\) \{[\s\S]{0,700}stats\.priceUsd = Number\(best\.priceUsd\)/);
+  assert.match(server, /const dexBaseMarket = target\.matched && target\.isBase/);
+  assert.match(server, /const priceUsd = firstMeaningfulNumber\(dexBaseMarket \? best\?\.priceUsd : null/);
+  assert.match(server, /mc: firstMeaningfulNumber\(dexBaseMarket \? best\?\.marketCap : null/);
+  assert.match(server, /vol24: firstMeaningfulNumber\(dexBaseMarket \? best\?\.volume\?\.h24 : null/);
 });

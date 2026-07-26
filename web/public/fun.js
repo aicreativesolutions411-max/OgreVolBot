@@ -28,7 +28,7 @@
   ];
   const TOOL_ICONS = "/assets/slimewire/png/icons/";
   const IS_QUICK_ROUTE = /^\/quick(?:\.html)?\/?$/i.test(location.pathname) || new URLSearchParams(location.search).get("quick") === "1";
-  const IS_WALLET_ROUTE = /^\/wallet(?:\.html)?\/?$/i.test(location.pathname);
+  const IS_WALLET_ROUTE = /^\/wallet(?:\.html|\/.*)?$/i.test(location.pathname);
   const ROUTE_PARAMS = new URLSearchParams(location.search);
   const FROM_CASH = ROUTE_PARAMS.get("from") === "cash";
   // Referral capture (mobile visitors land here directly now): /?ref=CODE — same ggRef key the
@@ -86,6 +86,7 @@
     feedStatus: "unavailable",
     feedRequestVersion: 0,
     searchRequestVersion: 0,
+    coinRequestVersion: 0,
     feedTimer: null,
     imageHydrateVersion: 0,
     resolvedCoinImages: new Map(),
@@ -108,7 +109,13 @@
     launchReturnView: "home",
     toolReturnView: "home",
     activeTool: "",
-    deferredInstall: null
+    deferredInstall: null,
+    pumpRewards: null,
+    pumpRewardsStatus: "idle",
+    pumpRewardsError: "",
+    pumpRewardsWalletIndex: null,
+    pumpRewardsRequestVersion: 0,
+    pumpRewardsPromise: null
   };
   let funIndicatorAssetsPromise = null;
   let funFundingAssetsPromise = null;
@@ -197,6 +204,66 @@
       if (Number.isFinite(number)) return number;
     }
     return null;
+  }
+  function positiveMarketNumber(...values) {
+    for (const value of values) {
+      if (value == null || value === "") continue;
+      const number = Number(value);
+      if (Number.isFinite(number) && number > 0) return number;
+    }
+    return null;
+  }
+  function marketSnapshotTimestamp(...values) {
+    for (const value of values) {
+      if (value == null || value === "") continue;
+      const numeric = Number(value);
+      if (Number.isFinite(numeric) && numeric > 0) return numeric;
+      if (Number.isFinite(numeric)) continue;
+      const parsed = Date.parse(String(value));
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    return 0;
+  }
+  function mergeLiveMarketSnapshot(coin = {}, snapshot = {}) {
+    const incomingPrice = positiveMarketNumber(snapshot.priceUsd, snapshot.price);
+    const incomingMarketCap = positiveMarketNumber(snapshot.marketCap, snapshot.marketCapUsd, snapshot.mc, snapshot.fdv);
+    const incomingLiquidity = positiveMarketNumber(snapshot.liquidity, snapshot.liquidityUsd, snapshot.liq);
+    const incomingVolume = positiveMarketNumber(snapshot.volume, snapshot.volumeH24, snapshot.volume24hUsd, snapshot.vol24, snapshot.v24);
+    const existingPrice = positiveMarketNumber(coin.priceUsd, coin.price);
+    const existingMarketCap = positiveMarketNumber(coin.marketCap, coin.marketCapUsd, coin.mc, coin.fdv);
+    const existingLiquidity = positiveMarketNumber(coin.liquidity, coin.liquidityUsd, coin.liq);
+    const existingVolume = positiveMarketNumber(coin.volume, coin.volumeH24, coin.volume24hUsd, coin.vol24, coin.v24);
+    const existingPriority = Math.max(0, Number(coin.marketPriority) || 10);
+    const incomingPriority = Math.max(0, Number(snapshot.marketPriority) || 10);
+    const existingAt = marketSnapshotTimestamp(coin.marketUpdatedAt, coin.updatedAtMs, coin.at);
+    const incomingAt = marketSnapshotTimestamp(snapshot.marketUpdatedAt, snapshot.updatedAtMs, snapshot.at);
+    const canReplaceExisting = incomingPriority > existingPriority
+      || (incomingPriority === existingPriority && incomingAt >= existingAt);
+    const choose = (incoming, existing) => incoming != null && (existing == null || canReplaceExisting) ? incoming : existing;
+    const priceUsd = choose(incomingPrice, existingPrice);
+    const marketCap = choose(incomingMarketCap, existingMarketCap);
+    const liquidity = choose(incomingLiquidity, existingLiquidity);
+    const volume = choose(incomingVolume, existingVolume);
+    const receivedLiveMarket = [incomingPrice, incomingMarketCap, incomingLiquidity, incomingVolume].some((value) => value != null);
+    const hadLiveMarket = [existingPrice, existingMarketCap, existingLiquidity, existingVolume].some((value) => value != null);
+    const incomingDominates = receivedLiveMarket && (!hadLiveMarket || canReplaceExisting);
+    const marketPriority = incomingDominates ? incomingPriority : existingPriority;
+    const marketUpdatedAt = incomingDominates ? incomingAt : existingAt;
+    const marketSource = incomingDominates
+      ? (snapshot.marketSource || coin.marketSource || "")
+      : (coin.marketSource || snapshot.marketSource || "");
+    return {
+      ...coin,
+      ...(priceUsd != null ? { priceUsd, price: priceUsd } : {}),
+      ...(marketCap != null ? { marketCap, marketCapUsd: marketCap, mc: marketCap } : {}),
+      ...(liquidity != null ? { liquidity, liquidityUsd: liquidity, liq: liquidity } : {}),
+      ...(volume != null ? { volume, volumeH24: volume, volume24hUsd: volume, vol24: volume, v24: volume } : {}),
+      ...(snapshot.symbol && !coin.symbol ? { symbol: snapshot.symbol } : {}),
+      ...(snapshot.name && !coin.name ? { name: snapshot.name } : {}),
+      ...(marketSource ? { marketSource } : {}),
+      marketPriority,
+      marketUpdatedAt
+    };
   }
   function freshnessAgeLabel(timestamp) {
     const ageSeconds = Math.max(0, Math.floor((Date.now() - Number(timestamp || 0)) / 1000));
@@ -332,6 +399,12 @@
     state.positionValuePromise = null;
     state.positionValueForceRequested = false;
     state.positionLoadVersion += 1;
+    state.pumpRewardsRequestVersion += 1;
+    state.pumpRewardsPromise = null;
+    state.pumpRewards = null;
+    state.pumpRewardsStatus = "idle";
+    state.pumpRewardsError = "";
+    state.pumpRewardsWalletIndex = null;
     state.wallets = [];
     state.positions = [];
     state.rhWalletPosition = null;
@@ -339,6 +412,7 @@
     state.portfolioStatus = "unavailable";
     state.portfolioUpdatedAt = 0;
     localStorage.removeItem(ACTIVE_WALLET_KEY);
+    renderPumpRewardsCard();
   }
 
   function authenticatedAccountScope() {
@@ -689,6 +763,115 @@
   }
   function activePreset() { return state.presets.trade.find((preset) => preset.id === state.activePresetId) || null; }
   function activeWallet() { return state.wallets.find((wallet) => wallet.index === state.activeWallet) || state.wallets[0] || null; }
+  function pumpRewardLamports(reward = {}) {
+    const value = reward?.totalLamports ?? reward?.lamports ?? "0";
+    try { return BigInt(String(value || "0")); }
+    catch { const fallback = Number(reward?.totalSol || 0); return BigInt(Number.isFinite(fallback) ? Math.max(0, Math.round(fallback * 1e9)) : 0); }
+  }
+  function formatPumpRewardSol(reward = {}) {
+    const lamports = pumpRewardLamports(reward);
+    const whole = lamports / 1_000_000_000n;
+    const fraction = (lamports % 1_000_000_000n).toString().padStart(9, "0").replace(/0+$/, "");
+    return String(whole) + (fraction ? "." + fraction : ".000") + " SOL";
+  }
+  function pumpRewardAvailable(reward = {}) { return pumpRewardLamports(reward) > 0n; }
+  function selectedPumpRewards(data = state.pumpRewards) {
+    const wallet = activeWallet();
+    if (!wallet || !data) return null;
+    return data.wallet || (data.wallets || []).find((row) => Number(row.walletIndex) === Number(wallet.index)) || null;
+  }
+  function renderPumpRewardsCard() {
+    const card = $("[data-pump-rewards]");
+    if (!card) return;
+    const wallet = activeWallet();
+    if (!state.token || !wallet) { card.hidden = true; card.innerHTML = ""; return; }
+    const walletLabel = escapeHtml(wallet.label || ("Wallet " + wallet.index));
+    card.hidden = false;
+    if (state.pumpRewardsStatus === "loading") {
+      card.innerHTML = '<div class="pump-rewards-heading"><span><i>↻</i><b>Pump rewards</b></span><small>Checking ' + walletLabel + '…</small></div><p class="pump-rewards-note">Loaded after your spendable balance. Rewards never inflate the balance above.</p>';
+      return;
+    }
+    if (state.pumpRewardsStatus === "error") {
+      card.innerHTML = '<div class="pump-rewards-heading"><span><i>↻</i><b>Pump rewards</b></span><small>On-chain check delayed</small></div><button class="pump-rewards-retry" type="button" data-refresh-pump-rewards>Check again</button><p class="pump-rewards-note">Your funds are unaffected. Rewards stay on-chain until claimed.</p>';
+      return;
+    }
+    const row = selectedPumpRewards();
+    if (!row) {
+      card.innerHTML = '<button class="pump-rewards-open" type="button" data-refresh-pump-rewards><span><i>↻</i><b>Pump rewards</b><small>Check creator fees and Cash back</small></span><em>Check →</em></button><p class="pump-rewards-note">Separate from your spendable wallet balance until claimed.</p>';
+      return;
+    }
+    const creator = row.creator || {}, cashback = row.cashback || {};
+    const rewardRow = (kind, label, reward) => {
+      const available = pumpRewardAvailable(reward);
+      return '<div class="pump-reward-row"><span><small>' + escapeHtml(label) + '</small><b>' + escapeHtml(formatPumpRewardSol(reward)) + '</b></span><button type="button" data-claim-pump-reward="' + kind + '" ' + (available ? "" : "disabled") + '>' + (available ? "Claim" : "None yet") + "</button></div>";
+    };
+    const rowLabel = escapeHtml(row.label || wallet.label || ("Wallet " + wallet.index));
+    card.innerHTML = '<div class="pump-rewards-heading"><span><i>↻</i><b>Pump rewards</b></span><small>' + rowLabel + ' · wallet-wide</small></div><div class="pump-reward-grid">' + rewardRow("creator", "Creator fees", creator) + rewardRow("cashback", "Cash back", cashback) + '</div><p class="pump-rewards-note">On-chain and separate from spendable SOL until you claim. Bonding-curve rewards arrive as SOL; PumpSwap rewards can remain WSOL when this wallet already has a WSOL account. SlimeWire never closes an existing WSOL account.</p>';
+  }
+  async function loadPumpRewardsForActiveWallet({ force = false } = {}) {
+    const wallet = activeWallet();
+    if (!state.token || !state.confirmedUserId || !wallet) { renderPumpRewardsCard(); return null; }
+    const walletIndex = Number(wallet.index);
+    if (!force && state.pumpRewardsStatus === "ready" && Number(state.pumpRewardsWalletIndex) === walletIndex) { renderPumpRewardsCard(); return state.pumpRewards; }
+    if (!force && state.pumpRewardsPromise?.walletIndex === walletIndex) return state.pumpRewardsPromise.promise;
+    const accountScope = authenticatedAccountScope();
+    const requestVersion = ++state.pumpRewardsRequestVersion;
+    state.pumpRewardsStatus = "loading";
+    state.pumpRewardsError = "";
+    state.pumpRewardsWalletIndex = walletIndex;
+    state.pumpRewards = null;
+    renderPumpRewardsCard();
+    const refresh = (async () => {
+      const result = await request("/api/web/pump/rewards?walletIndex=" + encodeURIComponent(walletIndex), { timeout: 10_000 });
+      if (!accountScopeMatches(accountScope) || requestVersion !== state.pumpRewardsRequestVersion || Number(activeWallet()?.index) !== walletIndex) return null;
+      if (!result.ok || !result.data?.ok) {
+        state.pumpRewardsStatus = "error";
+        state.pumpRewardsError = apiMessage(result.data, "Pump rewards are still syncing.");
+        renderPumpRewardsCard();
+        return null;
+      }
+      state.pumpRewards = result.data;
+      state.pumpRewardsStatus = "ready";
+      renderPumpRewardsCard();
+      return result.data;
+    })();
+    state.pumpRewardsPromise = { walletIndex, promise: refresh };
+    try { return await refresh; }
+    finally { if (state.pumpRewardsPromise?.promise === refresh) state.pumpRewardsPromise = null; }
+  }
+  function queuePumpRewardsLoad() {
+    window.setTimeout(() => { if (state.view === "wallet") void loadPumpRewardsForActiveWallet(); }, 0);
+  }
+  async function claimPumpReward(button) {
+    if (button.disabled || !(await ensureAccount())) return;
+    if (!state.wallets.length) await loadWallets();
+    const wallet = activeWallet(), kind = String(button.dataset.claimPumpReward || "");
+    if (!wallet || !["creator", "cashback"].includes(kind)) { toast("Select a wallet first.", true); return; }
+    const walletIndex = Number(wallet.index), accountScope = authenticatedAccountScope();
+    button.disabled = true;
+    const oldLabel = button.textContent;
+    button.textContent = "Claiming…";
+    const result = await post("/api/web/pump/rewards/claim", { walletIndex, kind, tradeAttemptId: attemptId("fun-pump-" + kind) }, { timeout: 90_000, noRetry: true });
+    if (!accountScopeMatches(accountScope) || Number(activeWallet()?.index) !== walletIndex) return;
+    if (!result.ok || !result.data?.ok) {
+      button.disabled = false;
+      button.textContent = oldLabel;
+      toast(apiMessage(result.data, "Could not claim " + (kind === "creator" ? "creator fees." : "Cash back.")), true);
+      return;
+    }
+    const rewardLabel = kind === "creator" ? "Creator fees" : "Cash back";
+    if (result.data.outcomeUnknown) toast(rewardLabel + " submitted; checking the on-chain result.");
+    else if (result.data.partial) toast(rewardLabel + " partially claimed. Any remainder stays on-chain.");
+    else if (!result.data.claimed) toast(result.data.message || ("No " + rewardLabel.toLowerCase() + " is ready yet."));
+    else {
+      const payoutAsset = String(result.data.payoutAsset || "SOL").toUpperCase();
+      const payoutText = payoutAsset === "WSOL" || payoutAsset === "SOL_AND_WSOL"
+        ? " claimed. PumpSwap proceeds remain WSOL in this wallet's existing WSOL account."
+        : " claimed as SOL to " + (wallet.label || ("Wallet " + walletIndex));
+      toast(rewardLabel + payoutText);
+    }
+    await Promise.all([loadPumpRewardsForActiveWallet({ force: true }), loadWalletBalancePreview()]);
+  }
   function portfolioSolTotal() {
     const liquidSol = state.wallets.reduce((sum, wallet) => sum + Math.max(0, Number(wallet.sol) || 0), 0);
     const coinsSol = state.positions.reduce((sum, position) => {
@@ -708,6 +891,7 @@
   function formatWalletUsd(value) {
     if (value == null || !Number.isFinite(Number(value))) return "—";
     const amount = Math.max(0, Number(value));
+    if (amount > 0 && amount < 0.01) return "<$0.01";
     if (amount >= 1000000) return `$${(amount / 1000000).toFixed(amount >= 10000000 ? 0 : 1)}M`;
     if (amount >= 100000) return `$${Math.round(amount / 1000)}K`;
     if (amount >= 1000) return `$${(amount / 1000).toFixed(1)}K`;
@@ -817,13 +1001,13 @@
   }
 
   function normalizeSol(row, receivedAt = Date.now()) {
-    const volume = marketNumber(row.volumeH24, row.volumeH1, row.volumeUsd, row.volume5m);
-    return { ...row, chain: "solana", address: row.tokenMint, marketCap: marketNumber(row.marketCap, row.marketCapUsd, row.fdv), liquidity: marketNumber(row.liquidityUsd, row.liquidity?.usd, row.reserveUsd), holders: marketNumber(row.holderCount, row.holders, row.holdersCount), volume, volumeLabel: volume == null ? (row.volumeLabel || row.volumeH1Label || row.volume5mLabel || "Unavailable") : "", change: marketNumber(row.m5, row.h1, row.priceChange?.h1), age: ageLabel(row), imageUrl: row.imageUrl || row.avatarUrl || row.imageUri || row.logoUrl || row.meta?.imageUrl || row.metadata?.image || "", marketState: row.marketState || "live", marketUpdatedAt: marketNumber(row.marketUpdatedAt, row.updatedAtMs, receivedAt) };
+    const volume = positiveMarketNumber(row.volumeH24, row.volumeH1, row.volumeUsd, row.volume5m);
+    return { ...row, chain: "solana", address: row.tokenMint, marketCap: positiveMarketNumber(row.marketCap, row.marketCapUsd, row.fdv), liquidity: positiveMarketNumber(row.liquidityUsd, row.liquidity?.usd, row.reserveUsd), holders: positiveMarketNumber(row.holderCount, row.holders, row.holdersCount), volume, volumeLabel: volume == null ? (row.volumeLabel || row.volumeH1Label || row.volume5mLabel || "Unavailable") : "", change: marketNumber(row.m5, row.h1, row.priceChange?.h1), age: ageLabel(row), imageUrl: row.imageUrl || row.avatarUrl || row.imageUri || row.logoUrl || row.meta?.imageUrl || row.metadata?.image || "", marketState: row.marketState || "live", marketSource: row.marketSource || "server-feed", marketPriority: Math.max(0, Number(row.marketPriority) || 20), marketUpdatedAt: marketNumber(row.marketUpdatedAt, row.updatedAtMs, receivedAt) };
   }
   function normalizeRh(row, receivedAt = Date.now()) {
-    const marketCap = marketNumber(row.marketCapUsd, row.marketCap, row.mc, row.fdv);
-    const volume = marketNumber(row.volume24hUsd, row.volumeH24, row.volumeUsd, row.vol24, row.vol1, row.volume?.h24);
-    return { ...row, chain: "robinhood", tokenMint: row.address || row.tokenMint, address: row.address || row.tokenMint, marketCap, liquidity: marketNumber(row.liquidityUsd, row.liquidity, row.liq, row.liquidity?.usd), holders: marketNumber(row.holderCount, row.holders, row.holdersCount), volume, volumeLabel: volume == null ? (row.volumeLabel || row.volume24hLabel || "Unavailable") : "", change: marketNumber(row.priceChange1h, row.m5, row.h1, row.ch1, row.priceChange24h, row.ch24), age: ageLabel(row), imageUrl: row.imageUrl || row.localImagePath || row.iconUrl || row.imageUri || row.logoUrl || row.metadata?.image || "", marketState: row.marketState || "live", marketUpdatedAt: marketNumber(row.marketUpdatedAt, row.updatedAtMs, receivedAt) };
+    const marketCap = positiveMarketNumber(row.marketCapUsd, row.marketCap, row.mc, row.fdv);
+    const volume = positiveMarketNumber(row.volume24hUsd, row.volumeH24, row.volumeUsd, row.vol24, row.vol1, row.volume?.h24);
+    return { ...row, chain: "robinhood", tokenMint: row.address || row.tokenMint, address: row.address || row.tokenMint, marketCap, liquidity: positiveMarketNumber(row.liquidityUsd, row.liquidity, row.liq, row.liquidity?.usd), holders: positiveMarketNumber(row.holderCount, row.holders, row.holdersCount), volume, volumeLabel: volume == null ? (row.volumeLabel || row.volume24hLabel || "Unavailable") : "", change: marketNumber(row.priceChange1h, row.m5, row.h1, row.ch1, row.priceChange24h, row.ch24), age: ageLabel(row), imageUrl: row.imageUrl || row.localImagePath || row.iconUrl || row.imageUri || row.logoUrl || row.metadata?.image || "", marketState: row.marketState || "live", marketSource: row.marketSource || "server-feed", marketPriority: Math.max(0, Number(row.marketPriority) || 20), marketUpdatedAt: marketNumber(row.marketUpdatedAt, row.updatedAtMs, receivedAt) };
   }
   const FEED_CONFIG = {
     movers: { bucket: "live", sort: "best", rh: "trending", note: "Live movers ranked by signal" },
@@ -840,7 +1024,7 @@
       holders: row.holders, volume: row.volume, volumeLabel: row.volumeLabel || "",
       change: row.change, age: row.age || "", pairAgeSeconds: row.pairAgeSeconds,
       createdAt: row.createdAt || "", live: Boolean(row.live), marketState: row.marketState || "stale",
-      marketUpdatedAt: Number(row.marketUpdatedAt || 0)
+      marketSource: row.marketSource || "", marketPriority: Number(row.marketPriority || 0), marketUpdatedAt: Number(row.marketUpdatedAt || 0)
     };
   }
   function restoreFeedCache() {
@@ -848,7 +1032,7 @@
     if (!Array.isArray(saved)) return;
     for (const entry of saved) {
       if (!entry?.key || !Array.isArray(entry.rows) || Date.now() - Number(entry.at || 0) > 5 * 60_000) continue;
-      state.feedCache.set(entry.key, { at: Number(entry.at), status: "stale", rows: entry.rows.map((row) => ({ ...row, marketState: "stale" })) });
+      state.feedCache.set(entry.key, { at: Number(entry.at), status: "stale", rows: entry.rows.map((row) => ({ ...row, marketState: "stale", marketSource: "feed-cache", marketPriority: 15 })) });
     }
   }
   function saveFeedCache() {
@@ -1097,10 +1281,14 @@
     saveLocal(RECENTS_KEY, state.recents);
   }
   async function openCoin(key, chainHint = "", options = {}) {
-    const chain = chainHint === "rh" || isRh(key) ? "robinhood" : "solana";
+    const targetKey = String(key || "").trim();
+    if (!targetKey) return;
+    const targetLower = targetKey.toLowerCase();
+    const requestVersion = ++state.coinRequestVersion;
+    const chain = chainHint === "rh" || isRh(targetKey) ? "robinhood" : "solana";
     const walletMode = IS_WALLET_ROUTE;
     const walletSwap = walletMode && Boolean(options.walletSwap);
-    let coin = [...state.rows, ...state.searchRows].find((row) => coinKey(row).toLowerCase() === String(key).toLowerCase()) || { address: key, tokenMint: key, chain };
+    const coin = [...state.rows, ...state.searchRows].find((row) => coinKey(row).toLowerCase() === targetLower) || { address: targetKey, tokenMint: targetKey, chain };
     state.selected = coin;
     state.selectedDetail = null;
     state.coinCalls = [];
@@ -1108,37 +1296,73 @@
     state.chartInterval = "15";
     state.chartMode = "chart";
     addRecent(coin);
+    const isCurrent = () => requestVersion === state.coinRequestVersion && coinKey(state.selected).toLowerCase() === targetLower;
     const quick = Boolean(options.quick || IS_QUICK_ROUTE);
     setView(quick ? "quick" : (walletSwap ? "wallet-swap" : (walletMode ? "wallet-asset" : "coin")), { hideNav: quick });
-    if (quick) renderQuickRoute(); else if (walletSwap) renderWalletSwap(true); else if (walletMode) renderWalletAsset(true); else renderCoinShell();
-    if (!walletMode) history.replaceState(null, "", quick ? `/quick?ca=${encodeURIComponent(key)}` : `#coin/${encodeURIComponent(key)}`);
-    const path = chain === "robinhood" ? `/api/web/rh/token?address=${encodeURIComponent(key)}` : `/api/web/token-read?mint=${encodeURIComponent(key)}`;
-    const detailPromise = request(path);
-    const dexMarketPromise = chain === "robinhood"
-      ? funDexBatch([key]).then((by) => by[key] || Object.entries(by).find(([address]) => address.toLowerCase() === String(key).toLowerCase())?.[1] || null).catch(() => null)
-      : Promise.resolve(null);
-    void loadPositions().then(() => { if (coinKey(state.selected).toLowerCase() !== String(key).toLowerCase()) return; if (state.view === "coin") renderPositionCard(); else if (state.view === "wallet-asset") renderWalletAsset(); });
-    const searchResult = await request(`/api/web/token-search?q=${encodeURIComponent(key)}`);
-    const searchMatch = searchResult.ok
-      ? (searchResult.data?.matches || []).find((row) => coinKey(row).toLowerCase() === String(key).toLowerCase())
-      : null;
-    if (searchMatch) {
-      coin = chain === "robinhood"
-        ? normalizeRh({ ...coin, ...searchMatch, address: searchMatch.address || key })
-        : normalizeSol({ ...coin, ...searchMatch, tokenMint: key });
-      state.selected = coin;
-      addRecent(coin);
-      if (quick) renderQuickRoute(); else if (walletSwap) renderWalletSwap(true); else if (walletMode) renderWalletAsset(true); else renderCoinShell();
-    }
-    const [detailResult, dexMarket] = await Promise.all([detailPromise, dexMarketPromise]);
-    if (detailResult.ok && detailResult.data?.ok) {
+    if (quick) renderQuickRoute(); else if (!walletMode) renderCoinShell();
+    if (!walletMode) history.replaceState(null, "", quick ? `/quick?ca=${encodeURIComponent(targetKey)}` : `#coin/${encodeURIComponent(targetKey)}`);
+
+    const paintSelected = () => {
+      if (!isCurrent()) return;
+      addRecent(state.selected);
+      if (quick) renderQuickRoute();
+      else if (walletSwap) renderWalletSwap();
+      else if (walletMode) refreshWalletAssetMarketUi();
+      else renderCoinShell();
+    };
+    const applySelected = (incoming = {}, marketSnapshot = state.selected || {}, detailRaw = null) => {
+      if (!isCurrent()) return false;
+      const current = state.selected || { address: targetKey, tokenMint: targetKey, chain };
+      const imageUrl = incoming.imageUrl || incoming.avatarUrl || incoming.iconUrl || incoming.imageUri || incoming.logoUrl || current.imageUrl || "";
+      const base = chain === "robinhood"
+        ? { ...current, ...incoming, address: incoming.address || current.address || targetKey, tokenMint: incoming.address || incoming.tokenMint || current.tokenMint || targetKey, imageUrl, priceChange1h: incoming.ch1 ?? incoming.priceChange1h ?? current.priceChange1h, createdAt: incoming.createdAt || current.createdAt }
+        : { ...current, ...incoming, tokenMint: incoming.tokenMint || current.tokenMint || targetKey, imageUrl, h1: incoming.changeH1 ?? incoming.h1 ?? current.h1 };
+      // Search/detail rows are useful server fallbacks, but spreading them over the
+      // selected coin must not accidentally inherit the browser-Dex priority. Give
+      // those rows their real source rank before the current live snapshot wins.
+      const preservingCurrentSnapshot = marketSnapshot === current;
+      const marketBase = preservingCurrentSnapshot ? {
+        ...base,
+        marketSource: incoming.marketSource || "server-detail",
+        marketPriority: Number(incoming.marketPriority) || 20,
+        marketUpdatedAt: marketSnapshotTimestamp(incoming.marketUpdatedAt, incoming.updatedAtMs, incoming.at)
+      } : base;
+      const merged = mergeLiveMarketSnapshot(marketBase, marketSnapshot || {});
+      state.selected = chain === "robinhood" ? normalizeRh(merged) : normalizeSol(merged);
+      if (detailRaw) state.selectedDetail = { ...(state.selectedDetail || {}), ...detailRaw };
+      paintSelected();
+      return true;
+    };
+
+    void loadPositions().then(() => {
+      if (!isCurrent()) return;
+      if (state.view === "coin") renderPositionCard();
+      else if (state.view === "wallet-asset") refreshWalletAssetMarketUi();
+    });
+
+    const searchTask = request(`/api/web/token-search?q=${encodeURIComponent(targetKey)}`).then((searchResult) => {
+      if (!isCurrent() || !searchResult.ok) return;
+      const searchMatch = (searchResult.data?.matches || []).find((row) => coinKey(row).toLowerCase() === targetLower);
+      if (searchMatch) applySelected(searchMatch, state.selected || {});
+    });
+    const path = chain === "robinhood" ? `/api/web/rh/token?address=${encodeURIComponent(targetKey)}` : `/api/web/token-read?mint=${encodeURIComponent(targetKey)}`;
+    const detailTask = request(path).then((detailResult) => {
+      if (!isCurrent() || !detailResult.ok || !detailResult.data?.ok) return;
       const raw = detailResult.data.coin || detailResult.data;
-      coin = chain === "robinhood" ? normalizeRh({ ...coin, ...raw, address: raw.address || key, marketCapUsd: dexMarket?.mc || raw.mc || raw.marketCapUsd, liquidityUsd: dexMarket?.liq || raw.liq || raw.liquidityUsd, volume24hUsd: dexMarket?.v24 || raw.vol24 || raw.volume24hUsd, imageUrl: coin.imageUrl || dexMarket?.img || raw.imageUrl || raw.iconUrl, priceChange1h: raw.ch1, createdAt: raw.createdAt }) : normalizeSol({ ...coin, ...raw, tokenMint: key, marketCap: raw.marketCapUsd, volumeH24: raw.volumeH24, h1: raw.changeH1 });
-      state.selected = coin;
-      state.selectedDetail = raw;
-      addRecent(coin);
-      if (quick) renderQuickRoute(); else if (walletSwap) renderWalletSwap(); else if (walletMode) renderWalletAsset(); else renderCoinShell();
-    } else if (quick) renderQuickRoute(); else if (walletSwap) renderWalletSwap(); else if (walletMode) renderWalletAsset(); else renderDetailPanel();
+      // A late detail response enriches metadata and fills missing market fields,
+      // but cannot replace a fresher Dex/chart snapshot already on this screen.
+      applySelected(raw, state.selected || {}, raw);
+    });
+    const dexTask = (chain === "robinhood" || walletMode ? funDexBatch([targetKey], chain) : Promise.resolve({})).then((by) => {
+      if (!isCurrent()) return;
+      const dexMarket = by[targetKey] || Object.entries(by).find(([address]) => address.toLowerCase() === targetLower)?.[1] || null;
+      if (!dexMarket) return;
+      applySelected({ imageUrl: dexMarket.img || "", symbol: dexMarket.symbol || "", name: dexMarket.name || "" }, dexMarket);
+    });
+    await Promise.allSettled([searchTask, detailTask, dexTask]);
+    if (!isCurrent()) return;
+    if (walletMode) refreshWalletAssetMarketUi();
+    else if (!state.selectedDetail && !quick) renderDetailPanel();
   }
 
   function quickSafetyLabel(coin = {}) {
@@ -1411,6 +1635,7 @@
     }
     if (initialRefresh) await initialRefresh;
     renderWalletHero();
+    if (state.token && activeWallet()) queuePumpRewardsLoad();
     if (!state.token && state.profileTab === "social") { renderSocialProfile(); return; }
     if (!state.token && state.sessionRestoreStatus === "unavailable" && state.wallets.length) {
       if (state.profileTab === "positions") renderWalletPositions();
@@ -1499,7 +1724,7 @@
   }
   function walletChartSrc(coin = state.selected || {}) {
     const key = coinKey(coin);
-    return key ? `/chart-lab?ca=${encodeURIComponent(key)}&tf=15m&embed=1&cv=wallet&sym=${encodeURIComponent(coin.symbol || "")}` : "";
+    return key ? `/chart-lab?ca=${encodeURIComponent(key)}&tf=15m&embed=1&cv=wallet76&sym=${encodeURIComponent(coin.symbol || "")}` : "";
   }
   function renderWalletSwap(loading = false) {
     if (!IS_WALLET_ROUTE) return;
@@ -1524,25 +1749,72 @@
     if (coin.chain === "robinhood") return (state.rhWalletPosition?.tokens || []).find((token) => String(token.address || "").toLowerCase() === key) || null;
     return walletPositionAssets(wallet).find((position) => String(position.tokenMint || "").toLowerCase() === key) || currentPosition();
   }
+  function walletAssetMetrics(coin = state.selected || {}) {
+    const holding = selectedWalletHolding();
+    const quantity = coin.chain === "robinhood" ? positionNumber(holding?.uiAmount) : positionQuantity(holding);
+    const priceUsd = positiveMarketNumber(coin.priceUsd, coin.price, state.selectedDetail?.priceUsd, state.selectedDetail?.price);
+    const reportedValueUsd = coin.chain === "robinhood"
+      ? positionNumber(holding?.valueUsd)
+      : (positionEstimatedSol(holding) != null && state.solUsd > 0 ? positionEstimatedSol(holding) * state.solUsd : null);
+    const liveHoldingValueUsd = quantity != null && quantity > 0 && priceUsd != null ? quantity * priceUsd : null;
+    // The chart price is the freshest executable-market estimate on this screen.
+    // Prefer it over a cached position value once both quantity and price are known.
+    const valueUsd = liveHoldingValueUsd ?? reportedValueUsd;
+    const pnl = coin.chain === "robinhood" ? positionNumber(holding?.pnlPercent) : (positionOpenPnl(holding) == null ? null : positionPercent(holding?.openPnlPercent));
+    return {
+      holding,
+      quantity,
+      priceUsd,
+      valueUsd,
+      pnl,
+      marketCap: positiveMarketNumber(coin.marketCap, coin.marketCapUsd, coin.mc, state.selectedDetail?.marketCapUsd, state.selectedDetail?.mc),
+      volume: positiveMarketNumber(coin.volume, coin.volumeH24, coin.volume24hUsd, state.selectedDetail?.volumeH24, state.selectedDetail?.vol24),
+      liquidity: positiveMarketNumber(coin.liquidity, coin.liquidityUsd, coin.liq, state.selectedDetail?.liquidityUsd, state.selectedDetail?.liq)
+    };
+  }
+  function refreshWalletAssetMarketUi() {
+    if (!IS_WALLET_ROUTE || state.view !== "wallet-asset") return;
+    const panel = $("[data-wallet-asset-panel]"), coin = state.selected || {}, key = coinKey(coin);
+    if (!panel || !key) return;
+    const metrics = walletAssetMetrics(coin), pnlClass = metrics.pnl == null ? "" : metrics.pnl >= 0 ? "up" : "down";
+    const image = $("[data-wallet-asset-image]", panel), symbol = $("[data-wallet-asset-symbol]", panel), name = $("[data-wallet-asset-name]", panel);
+    if (image) image.src = coinImage(coin);
+    if (symbol) symbol.textContent = coin.symbol || short(key);
+    if (name) name.textContent = coin.name || (coin.chain === "robinhood" ? "Robinhood Chain" : "Solana");
+    const value = $("[data-wallet-asset-value]", panel), quantity = $("[data-wallet-asset-quantity]", panel), pnl = $("[data-wallet-asset-pnl]", panel);
+    if (value) value.textContent = metrics.valueUsd == null ? "$0.00" : formatWalletUsd(metrics.valueUsd);
+    if (quantity) quantity.textContent = metrics.quantity == null ? "No holding yet" : `${formatTokenQuantity(metrics.quantity)} ${coin.symbol || "tokens"}`;
+    if (pnl) { pnl.className = pnlClass; pnl.textContent = metrics.pnl == null ? "Live market details" : `${formatPct(metrics.pnl)} open PnL`; }
+    const market = { price: metrics.priceUsd, marketCap: metrics.marketCap, volume: metrics.volume, liquidity: metrics.liquidity };
+    for (const [field, amount] of Object.entries(market)) {
+      const node = $(`[data-wallet-market="${field}"]`, panel);
+      if (node) node.textContent = formatUsd(amount);
+    }
+    const canMove = Number(metrics.quantity) > 0;
+    const sell = $('[data-open-trade="sell"]', panel), send = $("[data-fun-send-token]", panel);
+    if (sell) sell.disabled = !canMove;
+    if (send) { send.disabled = !canMove; send.dataset.funSendBalance = String(metrics.quantity || 0); }
+    const autoState = $("[data-wallet-auto-state]", panel), autoTp = $("[data-wallet-auto-tp]", panel), autoSl = $("[data-wallet-auto-sl]", panel);
+    if (autoState) autoState.textContent = metrics.holding ? "Server protection" : "Set after buying";
+    if (autoTp) autoTp.textContent = metrics.holding?.takeProfitPct ? `+${metrics.holding.takeProfitPct}%` : "Off";
+    if (autoSl) autoSl.textContent = metrics.holding?.stopLossPct ? `-${metrics.holding.stopLossPct}%` : "Off";
+  }
   function renderWalletAsset(loading = false) {
     if (!IS_WALLET_ROUTE) return;
     const panel = $("[data-wallet-asset-panel]"), coin = state.selected || {}, key = coinKey(coin), wallet = activeWallet();
     if (!panel || !key) return;
-    const holding = selectedWalletHolding();
-    const quantity = coin.chain === "robinhood" ? positionNumber(holding?.uiAmount) : positionQuantity(holding);
-    const valueUsd = coin.chain === "robinhood" ? positionNumber(holding?.valueUsd) : (positionEstimatedSol(holding) != null && state.solUsd > 0 ? positionEstimatedSol(holding) * state.solUsd : null);
-    const pnl = coin.chain === "robinhood" ? positionNumber(holding?.pnlPercent) : (positionOpenPnl(holding) == null ? null : positionPercent(holding?.openPnlPercent));
+    const { holding, quantity, priceUsd, valueUsd, pnl, marketCap, volume, liquidity } = walletAssetMetrics(coin);
     const pnlClass = pnl == null ? "" : pnl >= 0 ? "up" : "down", chart = walletChartSrc(coin);
     const sendAttrs = coin.chain === "robinhood" ? `data-fun-send-token="${escapeHtml(key)}" data-fun-send-chain="robinhood"` : `data-fun-send-token="${escapeHtml(key)}"`;
     const shield = state.selectedDetail?.shield || state.selectedDetail?.safety || coin.safety || {};
     const riskVerdict = String(shield.verdict || shield.status || "checking").toLowerCase();
     const riskBlocked = /block|danger|honeypot|scam/.test(riskVerdict);
-    panel.innerHTML = `<header class="wallet-screen-head asset"><button type="button" data-wallet-route-back aria-label="Back">←</button><div><img src="${escapeHtml(coinImage(coin))}" alt=""><span><h1>${escapeHtml(coin.symbol || short(key))}</h1><small>${escapeHtml(coin.name || (coin.chain === "robinhood" ? "Robinhood Chain" : "Solana"))}</small></span></div><button type="button" data-copy-coin aria-label="Copy contract">⧉</button></header>
-      <section class="wallet-asset-balance"><span>${loading ? "Loading…" : (valueUsd == null ? "$0.00" : formatWalletUsd(valueUsd))}</span><h2>${quantity == null ? "No holding yet" : `${escapeHtml(formatTokenQuantity(quantity))} ${escapeHtml(coin.symbol || "tokens")}`}</h2><p class="${pnlClass}">${pnl == null ? "Live market details" : `${escapeHtml(formatPct(pnl))} open PnL`}</p></section>
+    panel.innerHTML = `<header class="wallet-screen-head asset"><button type="button" data-wallet-route-back aria-label="Back">←</button><div><img data-wallet-asset-image src="${escapeHtml(coinImage(coin))}" alt=""><span><h1 data-wallet-asset-symbol>${escapeHtml(coin.symbol || short(key))}</h1><small data-wallet-asset-name>${escapeHtml(coin.name || (coin.chain === "robinhood" ? "Robinhood Chain" : "Solana"))}</small></span></div><button type="button" data-copy-coin aria-label="Copy contract">⧉</button></header>
+      <section class="wallet-asset-balance"><span data-wallet-asset-value>${loading ? "Loading…" : (valueUsd == null ? "$0.00" : formatWalletUsd(valueUsd))}</span><h2 data-wallet-asset-quantity>${quantity == null ? "No holding yet" : `${escapeHtml(formatTokenQuantity(quantity))} ${escapeHtml(coin.symbol || "tokens")}`}</h2><p data-wallet-asset-pnl class="${pnlClass}">${pnl == null ? "Live market details" : `${escapeHtml(formatPct(pnl))} open PnL`}</p></section>
       <div class="wallet-asset-actions"><button type="button" data-open-trade="buy"><i>＋</i><b>Buy</b></button><button type="button" data-open-trade="sell" ${quantity > 0 ? "" : "disabled"}><i>−</i><b>Sell</b></button><button type="button" data-wallet-swap><i>⇄</i><b>Swap</b></button><button type="button" ${sendAttrs} data-fun-send-wallet-index="${wallet?.index || ""}" data-fun-send-wallet="${escapeHtml(wallet?.publicKey || "")}" data-fun-send-wallet-label="${escapeHtml(wallet?.label || "Wallet")}" data-fun-send-symbol="${escapeHtml(coin.symbol || short(key))}" data-fun-send-balance="${escapeHtml(String(quantity || 0))}" ${quantity > 0 ? "" : "disabled"}><i>↗</i><b>Send</b></button></div>
-      <section class="wallet-market-cards"><div><span>Price</span><b>${escapeHtml(formatUsd(coin.priceUsd || coin.price))}</b></div><div><span>Market cap</span><b>${escapeHtml(formatUsd(coin.marketCap || coin.mc))}</b></div><div><span>24h volume</span><b>${escapeHtml(formatUsd(coin.volume || coin.volumeH24 || coin.volume24hUsd))}</b></div><div><span>Liquidity</span><b>${escapeHtml(formatUsd(coin.liquidity || coin.liquidityUsd))}</b></div></section>
+      <section class="wallet-market-cards"><div><span>Price</span><b data-wallet-market="price">${escapeHtml(formatUsd(priceUsd))}</b></div><div><span>Market cap</span><b data-wallet-market="marketCap">${escapeHtml(formatUsd(marketCap))}</b></div><div><span>24h volume</span><b data-wallet-market="volume">${escapeHtml(formatUsd(volume))}</b></div><div><span>Liquidity</span><b data-wallet-market="liquidity">${escapeHtml(formatUsd(liquidity))}</b></div></section>
       <section class="wallet-inline-chart"><div class="wallet-chart-tabs"><b>Live chart</b><span>15m</span></div>${chart ? `<iframe src="${escapeHtml(chart)}" title="${escapeHtml(coin.symbol || "Coin")} live chart" loading="lazy"></iframe>` : ""}<button type="button" data-wallet-expand-chart>Expand chart inside wallet <i>›</i></button></section>
-      <section class="wallet-auto-exits"><div><span>Auto exits</span><h3>${holding ? "Server protection" : "Set after buying"}</h3></div><div><small>Take profit</small><b>${holding?.takeProfitPct ? `+${escapeHtml(holding.takeProfitPct)}%` : "Off"}</b></div><div><small>Stop loss</small><b class="down">${holding?.stopLossPct ? `-${escapeHtml(holding.stopLossPct)}%` : "Off"}</b></div><button type="button" data-open-trade="buy">Edit</button></section>
+      <section class="wallet-auto-exits"><div><span>Auto exits</span><h3 data-wallet-auto-state>${holding ? "Server protection" : "Set after buying"}</h3></div><div><small>Take profit</small><b data-wallet-auto-tp>${holding?.takeProfitPct ? `+${escapeHtml(holding.takeProfitPct)}%` : "Off"}</b></div><div><small>Stop loss</small><b data-wallet-auto-sl class="down">${holding?.stopLossPct ? `-${escapeHtml(holding.stopLossPct)}%` : "Off"}</b></div><button type="button" data-open-trade="buy">Edit</button></section>
       <section class="wallet-token-safety ${riskBlocked ? "danger" : ""}"><div><span>${riskBlocked ? "⚠" : "◇"}</span><p><b>${riskBlocked ? "High-risk token warning" : "SlimeShield token controls"}</b><small>${escapeHtml(shield.summary || (riskBlocked ? "Trading is blocked when preflight confirms a honeypot or unsafe authority." : "Every buy is checked again before confirmation."))}</small></p></div><button type="button" data-token-controls>Hide or report</button></section>
       <section class="wallet-asset-footer"><h3>Recent activity</h3><button type="button" data-wallet-route-tab="activity"><span>≡</span><b>View buys, sells, sends and receives</b><i>›</i></button></section>`;
     syncWalletRouteNav();
@@ -1555,7 +1827,7 @@
     if (brand) { brand.dataset.nav = "wallet"; const image = $("img", brand), name = $("span", brand), mode = $("b", brand); if (image) { image.src = WALLET_BRAND_ASSET; image.alt = "SlimeWallet"; } if (name) name.textContent = "SLIME"; if (mode) mode.textContent = "WALLET"; }
     const intro = $("[data-wallet-route-intro]"); if (intro) intro.hidden = false;
     const terminal = $(".wallet-terminal-link"); if (terminal) terminal.hidden = false;
-    const install = $(".wallet-install-card"); if (install) install.hidden = runningStandalone();
+    updateFunInstallVisibility();
     const buy = $(".wallet-actions [data-deposit]"); if (buy) buy.textContent = "Buy";
     const send = $(".wallet-actions [data-send-sol]"); if (send) send.textContent = "Send";
     $$('[data-wallet-route-src]').forEach((image) => { if (!image.getAttribute("src")) image.src = image.dataset.walletRouteSrc || ""; });
@@ -1732,6 +2004,7 @@
     if (mode === "create") await downloadFunAccountBackup();
     await Promise.all([loadMe(), loadWalletBalancePreview(), loadPresets()]);
     renderWalletHero(); renderSocialProfile(); paintWalletPill(); toast(mode === "create" ? "Profile created" : "Welcome back");
+    if (state.view === "wallet") queuePumpRewardsLoad();
     void Promise.all([loadPortfolioSnapshot({ force: true }), loadPositions({ force: true })]).then(() => {
       renderWalletHero();
       if (state.view === "wallet" && state.profileTab === "positions") renderWalletPositions();
@@ -1999,6 +2272,10 @@
       const backup = !rh && coin.devWalletIndex ? `<button class="recovery-button" type="button" data-pump-wallet-backup data-wallet-index="${Number(coin.devWalletIndex)}" data-wallet-key="${escapeHtml(coin.devWallet || "")}">Pump wallet backup</button>` : "";
       return `<div class="created-coin-wrap"><button class="coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="${rh ? "rh" : "sol"}"><span class="coin-avatar"><img src="${escapeHtml(coin.imageUri || mascot(key))}" alt=""></span><span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span></span><span class="coin-meta"><i>${escapeHtml(coin.rail || "Solana")}</i><i>${escapeHtml(feeStatus)}</i>${holderStatus ? `<i>${escapeHtml(holderStatus)}</i>` : ""}</span></span><span class="coin-value"><b>Open</b><span>CREATOR</span></span></button>${claim}${backup}</div>`;
     }).join("");
+    panel.querySelectorAll(".created-coin-wrap").forEach((wrap, index) => {
+      if (!state.launches[index]?.pumpCashback) return;
+      wrap.querySelector(".coin-title")?.insertAdjacentHTML("beforeend", '<i class="pump-cashback-badge">Cash back</i>');
+    });
   }
 
   async function claimFunCreatorFees(button) {
@@ -2124,17 +2401,24 @@
   function searchRank(a, b) { return (Number(b.marketCap || b.marketCapUsd || 0) || Number(b.liquidityUsd || 0)) - (Number(a.marketCap || a.marketCapUsd || 0) || Number(a.liquidityUsd || 0)); }
   // Fresh pull of full stats (MC / volume / liquidity / pfp) straight from DexScreener for search
   // rows, so no field is ever blank — the same data the feed shows.
-  async function funDexBatch(addrs) {
+  async function funDexBatch(addrs, expectedChain = "") {
     const list = Array.from(new Set((addrs || []).filter(Boolean))).slice(0, 30);
     if (!list.length) return {};
+    const expectedByAddress = new Map(list.map((address) => [String(address).toLowerCase(), expectedChain || (isRh(address) ? "robinhood" : "solana")]));
     try {
       const j = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${list.join(",")}`).then((x) => x.ok ? x.json() : null);
       const by = {};
       for (const p of ((j && j.pairs) || [])) {
         const m = p.baseToken && p.baseToken.address; if (!m) continue;
+        const expected = expectedByAddress.get(String(m).toLowerCase());
+        // DexScreener's pair price/MC describe the base token. Never attach a
+        // quote-token price or a same-looking address from another network.
+        if (!expected || String(p.chainId || "").toLowerCase() !== expected) continue;
         const liq = Number((p.liquidity && p.liquidity.usd) || 0);
-        if (by[m] && by[m]._liq >= liq) continue;
-        by[m] = { _liq: liq, mc: Number(p.marketCap || p.fdv || 0), liq, v24: Number((p.volume && p.volume.h24) || 0), v1: Number((p.volume && p.volume.h1) || 0), img: (p.info && p.info.imageUrl) || "", m5: Number((p.priceChange && (p.priceChange.m5 ?? p.priceChange.h1))) };
+        const previousKey = Object.keys(by).find((address) => address.toLowerCase() === String(m).toLowerCase());
+        if (previousKey && by[previousKey]._liq >= liq) continue;
+        if (previousKey && previousKey !== m) delete by[previousKey];
+        by[m] = { _liq: liq, priceUsd: positiveMarketNumber(p.priceUsd), mc: positiveMarketNumber(p.marketCap, p.fdv), liq: positiveMarketNumber(liq), v24: positiveMarketNumber(p.volume && p.volume.h24), v1: positiveMarketNumber(p.volume && p.volume.h1), img: (p.info && p.info.imageUrl) || "", m5: Number((p.priceChange && (p.priceChange.m5 ?? p.priceChange.h1))), symbol: p.baseToken?.symbol || "", name: p.baseToken?.name || "", marketSource: "browser-dex", marketPriority: 40, marketUpdatedAt: Date.now() };
       }
       return by;
     } catch { return {}; }
@@ -2567,6 +2851,21 @@
   function runningStandalone() { return window.matchMedia?.("(display-mode: standalone)")?.matches || navigator.standalone === true; }
   const FUN_INSTALL_HOST = "app.slimewire.org";
   function funInstallOrigin() { return `https://${FUN_INSTALL_HOST}/${IS_WALLET_ROUTE ? "wallet" : "fun"}/?install=1`; }
+  function updateFunInstallVisibility() {
+    const install = $(".wallet-install-card");
+    if (install) install.hidden = !IS_WALLET_ROUTE || runningStandalone();
+  }
+  function openDedicatedFunInstallPage() {
+    if (location.hostname === FUN_INSTALL_HOST) {
+      toast(/iphone|ipad|ipod/i.test(navigator.userAgent || "") ? "Use Safari Share → Add to Home Screen" : "Use your browser menu → Install app");
+      return;
+    }
+    if (/android/i.test(navigator.userAgent || "")) {
+      location.href = "intent://" + FUN_INSTALL_HOST + "/" + (IS_WALLET_ROUTE ? "wallet" : "fun") + "/?install=1#Intent;scheme=https;package=com.android.chrome;end";
+      return;
+    }
+    window.open(funInstallOrigin(), "_blank", "noopener");
+  }
   function showFunInstallGuide() {
     const dedicated = location.hostname === FUN_INSTALL_HOST;
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent || "");
@@ -2578,14 +2877,14 @@
       : ["Open the mobile install page below.", `Your browser will open ${appName}.`, "Install it for a focused mobile wallet experience."];
     openSheet(`<div class="sheet-title"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><div><h2>Install ${appName}</h2><p>Keep this focused mobile layout as its own app.</p></div></div><div class="read-card"><h3>Mobile app install</h3>${steps.map((step, index) => `<p>${index + 1}. ${escapeHtml(step)}</p>`).join("")}</div><button class="submit-trade" type="button" data-install-fun>${dedicated ? `Install ${appName}` : "Open mobile install page"}</button><p class="fineprint">Browsers always require your confirmation; a website cannot silently force an install.</p>`);
   }
-  async function openFunInstall() {
-    if (location.hostname !== FUN_INSTALL_HOST) {
-      if (/android/i.test(navigator.userAgent || "")) location.href = `intent://${FUN_INSTALL_HOST}/${IS_WALLET_ROUTE ? "wallet" : "fun"}/?install=1#Intent;scheme=https;package=com.android.chrome;end`;
-      else window.open(funInstallOrigin(), "_blank", "noopener");
+  async function openFunInstall(trigger = null) {
+    if (runningStandalone()) {
+      updateFunInstallVisibility();
+      toast((IS_WALLET_ROUTE ? "SlimeWallet" : "SlimeWire Go") + " is already installed");
       return;
     }
-    if (IS_WALLET_ROUTE && location.pathname === "/wallet") {
-      location.assign("/wallet/?install=1");
+    if (trigger?.closest("[data-sheet-content]") && !state.deferredInstall) {
+      openDedicatedFunInstallPage();
       return;
     }
     if (state.deferredInstall) {
@@ -3675,6 +3974,30 @@
     openSheet(`<div class="sheet-title"><img src="${slimePfp(wallet.publicKey)}" alt=""><div><h2>Receive funds</h2><p>${escapeHtml(wallet.label || "Slime wallet")}</p></div></div><div class="read-card"><h3>Solana address</h3><button class="wallet-full-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><code>${escapeHtml(wallet.publicKey)}</code><span>Use for SOL and Solana coins</span></button></div><div class="read-card"><h3>Robinhood Chain address</h3><button class="wallet-full-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress || "")}"><code>${escapeHtml(wallet.rhAddress || "Open Manage RH ETH to load")}</code><span>Use for Robinhood ETH and coins</span></button></div><button class="submit-trade" type="button" data-rh-wallet-tools="${wallet.index}">Manage RH ETH</button><p class="fineprint">The two addresses belong to the same saved SlimeWire wallet. Always use the address matching the network.</p>`);
   }
 
+  window.addEventListener("message", (event) => {
+    if (event.origin !== location.origin || event.data?.type !== "slimewire:chart-market") return;
+    const key = String(event.data.token || "").trim();
+    if (!key || state.view !== "wallet-asset" || coinKey(state.selected).toLowerCase() !== key.toLowerCase()) return;
+    const chartFrame = $(".wallet-inline-chart iframe");
+    if (!chartFrame || event.source !== chartFrame.contentWindow) return;
+    const before = [
+      marketNumber(state.selected?.priceUsd, state.selected?.price),
+      marketNumber(state.selected?.marketCap, state.selected?.marketCapUsd, state.selected?.mc),
+      marketNumber(state.selected?.liquidity, state.selected?.liquidityUsd, state.selected?.liq),
+      marketNumber(state.selected?.volume, state.selected?.volumeH24, state.selected?.volume24hUsd)
+    ];
+    const chain = state.selected?.chain === "robinhood" || isRh(key) ? "robinhood" : "solana";
+    state.selected = chain === "robinhood"
+      ? normalizeRh(mergeLiveMarketSnapshot(state.selected, event.data.market || {}))
+      : normalizeSol(mergeLiveMarketSnapshot(state.selected, event.data.market || {}));
+    const after = [state.selected.priceUsd, state.selected.marketCap, state.selected.liquidity, state.selected.volume];
+    if (before.every((value, index) => value === after[index])) return;
+    addRecent(state.selected);
+    // Update the visible values in place. Rebuilding this panel would destroy
+    // and reload the live chart iframe on every market tick.
+    refreshWalletAssetMarketUi();
+  });
+
   document.addEventListener("click", async (event) => {
     const indicatorToggle = event.target.closest("[data-indicators-toggle]");
     if (indicatorToggle && !indicatorToggle.dataset.assetsReady) {
@@ -3733,6 +4056,8 @@
     const sendTokenPercent = event.target.closest("[data-set-send-token-percent]"); if (sendTokenPercent) { const input = $("[data-send-token-amount]"); const pending = state.pendingTokenSend; if (input && pending) { const percent = Number(sendTokenPercent.dataset.setSendTokenPercent || 0); input.value = tokenSendDisplayAmount(pending.balance, percent); input.dataset.sendTokenPercent = String(percent); pending.percent = percent; $$('[data-set-send-token-percent]').forEach((item) => item.classList.toggle("active", item === sendTokenPercent)); } return; }
     if (event.target.closest("[data-review-token-send]")) { reviewFunTokenSend(); return; }
     const confirmTokenSend = event.target.closest("[data-confirm-token-send]"); if (confirmTokenSend) { await confirmFunTokenSend(confirmTokenSend); return; }
+    if (event.target.closest("[data-refresh-pump-rewards]")) { await loadPumpRewardsForActiveWallet({ force: true }); return; }
+    const claimReward = event.target.closest("[data-claim-pump-reward]"); if (claimReward) { await claimPumpReward(claimReward); return; }
     const claimCreatorFees = event.target.closest("[data-claim-creator-fees]"); if (claimCreatorFees) { await claimFunCreatorFees(claimCreatorFees); return; }
     const coinButton = event.target.closest("[data-open-coin]"); if (coinButton) { const selectingSwap = IS_WALLET_ROUTE && (state.walletSwapSelecting || state.view === "wallet-swap"); state.walletSwapSelecting = false; closeSearch(); closeSheet(); await openCoin(coinButton.dataset.openCoin, coinButton.dataset.chainKind, { walletSwap: selectingSwap }); return; }
     const chainButton = event.target.closest("[data-chain]"); if (chainButton) { state.chain = chainButton.dataset.chain; $$("[data-chain]").forEach((button) => button.classList.toggle("active", button.dataset.chain === state.chain)); loadFeed(true); return; }
@@ -3752,7 +4077,7 @@
     const profile = event.target.closest("[data-profile]"); if (profile) { state.profileTab = profile.dataset.profile; $$("[data-profile]").forEach((button) => button.classList.toggle("active", button === profile)); loadWalletView(); return; }
     if (event.target.closest("[data-open-tools]")) { await loadCreatedCoinsSilently(); openTools(false); return; }
     if (event.target.closest("[data-open-global-tools]")) { openTools(true); return; }
-    if (event.target.closest("[data-install-fun]")) { await openFunInstall(); return; }
+    const installFun = event.target.closest("[data-install-fun]"); if (installFun) { await openFunInstall(installFun); return; }
     if (event.target.closest("[data-manage-presets]")) { await openPresetManager(); return; }
     if (event.target.closest("[data-save-trade-preset]")) { await saveTradePreset(); return; }
     const usePreset = event.target.closest("[data-use-trade-preset]"); if (usePreset) { state.activePresetId = usePreset.dataset.useTradePreset; localStorage.setItem(ACTIVE_PRESET_KEY, state.activePresetId); renderQuickTrade(); toast("Preset active"); await openPresetManager(); return; }
@@ -3834,7 +4159,7 @@
     const evmBackup = event.target.closest("[data-backup-evm-wallet]"); if (evmBackup) { if (confirm("Download this wallet's Robinhood/EVM private key? Anyone with it can move its ETH and Robinhood coins.")) await exportWallets(evmBackup, { evmOnly: true, walletPublicKey: evmBackup.dataset.walletKey || "", walletIndex: evmBackup.dataset.walletIndex || "" }); return; }
     if (event.target.closest("[data-restore-wallet]")) { await restoreWallet(); return; }
     const remove = event.target.closest("[data-remove-wallet]"); if (remove) { await removeWallet(remove.dataset.removeWallet, remove.dataset.walletKey); return; }
-    const select = event.target.closest("[data-select-wallet]"); if (select) { state.activeWallet = Number(select.dataset.selectWallet);localStorage.setItem(ACTIVE_WALLET_KEY,String(state.activeWallet)); paintWalletPill(); renderWalletHero(); renderQuickTrade(); if (state.view === "quick") renderQuickRoute(); await openWalletManager(); return; }
+    const select = event.target.closest("[data-select-wallet]"); if (select) { state.activeWallet = Number(select.dataset.selectWallet);localStorage.setItem(ACTIVE_WALLET_KEY,String(state.activeWallet)); state.pumpRewardsRequestVersion += 1; state.pumpRewards = null; state.pumpRewardsStatus = "idle"; paintWalletPill(); renderWalletHero(); renderPumpRewardsCard(); renderQuickTrade(); if (state.view === "quick") renderQuickRoute(); else if (state.view === "wallet") void loadPumpRewardsForActiveWallet(); await openWalletManager(); return; }
     const rename = event.target.closest("[data-rename-wallet]"); if (rename) { await renameWallet(rename.dataset.renameWallet); return; }
     const startVolume = event.target.closest("[data-start-volume]"); if (startVolume) { await startFunVolume(startVolume); return; }
     if (event.target.closest("[data-stop-volume]")) { await stopFunVolume(); return; }
@@ -3944,10 +4269,12 @@
   window.addEventListener("beforeinstallprompt", (event) => {
     event.preventDefault();
     state.deferredInstall = event;
+    updateFunInstallVisibility();
     if (new URLSearchParams(location.search).get("install") === "1") showFunInstallGuide();
   });
   window.addEventListener("appinstalled", () => {
     state.deferredInstall = null;
+    updateFunInstallVisibility();
     toast(`${IS_WALLET_ROUTE ? "SlimeWallet" : "SlimeWire Go"} installed`);
     closeSheet();
   });

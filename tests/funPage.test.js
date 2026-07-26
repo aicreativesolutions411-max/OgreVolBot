@@ -15,19 +15,47 @@ const rhChain = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.m
 const terminalApp = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
 const desktopHtml = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
 const desktopAliasHtml = fs.readFileSync(new URL("../web/public/gg.html", import.meta.url), "utf8");
+const chartLab = fs.readFileSync(new URL("../web/public/chart-lab.html", import.meta.url), "utf8");
+const publicHeaders = fs.readFileSync(new URL("../web/public/_headers", import.meta.url), "utf8");
+
+function walletMarketHelpers() {
+  const start = js.indexOf("function marketNumber(...values)");
+  const end = js.indexOf("function freshnessAgeLabel", start);
+  assert.ok(start >= 0 && end > start, "wallet market helpers should remain extractable");
+  return Function(`"use strict";${js.slice(start, end)};return { mergeLiveMarketSnapshot };`)();
+}
+
+function walletDexBatchWith(fetchImpl) {
+  const start = js.indexOf("async function funDexBatch");
+  const end = js.indexOf("async function enrichSearchMatches", start);
+  assert.ok(start >= 0 && end > start, "wallet Dex loader should remain extractable");
+  const positive = (...values) => values.map(Number).find((value) => Number.isFinite(value) && value > 0) ?? null;
+  return Function("fetch", "isRh", "positiveMarketNumber", `"use strict";${js.slice(start, end)};return funDexBatch;`)(fetchImpl, (address) => /^0x/i.test(String(address || "")), positive);
+}
+
+function chartParentMarketBridgeWith(postMessage, token = "0x1111111111111111111111111111111111111111") {
+  const start = chartLab.indexOf("function marketStamp(s)");
+  const end = chartLab.indexOf("function applyStats", start);
+  assert.ok(start >= 0 && end > start, "chart market bridge should remain extractable");
+  const parent = { postMessage };
+  const window = { parent };
+  const location = { origin: "https://slimewire.test" };
+  return Function("window", "location", "CA", `"use strict";${chartLab.slice(start, end)};return { postParentMarket };`)(window, location, token);
+}
 
 test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL support", () => {
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "73", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "76", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
 test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH trading", () => {
-  assert.match(server, /requestUrl\.pathname === "\/wallet"[\s\S]{0,260}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
-  assert.match(redirects, /^\/wallet\s+\/fun\.html\s+200$/m);
+  assert.match(server, /requestUrl\.pathname === "\/wallet"[\s\S]{0,180}Location: "\/wallet\/"/);
+  assert.match(server, /requestUrl\.pathname === "\/wallet\/"[\s\S]{0,260}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
+  assert.match(redirects, /^\/wallet\s+\/wallet\/\s+302$/m);
   assert.match(redirects, /^\/wallet\/\*\s+\/fun\.html\s+200$/m);
   assert.match(redirects, /^\/wallet\.html\s+\/fun\.html\s+200$/m);
   assert.match(html, /data-view="wallet-swap"/);
@@ -44,9 +72,9 @@ test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH tr
   assert.equal(walletManifest.start_url, "/wallet/?src=slimewallet-pwa");
   assert.equal(walletManifest.scope, "/wallet/");
   assert.match(html, /wallet-manifest\.webmanifest\?v=2/);
-  assert.match(html, /data-install-fun hidden><span>Install SlimeWallet/);
+  assert.match(html, /wallet-install-head[^>]+data-install-fun hidden[^>]+><span>Install<\/span>/);
   assert.match(funWorker, /IS_WALLET_WORKER/);
-  assert.match(funWorker, /slimewallet-v12/);
+  assert.match(funWorker, /slimewallet-v15/);
   assert.match(JSON.stringify(walletManifest.icons), /slimewallet-icon-512\.png/);
   assert.match(js, /WALLET_BRAND_ASSET = "\/assets\/slimewire\/slimewallet-icon-192\.png"/);
   assert.match(css, /slimewallet-vault-bg\.webp/);
@@ -70,6 +98,25 @@ test("SlimeWallet paints balances before the full positions and Robinhood portfo
   assert.match(js, /void loadPortfolioSnapshot\(\)\.then/);
   assert.match(js, /data-export-wallets>Back up all wallets/);
   assert.match(css, /\.wallet-backup-hero/);
+});
+
+test("SlimeWallet and Go load exact wallet-wide Pump rewards after spendable balances", () => {
+  assert.match(html, /data-pump-rewards hidden aria-live="polite"/);
+  assert.match(js, /function formatPumpRewardSol/);
+  assert.match(js, /\/api\/web\/pump\/rewards\?walletIndex=/);
+  assert.match(js, /post\("\/api\/web\/pump\/rewards\/claim"/);
+  assert.match(js, /accountScopeMatches\(accountScope\)/);
+  assert.match(js, /Number\(activeWallet\(\)\?\.index\) !== walletIndex/);
+  assert.match(js, /if \(initialRefresh\) await initialRefresh;[\s\S]{0,140}queuePumpRewardsLoad/);
+  assert.match(js, /separate from spendable SOL until you claim/i);
+  assert.match(js, /PumpSwap rewards can remain WSOL when this wallet already has a WSOL account/);
+  assert.match(js, /SlimeWire never closes an existing WSOL account/);
+  assert.match(js, /result\.data\.payoutAsset/);
+  assert.match(js, /PumpSwap proceeds remain WSOL in this wallet's existing WSOL account/);
+  assert.match(js, /pump-cashback-badge/);
+  assert.match(js, /function updateFunInstallVisibility/);
+  assert.match(js, /install\.hidden = !IS_WALLET_ROUTE \|\| runningStandalone\(\)/);
+  assert.match(js, /if \(state\.deferredInstall\)[\s\S]{0,160}promptEvent\.prompt\(\)/);
 });
 
 test("SlimeWire Go also adopts the fast authenticated wallet list before full portfolio hydration", () => {
@@ -113,7 +160,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: IS_WALLET_ROUTE \? "\/wallet\/" : "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v69/);
+  assert.match(funWorker, /slimewire-fun-v72/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -169,9 +216,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=52/);
-  assert.match(funWorker, /slimewire-fun-v69/);
-  assert.match(funWorker, /fun\.css\?v=52/);
+  assert.match(html, /fun\.css\?v=54/);
+  assert.match(funWorker, /slimewire-fun-v72/);
+  assert.match(funWorker, /fun\.css\?v=54/);
   assert.match(css, /\.wallet-bottom-nav\[hidden\]\{display:none!important\}/);
   assert.match(js, /walletNav\.hidden = hideWalletNav/);
 });
@@ -182,8 +229,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=73/);
-  assert.match(funWorker, /fun\.js\?v=73/);
+  assert.match(html, /fun\.js\?v=76/);
+  assert.match(funWorker, /fun\.js\?v=76/);
 });
 
 test("Fun volume switches pasted contracts to their authoritative chain", () => {
@@ -249,7 +296,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /"slimewire-fun-v69"/);
+  assert.match(funWorker, /"slimewire-fun-v72"/);
   assert.doesNotMatch(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(js, /loadFunScript\("\/slimewire-funding\.js\?v=8"\)/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
@@ -691,7 +738,7 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(html, /assets\/slimewire\/png\/slimewire-mark\.png/);
   assert.doesNotMatch(js, /pfp\/characters/);
   assert.match(js, /hydrateSelectedFromFeed\(\)/);
-  assert.match(js, /request\(`\/api\/web\/token-search\?q=\$\{encodeURIComponent\(key\)\}`\)/);
+  assert.match(js, /request\(`\/api\/web\/token-search\?q=\$\{encodeURIComponent\(targetKey\)\}`\)/);
   assert.match(server, /token-pairs\/v1\/robinhood/);
   assert.match(server, /const meta = await getDexTokenMetadata\(mint/);
   assert.match(server, /enrichRhFeedArtwork/);
@@ -750,8 +797,10 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(server, /exactPrefix = `https:\/\/i2c\.seadn\.io\/robinhood\/\$\{key\}\//);
   assert.match(server, /while \(bytes < 320_000\)/);
   assert.match(server, /String\(row\?\.baseToken\?\.address \|\| ""\)\.toLowerCase\(\) === key/);
-  assert.match(js, /const detailPromise = request\(path\)/);
-  assert.ok(js.indexOf("const searchResult = await request") < js.indexOf("const [detailResult, dexMarket] = await Promise.all"));
+  assert.match(js, /const detailTask = request\(path\)\.then/);
+  assert.match(js, /const searchTask = request\(`\/api\/web\/token-search/);
+  assert.match(js, /const dexTask = \(chain === "robinhood" \|\| walletMode/);
+  assert.match(js, /await Promise\.allSettled\(\[searchTask, detailTask, dexTask\]\)/);
 });
 
 test("coin details omit the redundant risk strip while safety remains available in Tools", () => {
@@ -769,8 +818,8 @@ test("coin search paints cached matches immediately, preserves the newest query,
   assert.match(js, /Promise\.allSettled\(tasks\)/);
   assert.match(js, /\[\.\.\.state\.rows, \.\.\.state\.searchRows\]\.find/);
   assert.match(js, /state\.searchRows = rows/);
-  assert.match(js, /marketNumber\(row\.marketCapUsd, row\.marketCap, row\.mc, row\.fdv\)/);
-  assert.match(js, /marketNumber\(row\.volume24hUsd, row\.volumeH24, row\.volumeUsd/);
+  assert.match(js, /positiveMarketNumber\(row\.marketCapUsd, row\.marketCap, row\.mc, row\.fdv\)/);
+  assert.match(js, /positiveMarketNumber\(row\.volume24hUsd, row\.volumeH24, row\.volumeUsd/);
   assert.match(js, />24h \$\{escapeHtml\(volume\)\}/);
   assert.match(js, />Liq \$\{escapeHtml\(formatUsd\(coin\.liquidity\)\)\}/);
   assert.match(js, /class="coin-ca-button"[^>]+data-copy-coin/);
@@ -820,7 +869,7 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, MACD, and 
   assert.match(js, /loadFunScript\("\/vendor\/lightweight-charts\.standalone\.production\.js"\)/);
   assert.match(js, /loadFunScript\("\/fun-indicators\.js\?v=7"\)/);
   assert.doesNotMatch(funWorker, /fun-indicators\.js\?v=7/);
-  assert.match(funWorker, /fun\.css\?v=52/);
+  assert.match(funWorker, /fun\.css\?v=54/);
   assert.match(indicators, /new URLSearchParams\(\{ ca: key, tf: timeframe \}\)/);
   assert.match(indicators, /`\$\{API_BASE\}\/api\/chart\?\$\{query\.toString\(\)\}`/);
   assert.match(indicators, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/pools/);
@@ -989,7 +1038,7 @@ test("/quick preloads social coins and keeps wallet setup inside the fast trade 
   for (const marker of ["data-view=\"quick\"", "data-quick-paste-form", "data-quick-route-content", "data-quick-clipboard"]) assert.match(html, new RegExp(marker));
   assert.match(js, /IS_QUICK_ROUTE/);
   assert.match(js, /new URLSearchParams\(location\.search\)/);
-  assert.match(js, /\/quick\?ca=\$\{encodeURIComponent\(key\)\}/);
+  assert.match(js, /\/quick\?ca=\$\{encodeURIComponent\(targetKey\)\}/);
   assert.match(js, /data-quick-select-amount/);
   assert.match(js, /data-quick-review/);
   assert.match(js, /data-quick-bundle/);
@@ -1079,6 +1128,160 @@ test("wallet holdings show real PnL and send Solana or Robinhood tokens without 
     assert.match(source, /function rhSendTokenModal/);
     assert.match(source, /pnlPercent/);
   }
+});
+
+test("wallet token details reuse the chart's exact live market snapshot", () => {
+  assert.match(js, /function mergeLiveMarketSnapshot\(coin = \{\}, snapshot = \{\}\)/);
+  assert.match(js, /function positiveMarketNumber\(\.\.\.values\)/);
+  assert.match(js, /incomingPriority > existingPriority/);
+  assert.match(js, /snapshot\.vol24, snapshot\.v24/);
+  assert.match(js, /funDexBatch\(\[targetKey\], chain\)/);
+  assert.match(js, /String\(p\.chainId \|\| ""\)\.toLowerCase\(\) !== expected/);
+  assert.match(js, /marketSource: "browser-dex", marketPriority: 40/);
+  assert.match(js, /cv=wallet76/);
+  assert.match(js, /coinRequestVersion: 0/);
+  assert.match(js, /requestVersion === state\.coinRequestVersion/);
+  assert.match(js, /event\.data\?\.type !== "slimewire:chart-market"/);
+  assert.match(js, /event\.source !== chartFrame\.contentWindow/);
+  assert.match(js, /refreshWalletAssetMarketUi\(\);/);
+  assert.match(js, /liveHoldingValueUsd \?\? reportedValueUsd/);
+  assert.match(js, /data-wallet-market="marketCap"/);
+  assert.match(chartLab, /function postParentMarket\(s\)/);
+  assert.match(chartLab, /postParentMarket\(\{priceUsd:price,mc:mc,liq:liq,vol24:vol24/);
+  assert.match(chartLab, /window\.parent\.postMessage\(\{type:'slimewire:chart-market',token:CA,market:market\},location\.origin\)/);
+  assert.match(chartLab, /if\(!baseMatches\)\{if\(bars\.length<3\)loadGeckoFallback\(\);return \{symbol:/);
+  assert.match(chartLab, /var version=\+\+chartLoadVersion,requestedTf=TF/);
+  assert.match(chartLab, /version!==chartLoadVersion\|\|requestedTf!==TF/);
+  assert.match(chartLab, /requestedTf===TF&&rows\.length\?applyChartData/);
+  for (const route of ["/chart", "/chart-lab", "/chart-lab.html", "/chart-preview", "/chart-preview.html"]) {
+    assert.match(publicHeaders, new RegExp(`^${route.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\n  Cache-Control: no-store, max-age=0, must-revalidate$`, "m"));
+  }
+  assert.match(server, /serveStaticHtmlPage\(response, "chart-lab\.html", "no-store, max-age=0"\)/);
+});
+
+test("wallet market merges ignore zeroes and respect live-source priority and timestamps", () => {
+  const { mergeLiveMarketSnapshot } = walletMarketHelpers();
+  const browser = {
+    priceUsd: 1.25, marketCap: 100_000, liquidity: 25_000, volumeH24: 8_000,
+    marketSource: "browser-dex", marketPriority: 40, marketUpdatedAt: 200
+  };
+
+  const zeroUpdate = mergeLiveMarketSnapshot(browser, {
+    priceUsd: 0, mc: 0, liq: 0, v24: 0,
+    marketSource: "chart-server", marketPriority: 20, marketUpdatedAt: 900
+  });
+  assert.equal(zeroUpdate.priceUsd, 1.25);
+  assert.equal(zeroUpdate.marketCap, 100_000);
+  assert.equal(zeroUpdate.liquidity, 25_000);
+  assert.equal(zeroUpdate.volume, 8_000);
+  assert.equal(zeroUpdate.marketUpdatedAt, 200, "zero payloads must not be stamped as fresh");
+
+  const lowerPriority = mergeLiveMarketSnapshot(browser, {
+    price: 9, marketCapUsd: 900_000, liquidityUsd: 90_000, vol24: 90_000,
+    marketSource: "chart-server", marketPriority: 20, marketUpdatedAt: 900
+  });
+  assert.deepEqual(
+    [lowerPriority.priceUsd, lowerPriority.mc, lowerPriority.liq, lowerPriority.v24],
+    [1.25, 100_000, 25_000, 8_000]
+  );
+  assert.equal(lowerPriority.marketSource, "browser-dex");
+  assert.equal(lowerPriority.marketPriority, 40);
+
+  const aliasUpdate = mergeLiveMarketSnapshot(browser, {
+    price: 1.5, marketCapUsd: 120_000, liquidityUsd: 30_000, v24: 12_000,
+    marketSource: "browser-dex", marketPriority: 40, marketUpdatedAt: 300
+  });
+  assert.deepEqual(
+    [aliasUpdate.priceUsd, aliasUpdate.price, aliasUpdate.marketCap, aliasUpdate.mc, aliasUpdate.liquidity, aliasUpdate.liq, aliasUpdate.volume, aliasUpdate.vol24, aliasUpdate.v24],
+    [1.5, 1.5, 120_000, 120_000, 30_000, 30_000, 12_000, 12_000, 12_000]
+  );
+  assert.equal(aliasUpdate.marketUpdatedAt, 300);
+
+  const olderPeer = mergeLiveMarketSnapshot(aliasUpdate, {
+    priceUsd: 2, marketPriority: 40, marketUpdatedAt: 250
+  });
+  assert.equal(olderPeer.priceUsd, 1.5, "an older equal-priority response cannot win a race");
+
+  const sparseBrowser = { priceUsd: 2, marketPriority: 40, marketUpdatedAt: 500, marketSource: "browser-dex" };
+  const filled = mergeLiveMarketSnapshot(sparseBrowser, { mc: 50_000, v24: 2_500, marketPriority: 20, marketUpdatedAt: 600 });
+  assert.equal(filled.priceUsd, 2);
+  assert.equal(filled.marketCap, 50_000, "a lower-priority source may fill a missing card");
+  assert.equal(filled.volume, 2_500);
+  assert.equal(filled.marketPriority, 40);
+  assert.equal(filled.marketUpdatedAt, 500);
+
+  const untimed = mergeLiveMarketSnapshot({}, { priceUsd: 3, marketPriority: 20, marketUpdatedAt: 0 });
+  assert.equal(untimed.marketUpdatedAt, 0, "an undated cached payload must not become fresh at merge time");
+});
+
+test("embedded wallet chart publishes all four live market cards to its parent", () => {
+  const calls = [];
+  const token = "0x1111111111111111111111111111111111111111";
+  const { postParentMarket } = chartParentMarketBridgeWith((...args) => calls.push(args), token);
+
+  postParentMarket({
+    priceUsd: "0.000229",
+    mc: "392000",
+    liq: "85000",
+    vol24: "12000",
+    symbol: "DIH",
+    name: "Dih",
+    marketSource: "browser-dex",
+    marketPriority: 40,
+    marketUpdatedAt: 1_234
+  });
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], [{
+    type: "slimewire:chart-market",
+    token,
+    market: {
+      priceUsd: 0.000229,
+      mc: 392_000,
+      liq: 85_000,
+      vol24: 12_000,
+      symbol: "DIH",
+      name: "Dih",
+      marketSource: "browser-dex",
+      marketPriority: 40,
+      marketUpdatedAt: 1_234
+    }
+  }, "https://slimewire.test"]);
+
+  postParentMarket({ priceUsd: 0, mc: 0, liq: 0, vol24: 0 });
+  assert.equal(calls.length, 1, "an empty provider response must not blank the wallet cards");
+});
+
+test("wallet Dex enrichment only accepts target-as-base market values", async () => {
+  const target = "0x1111111111111111111111111111111111111111";
+  const other = "0x2222222222222222222222222222222222222222";
+  const pairs = [
+    {
+      chainId: "robinhood", pairAddress: "0xquote", baseToken: { address: other, symbol: "OTHER" },
+      quoteToken: { address: target, symbol: "TARGET" }, priceUsd: "999", marketCap: 999_000,
+      liquidity: { usd: 999_000 }, volume: { h24: 999_000 }
+    },
+    {
+      chainId: "ethereum", pairAddress: "0xwrongchain", baseToken: { address: target, symbol: "WRONG" },
+      priceUsd: "88", marketCap: 88_000, liquidity: { usd: 88_000 }, volume: { h24: 88_000 }
+    },
+    {
+      chainId: "robinhood", pairAddress: "0xbase", baseToken: { address: target, symbol: "RIGHT", name: "Right token" },
+      quoteToken: { address: other, symbol: "OTHER" }, priceUsd: "2", marketCap: 20_000,
+      liquidity: { usd: 4_000 }, volume: { h24: 3_000 }
+    }
+  ];
+  const funDexBatch = walletDexBatchWith(async () => ({ ok: true, json: async () => ({ pairs }) }));
+  const result = await funDexBatch([target], "robinhood");
+  assert.equal(result[target].priceUsd, 2);
+  assert.equal(result[target].mc, 20_000);
+  assert.equal(result[target].symbol, "RIGHT");
+  assert.equal(result[target].marketPriority, 40);
+  assert.equal(result[target].marketSource, "browser-dex");
+  assert.equal(result[other], undefined, "a quote-side match cannot publish the base token's metrics");
+
+  const quoteOnly = walletDexBatchWith(async () => ({ ok: true, json: async () => ({ pairs: [pairs[0]] }) }));
+  assert.deepEqual(await quoteOnly([target], "robinhood"), {});
 });
 
 test("selected degen hero art is optimized and referenced from the v3 banner", () => {

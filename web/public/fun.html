@@ -14,9 +14,9 @@
   <link id="slimeAppleIcon" rel="apple-touch-icon" href="/assets/slimewire/fun-app-icon-180.png">
   <link id="slimeAppManifest" rel="manifest" href="/fun-manifest.webmanifest?v=2">
   <script>if(/^\/wallet(?:\/|\.html|$)/i.test(location.pathname)){document.documentElement.classList.add("wallet-route-prepaint");document.title="SlimeWallet — SOL + ETH Wallet";document.getElementById("slimeAppManifest").href="/wallet-manifest.webmanifest?v=2";document.getElementById("slimeAppIcon").href="/assets/slimewire/slimewallet-icon-192.png";document.getElementById("slimeAppleIcon").href="/assets/slimewire/slimewallet-icon-192.png";document.querySelector('meta[name="apple-mobile-web-app-title"]').content="SlimeWallet"}</script>
-  <link rel="stylesheet" href="/fun.css?v=52">
+  <link rel="stylesheet" href="/fun.css?v=54">
   <script src="/config.js"></script>
-  <script defer src="/fun.js?v=73"></script>
+  <script defer src="/fun.js?v=76"></script>
 </head>
 <body>
   <div class="fun-app" id="funApp">
@@ -27,6 +27,7 @@
       </button>
       <div class="header-actions">
         <button class="wallet-terminal-link" type="button" data-wallet-open-terminal hidden>Terminal</button>
+        <button class="wallet-install-card wallet-install-head" type="button" data-install-fun hidden aria-label="Install SlimeWallet"><span>Install</span></button>
         <button class="icon-btn" type="button" data-open-search aria-label="Search coins">⌕</button>
         <button class="wallet-pill" type="button" data-wallet-entry><span class="status-dot"></span><span class="wallet-pill-copy" data-wallet-balance><b>Connect</b><small>Wallet</small></span></button>
       </div>
@@ -69,9 +70,9 @@
       <section class="fun-view" data-view="wallet" aria-label="Wallet profile">
         <div class="wallet-route-intro" data-wallet-route-intro hidden><span>SLIMEWALLET</span><b>Everything you own. Nothing you do not need.</b><small>Solana + Robinhood Chain · one SlimeWire profile</small></div>
         <div class="wallet-hero" data-wallet-hero></div>
+        <section class="pump-rewards-card" data-pump-rewards hidden aria-live="polite"></section>
         <div class="wallet-actions"><button class="primary wallet-swap" type="button" data-wallet-swap>Swap</button><button type="button" data-deposit>Deposit</button><button type="button" data-send-sol>Send SOL</button><button type="button" data-receive>Receive</button><button class="season" type="button" data-season-open>Season</button><button type="button" data-manage-wallets>Manage</button></div>
         <button class="wallet-preset-strip" type="button" data-manage-presets hidden><span>Buy preset</span><b data-wallet-preset-copy>Manual entry</b><i>›</i></button>
-        <button class="wallet-install-card" type="button" data-install-fun hidden><span>Install SlimeWallet</span><b>Add it to your home screen</b><i>↓</i></button>
         <div class="profile-tabs" role="tablist"><button class="active" type="button" data-profile="positions">Positions</button><button type="button" data-profile="activity">Activity</button><button type="button" data-profile="created">Created</button><button type="button" data-profile="social">Profile</button></div>
         <div data-profile-panel><div class="skeleton-list"></div></div>
       </section>

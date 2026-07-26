@@ -10,6 +10,11 @@
   const TOKEN_KEY = "ogreWebToken";
   const ACTIVE_WALLET_KEY = "slimecashActiveWalletIndex";
   const TOOL_PREFILL_KEY = "ggToolPrefill";
+  const PUMP_CASHBACK_POSITIVE_TTL_MS = 30_000;
+  const PUMP_CASHBACK_RETRY_TTL_MS = 8_000;
+  const pumpCashbackRefreshTimers = new WeakMap();
+  let pumpCashbackAuthToken = null;
+  let pumpCashbackAuthVersion = 0;
 
   const one = (selector, root) => (root || document).querySelector(selector);
   const all = (selector, root) => Array.from((root || document).querySelectorAll(selector));
@@ -279,7 +284,143 @@
   }
 
   function toolbarHtml(active) {
-    return `<div class="chartProBar" aria-label="Professional chart controls"><div class="proIntervals">${TIMEFRAMES.map(([value, label]) => `<button type="button" class="${value === active ? "on" : ""}" data-pro-tf="${value}">${label}</button>`).join("")}</div><i class="proDivider"></i><div class="proActions"><button class="proSlime" type="button" data-pro-slime-mode aria-pressed="false"><img src="/assets/slimewire/svg/slimewire-mark.svg" alt=""> Slime Mode</button><button class="proIndicator" type="button" data-indicators-toggle aria-expanded="false" aria-pressed="false">⌁ Indicators</button><button class="proQuick" type="button" data-pro-quick-toggle>⚡ Quick trade</button><button class="proWide" type="button" data-pro-wide>↔ Wider chart</button><button class="proFull" type="button" data-pro-full>⛶ Fullscreen</button></div></div>`;
+    return `<div class="chartProBar" aria-label="Professional chart controls"><div class="proIntervals">${TIMEFRAMES.map(([value, label]) => `<button type="button" class="${value === active ? "on" : ""}" data-pro-tf="${value}">${label}</button>`).join("")}</div><span class="proCashbackBadge" data-pro-pump-cashback hidden><b><i></i>Pump Cash back</b><small data-pro-pump-cashback-amount hidden></small></span><i class="proDivider"></i><div class="proActions"><button class="proSlime" type="button" data-pro-slime-mode aria-pressed="false"><img src="/assets/slimewire/svg/slimewire-mark.svg" alt=""> Slime Mode</button><button class="proIndicator" type="button" data-indicators-toggle aria-expanded="false" aria-pressed="false">⌁ Indicators</button><button class="proQuick" type="button" data-pro-quick-toggle>⚡ Quick trade</button><button class="proWide" type="button" data-pro-wide>↔ Wider chart</button><button class="proFull" type="button" data-pro-full>⛶ Fullscreen</button></div></div>`;
+  }
+
+  function pumpCashbackSolFromRewards(payload, walletIndex) {
+    const root = payload?.rewards || payload?.data || payload || {};
+    const wallets = Array.isArray(root.wallets) ? root.wallets : [];
+    const selected = root.wallet || wallets.find((wallet) => Number(wallet?.walletIndex || wallet?.index) === Number(walletIndex)) || null;
+    const cashback = selected?.cashback || root.cashback || root.totals?.cashback || null;
+    const solCandidates = [cashback?.totalSol, selected?.cashbackTotalSol, root.cashbackTotalSol, root.totals?.cashbackSol];
+    for (const candidate of solCandidates) {
+      if (candidate == null || candidate === "") continue;
+      const amount = Number(candidate);
+      if (Number.isFinite(amount) && amount >= 0) return amount;
+    }
+    const lamportCandidates = [cashback?.totalLamports, selected?.cashbackTotalLamports, root.cashbackTotalLamports, root.totals?.cashbackLamports];
+    for (const candidate of lamportCandidates) {
+      if (candidate == null || candidate === "") continue;
+      const lamports = Number(candidate);
+      if (Number.isFinite(lamports) && lamports >= 0) return lamports / 1e9;
+    }
+    return null;
+  }
+
+  function formatPumpCashbackSol(value) {
+    if (value == null || value === "") return "";
+    const amount = Number(value);
+    if (!Number.isFinite(amount) || amount < 0) return "";
+    if (amount > 0 && amount < .000001) return "<0.000001";
+    return amount.toFixed(6).replace(/\.?0+$/, "") || "0";
+  }
+
+  function paintPumpCashbackBadge(trade, enabled, source, claimableSol) {
+    const badge = one("[data-pro-pump-cashback]", trade), amount = one("[data-pro-pump-cashback-amount]", badge);
+    if (!badge) return;
+    badge.hidden = !enabled;
+    badge.dataset.source = enabled ? String(source || "pump") : "";
+    badge.title = enabled
+      ? "Cash back is enabled for this Pump coin. Rewards shown here are wallet-wide, not earned only from this coin."
+      : "";
+    if (!amount) return;
+    const formatted = formatPumpCashbackSol(claimableSol);
+    amount.hidden = !enabled || !formatted;
+    amount.textContent = formatted ? `active wallet · ${formatted} SOL across Pump Cash back trades` : "";
+  }
+
+  function pumpCashbackContextFresh(checkedAt, ttlMs, nowMs = Date.now()) {
+    const checked = Number(checkedAt), ttl = Number(ttlMs), now = Number(nowMs);
+    const age = now - checked;
+    return checked > 0 && ttl > 0 && Number.isFinite(age) && age >= 0 && age < ttl;
+  }
+
+  function pumpCashbackWalletContext(authToken, walletIndex) {
+    const token = String(authToken || "");
+    if (token !== pumpCashbackAuthToken) {
+      pumpCashbackAuthToken = token;
+      pumpCashbackAuthVersion += 1;
+    }
+    return token ? `session-${pumpCashbackAuthVersion}-wallet-${walletIndex}` : "guest";
+  }
+
+  function schedulePumpCashbackRefresh(trade, delayMs) {
+    const oldTimer = pumpCashbackRefreshTimers.get(trade);
+    if (oldTimer) clearTimeout(oldTimer);
+    const timer = setTimeout(() => {
+      pumpCashbackRefreshTimers.delete(trade);
+      if (trade?.isConnected) void refreshPumpCashbackContext(trade);
+    }, Math.max(1_000, Number(delayMs) || PUMP_CASHBACK_RETRY_TTL_MS));
+    pumpCashbackRefreshTimers.set(trade, timer);
+  }
+
+  function clearPumpCashbackRefresh(trade) {
+    const timer = pumpCashbackRefreshTimers.get(trade);
+    if (timer) clearTimeout(timer);
+    pumpCashbackRefreshTimers.delete(trade);
+  }
+
+  async function pumpCashbackRequest(path, timeoutMs = PUMP_CASHBACK_RETRY_TTL_MS) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(1_000, Number(timeoutMs) || PUMP_CASHBACK_RETRY_TTL_MS));
+    try { return await request(path, { signal: controller.signal }); }
+    finally { clearTimeout(timer); }
+  }
+
+  async function refreshPumpCashbackContext(trade) {
+    const context = currentContext(trade), token = String(context.token || "");
+    const authToken = localStorage.getItem(TOKEN_KEY) || "";
+    const hasSession = Boolean(authToken);
+    const walletIndex = Number(localStorage.getItem(ACTIVE_WALLET_KEY)) || 1;
+    const walletContext = pumpCashbackWalletContext(authToken, walletIndex);
+    if (!token || context.rh) {
+      clearPumpCashbackRefresh(trade);
+      trade.dataset.proCashbackToken = token;
+      trade.dataset.proCashbackWallet = walletContext;
+      delete trade.dataset.proCashbackCheckedAt;
+      delete trade.dataset.proCashbackEnabled;
+      delete trade.dataset.proCashbackRequest;
+      paintPumpCashbackBadge(trade, false);
+      return;
+    }
+    const sameContext = trade.dataset.proCashbackToken === token && trade.dataset.proCashbackWallet === walletContext;
+    if (sameContext && trade.dataset.proCashbackRequest) return;
+    const ttlMs = trade.dataset.proCashbackEnabled === "1" ? PUMP_CASHBACK_POSITIVE_TTL_MS : PUMP_CASHBACK_RETRY_TTL_MS;
+    if (sameContext && pumpCashbackContextFresh(trade.dataset.proCashbackCheckedAt, ttlMs)) return;
+    if (!sameContext) {
+      clearPumpCashbackRefresh(trade);
+      delete trade.dataset.proCashbackCheckedAt;
+      delete trade.dataset.proCashbackEnabled;
+      paintPumpCashbackBadge(trade, false);
+    }
+    trade.dataset.proCashbackToken = token;
+    trade.dataset.proCashbackWallet = walletContext;
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    trade.dataset.proCashbackRequest = requestId;
+    const bootstrap = await pumpCashbackRequest(`/api/web/chart/bootstrap?token=${encodeURIComponent(token)}`);
+    if (trade.dataset.proCashbackToken !== token || trade.dataset.proCashbackWallet !== walletContext || trade.dataset.proCashbackRequest !== requestId) return;
+    delete trade.dataset.proCashbackRequest;
+    if (!bootstrap.ok || !bootstrap.data) {
+      delete trade.dataset.proCashbackCheckedAt;
+      delete trade.dataset.proCashbackEnabled;
+      schedulePumpCashbackRefresh(trade, PUMP_CASHBACK_RETRY_TTL_MS);
+      return;
+    }
+    const chart = bootstrap.data?.chart || bootstrap.data || {};
+    const enabled = chart.pumpCashback === true || bootstrap.data?.pumpCashback === true;
+    const source = chart.pumpCashbackSource || bootstrap.data?.pumpCashbackSource || "";
+    trade.dataset.proCashbackCheckedAt = String(Date.now());
+    trade.dataset.proCashbackEnabled = enabled ? "1" : "0";
+    paintPumpCashbackBadge(trade, enabled, source);
+    schedulePumpCashbackRefresh(trade, enabled ? PUMP_CASHBACK_POSITIVE_TTL_MS : PUMP_CASHBACK_RETRY_TTL_MS);
+    if (!enabled || !hasSession) return;
+    const rewards = await pumpCashbackRequest(`/api/web/pump/rewards?walletIndex=${encodeURIComponent(walletIndex)}`);
+    if (trade.dataset.proCashbackToken !== token || trade.dataset.proCashbackWallet !== walletContext) return;
+    if (!rewards.ok || rewards.data?.ok === false) {
+      schedulePumpCashbackRefresh(trade, PUMP_CASHBACK_RETRY_TTL_MS);
+      return;
+    }
+    paintPumpCashbackBadge(trade, true, source, pumpCashbackSolFromRewards(rewards.data, walletIndex));
   }
 
   function indicatorDrawerHtml() {
@@ -479,7 +620,7 @@
   }
 
   function scan() {
-    all("#v-trade .trade, #v-rhtrade .trade").forEach((trade) => { injectTradeWorkspace(trade); refreshTradeContext(trade); refreshChartFocusControls(trade); });
+    all("#v-trade .trade, #v-rhtrade .trade").forEach((trade) => { injectTradeWorkspace(trade); refreshTradeContext(trade); refreshChartFocusControls(trade); void refreshPumpCashbackContext(trade); });
     applyToolPrefill();
   }
 

@@ -1,12 +1,12 @@
 /* SlimeWire Go + SlimeWallet: isolated installable shells and push worker. */
 const IS_WALLET_WORKER = new URL(self.registration.scope).pathname.startsWith("/wallet/");
-const FUN_CACHE = IS_WALLET_WORKER ? "slimewallet-v12" : "slimewire-fun-v69";
+const FUN_CACHE = IS_WALLET_WORKER ? "slimewallet-v15" : "slimewire-fun-v72";
 const FUN_CACHE_PREFIX = IS_WALLET_WORKER ? "slimewallet-" : "slimewire-fun-";
 const FUN_SHELL = [
   IS_WALLET_WORKER ? "/wallet/" : "/fun/",
   "/fun.html",
-  "/fun.css?v=52",
-  "/fun.js?v=73",
+  "/fun.css?v=54",
+  "/fun.js?v=76",
   IS_WALLET_WORKER ? "/wallet-manifest.webmanifest?v=2" : "/fun-manifest.webmanifest?v=2",
   "/config.js",
   IS_WALLET_WORKER ? "/assets/slimewire/slimewallet-icon-192.png" : "/assets/slimewire/fun-app-icon-192.png"
@@ -28,7 +28,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
   const isFunPage = request.mode === "navigate" && (IS_WALLET_WORKER
-    ? (url.pathname === "/wallet" || url.pathname === "/wallet/" || url.pathname === "/wallet.html")
+    ? (url.pathname === "/wallet" || url.pathname === "/wallet.html" || url.pathname.startsWith("/wallet/"))
     : (url.pathname === "/fun" || url.pathname === "/fun/" || url.pathname === "/fun.html"));
   const isStatic = request.mode !== "navigate" && /\.(?:css|js|png|webp|svg|ico|json|webmanifest|woff2?)$/i.test(url.pathname);
   if (!isFunPage && !isStatic) return;

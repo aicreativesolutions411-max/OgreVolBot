@@ -1294,7 +1294,7 @@ test("RH creator fee: pump-style venue-side, automatic at launch, NOT baked into
     const render = functionBody(src, "renderLaunch");
     assert.doesNotMatch(render, /lcRhCreatorFee/);
     assert.match(render, /creatorFeeEnabled:true/);
-    assert.match(render, /Creator fees are automatic/);
+    assert.match(render, /Fees are assigned to your selected launch wallet automatically/);
   }
 });
 
@@ -2654,7 +2654,7 @@ test("per-user BUY PRESETS: settable in DM, drive the DM receipt's ⚡ buttons +
   assert.match(serverSource, /DEFAULT_BUY_PRESETS = \[0\.5, 1, 2\]/);
   assert.match(functionBody(serverSource, "setBuyPref"), /writeJsonFile\(buyPrefsPath\(\)/);
   assert.match(functionBody(serverSource, "quickBuyReceiptKeyboard"), /userBuyPrefs\(await readBuyPrefs\(\), userId\)/); // receipt uses YOUR presets
-  assert.match(functionBody(serverSource, "quickBuyReceiptKeyboard"), /callback_data: `qb:\$\{custom\}:\$\{mint\}`/);     // custom preset one-tap
+  assert.match(functionBody(serverSource, "quickBuyReceiptKeyboard"), /callback_data: `qbp:\$\{custom\}:\$\{mint\}`/);    // every amount shortcut applies the saved exit preset
   assert.match(serverSource, /startsWith\("bp:"\)/);                        // presets menu routed
   assert.match(serverSource, /applyBuyPrefInput\(message, userId\)/);       // typed input wired
   assert.match(serverSource, /text === "\/presets"/);                       // command
@@ -3023,10 +3023,10 @@ test("Telegram /buy prioritizes the card coin and posts a compact TG/Web chooser
   assert.match(open, /Choose buy amount/);
   assert.match(serverSource, /startsWith\("buyopen:"\)/);
   const keyboard = functionBody(serverSource, "telegramQuickBuyPanelKeyboard");
-  assert.match(keyboard, /callback_data: `qb:/);
-  assert.match(keyboard, /callback_data: `qbp:/);
-  assert.match(keyboard, /callback_data: `rqb:/);
-  assert.match(keyboard, /callback_data: `rqbp:/);
+  assert.match(keyboard, /callback_data: `qbp:\$\{amount\}:/);
+  assert.match(keyboard, /callback_data: `qbp:\$\{target\}`/);
+  assert.match(keyboard, /callback_data: `rqbp:\$\{amount\}:/);
+  assert.match(keyboard, /callback_data: `rqbp:\$\{target\}`/);
   assert.match(keyboard, /Full scan/);
   assert.match(serverSource, /const quickBuyCommand = \/\^\\\/buy/);
   assert.match(serverSource, /sendTelegramQuickBuyPanel\(chatId, userId, message, quickBuyCommand\[1\]/);
@@ -3285,7 +3285,8 @@ test("provider JSON and fast holder reads stay memory bounded", () => {
   assert.match(fetcher, /response\.body\?\.getReader/);
   assert.match(fetcher, /Provider response exceeded/);
   const enrich = functionBody(serverSource, "enrichScanSecurityOnchain");
-  assert.match(enrich, /computeOnchainDistribution\(\{ mint, creatorWallet: creator, rpcRead, withHolderCount: false \}\)/);
+  assert.match(enrich, /const scanPriorityRpcRead =/);
+  assert.match(enrich, /computeOnchainDistribution\(\{ mint, creatorWallet: creator, rpcRead: scanPriorityRpcRead, withHolderCount: false \}\)/);
 });
 
 // ---- Alpha Radar: "is a big network behind this coin?" (long-term-runner oriented, read-only) ----
@@ -4910,10 +4911,12 @@ test("launch participant invites are non-custodial, durable, idempotent, and res
   assert.match(publicInvite, /stopLossPct/);
   assert.match(publicInvite, /takeProfitLadder: savedLadder/);
   assert.match(publicInvite, /notifyOnLaunch: Boolean\(invite\.notifyOnLaunch\)/);
+  assert.match(publicInvite, /maxSlippageBps: launchBundleInviteMaxSlippageBps\(invite\.maxSlippageBps\)/);
   assert.match(publicInvite, /launchNotified: Boolean\(invite\.launchNotifiedAt\)/);
   assert.doesNotMatch(publicInvite, /walletPublicKey:/);
   const approveInvite = functionBody(serverSource, "approveLaunchBundleInvite");
   assert.match(approveInvite, /notifyOnLaunch: cleanLaunchBoolean\(body\.notifyOnLaunch\)/);
+  assert.match(approveInvite, /maxSlippageBps: launchBundleInviteMaxSlippageBps\(body\.maxSlippageBps\)/);
   const notifyInvite = functionBody(serverSource, "notifyLaunchBundleInviteParticipants");
   assert.match(notifyInvite, /row\.notifyOnLaunch === true/);
   assert.match(notifyInvite, /!row\.launchNotifiedAt/);
@@ -4929,8 +4932,14 @@ test("launch participant invites are non-custodial, durable, idempotent, and res
   assert.match(fulfillInvites, /const launchWaveSize = store\.invites\.filter/);
   assert.match(fulfillInvites, /launchWaveEntrySlippageBps\(/);
   assert.match(fulfillInvites, /Number\(invite\.entry\?\.attempts \|\| 0\) \+ attempts - 1/);
-  assert.match(fulfillInvites, /runWithConcurrency\(pending, Math\.min\(20, pending\.length\)/);
+  assert.match(fulfillInvites, /runLaunchBundleInviteWaves\(pending/);
+  const inviteWaves = functionBody(serverSource, "runLaunchBundleInviteWaves");
+  assert.match(inviteWaves, /sortLaunchBundleInviteQueue\(rows\)/);
+  assert.match(inviteWaves, /for \(let start = 0; start < ordered\.length; start \+= size\)/);
+  assert.match(inviteWaves, /runWithConcurrency\(wave, wave\.length, worker\)/);
+  assert.doesNotMatch(inviteWaves, /slice\(0,\s*(?:12|20)\)/);
   assert.match(fulfillInvites, /buyTokenForPlan\(wallet, tokenMint, amountLamports, entrySlippageBps/);
+  assert.match(fulfillInvites, /Math\.min\(participantMaxSlippageBps, launchWaveEntrySlippageBps/);
 
   const slippageHelper = Function("requestedBps", "walletCount", "priorAttempts", functionBody(serverSource, "launchWaveEntrySlippageBps"));
   assert.equal(slippageHelper(1500, 1, 0), 3000);
@@ -4945,7 +4954,7 @@ test("launch participant invites are non-custodial, durable, idempotent, and res
   assert.match(postLaunchBuys, /slippage: entrySlippagePct/);
 
   const fulfillRhInvites = functionBody(serverSource, "fulfillRhLaunchBundleInvites");
-  assert.match(fulfillRhInvites, /runWithConcurrency\(pending, Math\.min\(20, pending\.length\)/);
+  assert.match(fulfillRhInvites, /runLaunchBundleInviteWaves\(pending/);
   assert.match(fulfillRhInvites, /runIdempotentMoneyOp\(\s*"launch-bundle-invite-rh"/);
   assert.match(fulfillRhInvites, /webRhTradeCore\(participantUserId/);
   assert.match(fulfillRhInvites, /payCurrency: "SOL"/);
@@ -4972,6 +4981,8 @@ test("launch participant invites are non-custodial, durable, idempotent, and res
     assert.match(html, /Notify me when the coin launches/);
     assert.match(html, /ensurePushSubscribed\(\)/);
     assert.match(html, /notifyOnLaunch:!!\(notify&&notify\.checked\)/);
+    assert.match(html, /id="lcJoinMaxSlip"/);
+    assert.match(html, /maxSlippageBps:\$\("#lcJoinMaxSlip"\)\.value/);
     assert.match(html, /Push is ready\. Save the entry to get the launch alert\./);
     assert.match(html, /Your wallet stays yours/);
     assert.match(html, /data-lc-participant-pick/);
@@ -5003,7 +5014,11 @@ test("Pump launches can keep creator fees accrued for a later SlimeWire or walle
   const autoClaim = functionBody(serverSource, "processCreatorFeeAutoClaims");
   assert.match(autoClaim, /normalizeCreatorFeeClaimMode\(attempt\.creatorFeeClaimMode\) === "manual"/);
   const holderAutoClaim = functionBody(serverSource, "processHolderRewardAutoClaims");
-  assert.match(holderAutoClaim, /normalizeCreatorFeeClaimMode\(attempt\.creatorFeeClaimMode\) === "manual"/);
+  // Manual mode leaves the creator's own share alone. The independently-owned
+  // official holder share still needs its permissionless setup/distribution
+  // worker, otherwise holder rewards would be stranded in Pump's fee programs.
+  assert.doesNotMatch(holderAutoClaim, /normalizeCreatorFeeClaimMode\(attempt\.creatorFeeClaimMode\) === "manual"/);
+  assert.match(holderAutoClaim, /reconcilePumpHolderRewardFeeSharing/);
   assert.match(serverSource, /creatorFeeClaimMode: normalizeCreatorFeeClaimMode\(a\.creatorFeeClaimMode\)/);
 
   for (const file of ["gg.html", "index.html"]) {

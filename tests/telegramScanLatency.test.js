@@ -59,6 +59,37 @@ test("ordinary cold scan acknowledgement never waits on rendering or a Telegram 
   assert.match(functionBody(serverSource, "slimeScanKeyboardForResult"), /slimeScanSafetyProofReady/);
 });
 
+test("warm Solana and Robinhood scans stay text-first outside branded smart calls", () => {
+  const look = functionBody(serverSource, "handleTelegramLookCommand");
+  const rh = functionBody(serverSource, "sendRhScanCard");
+
+  assert.match(look, /preferText:\s*!String\(options\.contextHtml/);
+  assert.match(rh, /const quickMediaAllowed = options\.brandedMedia === true/);
+  assert.match(rh, /quickMediaAllowed\s*\?\s*await scanFastTimeout\(renderRhScanCardPng/);
+  assert.match(rh, /const fullMediaAllowed = options\.brandedMedia === true/);
+});
+
+test("progressive scan updates do not stampede the shared RPC queue", () => {
+  const supply = functionBody(serverSource, "fetchTokenSupplyUi");
+  const settle = functionBody(serverSource, "settleTelegramSolScanCard");
+  const classify = functionBody(serverSource, "isSolMintAddress");
+
+  assert.match(serverSource, /const scanTokenSupplyCache = new Map\(\)/);
+  assert.match(serverSource, /const scanTokenSupplyInFlight = new Map\(\)/);
+  assert.match(supply, /scanTokenSupplyInFlight\.get\(key\)/);
+  assert.match(supply, /retries:\s*0,\s*priority:\s*true/);
+  assert.match(settle, /slimeScanRetryMissingFields\(accumulated, mint\)/);
+  assert.match(serverSource, /const SLIME_SCAN_RETRY_FIELDS = new Set\(\["identity", "price", "market cap", "liquidity", "security"\]\)/);
+  assert.match(classify, /retries:\s*0,\s*priority:\s*true/);
+});
+
+test("DexScreener pair resolution is hedged and single-flight", () => {
+  const resolver = functionBody(serverSource, "resolveDexPairToMint");
+  assert.match(serverSource, /const dexPairMintInFlight = new Map\(\)/);
+  assert.match(resolver, /dexPairMintInFlight\.get\(a\)/);
+  assert.match(resolver, /setTimeout\(\(\) => \{ void startSearch\(\); \}, 400\)/);
+});
+
 test("plain group CA classification has a strict latency ceiling", () => {
   const router = functionBody(serverSource, "handleMessage");
   assert.match(router, /scanFastTimeout\(isSolMintAddress\(bareCa\[1\]\),\s*1_000,\s*true\)/);

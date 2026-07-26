@@ -478,7 +478,7 @@
   .launch-card{max-width:640px;margin:0 auto;padding:20px}
   .launch-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:18px}
   .launch-head h3{font-size:22px;margin:0 0 5px}.launch-head p{margin:0!important;max-width:430px;line-height:1.45}
-  .launch-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px!important;padding:5px;border:1px solid var(--border);border-radius:12px;background:rgba(0,0,0,.16);margin:0 0 18px!important}
+  .launch-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:6px!important;padding:5px;border:1px solid var(--border);border-radius:12px;background:rgba(0,0,0,.16);margin:0 0 18px!important}
   .launch-tabs button{padding:10px 6px;border-radius:9px;font-size:12px}.launch-tabs button.on{box-shadow:0 0 0 1px rgba(114,255,35,.18) inset}
   .launch-section-title{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:2px 0 8px}
   .launch-media{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
@@ -491,6 +491,13 @@
   .launch-advanced summary{cursor:pointer;padding:12px 0;font-size:12px;font-weight:800}.launch-advanced>div{padding:0 0 4px}
   .launch-action{padding-top:10px}
   .launch-action .bigbuy{margin-top:8px!important}
+  .reward-mode-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 10px}
+  .reward-mode{position:relative;display:flex;align-items:flex-start;gap:8px;min-height:92px;padding:12px;border:1px solid var(--border2);border-radius:12px;background:rgba(0,0,0,.14);cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s}
+  .reward-mode:has(input:checked){border-color:rgba(114,255,35,.6);background:rgba(114,255,35,.09);box-shadow:0 0 0 1px rgba(114,255,35,.14) inset}
+  .reward-mode input{margin-top:2px;accent-color:var(--green);flex:0 0 auto}.reward-mode b{display:block;font-size:12px;color:var(--text);margin-bottom:4px}.reward-mode small{display:block;color:var(--muted);font-size:10px;line-height:1.35}
+  .cashback-badge{display:inline-flex;align-items:center;gap:4px;border:1px solid rgba(114,255,35,.5);border-radius:999px;padding:2px 7px;background:rgba(114,255,35,.1);color:var(--green2);font-size:9px;font-weight:900;letter-spacing:.03em;text-transform:uppercase;vertical-align:middle}
+  .pump-reward-totals{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}.pump-reward-total{padding:11px;border:1px solid var(--border2);border-radius:11px;background:rgba(0,0,0,.15)}.pump-reward-total b{display:block;color:var(--green2);font-family:var(--mono);font-size:14px}.pump-reward-total span{display:block;color:var(--muted);font-size:9px;margin-top:3px;text-transform:uppercase;letter-spacing:.04em}
+  .pump-reward-row{display:grid;grid-template-columns:minmax(120px,1fr) minmax(150px,1.2fr) auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--border2)}.pump-reward-row:first-of-type{border-top:0}.pump-reward-values{font-size:10px;color:var(--muted);line-height:1.55}.pump-reward-values b{color:var(--text);font-family:var(--mono);font-size:11px}.pump-reward-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.pump-reward-actions .wbtn{padding:7px 9px;font-size:10px;white-space:nowrap}
 
   /* mobile bottom nav */
   .botnav{display:none}
@@ -546,7 +553,7 @@
   }
   @media(max-width:520px){
     .launch-card{padding:15px;border-radius:16px}.launch-head{margin-bottom:14px}.launch-head h3{font-size:20px}.launch-head .wbtn{padding:7px 9px;font-size:11px}
-    .launch-media{grid-template-columns:1fr}.launch-upload{min-height:88px}.launch-tabs button{font-size:11px;padding:9px 3px}
+    .launch-media{grid-template-columns:1fr}.launch-upload{min-height:88px}.launch-tabs button{font-size:11px;padding:9px 3px}.reward-mode-grid{grid-template-columns:1fr}.reward-mode{min-height:0}.pump-reward-row{grid-template-columns:1fr}.pump-reward-actions{justify-content:flex-start}
     /* Tighten the trending row so the ⚡ Buy button stays IN frame (it was overflowing ~30px off the
        right on a 375px phone). Smaller cell padding + avatar + buy button; desktop is untouched. */
     /* Robinhood board rows: drop the $price chip on phones (MC line carries it) + tighten padding so
@@ -597,7 +604,7 @@
   .chartSplitMain.chartSplitAdjusted .tapeTable{max-height:none;min-height:58px;flex:1 1 auto}
   @media(max-width:820px){.chartTapeSplit{flex-basis:24px;height:24px}.chartTapeSplit:before{width:72px}.chartTapeSplit span{right:8px;font-size:8px}.chartSplitMain.chartSplitAdjusted .marketTape{padding-bottom:8px}}
 </style>
-<link rel="stylesheet" href="/terminal-pro.css?v=20260719a">
+<link rel="stylesheet" href="/terminal-pro.css?v=20260725a">
 <script defer src="/vendor/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -752,7 +759,7 @@
   const state={route:"trending",mint:null,trendTab:"best",trenchTab:"board",volTf:"h1",marketChain:localStorage.getItem("ggMarketChain")||"all",rows:[],pollT:null,
     token:localStorage.getItem(TOKEN_KEY)||"",user:null,wallets:[],activeWallet:Number(localStorage.getItem(ACTIVE_WALLET_KEY))||null,
     presets:{trade:[],bundle:[]},activeTradePreset:localStorage.getItem("ggTradePreset")||"",searchTerm:"",pendingSell:null,portfolioTab:"positions",lcNftMint:"",lcNftOverview:null,lcNftItemImage:null,
-    launchInviteToken:(new URLSearchParams(location.search).get("bundleInvite")||"").trim(),launchInvites:[],launchInviteLastUrl:"",
+    launchInviteToken:(new URLSearchParams(location.search).get("bundleInvite")||"").trim(),launchInvites:[],launchInviteLastUrl:"",launchCoins:[],pumpRewards:null,pumpRewardsCheckedAt:0,pumpRewardsError:"",
     watch:new Set(),watchRows:[],
     // Seed positions from the last session so the Portfolio paints INSTANTLY on load, then refreshes.
     posCache:(function(){try{return JSON.parse(localStorage.getItem("ggPosCache")||"null");}catch(e){return null;}})(),
@@ -3605,7 +3612,7 @@
   // wallet has earned across ALL its coins at once (no mint needed), even coins launched directly on
   // pump.fun outside this site — so we list every one of your wallets with a claim button, not just
   // coins we have a launch record for. The record list below is a bonus (per-coin Meteora claims live there).
-  async function launchesModal(){
+  async function launchesModalOld(){
     openModal('<h3>Your launches &amp; fees</h3><p class="sub mut" style="font-size:12px">Automatic launches collect in the background. If you chose accumulation, fees stay in the Pump creator vault until you claim them here or with the backed-up creator wallet.</p><div id="lchSimple"><div class="loading"><span class="spin"></span></div></div>');
     const body=$("#lchSimple");if(!body)return;
     const {ok,d}=await api("/api/web/launches").catch(()=>({}));const coins=(ok&&d&&d.coins)||[];
@@ -3613,6 +3620,58 @@
     body.innerHTML=coins.map(c=>{const rh=c.rail==="robinhood";const pump=!rh&&c.rail!=="meteora";const manual=pump&&c.creatorFeeClaimMode==="manual";const status=String(c.status||"live").toLowerCase();const actions='<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="wbtn ghost" style="padding:7px 10px" onclick="'+(rh?'GG.rhTrade':'GG.open')+'(\''+esc(c.mint)+'\')">Open</button>'+(manual&&c.devWalletIndex?'<button class="wbtn" style="padding:7px 10px" onclick="GG.claimFees('+Number(c.devWalletIndex)+',\'pump\',\''+esc(c.mint)+'\')">Claim fees</button>':'')+(pump&&c.devWalletIndex?'<button class="wbtn ghost" style="padding:7px 10px" onclick="GG.exportPumpCreatorWallet('+Number(c.devWalletIndex)+',\''+esc(c.devWallet||'')+'\')">Backup wallet</button>':'')+'</div>';return '<div class="walletrow" style="align-items:center;margin-bottom:7px;flex-wrap:wrap"><div class="ico">'+(rh?'🪶':'💊')+'</div><div class="info" style="min-width:150px"><b>'+esc(c.symbol||c.name||short(c.mint))+'</b><div class="addr mut">'+esc(rh?'Robinhood Chain':manual?'Pump · fees accumulating':'Pump · automatic claims')+' · '+esc(c.devWalletShort||"creator wallet")+' · '+esc(status)+'</div></div>'+actions+'</div>';}).join("")+
       '<div class="launch-summary" style="margin-top:10px;margin-bottom:0"><span class="mark">🔐</span><div><b>The creator wallet controls each claim.</b><br><span class="mut">Backups are downloaded only after your confirmation and contain a private recovery key. Never share the file.</span></div></div>';
   }
+  // Pump rewards are wallet-wide vault balances. Never label a wallet claim as belonging to one coin:
+  // one creator wallet can launch several coins and one trader wallet can earn Cash back across several.
+  function pumpRewardSol(part){
+    const raw=String(part&&part.totalLamports!=null?part.totalLamports:"");
+    if(/^\d+$/.test(raw)){try{const n=BigInt(raw),whole=n/1000000000n,frac=String(n%1000000000n).padStart(9,"0").replace(/0+$/,"");return String(whole)+(frac?"."+frac:"");}catch(e){}}
+    const n=Number(part&&part.totalSol||0);return isFinite(n)?n.toFixed(9).replace(/0+$/,"").replace(/\.$/,""):"0";
+  }
+  function pumpRewardBreakdown(part){return "Curve "+pumpRewardSol({totalLamports:part&&part.curveLamports})+" / PumpSwap "+pumpRewardSol({totalLamports:part&&part.ammLamports});}
+  function pumpRewardsInnerHtml(){
+    const data=state.pumpRewards,loading=state._pumpRewardsLoading;
+    if(!data)return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><div><h3 style="margin:0 0 3px">Pump rewards</h3><p class="sub" style="margin:0">Live creator fees and trader Cash back, by wallet.</p></div><span class="mut" style="font-size:11px">'+(loading?'<span class="spin"></span> Loading...':esc(state.pumpRewardsError||"Tap refresh"))+'</span></div><button class="wbtn ghost" style="margin-top:10px" onclick="GG.loadPumpRewards(true)">Refresh</button>';
+    const wallets=Array.isArray(data.wallets)?data.wallets:[],totals=data.totals||{};
+    const rows=wallets.map(w=>{const creator=w.creator||{},cashback=w.cashback||{},creatorSol=pumpRewardSol(creator),cashbackSol=pumpRewardSol(cashback),canCreator=Number(creator.totalLamports||0)>0||Number(creator.totalSol||0)>0,canCashback=Number(cashback.totalLamports||0)>0||Number(cashback.totalSol||0)>0;return '<div class="pump-reward-row"><div style="min-width:0"><b>'+esc(w.label||("Wallet "+w.walletIndex))+'</b><div class="addr mut" style="font-size:10px">'+esc(w.shortPublicKey||short(w.publicKey||""))+'</div></div><div class="pump-reward-values"><div>Creator fees <b>'+esc(creatorSol)+' SOL</b></div><div>Cash back <b>'+esc(cashbackSol)+' SOL</b></div><div style="font-size:9px">Creator: '+esc(pumpRewardBreakdown(creator))+'<br>Cash back: '+esc(pumpRewardBreakdown(cashback))+'</div></div><div class="pump-reward-actions">'+(canCreator?'<button class="wbtn" onclick="GG.claimPumpReward('+Number(w.walletIndex)+',\'creator\',this)">Claim creator</button>':'')+(canCashback?'<button class="wbtn" onclick="GG.claimPumpReward('+Number(w.walletIndex)+',\'cashback\',this)">Claim Cash back</button>':'')+(!canCreator&&!canCashback?'<span class="mut" style="font-size:10px">Nothing claimable</span>':'')+'</div></div>';}).join("");
+    return '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px"><div><h3 style="margin:0 0 3px">Pump rewards</h3><p class="sub" style="margin:0">Exact on-chain claimable vault balances, separate from spendable SOL.</p></div><button class="wbtn ghost" style="padding:7px 9px" onclick="GG.loadPumpRewards(true)" '+(loading?'disabled':'')+'>'+(loading?'Refreshing...':'Refresh')+'</button></div><div class="pump-reward-totals"><div class="pump-reward-total"><b>'+esc(pumpRewardSol({totalSol:totals.creatorSol}))+' SOL</b><span>Creator fees</span></div><div class="pump-reward-total"><b>'+esc(pumpRewardSol({totalSol:totals.cashbackSol}))+' SOL</b><span>Trader Cash back</span></div></div>'+(state.pumpRewardsError?'<p class="wnote" style="color:var(--red)">'+esc(state.pumpRewardsError)+'</p>':'')+(rows||'<p class="mut" style="font-size:12px">No managed wallets yet.</p>')+'<p class="wnote" style="margin:9px 0 0">Amounts are wallet-wide across Pump and PumpSwap, never assigned to one coin. Bonding-curve rewards arrive as SOL. PumpSwap rewards can remain WSOL when the wallet already has a WSOL account; SlimeWire never closes that existing account.</p>';
+  }
+  function pumpRewardsCardHtml(){return '<div class="wbox" data-pump-rewards-panel>'+pumpRewardsInnerHtml()+'</div>';}
+  function paintPumpRewardsPanels(){document.querySelectorAll("[data-pump-rewards-panel]").forEach(box=>box.innerHTML=pumpRewardsInnerHtml());}
+  async function loadPumpRewards(force){
+    if(!state.token)return null;
+    const fresh=state.pumpRewards&&Date.now()-Number(state.pumpRewardsCheckedAt||0)<15000;
+    if(!force&&fresh){paintPumpRewardsPanels();return state.pumpRewards;}
+    if(state._pumpRewardsLoading)return state.pumpRewards;
+    state._pumpRewardsLoading=true;state.pumpRewardsError="";paintPumpRewardsPanels();
+    const {ok,d}=await api("/api/web/pump/rewards").catch(()=>({}));
+    if(ok&&d&&d.ok){state.pumpRewards=d;state.pumpRewardsCheckedAt=Date.now();state.pumpRewardsError="";}
+    else state.pumpRewardsError=apiMessage(d,"Pump rewards could not refresh yet.");
+    state._pumpRewardsLoading=false;paintPumpRewardsPanels();return state.pumpRewards;
+  }
+  async function claimPumpReward(walletIndex,kind,button){
+    if(!(await ensureAccount())){toast("Log in to claim this wallet's rewards.",true);return;}
+    const rewardKind=kind==="cashback"?"cashback":"creator",old=button&&button.textContent;if(button){button.disabled=true;button.textContent="Claiming...";}
+    const {ok,d}=await jpost("/api/web/pump/rewards/claim",{walletIndex:Number(walletIndex),kind:rewardKind,tradeAttemptId:attemptId()});
+    if(ok&&d&&d.ok){const got=Number(d.claimedSol??(d.claim&&d.claim.claimedSol)??0),asset=String(d.payoutAsset||"SOL");toast(got>0?(asset==="SOL"?"Claimed "+pumpRewardSol({totalSol:got})+" SOL to this wallet":"Claimed "+pumpRewardSol({totalSol:got})+" SOL-equivalent; PumpSwap proceeds remain WSOL in the wallet's existing WSOL account."):"Nothing was waiting to claim.",!(got>0));await Promise.all([loadPumpRewards(true),refreshWallets()]);if(state.route==="wallet")paintWallet();}
+    else toast(apiMessage(d,"Reward claim could not complete."),true);
+    if(button&&button.isConnected){button.disabled=false;button.textContent=old||"Claim";}
+  }
+  async function launchesModal(){
+    openModal('<h3>Your launches &amp; rewards</h3><p class="sub mut" style="font-size:12px">Pump rewards are shown by wallet because a claim can include activity from several coins.</p><div id="lchSimple"><div class="loading"><span class="spin"></span></div></div>');
+    const body=$("#lchSimple");if(!body)return;
+    const [launchResult]=await Promise.all([api("/api/web/launches").catch(()=>({})),loadPumpRewards(false)]),ok=launchResult&&launchResult.ok,d=launchResult&&launchResult.d,coins=(ok&&d&&d.coins)||[];state.launchCoins=coins;
+    const list=coins.length?coins.map(c=>{const rh=c.rail==="robinhood",pump=!rh&&c.rail!=="meteora",manual=pump&&c.creatorFeeClaimMode==="manual",cashback=pump&&!!(c.pumpCashback||c.cashback||c.isCashbackCoin),status=String(c.status||"live").toLowerCase();const actions='<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="wbtn ghost" style="padding:7px 10px" onclick="'+(rh?'GG.rhTrade':'GG.open')+'(\''+esc(c.mint)+'\')">Open</button><button class="wbtn ghost" style="padding:7px 10px" onclick="GG.dexProfileReview(\''+esc(c.mint)+'\')">Update DEX profile</button>'+(pump&&c.devWalletIndex?'<button class="wbtn ghost" style="padding:7px 10px" onclick="GG.exportPumpCreatorWallet('+Number(c.devWalletIndex)+',\''+esc(c.devWallet||'')+'\')">Backup wallet</button>':'')+'</div>';const rewardLabel=cashback?'Pump / Cash back permanent':manual?'Pump / creator fees accumulating':'Pump / creator rewards';return '<div class="walletrow" style="align-items:center;margin-bottom:7px;flex-wrap:wrap"><div class="ico">'+(rh?'RH':'P')+'</div><div class="info" style="min-width:150px"><b>'+esc(c.symbol||c.name||short(c.mint))+' '+(cashback?'<span class="cashback-badge">Cash back</span>':'')+'</b><div class="addr mut">'+esc(rh?'Robinhood Chain':rewardLabel)+' / '+esc(c.devWalletShort||"creator wallet")+' / '+esc(status)+'</div></div>'+actions+'</div>';}).join(""):'<div class="launch-summary"><span class="mark">+</span><div><b>No launches yet.</b><br><span class="mut">Complete the launch tabs and your coins will appear here.</span></div></div>';
+    body.innerHTML=pumpRewardsCardHtml()+'<div class="launch-section-title" style="margin-top:14px">Coins launched through SlimeWire</div>'+list+'<div class="launch-summary" style="margin-top:10px;margin-bottom:0"><span class="mark">Key</span><div><b>Rewards stay under the receiving wallet.</b><br><span class="mut">Use the wallet-wide buttons above. Backups contain private recovery keys; never share them.</span></div></div>';
+  }
+  function dexProfileDrafts(){try{const d=JSON.parse(localStorage.getItem("ggDexProfileDrafts")||"{}");return d&&typeof d==="object"?d:{};}catch(e){return{};}}
+  function saveDexProfileDraft(mint){const drafts=dexProfileDrafts();drafts[mint]={website:String(($("#dexProfileWebsite")||{}).value||""),x:String(($("#dexProfileX")||{}).value||""),telegram:String(($("#dexProfileTelegram")||{}).value||""),savedAt:new Date().toISOString()};try{localStorage.setItem("ggDexProfileDrafts",JSON.stringify(drafts));}catch(e){}return drafts[mint];}
+  function dexProfileReview(mint){
+    const coin=(state.launchCoins||[]).find(c=>String(c.mint||"").toLowerCase()===String(mint||"").toLowerCase())||{},saved=dexProfileDrafts()[mint]||{},form=state.launchForm||{};
+    const website=saved.website??coin.website??form.lcWeb??"",x=saved.x??coin.x??coin.twitter??form.lcX??"",telegram=saved.telegram??coin.telegram??form.lcTg??"";
+    openModal('<h3>Update DEX profile</h3><p class="sub mut" style="font-size:12px;line-height:1.5">Review the token info here first. SlimeWire saves this prep sheet on this device, then opens the official DEX Screener checkout.</p><div class="field"><label>Coin CA</label><div class="walletrow" style="margin:0"><div class="info"><div class="addr" style="word-break:break-all">'+esc(mint)+'</div></div><button class="wbtn ghost" onclick="GG.copy(\''+esc(mint)+'\')">Copy</button></div></div><div class="field"><label>Website</label><input id="dexProfileWebsite" value="'+esc(website)+'" placeholder="https://yourcoin.com"></div><div class="field row2"><div><label>X / Twitter</label><input id="dexProfileX" value="'+esc(x)+'" placeholder="https://x.com/yourcoin"></div><div><label>Telegram</label><input id="dexProfileTelegram" value="'+esc(telegram)+'" placeholder="https://t.me/yourcoin"></div></div><div class="launch-summary"><span class="mark">Out</span><div><b>Final sign-in and payment happen with DEX Screener.</b><br><span class="mut">DEX Screener does not offer a public partner checkout API, so SlimeWire never collects your DEX login or payment. You may need to paste the saved links into their form.</span></div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="wbtn ghost" style="flex:1" onclick="GG.saveDexProfileDraft(\''+esc(mint)+'\');GG.toast(\'DEX prep saved on this device\')">Save draft</button><button class="wbtn" style="flex:1" onclick="GG.openDexProfileCheckout(\''+esc(mint)+'\')">Continue to DEX Screener</button></div>');
+    ["#dexProfileWebsite","#dexProfileX","#dexProfileTelegram"].forEach(id=>{const input=$(id);if(input)input.oninput=()=>saveDexProfileDraft(mint);});
+  }
+  function openDexProfileCheckout(mint){saveDexProfileDraft(mint);const url="https://marketplace.dexscreener.com/product/token-info/order",tab=window.open(url,"_blank");if(tab)tab.opener=null;else location.href=url;toast("Prep saved / finish securely with DEX Screener");}
   async function launchesModalLegacy(){
     openModal('<h3>💰 Creator fees &amp; launches</h3><p class="sub mut" style="font-size:12px">Pump fees <b>accrue but aren\'t auto-sent</b> — you claim them. This claims every fee a wallet earned across <b>all</b> its pump coins (even ones launched on pump.fun directly), straight to that wallet. No pump.fun trip.</p><div id="lchBody"><div class="loading"><span class="spin"></span></div></div>');
     if(!state.wallets.length)await refreshWallets();
@@ -3641,6 +3700,7 @@
     body.innerHTML=html;
   }
   async function claimFees(walletIndex,rail,mint){
+    if((rail||"pump")==="pump")return claimPumpReward(walletIndex,"creator");
     if(!(await ensureTradeReady()))return;
     toast("Claiming fees…");
     const {ok,d}=await jpost("/api/web/launch/claim-fees",{walletIndex:String(walletIndex),rail:rail||"pump",mint:mint||"",tradeAttemptId:attemptId()});
@@ -4158,6 +4218,7 @@
           '<div style="display:flex;gap:9px;margin-top:6px"><button class="wbtn" id="copyDep">Copy deposit address</button></div>'+
           '<p class="wnote" style="margin-top:12px">Tip: keep a little SOL for fees. Once funds land, hit Refresh and your balance updates here and on every Buy button.</p></div>':'')+
         additionalWalletFundingHtml()+
+        pumpRewardsCardHtml()+
         // ---- Presets fold ----
         '<details class="fold"><summary>🎚️ Presets<span class="sub">Quick Buy &amp; Bundle · auto TP/SL</span><span class="chev">▾</span></summary><div class="foldbody">'+
           '<p class="wnote" style="margin:0 0 12px">Tap <b>Use</b> to make a Quick Buy preset active (it arms TP/SL on every buy — the active one shows ✓). <b>✎</b> edit · <b>✕</b> remove. You can also switch presets from the dropdown on any coin\'s trade screen.</p>'+
@@ -4230,6 +4291,7 @@
         '<a class="socbtn" href="https://www.slimewire.org" target="_blank" rel="noopener noreferrer">🌐 Website</a>'+
       '</div></div>';
     view.innerHTML="";view.appendChild(wrap);wireSwampOps();
+    if(state.token)setTimeout(()=>loadPumpRewards(false),0);
     const cf=$("#connectFundBtn");if(cf)cf.onclick=()=>openConnectModal();
     const mk=$("#mkWallet");if(mk)mk.onclick=async()=>{mk.disabled=true;mk.textContent="Creating…";await createWallet();if(state.route==="wallet")renderWallet();};
     const rs=$("#restoreBtn");if(rs)rs.onclick=()=>restoreModal();
@@ -4716,10 +4778,23 @@
       '<div class="ln mut" style="font-size:10px;margin-top:6px">Automatic mode leaves fees in Pump\'s creator vault until one economical, atomic holder payout is ready. Eligible holders are paid proportional to token balance; shortfalls remain pending. Pump Cash back instead rewards traders by volume. No token tax or transfer trap.</div>'+
     '</div>';
   }
+  function lcRewardMode(){const picked=document.querySelector('input[name="lcRewardMode"]:checked');return picked&&["creator","cashback","holders"].includes(picked.value)?picked.value:"creator";}
+  function lcRewardModeHtml(){
+    return '<div class="launch-section-title">Pump reward mode</div><div class="reward-mode-grid" role="radiogroup" aria-label="Pump reward mode">'+
+      '<label class="reward-mode"><input type="radio" name="lcRewardMode" id="lcRewardCreator" value="creator" checked><span><b>Creator rewards</b><small>Default. Pump creator fees accrue to the selected dev wallet.</small></span></label>'+
+      '<label class="reward-mode"><input type="radio" name="lcRewardMode" id="lcRewardCashback" value="cashback"><span><b>Pump Cash back</b><small>Permanent at creation. Traders earn by eligible trading volume.</small></span></label>'+
+      '<label class="reward-mode"><input type="radio" name="lcRewardMode" id="lcRewardHolders" value="holders"><span><b>SlimeWire holder rewards</b><small>Batch a chosen share of creator fees to eligible holders.</small></span></label></div>'+
+      '<div id="lcCreatorRewardFields"><div class="launch-summary"><span class="mark">%</span><div><b>Creator fees are automatic by default.</b><br><span class="mut">They accrue to this wallet. Claimable Pump and PumpSwap balances appear wallet-wide in Wallet and Your launches.</span></div></div><label class="lcheck"><input type="checkbox" id="lcCreatorFeesManual"> <span><b>Let Pump creator fees accumulate</b> - skip automatic claims for this launch. Claim later in SlimeWire, or use the backed-up creator wallet directly.</span></label></div>'+
+      '<div id="lcCashbackRewardFields" class="feebox" style="display:none"><b>Pump Cash back is permanent for this coin.</b><div class="ln mut">Eligible traders earn from volume through Pump. The creator cannot switch this coin back later or manually claim the fees redirected to Cash back.</div></div>'+
+      '<div id="lcHolderRewardFields" class="feebox" style="display:none"><b>SlimeWire holder rewards</b><div class="field row2" style="margin-top:8px"><div><label style="font-size:11px">Fee split</label><select id="lcHolderRewardShare"><option value="5000">Half to holders</option><option value="10000">All to holders</option></select></div><div><label style="font-size:11px">Hold rule</label><input id="lcHolderRewardMinHours" inputmode="numeric" value="4" placeholder="hours"></div><div><label style="font-size:11px">Minimum tokens</label><input id="lcHolderRewardMinTokens" inputmode="numeric" value="3000000"></div><div><label style="font-size:11px">Holders per payout</label><input id="lcHolderRewardMax" inputmode="numeric" value="18" max="18"></div><div><label style="font-size:11px">Distribute after rewards reach (SOL)</label><input id="lcHolderRewardMinPayout" inputmode="decimal" value="0.01" min="0.005" step="0.005"></div></div><div class="ln mut" style="font-size:10px">Fees accrue until one economical holder payout is ready. No token tax or transfer trap.</div></div>';
+  }
+  function lcSyncRewardMode(){const mode=lcRewardMode(),creator=$("#lcCreatorRewardFields"),cashback=$("#lcCashbackRewardFields"),holders=$("#lcHolderRewardFields"),manual=$("#lcCreatorFeesManual"),goButton=$("#lcGo");if(creator)creator.style.display=mode==="creator"?"":"none";if(cashback)cashback.style.display=mode==="cashback"?"":"none";if(holders)holders.style.display=mode==="holders"?"":"none";if(manual)manual.disabled=mode!=="creator";if(goButton&&!goButton.disabled)goButton.textContent=mode==="cashback"?"Review permanent Cash back launch":"Review & launch";}
+  function lcWireRewardMode(){document.querySelectorAll('input[name="lcRewardMode"]').forEach(r=>r.onchange=()=>{lcSyncRewardMode();lcSnapshot();});lcSyncRewardMode();}
   function lcWireHolderRewards(pfx){const cb=$("#"+pfx+"HolderRewards"),box=$("#"+pfx+"HolderRewardsFields");if(!cb||!box)return;const sync=()=>{box.style.display=cb.checked?"":"none";};cb.onchange=sync;sync();}
-  function lcReadHolderRewards(pfx){const cb=$("#"+pfx+"HolderRewards");if(!cb||!cb.checked)return{enabled:false};return{enabled:true,shareBps:Number(($("#"+pfx+"HolderRewardShare")||{}).value||5000),minTokens:Number((($("#"+pfx+"HolderRewardMinTokens")||{}).value||"3000000").replace(/,/g,""))||3000000,minHoldHours:Number(($("#"+pfx+"HolderRewardMinHours")||{}).value||4)||4,maxRecipients:Math.min(18,Number(($("#"+pfx+"HolderRewardMax")||{}).value||18)||18),minPayoutSol:Number(($("#"+pfx+"HolderRewardMinPayout")||{}).value||0.01)||0.01,minWalletPayoutSol:0.0001,weighting:"balance"};}
+  function lcReadHolderRewardsLegacy(pfx){const cb=$("#"+pfx+"HolderRewards");if(!cb||!cb.checked)return{enabled:false};return{enabled:true,shareBps:Number(($("#"+pfx+"HolderRewardShare")||{}).value||5000),minTokens:Number((($("#"+pfx+"HolderRewardMinTokens")||{}).value||"3000000").replace(/,/g,""))||3000000,minHoldHours:Number(($("#"+pfx+"HolderRewardMinHours")||{}).value||4)||4,maxRecipients:Math.min(18,Number(($("#"+pfx+"HolderRewardMax")||{}).value||18)||18),minPayoutSol:Number(($("#"+pfx+"HolderRewardMinPayout")||{}).value||0.01)||0.01,minWalletPayoutSol:0.0001,weighting:"balance"};}
   function lcExitPresetOptions(){return '<option value="balanced">Balanced · TP +40% / SL -8%</option><option value="smart">Smart ladder · +50 / +120 / +300</option><option value="fast">Fast ladder · +25 / +50 / +100</option><option value="custom">Custom ladder</option><option value="manual">Manual only · buy at launch, I sell myself</option>';}
   function lcExitStrategyHtml(pfx,label){return '<div class="field lc-exit-strategy" data-lc-strategy="'+pfx+'"><label>'+esc(label||"Exit preset")+'</label><select id="'+pfx+'Preset">'+lcExitPresetOptions()+'</select><label id="'+pfx+'StopControl" class="lcheck" style="margin:7px 0 0"><input type="checkbox" id="'+pfx+'SlEnabled" data-lc-stop-toggle checked> <span><b id="'+pfx+'SlLabel">Stop loss on</b> · uncheck for take-profit ladder only.</span></label><div id="'+pfx+'SlState" class="mut" style="font-size:10px;margin:3px 0 0">Stop loss and break-even protection are on.</div><div id="'+pfx+'Custom" class="feebox" style="display:none;margin-top:7px"><div class="field"><label>Stop loss (%)</label><input id="'+pfx+'Sl" inputmode="decimal" value="10"></div><div class="mut" style="font-size:10px;margin:1px 0 6px">Each target sells part of that wallet\'s original position. A 0% sell target is skipped.</div><div class="field row2"><div><label>Target 1 / sell %</label><div style="display:flex;gap:6px"><input id="'+pfx+'Tp1" inputmode="decimal" value="50"><input id="'+pfx+'Sell1" inputmode="decimal" value="40"></div></div><div><label>Target 2 / sell %</label><div style="display:flex;gap:6px"><input id="'+pfx+'Tp2" inputmode="decimal" value="120"><input id="'+pfx+'Sell2" inputmode="decimal" value="35"></div></div><div><label>Target 3 / sell %</label><div style="display:flex;gap:6px"><input id="'+pfx+'Tp3" inputmode="decimal" value="300"><input id="'+pfx+'Sell3" inputmode="decimal" value="25"></div></div></div></div></div>';}
+  function lcReadHolderRewards(pfx){if(pfx!=="lc"||lcRewardMode()!=="holders")return{enabled:false};return{enabled:true,shareBps:Number(($("#"+pfx+"HolderRewardShare")||{}).value||5000),minTokens:Number(((($("#"+pfx+"HolderRewardMinTokens")||{}).value||"3000000").replace(/,/g,"")))||3000000,minHoldHours:Number(($("#"+pfx+"HolderRewardMinHours")||{}).value||4)||4,maxRecipients:Math.min(18,Number(($("#"+pfx+"HolderRewardMax")||{}).value||18)||18),minPayoutSol:Number(($("#"+pfx+"HolderRewardMinPayout")||{}).value||0.01)||0.01,minWalletPayoutSol:0.0001,weighting:"balance"};}
   function lcReadExitStrategy(pfx){
     const preset=String(($("#"+pfx+"Preset")||{}).value||"balanced");
     if(preset==="manual")return{preset,manualExit:true,disableAutoExit:true,takeProfitPct:"0",stopLossPct:"0",takeProfitLadder:[],breakEvenAfterTp1:false,sellDelay:"off"};
@@ -4771,7 +4846,8 @@
     const rows=(state.launchInvites||[]).map(inv=>{
       const ready=inv.status==="READY",entered=inv.status==="CONSUMED"&&/^ENTERED/.test(String(inv.entry&&inv.entry.status||"")),needs=inv.status==="CONSUMED"&&!entered,waiting=inv.status==="WAITING",reserved=inv.status==="RESERVED";
       const status=entered?"Entered":needs?"Needs attention":ready?"Ready":reserved?(inv.entry&&inv.entry.status==="RETRYING"?"Retrying safely":inv.entry&&inv.entry.status==="RECONCILING"?"Reconciling":"Launching"):waiting?"Waiting for approval":inv.status==="EXPIRED"?"Expired":"Unavailable";
-      return '<div class="lc-bundle-wallet"><label class="lcheck"><input type="checkbox" data-lc-participant-pick="'+esc(inv.id)+'" '+(ready?"checked":"disabled")+'> <span><b>'+esc(inv.label||inv.participantName||"Participant")+'</b> · '+esc(status)+(ready?' · ◉'+esc(Number(inv.amountSol||0).toFixed(3))+' · '+esc(inv.exitLabel||"Manual only"):"")+'</span></label>'+(ready||waiting?'<button class="wbtn ghost" type="button" data-lc-invite-revoke="'+esc(inv.id)+'" style="margin-top:6px">Remove</button>':"")+'</div>';
+      const pickId="lcParticipant_"+String(inv.id||"").replace(/[^A-Za-z0-9_-]/g,"_"),queue=Number(inv.queuePosition)>0?" / queue #"+Number(inv.queuePosition):"";
+      return '<div class="lc-bundle-wallet"><label class="lcheck"><input type="checkbox" id="'+esc(pickId)+'" data-lc-participant-pick="'+esc(inv.id)+'" '+(ready?"checked":"disabled")+'> <span><b>'+esc(inv.label||inv.participantName||"Participant")+'</b> · '+esc(status+queue)+(ready?' · ◉'+esc(Number(inv.amountSol||0).toFixed(3))+' · '+esc(inv.exitLabel||"Manual only"):"")+'</span></label>'+(ready||waiting?'<button class="wbtn ghost" type="button" data-lc-invite-revoke="'+esc(inv.id)+'" style="margin-top:6px">Remove</button>':"")+'</div>';
     }).join("");
     return '<div class="launch-section-title" style="margin-top:14px">External participant wallets</div>'+
       '<div class="launch-summary"><span class="mark">↗</span><div><b>Invite someone into the launch entry.</b><br><span class="mut">They sign in, choose and approve their own SlimeWire wallet, amount and exit control. You never receive their key or control their funds.</span></div></div>'+
@@ -4806,8 +4882,8 @@
     const cfg=invite.exitConfig||{},lad=Array.isArray(cfg.takeProfitLadder)?cfg.takeProfitLadder:[];
     const exit=invite.exitMode==="manual"?"Manual only":(lad.length?lad.map(r=>"+"+Number(r.pct)+"% / sell "+Number(r.sellPercent)+"%").join(" → "):invite.exitLabel||"Managed exit");
     const sl=invite.exitMode==="manual"?"":(invite.stopLossEnabled?" · stop loss -"+Number(cfg.stopLossPct||0)+"%":" · stop loss off");
-    const push=invite.notifyOnLaunch?" · launch push on":"";
-    return '<div class="launch-summary"><span class="mark">✓</span><div><b>Saved now</b><br><span class="mut">'+esc(invite.walletLabel||invite.walletShort||"Wallet")+' · '+esc(invite.amountSol)+' SOL · '+esc(exit+sl+push)+'</span></div></div>';
+    const push=invite.notifyOnLaunch?" · launch push on":"",slip=" · max fill movement "+(Number(invite.maxSlippageBps||3000)/100)+"%";
+    return '<div class="launch-summary"><span class="mark">✓</span><div><b>Saved now</b><br><span class="mut">'+esc(invite.walletLabel||invite.walletShort||"Wallet")+' · '+esc(invite.amountSol)+' SOL · '+esc(exit+sl+slip+push)+'</span></div></div>';
   }
   async function renderLaunchBundleInvite(){
     setActiveView("v-launch");subbarTool("Launch entry approval");
@@ -4826,10 +4902,11 @@
     else if(!(state.wallets||[]).length) action='<div class="launch-summary"><span class="mark">2</span><div><b>Create or restore your wallet first.</b><br><span class="mut">Then return here; this invite stays attached to the link.</span></div></div><button class="wbtn" id="lcJoinWallet" style="width:100%">Set up my wallet</button>';
     else action=lcInviteSavedSummary(invite)+'<div class="field"><label>Your wallet</label>'+walletSelectHtml("lcJoinWalletSelect")+'<span class="mut" style="font-size:10px">Only this wallet will enter. You keep full control.</span></div>'+
       '<div class="field"><label>Entry amount (SOL)</label><input id="lcJoinAmount" inputmode="decimal" value="'+esc(invite.amountSol||"0.05")+'"><span class="mut" style="font-size:10px">Keep a little SOL for network fees.</span></div>'+
+      '<div class="field"><label>Maximum fill movement</label><select id="lcJoinMaxSlip"><option value="1000">10% · tighter, may miss</option><option value="2000">20%</option><option value="3000">30% · recommended</option><option value="4000">40%</option><option value="5000">50% · highest risk</option></select><span class="mut" style="font-size:10px">Your buy will never use more tolerance than this. A lower cap can fail during a fast launch.</span></div>'+
       '<div class="field"><label>After entry</label><select id="lcJoinExit"><option value="manual">Manual only — no automatic selling</option><option value="balanced">Balanced preset · TP +40% / SL -8%</option><option value="smart">Smart ladder · +50 / +120 / +300</option><option value="fast">Fast ladder · +25 / +50 / +100</option><option value="custom">Custom ladder</option></select><span class="mut" style="font-size:10px">A preset enables managed-wallet TP/SL for 30 days; revoke it anytime in Wallet. Manual only leaves automation off.</span></div>'+lcInviteCustomHtml()+
       '<label class="lcheck"><input type="checkbox" id="lcJoinNotify" '+(invite.notifyOnLaunch?'checked':'')+'> <span><b>Notify me when the coin launches</b> · enable a push alert on this phone or browser as soon as the launch is confirmed.</span></label>'+
       '<div id="lcJoinNotifyMsg" class="mut" style="font-size:10px;margin:3px 0 8px">'+(invite.notifyOnLaunch?'Launch push is enabled for this entry.':'Optional · you can approve the entry without notifications.')+'</div>'+
-      '<label class="lcheck"><input type="checkbox" id="lcJoinConfirm"> <span>I approve one buy from this wallet when the launch completes. I understand launches are high risk and fills are not guaranteed.</span></label>'+
+      '<label class="lcheck"><input type="checkbox" id="lcJoinConfirm"> <span>I approve one buy from this wallet when the launch completes, limited to the SOL amount and maximum fill movement shown above. I understand launches are high risk and fills are not guaranteed.</span></label>'+
       '<button class="bigbuy" id="lcJoinApprove">'+(invite.status==="READY"?'Update approved entry':'Approve launch entry')+'</button>'+(invite.status==="READY"?'<button class="wbtn ghost" id="lcJoinCancel" style="width:100%;margin-top:8px">Cancel my approval</button>':'')+'<div id="lcJoinMsg" class="mut" style="font-size:11px;margin-top:8px"></div>';
     $("#v-launch").innerHTML='<div class="wgrid"><div class="wbox launch-card" style="grid-column:1/-1;max-width:720px;margin:auto"><div class="launch-head"><div><h3>Join '+esc(invite.label||"launch entry")+'</h3><p class="sub">Invited by '+esc(invite.launcherName||"a SlimeWire launcher")+' · '+esc(invite.status==="READY"?"Already approved — you can update it until launch.":"Choose your settings once, then the launch handles the entry.")+'</p></div><a class="wbtn ghost" href="/">Terminal</a></div>'+action+'<div class="lcnote" style="margin-top:12px"><b>Your wallet stays yours.</b> This approval is limited to one buy for this invite. Manual only means SlimeWire will not auto-sell; presets can be changed only before launch starts.</div></div></div>';
     const li=$("#lcJoinLogin"),cr=$("#lcJoinCreate"),wa=$("#lcJoinWallet");if(li)li.onclick=loginModal;if(cr)cr.onclick=createAccountModal;if(wa)wa.onclick=()=>go("wallet");
@@ -4837,6 +4914,7 @@
       exit.value=invite.exitMode||"manual";
       const cfg=invite.exitConfig||{},lad=Array.isArray(cfg.takeProfitLadder)?cfg.takeProfitLadder:[],slToggle=$("#lcJoinSlEnabled"),walletSelect=$("#lcJoinWalletSelect");
       if(walletSelect&&invite.status==="READY"){const match=[...walletSelect.options].find(o=>{const w=(state.wallets||[])[Number(o.value)-1];return (w&&short(w.publicKey)===invite.walletShort)||o.textContent.includes(invite.walletLabel||"\u0000");});if(match)walletSelect.value=match.value;}
+      if($("#lcJoinMaxSlip"))$("#lcJoinMaxSlip").value=String(invite.maxSlippageBps||3000);
       if(slToggle&&invite.stopLossEnabled===false)slToggle.checked=false;
       if($("#lcJoinSl")&&cfg.stopLossPct!==undefined)$("#lcJoinSl").value=String(cfg.stopLossPct);
       lad.slice(0,3).forEach((r,i)=>{const n=i+1,tp=$("#lcJoinTp"+n),sell=$("#lcJoinSell"+n);if(tp)tp.value=String(r.pct);if(sell)sell.value=String(r.sellPercent);});
@@ -4848,7 +4926,7 @@
       const mode=$("#lcJoinExit").value,ladder=[1,2,3].map(i=>({pct:Number(($("#lcJoinTp"+i)||{}).value||0),sellPercent:Number(($("#lcJoinSell"+i)||{}).value||0)}));
       approve.disabled=true;approve.textContent="Checking wallet and saving…";
       const stopLossEnabled=mode!=="manual"&&!!($("#lcJoinSlEnabled")&&$("#lcJoinSlEnabled").checked);
-      const {ok,d}=await jpost("/api/web/launch/bundle-invite/approve",{token,walletIndex:$("#lcJoinWalletSelect").value,amountSol:$("#lcJoinAmount").value,exitMode:mode,stopLossEnabled,stopLossPct:stopLossEnabled?(($("#lcJoinSl")||{}).value||10):0,takeProfitLadder:ladder,notifyOnLaunch:!!(notify&&notify.checked)});
+      const {ok,d}=await jpost("/api/web/launch/bundle-invite/approve",{token,walletIndex:$("#lcJoinWalletSelect").value,amountSol:$("#lcJoinAmount").value,maxSlippageBps:$("#lcJoinMaxSlip").value,exitMode:mode,stopLossEnabled,stopLossPct:stopLossEnabled?(($("#lcJoinSl")||{}).value||10):0,takeProfitLadder:ladder,notifyOnLaunch:!!(notify&&notify.checked)});
       if(ok){toast("Entry approved");renderLaunchBundleInvite();}else{msg.textContent=apiMessage(d,"Could not approve entry.");approve.disabled=false;approve.textContent="Approve launch entry";}
     };
     if(notify)notify.onchange=async()=>{
@@ -4862,7 +4940,7 @@
   }
   async function pollLaunchProgress(aid,btn){
     const out=$("#lcOut");let tries=0;
-    const manualCreatorFees=!!($("#lcCreatorFeesManual")&&$("#lcCreatorFeesManual").checked);
+    const launchRewardMode=lcRewardMode(),manualCreatorFees=launchRewardMode==="creator"&&!!($("#lcCreatorFeesManual")&&$("#lcCreatorFeesManual").checked),cashbackLaunch=launchRewardMode==="cashback";
     const creatorWalletIndex=String(($("#lcDevWallet")||{}).value||state.activeWallet||"");
     const creatorWallet=(state.wallets||[]).find(w=>String(w.index)===creatorWalletIndex);
     const tick=async()=>{
@@ -4875,6 +4953,8 @@
         if(btn){btn.disabled=false;btn.textContent="Review & launch";}
         state.launchedMint=mint;
         if(out)out.innerHTML='<div class="wbox" style="margin:0"><b style="color:var(--green)">✓ Launched!</b>'+(entries&&entries.requested?'<div class="ln">Participant entries: <b>'+esc(entries.completed||0)+'/'+esc(entries.requested)+'</b> entered'+(entries.failed?' · '+esc(entries.failed)+' need attention':'')+'</div>':'')+(mint?'<div class="addr mut" style="margin-top:6px;word-break:break-all">'+esc(mint)+' <button onclick="GG.copy(\''+esc(mint)+'\')">⧉</button></div><div style="display:flex;gap:9px;margin-top:10px;flex-wrap:wrap"><button class="wbtn" onclick="GG.open(\''+esc(mint)+'\')">Open &amp; trade</button><button class="wbtn ghost" onclick="GG.launchChat(\''+esc(mint)+'\')">💬 Chat &amp; Live</button>'+(manualCreatorFees&&creatorWallet?'<button class="wbtn ghost" onclick="GG.exportPumpCreatorWallet('+Number(creatorWallet.index)+',\''+esc(creatorWallet.publicKey||'')+'\')">Download Pump wallet backup</button><button class="wbtn ghost" onclick="GG.launchesModal()">Claim later in SlimeWire</button>':'')+'</div>':'')+(manualCreatorFees?'<div class="ln mut" style="font-size:11px;margin-top:8px">Creator fees will remain in the Pump vault until you claim them. The wallet backup is optional recovery access; keep it private.</div>':'')+'</div>';
+        if(out&&cashbackLaunch){const box=out.querySelector(".wbox");if(box)box.insertAdjacentHTML("beforeend",'<div class="launch-summary" style="margin-top:9px;margin-bottom:0"><span class="mark">%</span><div><b><span class="cashback-badge">Cash back</span> permanently enabled</b><br><span class="mut">Eligible trader rewards build by volume. Wallet-wide claimable Cash back appears in Wallet.</span></div></div>');}
+        if(out&&mint){const actions=out.querySelector(".wbox div[style*='display:flex']");if(actions)actions.insertAdjacentHTML("beforeend",'<button class="wbtn ghost" onclick="GG.dexProfileReview(\''+esc(mint)+'\')">Update DEX profile</button>');}
         toast("Token launched!");refreshWallets();return;
       }
       if(pr.status==="FAILED"){if(btn){btn.disabled=false;btn.textContent="Review & launch";}if(out)out.innerHTML='<div class="mut" style="color:var(--red);font-size:12px">Launch failed: '+esc(pr.failureReason||"unknown error")+'</div>';return;}
@@ -4950,7 +5030,7 @@
   // Persist the WHOLE launch form across navigations (go to Wallet / dev wallet and back) so nothing
   // typed or uploaded disappears. Snapshot on every edit; restore right after each render. Images live
   // in state.launchImg/Banner (file inputs can't be re-populated for security, so we re-show the preview).
-  function lcSnapshot(){const root=$("#v-launch");if(!root)return;const f=state.launchForm||(state.launchForm={});root.querySelectorAll("input,textarea,select").forEach(el=>{if(!el.id||el.type==="file"||el.id==="lcChatCa")return;f[el.id]=(el.type==="checkbox")?el.checked:el.value;});}
+  function lcSnapshot(){const root=$("#v-launch");if(!root)return;const f=state.launchForm||(state.launchForm={});root.querySelectorAll("input,textarea,select").forEach(el=>{if(!el.id||el.type==="file"||el.id==="lcChatCa")return;f[el.id]=(el.type==="checkbox"||el.type==="radio")?el.checked:el.value;});}
   function lcReadDevBuyAmount(){
     const input=$("#lcDevBuy"),saved=state.launchForm&&state.launchForm.lcDevBuy;
     const raw=String((input&&input.value)!=null?input.value:(saved||"")).trim().replace(",",".");
@@ -5008,12 +5088,12 @@
     if(!(await ensureTradeReady()))return;const name=String(($("#lcNftItemName")||{}).value||"").trim();if(!name){toast("Give this NFT a name.",true);return;}if(!state.lcNftItemImage){toast("Choose an artwork image before minting.",true);return;}const btn=$("#lcNftItemMint");if(btn){btn.disabled=true;btn.textContent="Minting…";}const body={tokenMint:state.lcNftMint,name,description:String(($("#lcNftItemDescription")||{}).value||"").trim(),rarity:String(($("#lcNftItemRarity")||{}).value||"common"),recipient:String(($("#lcNftItemRecipient")||{}).value||"").trim(),clientRequestId:attemptId()};if(state.lcNftItemImage){body.imageDataUrl=state.lcNftItemImage.dataUrl;body.imageName=state.lcNftItemImage.name;}const {ok,d}=await lcNftLongPost("/api/web/nft/item/mint",body);if(!(ok&&d&&d.ok)){state.lcNftStatus=apiMessage(d,"The NFT was not minted.");lcPaintNftManager();return;}state.lcNftItemImage=null;toast("NFT minted");await lcLoadNftManager();
   }
   function lcWireNftManager(){const load=$("#lcNftManagerLoad"),refresh=$("#lcNftRefresh"),create=$("#lcNftCreateLater"),link=$("#lcNftLinkExisting"),mint=$("#lcNftItemMint"),img=$("#lcNftItemImage"),ref=$("#lcNftStudioReference"),quote=$("#lcNftStudioQuote"),start=$("#lcNftStudioStart"),previews=$("#lcNftStudioPreviews"),approve=$("#lcNftStudioApprove"),build=$("#lcNftStudioBuild"),cancel=$("#lcNftStudioCancel"),studioRefresh=$("#lcNftStudioRefresh");if(load)load.onclick=lcLoadNftManager;if(refresh)refresh.onclick=lcLoadNftManager;if(create)create.onclick=lcCreateLaterNftCollection;if(link)link.onclick=lcLinkExistingNftCollection;if(mint)mint.onclick=lcMintNftItem;if(img)img.onchange=e=>lcReadNftItemImage(e.target.files&&e.target.files[0]);if(ref)ref.onchange=e=>lcReadNftStudioReference(e.target.files&&e.target.files[0]);if(quote)quote.onclick=lcQuoteNftStudio;if(start)start.onclick=lcStartNftStudio;if(previews)previews.onclick=lcGenerateNftPreviews;if(approve)approve.onclick=lcApproveNftPreview;if(build)build.onclick=lcBuildNftStudio;if(cancel)cancel.onclick=lcCancelNftStudio;if(studioRefresh)studioRefresh.onclick=lcLoadNftManager;}
-  function lcRestore(){const root=$("#v-launch");if(!root)return;const f=state.launchForm;if(f){root.querySelectorAll("input,textarea,select").forEach(el=>{if(!el.id||el.type==="file"||el.id==="lcChatCa"||!(el.id in f))return;if(el.type==="checkbox")el.checked=!!f[el.id];else if(f[el.id]!=null&&f[el.id]!=="")el.value=f[el.id];});}
+  function lcRestore(){const root=$("#v-launch");if(!root)return;const f=state.launchForm;if(f){root.querySelectorAll("input,textarea,select").forEach(el=>{if(!el.id||el.type==="file"||el.id==="lcChatCa"||!(el.id in f))return;if(el.type==="checkbox"||el.type==="radio")el.checked=!!f[el.id];else if(f[el.id]!=null&&f[el.id]!=="")el.value=f[el.id];});}
     if(state.launchImg&&$("#lcImgPrev"))$("#lcImgPrev").innerHTML='<img src="'+state.launchImg.dataUrl+'" style="height:64px;width:64px;border-radius:10px;object-fit:cover;border:1px solid var(--border)">';
     if(state.launchBanner&&$("#lcBannerPrev"))$("#lcBannerPrev").innerHTML='<img src="'+state.launchBanner.dataUrl+'" style="height:40px;border-radius:10px;object-fit:cover;border:1px solid var(--border)">';
     // Re-apply the show/hide that depends on restored checkbox state (promoter rows, bundle amount).
     const pm=$("#lcPromo");if(pm){const e=$("#lcPromoRows"),pp=$("#lcPayPromo");if(e)e.style.display=pm.checked?"":"none";if(pp)pp.style.display=pm.checked?"":"none";}
-    lcWireHolderRewards("lc");lcWireHolderRewards("lcRh");lcWireLaunchStrategies();}
+    lcWireHolderRewards("lc");lcWireHolderRewards("lcRh");lcWireRewardMode();lcWireLaunchStrategies();}
   async function renderLaunch(){
     if(state.launchInviteToken){await renderLaunchBundleInvite();return;}
     setActiveView("v-launch");subbarTool("🚀 Launch a Coin");if(state.token)await Promise.all([refreshWallets(),loadLaunchBundleInvites()]);if(state.route!=="launch")return;
@@ -5057,8 +5137,7 @@
       '<div data-lpanel="dev"'+show("dev")+'>'+
         '<div class="field"><label>Creator / dev wallet</label>'+walletSelectHtml("lcDevWallet")+'<span class="mut" style="font-size:10px">This wallet creates the coin, receives creator fees, and pays launch costs.</span></div><div id="lcDevRhNote" style="display:none"></div>'+
         '<div id="lcDevSol">'+
-        '<div class="launch-summary"><span class="mark">✓</span><div><b>Creator fees are automatic by default.</b><br><span class="mut">They go to this wallet, and SlimeWire claims eligible Pump fees after trading activity.</span></div></div>'+
-        '<label class="lcheck"><input type="checkbox" id="lcCreatorFeesManual"> <span><b>Let Pump creator fees accumulate</b> — skip automatic claims for this launch. Claim later in SlimeWire, and download the creator-wallet backup if you want direct pump.fun recovery access.</span></label>'+
+        lcRewardModeHtml()+
         '<div class="field"><label>Dev buy (SOL) <span style="text-transform:none">(optional)</span></label><input id="lcDevBuy" inputmode="decimal" placeholder="0.1"><span class="mut" style="font-size:10px">Your first position in the coin. Leave blank to launch without buying.</span></div>'+
         lcExitStrategyHtml("lcDev","Dev wallet exit preset")+
         '<label class="lcheck"><input type="checkbox" id="lcBundle" checked> <span><b>Bundle my dev buy with launch</b> — it lands with the create transaction. If the Jito bundle does not land, SlimeWire retries and falls back to an immediate standard launch + buy.</span></label>'+
@@ -5094,7 +5173,7 @@
     const nftOn=$("#lcNftEnabled"),nftMode=$("#lcNftSupplyMode");if(nftOn)nftOn.onchange=()=>{syncNft();lcSnapshot();};if(nftMode)nftMode.onchange=()=>{syncNft();lcSnapshot();};syncNft();
     lcWireNftManager();
     const pm=$("#lcPromo");if(pm)pm.onchange=()=>{const e=$("#lcPromoRows"),pp=$("#lcPayPromo");if(e)e.style.display=pm.checked?"":"none";if(pp)pp.style.display=pm.checked?"":"none";};
-    lcWireHolderRewards("lc");lcWireHolderRewards("lcRh");
+    lcWireHolderRewards("lc");lcWireHolderRewards("lcRh");lcWireRewardMode();
     const pp=$("#lcPayPromo");if(pp)pp.onclick=()=>payPromotersModal();
     const dwSel=$("#lcDevWallet");if(dwSel)dwSel.onchange=()=>{lcSnapshot();refreshRhSetup();lcSyncLaunchStrategies();};   // RH address + bundle list are per-wallet
     lcWireChat();
@@ -5166,7 +5245,8 @@
       const proceedsRouting=lcReadProceedsRouting(devIdx);
       // Creator fee is now a simple toggle: checked = MAX (1000 bps) to the dev wallet, unchecked = none.
       const creatorFeeBps="1000";
-      const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps,creatorFeeClaimMode:($("#lcCreatorFeesManual")&&$("#lcCreatorFeesManual").checked)?"manual":"auto",holderRewards:lcReadHolderRewards("lc"),rail:state.launchRail||"pump",nftCollection:{enabled:!!($("#lcNftEnabled")&&$("#lcNftEnabled").checked),name:String(($("#lcNftName")||{}).value||"").trim(),description:String(($("#lcNftDescription")||{}).value||"").trim(),useCoinArt:true,supplyMode:String(($("#lcNftSupplyMode")||{}).value||"expandable"),supplyCap:Math.max(1,Math.min(500,Number(($("#lcNftSupplyCap")||{}).value||500))),royaltyBps:Math.max(0,Math.min(1000,Number(($("#lcNftRoyalty")||{}).value||500)))}};
+      const rewardMode=lcRewardMode();
+      const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps,pumpCashback:rewardMode==="cashback",creatorFeeClaimMode:($("#lcCreatorFeesManual")&&$("#lcCreatorFeesManual").checked&&rewardMode==="creator")?"manual":"auto",holderRewards:lcReadHolderRewards("lc"),rail:state.launchRail||"pump",nftCollection:{enabled:!!($("#lcNftEnabled")&&$("#lcNftEnabled").checked),name:String(($("#lcNftName")||{}).value||"").trim(),description:String(($("#lcNftDescription")||{}).value||"").trim(),useCoinArt:true,supplyMode:String(($("#lcNftSupplyMode")||{}).value||"expandable"),supplyCap:Math.max(1,Math.min(500,Number(($("#lcNftSupplyCap")||{}).value||500))),royaltyBps:Math.max(0,Math.min(1000,Number(($("#lcNftRoyalty")||{}).value||500)))}};
       if(devW&&devW.publicKey)body.creatorFeeRecipient=devW.publicKey;
       // Promoter fee-split (up to 4 wallets + %) stored on the coin; paid out via "Pay promoters".
       if($("#lcPromo")&&$("#lcPromo").checked){const sp=[0,1,2,3].map(i=>({wallet:(($("#lcPmW"+i)||{}).value||"").trim(),pct:Number((($("#lcPmP"+i)||{}).value||"").trim())})).filter(r=>r.wallet&&r.pct>0);if(sp.length)body.creatorFeeSplit=sp;}
@@ -5186,6 +5266,10 @@
       }
       const participantInviteIds=[...document.querySelectorAll('#v-launch [data-lc-participant-pick]:checked')].map(cb=>String(cb.dataset.lcParticipantPick||"")).filter(Boolean);
       if(participantInviteIds.length){body.participantInviteIds=participantInviteIds;if(body.bundleBuy)body.bundleBuy.participantInviteIds=participantInviteIds;}
+      if(rewardMode==="cashback"){
+        const confirmed=await confirmModal('<h3>Confirm permanent Pump Cash back</h3><p class="sub mut" style="font-size:13px;line-height:1.5">This choice is set when the coin is created and <b>cannot be changed later</b>. Eligible traders earn by volume. The creator cannot manually claim the creator fees redirected to Cash back.</p>','Launch with Cash back','Go back');
+        if(!confirmed){b.disabled=false;b.textContent="Review permanent Cash back launch";return;}
+      }
       const {ok,status,d}=await jpost("/api/web/launch/coin",body);
       // Re-enable the button + route to Wallet WITHOUT wiping the token (the old wipe orphaned a just-
       // restored wallet, and returning left the button stuck on "Launching…" forever).
@@ -5379,7 +5463,7 @@
 
   // ---------- expose + boot ----------
   window.GG={open:openCoinRoute,openSell:(m)=>{state.pendingSell=m;go("trade",m);},sellPos:(m,s)=>quickSellModal(m,s),sendPos:(m,s)=>sendTokenModal(m,s),armPos:(m,s)=>armExitsModal(m,s),go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,setMarketChain,
-    escrowModal,renderEscrow,escrowFinalize,escrowRefund,launchesModal,claimFees,exportPumpCreatorWallet,toast,
+    escrowModal,renderEscrow,escrowFinalize,escrowRefund,launchesModal,claimFees,claimPumpReward,loadPumpRewards,dexProfileReview,saveDexProfileDraft,openDexProfileCheckout,exportPumpCreatorWallet,toast,
     launchRh:()=>{state.launchRail="robinhood";state.launchTab="coin";go("launch");},
     rhTrade:(a)=>rhTradeModal(a),rhBuy:(a,amt)=>rhBuyAmount(a,amt),rhBuyAmount:(a,amt)=>rhBuyAmount(a,amt),rhSell:(a,p)=>rhTrade(a,"sell",{percent:p}),rhQuick:(a)=>rhBuyAmount(a,rhQuickEth()),
     rhSellPos:async(a,p,w)=>{await rhTrade(a,"sell",{percent:p,walletIndex:w});loadRhPositions();},rhSendToken:(a,s,b,w)=>rhSendTokenModal(a,s,b,w),rhUseWallet:(w)=>rhUseWallet(w),rhOpenWalletCoin:(w,a)=>rhOpenWalletCoin(w,a),rhAvTile:(s,z,r,k)=>rhAvTileHtml(s,z,r,k),rhAvatarFail:(img)=>imgNext(img),imgNext:(img)=>imgNext(img),rhPresetModal:()=>rhPresetModal(),
@@ -5432,7 +5516,7 @@
   });
 })();
 </script>
-<script src="/terminal-pro.js?v=20260719a"></script>
+<script src="/terminal-pro.js?v=20260725a"></script>
 <script src="/fun-indicators.js?v=20260719a"></script>
 </body>
 </html>

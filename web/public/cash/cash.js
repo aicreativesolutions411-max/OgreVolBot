@@ -78,7 +78,13 @@
     activityPromise: null,
     activityUpdatedAt: "",
     activitySource: "",
-    activityError: ""
+    activityError: "",
+    pumpRewards: null,
+    pumpRewardsStatus: "idle",
+    pumpRewardsError: "",
+    pumpRewardsWalletIndex: null,
+    pumpRewardsRequestVersion: 0,
+    pumpRewardsPromise: null
   };
 
   const inFlightReads = new Map();
@@ -346,8 +352,15 @@
     state.activitySource = "";
     state.activityError = "";
     state.walletSyncError = "";
+    state.pumpRewardsRequestVersion += 1;
+    state.pumpRewardsPromise = null;
+    state.pumpRewards = null;
+    state.pumpRewardsStatus = "idle";
+    state.pumpRewardsError = "";
+    state.pumpRewardsWalletIndex = null;
     const positions = $("cashPositions");
     if (positions) positions.innerHTML = '<div class="activity-empty">Sign in to see coin positions.</div>';
+    renderCashPumpRewards();
   }
 
   function confirmCashAccountIdentity(user) {
@@ -668,6 +681,8 @@
     if (result.data.user) confirmCashAccountIdentity(result.data.user);
     await loadAccount();
     await ensureWallet({ create: false });
+    const cashBalanceRefresh = refreshBalance({ silent: true });
+    loadCashPumpRewardsAfterBalance(cashBalanceRefresh);
     const backedUp = await backupCashAccount({ quiet: true });
     closeSheet("onboard");
     refreshProfile();
@@ -699,6 +714,7 @@
     closeSheet("onboard");
     refreshProfile();
     void Promise.resolve(balanceRefresh).catch(() => {});
+    loadCashPumpRewardsAfterBalance(balanceRefresh);
     loadCashHistory();
     toast(`Welcome back${state.account?.username ? `, @${state.account.username}` : ""}`);
   }
@@ -831,7 +847,13 @@
     state.lamports = state.usdcRaw = null;
     state.rhEth = null;
     state.rhAddress = "";
+    state.pumpRewardsRequestVersion += 1;
+    state.pumpRewards = null;
+    state.pumpRewardsStatus = "idle";
+    state.pumpRewardsWalletIndex = Number(wallet.index);
+    renderCashPumpRewards();
     await refreshBalance({ silent: true });
+    void loadCashPumpRewards({ force: true });
     renderProfile();
     renderCashWallets();
     $("cashWalletStatus").textContent = `${wallet.label || `Wallet ${wallet.index}`} is now active.`;
@@ -1218,6 +1240,124 @@
     const rh = state.rhEth == null ? "ETH loading…" : `${Number(state.rhEth).toFixed(6)} ETH (Robinhood)${rhValue > 0 ? ` · ${formatUsd(rhValue)}` : ""}`;
     const freshness = state.balanceRefreshing ? " · refreshing live" : "";
     $("balanceSub").textContent = `$${state.usdc.toFixed(2)} USD · ${sol.toFixed(4)} SOL · ${rh}${freshness}`;
+  }
+
+  function cashPumpRewardLamports(reward = {}) {
+    const value = reward?.totalLamports ?? reward?.lamports ?? "0";
+    try { return BigInt(String(value || "0")); }
+    catch { const fallback = Number(reward?.totalSol || 0); return BigInt(Number.isFinite(fallback) ? Math.max(0, Math.round(fallback * 1e9)) : 0); }
+  }
+
+  function formatCashPumpReward(reward = {}) {
+    const lamports = cashPumpRewardLamports(reward);
+    const whole = lamports / 1_000_000_000n;
+    const fraction = (lamports % 1_000_000_000n).toString().padStart(9, "0").replace(/0+$/, "");
+    return String(whole) + (fraction ? "." + fraction : ".000") + " SOL";
+  }
+
+  function selectedCashPumpRewards(data = state.pumpRewards) {
+    if (!state.wallet || !data) return null;
+    return data.wallet || (data.wallets || []).find((row) => Number(row.walletIndex) === Number(state.wallet.index)) || null;
+  }
+
+  function renderCashPumpRewards() {
+    const card = $("pumpRewardsCard");
+    if (!card) return;
+    if (!state.token || !state.confirmedAccountRef || !state.wallet) { card.hidden = true; card.innerHTML = ""; return; }
+    card.hidden = false;
+    const label = escapeHtml(state.wallet.label || ("Wallet " + state.wallet.index));
+    if (state.pumpRewardsStatus === "loading") {
+      card.innerHTML = '<div class="cash-pump-head"><span><i>↻</i><b>Pump rewards</b></span><small>Checking ' + label + '…</small></div><p>Loaded after Cash Balance. Rewards stay separate until claimed.</p>';
+      return;
+    }
+    if (state.pumpRewardsStatus === "error") {
+      card.innerHTML = '<div class="cash-pump-head"><span><i>↻</i><b>Pump rewards</b></span><small>On-chain check delayed</small></div><button class="cash-pump-retry" type="button" data-cash-refresh-pump-rewards>Check again</button><p>Rewards remain on-chain and your spendable balance is unaffected.</p>';
+      return;
+    }
+    const row = selectedCashPumpRewards();
+    if (!row) {
+      card.innerHTML = '<button class="cash-pump-open" type="button" data-cash-refresh-pump-rewards><span><b>Pump rewards</b><small>Creator fees + Cash back</small></span><em>Check →</em></button><p>Separate from Cash Balance until claimed.</p>';
+      return;
+    }
+    const rewardHtml = (kind, reward, rewardLabel) => {
+      const available = cashPumpRewardLamports(reward) > 0n;
+      return '<div class="cash-pump-row"><span><small>' + escapeHtml(rewardLabel) + '</small><b>' + escapeHtml(formatCashPumpReward(reward)) + '</b></span><button type="button" data-cash-claim-pump-reward="' + kind + '" ' + (available ? "" : "disabled") + '>' + (available ? "Claim" : "None yet") + "</button></div>";
+    };
+    card.innerHTML = '<div class="cash-pump-head"><span><i>↻</i><b>Pump rewards</b></span><small>' + escapeHtml(row.label || state.wallet.label || ("Wallet " + state.wallet.index)) + ' · wallet-wide</small></div><div class="cash-pump-grid">' + rewardHtml("creator", row.creator || {}, "Creator fees") + rewardHtml("cashback", row.cashback || {}, "Cash back") + '</div><p>On-chain and not included in Cash Balance until claimed. Bonding-curve rewards arrive as SOL; PumpSwap rewards can remain WSOL when this wallet already has a WSOL account. SlimeWire never closes an existing WSOL account.</p>';
+  }
+
+  async function loadCashPumpRewards({ force = false } = {}) {
+    const wallet = state.wallet;
+    const accountRef = String(state.confirmedAccountRef || "");
+    if (!state.token || !accountRef || !wallet) { renderCashPumpRewards(); return null; }
+    const walletIndex = Number(wallet.index);
+    if (!force && state.pumpRewardsStatus === "ready" && Number(state.pumpRewardsWalletIndex) === walletIndex) { renderCashPumpRewards(); return state.pumpRewards; }
+    if (!force && state.pumpRewardsPromise?.walletIndex === walletIndex) return state.pumpRewardsPromise.promise;
+    const requestEpoch = sessionEpoch;
+    const requestVersion = ++state.pumpRewardsRequestVersion;
+    state.pumpRewards = null;
+    state.pumpRewardsStatus = "loading";
+    state.pumpRewardsError = "";
+    state.pumpRewardsWalletIndex = walletIndex;
+    renderCashPumpRewards();
+    const refresh = (async () => {
+      const result = await get("/api/web/pump/rewards?walletIndex=" + encodeURIComponent(walletIndex), { timeoutMs: 10_000, dedupe: !force });
+      if (sessionEpoch !== requestEpoch || state.confirmedAccountRef !== accountRef || Number(state.wallet?.index) !== walletIndex || requestVersion !== state.pumpRewardsRequestVersion) return null;
+      if (!result.ok || !result.data?.ok) {
+        state.pumpRewardsStatus = "error";
+        state.pumpRewardsError = result.data?.error || "Pump rewards are still syncing.";
+        renderCashPumpRewards();
+        return null;
+      }
+      state.pumpRewards = result.data;
+      state.pumpRewardsStatus = "ready";
+      renderCashPumpRewards();
+      return result.data;
+    })();
+    state.pumpRewardsPromise = { walletIndex, promise: refresh };
+    try { return await refresh; }
+    finally { if (state.pumpRewardsPromise?.promise === refresh) state.pumpRewardsPromise = null; }
+  }
+
+  function loadCashPumpRewardsAfterBalance(balancePromise = state.balanceRefreshPromise) {
+    const accountRef = String(state.confirmedAccountRef || "");
+    const walletIndex = Number(state.wallet?.index || 0);
+    void Promise.resolve(balancePromise).catch(() => null).then(() => {
+      if (accountRef && state.confirmedAccountRef === accountRef && walletIndex && Number(state.wallet?.index) === walletIndex) void loadCashPumpRewards();
+    });
+  }
+
+  async function claimCashPumpReward(button) {
+    if (button.disabled || !(await ensureAccount())) return;
+    if (!state.wallet && !(await ensureWallet({ create: false }))) return;
+    const kind = String(button.dataset.cashClaimPumpReward || "");
+    if (!["creator", "cashback"].includes(kind)) return;
+    const accountRef = String(state.confirmedAccountRef || "");
+    const requestEpoch = sessionEpoch;
+    const walletIndex = Number(state.wallet.index);
+    const oldLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = "Claiming…";
+    const result = await api("POST", "/api/web/pump/rewards/claim", { walletIndex, kind, tradeAttemptId: crypto.randomUUID() }, { timeoutMs: 90_000 });
+    if (sessionEpoch !== requestEpoch || state.confirmedAccountRef !== accountRef || Number(state.wallet?.index) !== walletIndex) return;
+    if (!result.ok || !result.data?.ok) {
+      button.disabled = false;
+      button.textContent = oldLabel;
+      toast(result.data?.error || ("Could not claim " + (kind === "creator" ? "creator fees." : "Cash back.")), true);
+      return;
+    }
+    const rewardLabel = kind === "creator" ? "Creator fees" : "Cash back";
+    if (result.data.outcomeUnknown) toast(rewardLabel + " submitted; checking the on-chain result.");
+    else if (result.data.partial) toast(rewardLabel + " partially claimed. Any remainder stays on-chain.");
+    else if (!result.data.claimed) toast(result.data.message || ("No " + rewardLabel.toLowerCase() + " is ready yet."));
+    else {
+      const payoutAsset = String(result.data.payoutAsset || "SOL").toUpperCase();
+      const payoutText = payoutAsset === "WSOL" || payoutAsset === "SOL_AND_WSOL"
+        ? " claimed. PumpSwap proceeds remain WSOL in this wallet's existing WSOL account."
+        : " claimed as SOL to " + (state.wallet.label || ("Wallet " + walletIndex));
+      toast(rewardLabel + payoutText);
+    }
+    await Promise.all([loadCashPumpRewards({ force: true }), refreshBalance({ silent: true })]);
   }
 
   function friendlyAge(value) {
@@ -2526,6 +2666,7 @@
         refreshBalance({ silent: true }),
         loadCashHistory()
       ]);
+      void loadCashPumpRewards({ force: true });
       renderProfile();
       renderCashSyncStatus();
       if (!quiet && !state.balanceError && !state.sessionError) toast("SlimeCash is live and up to date");
@@ -2560,7 +2701,10 @@
     paintOnlineState();
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState !== "visible" || !state.token || !state.wallet) return;
-      if (Date.now() - Date.parse(state.balanceUpdatedAt || 0) > 45_000) void refreshBalance({ silent: true });
+      if (Date.now() - Date.parse(state.balanceUpdatedAt || 0) > 45_000) {
+        const liveBalanceRefresh = refreshBalance({ silent: true });
+        void Promise.resolve(liveBalanceRefresh).finally(() => loadCashPumpRewards({ force: true }));
+      }
       void checkPendingCashFunding();
       if (readPendingFund() && !readPendingFund().arrived && !state.depositTimer) {
         state.depositTimer = setInterval(() => { void checkPendingCashFunding(); }, 3000);
@@ -2629,7 +2773,8 @@
       showOnboard();
     } else if (signedIn) {
       void refreshProfile();
-      if (!initialBalanceRefresh) refreshBalance();
+      const activeBalanceRefresh = initialBalanceRefresh || refreshBalance({ silent: true });
+      loadCashPumpRewardsAfterBalance(activeBalanceRefresh);
       void loadCashHistory();
     } else {
       renderCashSyncStatus();
@@ -2694,6 +2839,9 @@
     }
     const tabButton = event.target.closest(".tab");
     if (tabButton) switchTab(tabButton.dataset.tab);
+    if (event.target.closest("[data-cash-refresh-pump-rewards]")) void loadCashPumpRewards({ force: true });
+    const pumpRewardClaim = event.target.closest("[data-cash-claim-pump-reward]");
+    if (pumpRewardClaim) void claimCashPumpReward(pumpRewardClaim);
     const sellPosition = event.target.closest("[data-cash-sell]");
     if (sellPosition) void sellCashPosition(sellPosition);
     const rhWalletTools = event.target.closest("[data-rh-wallet-tools]");

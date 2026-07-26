@@ -47,6 +47,19 @@
 /airdrop.html
   Cache-Control: no-store, must-revalidate
 
+# Live chart aliases carry fast-moving candle/market state and may be embedded
+# inside the installed wallet. Never let a CDN pin an older chart document.
+/chart
+  Cache-Control: no-store, max-age=0, must-revalidate
+/chart-lab
+  Cache-Control: no-store, max-age=0, must-revalidate
+/chart-lab.html
+  Cache-Control: no-store, max-age=0, must-revalidate
+/chart-preview
+  Cache-Control: no-store, max-age=0, must-revalidate
+/chart-preview.html
+  Cache-Control: no-store, max-age=0, must-revalidate
+
 # Downloadable PDFs are re-generated in place (same filename), so they MUST revalidate every fetch —
 # otherwise a stale copy (e.g. an older, sparser guide layout) stays pinned in the browser for hours.
 /SlimeWire-TG-Guide.pdf

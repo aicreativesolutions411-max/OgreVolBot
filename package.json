@@ -74,6 +74,8 @@
     "@polymarket/builder-signing-sdk": "^0.0.8",
     "@polymarket/clob-client-v2": "^1.1.0",
     "@pump-fun/pump-sdk": "^1.36.0",
+    "@pump-fun/pump-swap-sdk": "^1.19.0",
+    "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",
     "bs58": "^6.0.0",
     "ethers": "^6.17.0",

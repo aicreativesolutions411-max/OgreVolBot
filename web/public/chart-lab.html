@@ -20,8 +20,12 @@
   .hdr{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px}
   .tk{display:flex;align-items:center;gap:11px}
   .av{width:38px;height:38px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#1f5e33,#0d2716);border:1px solid #347a44;display:flex;align-items:center;justify-content:center;color:#b6ff7a;font-weight:700;font-size:14px;box-shadow:0 0 16px rgba(124,255,79,.3)}
+  .symline{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
   .tk .sym{font-size:16px;font-weight:700;letter-spacing:.2px}
   .tk .sub{font-size:11px;color:#5d8a6e;font-family:ui-monospace,Menlo,monospace}
+  .cashbackBadge{display:inline-flex;align-items:center;gap:5px;min-height:19px;padding:3px 7px;border:1px solid rgba(124,255,79,.42);border-radius:999px;background:linear-gradient(180deg,rgba(51,112,29,.36),rgba(8,27,12,.78));color:#caffae;font-size:8px;font-weight:850;letter-spacing:.05em;text-transform:uppercase;box-shadow:0 0 13px rgba(124,255,79,.1)}
+  .cashbackBadge::before{content:"";width:5px;height:5px;border-radius:50%;background:#7CFF4F;box-shadow:0 0 7px rgba(124,255,79,.9)}
+  .cashbackBadge[hidden]{display:none}
   .px{font-size:20px;font-weight:700;text-align:right;line-height:1.1}
   .chg{font-size:12px;font-weight:600;text-align:right}
   .live{font-size:10px;color:#7CFF4F;display:flex;align-items:center;gap:5px;justify-content:flex-end;margin-top:2px;letter-spacing:.4px}
@@ -84,7 +88,7 @@
         <div class="tk">
           <span class="av"></span>
           <div>
-            <div class="sym">Loading…</div>
+            <div class="symline"><div class="sym">Loading…</div><span class="cashbackBadge" id="pumpCashbackBadge" hidden>Pump Cash back</span></div>
             <div class="sub"></div>
           </div>
         </div>
@@ -156,7 +160,7 @@
     return location.hostname.indexOf('onrender.com')>=0 ? '' : 'https://app.slimewire.org'; })();
   if(EMBED&&document.body)document.body.classList.add('embed');
   var LWC=window.LightweightCharts;
-  var mcScale=0, dexStats=null, dexPair=PINNED_POOL||null, dexTokenSide='base', realPrice=null, chg24=null, haveCandles=false;
+  var mcScale=0, dexStats=null, dexPair=PINNED_POOL||null, dexTokenSide='base', realPrice=null, chg24=null, haveCandles=false, chartLoadVersion=0;
   var gtFallbackBusy=false,gtFallbackAt=0;
   // ---- formatters ----
   function fmtUsd(p){p=Number(p)||0;if(p<=0)return '$0';if(p>=1)return '$'+p.toLocaleString(undefined,{maximumFractionDigits:3});if(p>=0.001)return '$'+p.toFixed(5);return '$'+p.toPrecision(3);}
@@ -164,6 +168,7 @@
   function fmtCount(v){v=Number(v)||0;return v>=1e6?(v/1e6).toFixed(1).replace(/\.0$/,'')+'M':v>=1e3?Math.round(v).toLocaleString():v>0?Math.round(v).toLocaleString():'-';}
   function axisFmt(p){return mcScale>0?fmtMcRaw(p*mcScale):fmtUsd(p);}   // axis/crosshair shows MARKET CAP (price × the anchor)
   function esc(s){return String(s||'').replace(/[<>&"]/g,'');}
+  function setPumpCashbackBadge(enabled,source){var badge=document.getElementById('pumpCashbackBadge');if(!badge)return;badge.hidden=!enabled;badge.setAttribute('data-source',enabled?String(source||'pump'):'');badge.title=enabled?'Cash back is enabled for this Pump coin. Claimable rewards are wallet-wide and available in Wallet.':'';}
   function chartH(){return Math.max(280,Math.min(470,Math.round((window.innerHeight||640)*0.52)));}
   var TFSEC={'1s':1,'15s':15,'30s':30,'1m':60,'5m':300,'15m':900,'1h':3600,'4h':14400,'12h':43200,'1d':86400};
   function tfSec(){return TFSEC[TF]||TFSEC['5m'];}
@@ -298,6 +303,26 @@
   // ========================================================================================
 
   // ---- stats (DexScreener = same source as the app top bar, so the numbers MATCH) ----
+  function marketStamp(s){
+    var values=[s&&s.marketUpdatedAt,s&&s.updatedAtMs,s&&s.at],i,n,p;
+    for(i=0;i<values.length;i++){if(values[i]==null||values[i]==='')continue;n=Number(values[i]);if(isFinite(n)&&n>0)return n;if(isFinite(n))continue;p=Date.parse(String(values[i]));if(isFinite(p)&&p>0)return p;}
+    return 0;
+  }
+  function postParentMarket(s){
+    if(!CA||!s||window.parent===window)return;
+    var market={},n,hasMarket=false;
+    n=Number(s.priceUsd);if(n>0){market.priceUsd=n;hasMarket=true;}
+    n=Number(s.mc);if(n>0){market.mc=n;hasMarket=true;}
+    n=Number(s.liq);if(n>0){market.liq=n;hasMarket=true;}
+    n=Number(s.vol24);if(n>0){market.vol24=n;hasMarket=true;}
+    if(s.symbol)market.symbol=String(s.symbol);
+    if(s.name)market.name=String(s.name);
+    if(!hasMarket)return;
+    market.marketSource=String(s.marketSource||'chart-server');
+    market.marketPriority=Math.max(0,Number(s.marketPriority)||20);
+    market.marketUpdatedAt=marketStamp(s);
+    try{window.parent.postMessage({type:'slimewire:chart-market',token:CA,market:market},location.origin);}catch(e){}
+  }
   function applyStats(s,tick,marketAnchor){
     if(!s)return; var e,price=Number(s.priceUsd)||0,mc=Number(s.mc)||0,liq=Number(s.liq)||0,vol24=Number(s.vol24)||0,holders=Number(s.holders)||0;
     // Providers disagree on Robinhood `marketCap` versus FDV. DexScreener is also what
@@ -323,6 +348,7 @@
     if(CA&&(e=document.querySelector('.tk .sub')))e.textContent=CA.slice(0,4)+'...'+CA.slice(-4);
     if(s.imageUrl&&(e=document.querySelector('.tk .av'))){e.textContent='';e.style.backgroundImage='url("'+String(s.imageUrl).replace(/["\\\r\n]/g,'')+'")';e.style.backgroundSize='cover';e.style.backgroundPosition='center';}
     if(tick&&price>0)liveTick(price);
+    postParentMarket({priceUsd:price,mc:mc,liq:liq,vol24:vol24,symbol:s.symbol,name:s.name,marketSource:s.marketSource||(marketAnchor?'browser-dex':'chart-server'),marketPriority:marketAnchor?40:(Number(s.marketPriority)||20),marketUpdatedAt:marketStamp(s)});
   }
   function applyDexStats(s){
     if(!s||!(s.priceUsd>0))return; dexStats=s; applyStats(s,true,true);
@@ -342,14 +368,15 @@
   // becomes a flat one-candle chart just because one server-side lookup blinked.
   function loadGeckoFallback(){
     if(NETWORK!=='robinhood'||bars.length>2||!dexPair||gtFallbackBusy||Date.now()-gtFallbackAt<5000)return Promise.resolve(false);
-    gtFallbackBusy=true;gtFallbackAt=Date.now();
-    var spec=TF==='1d'?{path:'day',aggregate:1}:TF==='12h'?{path:'hour',aggregate:12}:TF==='4h'?{path:'hour',aggregate:4}:TF==='1h'?{path:'hour',aggregate:1}:TF==='15m'?{path:'minute',aggregate:15}:TF==='1m'||tfSec()<60?{path:'minute',aggregate:1}:{path:'minute',aggregate:5};
+    gtFallbackBusy=true;gtFallbackAt=Date.now();var requestedTf=TF;
+    var requestedSeconds=TFSEC[requestedTf]||TFSEC['5m'];
+    var spec=requestedTf==='1d'?{path:'day',aggregate:1}:requestedTf==='12h'?{path:'hour',aggregate:12}:requestedTf==='4h'?{path:'hour',aggregate:4}:requestedTf==='1h'?{path:'hour',aggregate:1}:requestedTf==='15m'?{path:'minute',aggregate:15}:requestedTf==='1m'||requestedSeconds<60?{path:'minute',aggregate:1}:{path:'minute',aggregate:5};
     var url='https://api.geckoterminal.com/api/v2/networks/robinhood/pools/'+encodeURIComponent(dexPair)+'/ohlcv/'+spec.path+'?aggregate='+spec.aggregate+'&limit=300&currency=usd&token='+dexTokenSide;
     return json(url).then(function(j){
       var list=j&&j.data&&j.data.attributes&&j.data.attributes.ohlcv_list;
       if(!Array.isArray(list)||!list.length)return false;
       var rows=list.map(function(k){return {t:Number(k&&k[0])||0,o:Number(k&&k[1])||0,h:Number(k&&k[2])||0,l:Number(k&&k[3])||0,c:Number(k&&k[4])||0,v:Number(k&&k[5])||0};}).filter(function(k){return k.t>0&&k.c>0;});
-      return rows.length?applyChartData({candles:rows,pairAddress:dexPair}):false;
+      return requestedTf===TF&&rows.length?applyChartData({candles:rows,pairAddress:dexPair,marketSource:'browser-gecko',marketPriority:30,marketUpdatedAt:Date.now()}):false;
     }).then(function(ok){gtFallbackBusy=false;return ok;},function(){gtFallbackBusy=false;return false;});
   }
   function candlesFromTradeRows(list){
@@ -392,14 +419,19 @@
     return json('https://api.dexscreener.com/latest/dex/tokens/'+encodeURIComponent(CA)).then(function(j){
       var pairs=(j&&j.pairs)||[];
       var matching=pairs.filter(function(p){return String(p.chainId||'').toLowerCase()===NETWORK;}).filter(function(p){return String((p.baseToken&&p.baseToken.address)||'').toLowerCase()===CA.toLowerCase()||String((p.quoteToken&&p.quoteToken.address)||'').toLowerCase()===CA.toLowerCase();});
+      var baseMatching=matching.filter(function(p){return String((p.baseToken&&p.baseToken.address)||'').toLowerCase()===CA.toLowerCase();});
       var exact=PINNED_POOL&&matching.filter(function(p){return String(p.pairAddress||'').toLowerCase()===PINNED_POOL.toLowerCase();})[0];
-      var best=exact||matching.sort(function(a,b){return ((b.liquidity&&b.liquidity.usd)||0)-((a.liquidity&&a.liquidity.usd)||0);})[0];
+      // A caller-pinned quote-side pool is still valid for Gecko's token=quote
+      // candles. DexScreener price/MC always describe the base token, however,
+      // so those values must never be published as the requested token's stats.
+      var best=exact||(baseMatching.length?baseMatching:matching).sort(function(a,b){return ((b.liquidity&&b.liquidity.usd)||0)-((a.liquidity&&a.liquidity.usd)||0);})[0];
       if(!best)return null; if(!PINNED_POOL&&best.pairAddress)dexPair=best.pairAddress; var baseMatches=String((best.baseToken&&best.baseToken.address)||'').toLowerCase()===CA.toLowerCase(); dexTokenSide=baseMatches?'base':'quote'; var base=baseMatches?(best.baseToken||{}):(best.quoteToken||best.baseToken||{});
-      var s={symbol:base.symbol||'',name:base.name||'',priceUsd:+best.priceUsd||0,mc:+best.marketCap||+best.fdv||0,liq:+(best.liquidity&&best.liquidity.usd)||0,vol24:+(best.volume&&best.volume.h24)||0,change24:+(best.priceChange&&best.priceChange.h24)||0,buys24:+(best.txns&&best.txns.h24&&best.txns.h24.buys)||0,sells24:+(best.txns&&best.txns.h24&&best.txns.h24.sells)||0};
+      if(!baseMatches){if(bars.length<3)loadGeckoFallback();return {symbol:base.symbol||'',name:base.name||'',pairAddress:best.pairAddress||'',quoteOnly:true};}
+      var s={symbol:base.symbol||'',name:base.name||'',priceUsd:+best.priceUsd||0,mc:+best.marketCap||+best.fdv||0,liq:+(best.liquidity&&best.liquidity.usd)||0,vol24:+(best.volume&&best.volume.h24)||0,change24:+(best.priceChange&&best.priceChange.h24)||0,buys24:+(best.txns&&best.txns.h24&&best.txns.h24.buys)||0,sells24:+(best.txns&&best.txns.h24&&best.txns.h24.sells)||0,marketSource:'browser-dex',marketPriority:40,marketUpdatedAt:Date.now()};
       applyDexStats(s); if(bars.length<3)loadGeckoFallback(); return s;
     });
   }
-  function applyChartData(d){
+  function applyChartData(d,fromCache){
     if(!d||!d.candles||!d.candles.length)return false;
     if(!PINNED_POOL&&d.pairAddress)dexPair=d.pairAddress;
     applyStats(d,false);
@@ -414,13 +446,20 @@
     candles.sort(function(a,b){return a.time-b.time;}); vols.sort(function(a,b){return a.time-b.time;});
     setCandles(candles,vols);
     if(d.trades&&d.trades.length){ txns=d.trades.map(function(x){return {buy:x.side==='buy',usd:Math.round(x.usd||0),price:+x.price||0,t:x.t||Math.floor(Date.now()/1000)};}); renderTape(); applyTradeTicks(d.trades); }
-    try{ if(CA) sessionStorage.setItem('cl2:'+CA, JSON.stringify({at:Date.now(),tf:TF,d:{candles:cs.slice(-150),trades:(d.trades||[]).slice(0,40),mc:d.mc,priceUsd:d.priceUsd,liq:d.liq,vol24:d.vol24,change24h:d.change24h,buys24:d.buys24,sells24:d.sells24,holders:d.holders,symbol:d.symbol,name:d.name}})); }catch(e){}
+    try{ if(CA&&!fromCache) sessionStorage.setItem('cl2:'+CA, JSON.stringify({at:Date.now(),tf:TF,d:{candles:cs.slice(-150),trades:(d.trades||[]).slice(0,40),mc:d.mc,priceUsd:d.priceUsd,liq:d.liq,vol24:d.vol24,change24h:d.change24h,buys24:d.buys24,sells24:d.sells24,holders:d.holders,symbol:d.symbol,name:d.name,marketSource:d.marketSource||'chart-server',marketPriority:Number(d.marketPriority)||20,marketUpdatedAt:marketStamp(d)}})); }catch(e){}
     return true;
   }
-  function loadServer(){ if(!CA)return; fetch(API+'/api/chart?ca='+encodeURIComponent(CA)+'&tf='+encodeURIComponent(TF)+(dexPair?'&pool='+encodeURIComponent(dexPair):'')).then(function(r){return r.json();}).then(function(d){ if(d&&d.candles){applyChartData(d);if(bars.length<3)loadGeckoFallback();} }).catch(function(){loadGeckoFallback();}); }
+  function loadServer(){
+    if(!CA)return;var version=++chartLoadVersion,requestedTf=TF;
+    fetch(API+'/api/chart?ca='+encodeURIComponent(CA)+'&tf='+encodeURIComponent(requestedTf)+(dexPair?'&pool='+encodeURIComponent(dexPair):'')).then(function(r){return r.json();}).then(function(d){
+      if(version!==chartLoadVersion||requestedTf!==TF)return;
+      if(d&&d.candles){if(!d.marketSource)d.marketSource='chart-server';if(!d.marketPriority)d.marketPriority=20;applyChartData(d);if(bars.length<3)loadGeckoFallback();}
+    }).catch(function(){if(version===chartLoadVersion&&requestedTf===TF)loadGeckoFallback();});
+  }
   function loadBootstrap(){ if(!CA)return; json(API+'/api/web/chart/bootstrap?token='+encodeURIComponent(CA)).then(function(j){
     var c=j&&j.chart;if(!c)return;if(!PINNED_POOL&&c.pairAddress)dexPair=c.pairAddress;
-    applyStats({symbol:c.symbol,name:c.name,imageUrl:c.imageUrl,priceUsd:c.priceUsd,mc:c.marketCap||c.fdv,liq:c.liquidityUsd,vol24:c.volumeH24,buys24:c.txns&&c.txns.h24&&c.txns.h24.buys,sells24:c.txns&&c.txns.h24&&c.txns.h24.sells},false);
+    setPumpCashbackBadge(c.pumpCashback===true||j.pumpCashback===true,c.pumpCashbackSource||j.pumpCashbackSource);
+    applyStats({symbol:c.symbol,name:c.name,imageUrl:c.imageUrl,priceUsd:c.priceUsd,mc:c.marketCap||c.fdv,liq:c.liquidityUsd,vol24:c.volumeH24,buys24:c.txns&&c.txns.h24&&c.txns.h24.buys,sells24:c.txns&&c.txns.h24&&c.txns.h24.sells,marketSource:'chart-bootstrap',marketPriority:20,marketUpdatedAt:marketStamp(c)||marketStamp(j)||Date.now()},false);
   }); }
 
   // PRIMARY candle load = OUR server (/api/chart -> Solana Tracker + swap-api, cached). Reliable
@@ -440,7 +479,7 @@
   // ---- boot ----
   if(CA){
     // instant repaint from cache (same coin viewed recently) so it's never blank on reopen
-    try{ var cc=JSON.parse(sessionStorage.getItem('cl2:'+CA)||'null'); if(cc&&cc.d&&cc.tf===TF&&Date.now()-cc.at<120000){ applyChartData(cc.d); } }catch(e){}
+    try{ var cc=JSON.parse(sessionStorage.getItem('cl2:'+CA)||'null'); if(cc&&cc.d&&cc.tf===TF&&Date.now()-cc.at<120000){ cc.d.marketSource='chart-cache';cc.d.marketPriority=15;cc.d.marketUpdatedAt=marketStamp(cc.d)||Number(cc.at)||0;applyChartData(cc.d,true); } }catch(e){}
     loadReal();
     setTimeout(markTooFresh,7000);   // fresh pair with no candles yet → calm note, not an endless spinner
     setInterval(loadServer,15000);   // refresh the real candle history from OUR server
