@@ -114,10 +114,14 @@ test("SlimeWallet and Go load exact wallet-wide Pump rewards after spendable bal
   assert.match(js, /Claimed lifetime/);
   assert.match(js, /pump-dev-badge/);
   assert.match(js, /isCreator \? rewardRow\("creator", "Creator fees ready"/);
+  assert.match(js, /rewardRow\("cashback", "Trader cash back ready"/);
+  assert.match(js, /class="pump-rewards-fold"/);
+  assert.match(js, /Creator & trader rewards/);
   assert.match(js, /Live on-chain earnings, separate from spendable SOL until claimed/);
   assert.match(js, /PumpSwap may pay WSOL when this wallet already has a WSOL account/);
   assert.match(css, /\.pump-rewards-card\.creator-wallet/);
   assert.match(css, /\.pump-creator-summary/);
+  assert.match(css, /\.pump-rewards-fold>summary/);
   assert.match(js, /result\.data\.payoutAsset/);
   assert.match(js, /PumpSwap proceeds remain WSOL in this wallet's existing WSOL account/);
   assert.match(js, /pump-cashback-badge/);
@@ -152,6 +156,13 @@ test("SlimeWallet shares one secure account session and keeps wallet management 
   assert.match(js, /data-export-wallets>Back up all wallets/);
   assert.match(js, /data-restore-wallets>Restore \/ import wallet/);
   assert.match(js, /data-create-wallet>Create new wallet/);
+  assert.match(js, /function walletProfileManagementHtml\(\)/);
+  assert.match(js, /Log in \/ switch profile/);
+  assert.match(js, /WALLET MANAGEMENT/);
+  assert.match(js, /data-manage-wallets>Manage wallets/);
+  assert.match(js, /data-restore-wallets>Restore \/ import/);
+  assert.match(js, /wallet-profile-open/);
+  assert.match(css, /\.wallet-only\.wallet-profile-open \[data-wallet-hero\]/);
   const manager = js.slice(js.indexOf("async function openWalletManager"), js.indexOf("function selectedManagerWalletIndexes"));
   assert.match(manager, /if \(!state\.token\) \{ openFunAccount\("login"\); return; \}/);
   assert.doesNotMatch(manager, /await Promise\.all\(\[loadWallets/);
@@ -170,6 +181,15 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(funWorker, /slimewire-fun-v73/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
+});
+
+test("Quick Buy uses an intentional SOL mark instead of the broken target glyph", () => {
+  const quick = js.slice(js.indexOf("function renderQuickRoute"), js.indexOf("function renderWalletPositions"));
+  assert.match(quick, /class="sol-amount-mark">S<\/i>/);
+  assert.doesNotMatch(quick, /<i>◎<\/i>/);
+  assert.match(css, /\.quick-amounts button i\.sol-amount-mark/);
+  assert.doesNotMatch(js, /<b>◎ \$\{sol\.toFixed\(4\)\} SOL<\/b>/);
+  assert.doesNotMatch(js, /`◎ \$\{escapeHtml\(formatPositionSol\(valueSol\)\)\} SOL`/);
 });
 
 test("/fun keeps the reference layout clean while carrying SlimeWire features", () => {

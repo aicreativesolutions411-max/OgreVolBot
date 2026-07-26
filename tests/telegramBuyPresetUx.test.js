@@ -76,10 +76,14 @@ test("all current Solana preset amount buttons apply the saved exit and report a
   assert.match(receiptKeyboard, /qbp:\$\{a\}:\$\{mint\}/);
   assert.match(receiptKeyboard, /qbp:\$\{custom\}:\$\{mint\}/);
   assert.match(receiptKeyboard, /Saved exit:/);
+  assert.match(receiptKeyboard, /\$\{a\} SOL/);
+  assert.doesNotMatch(receiptKeyboard, /◎/);
 
   const buyPanel = functionBody(serverSource, "telegramQuickBuyPanelKeyboard");
   assert.match(buyPanel, /qbp:\$\{amount\}:\$\{target\}/);
   assert.match(buyPanel, /tgQuickExitButtonLabel\(prefs\)/);
+  assert.match(buyPanel, /\$\{amount\} SOL/);
+  assert.doesNotMatch(buyPanel, /◎/);
 
   const presetBuy = functionBody(serverSource, "tgExecuteQuickBuyPreset");
   assert.match(presetBuy, /tgQuickExitConfig\(prefs\)/);
