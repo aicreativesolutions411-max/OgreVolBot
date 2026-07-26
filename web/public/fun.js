@@ -4129,9 +4129,7 @@
     if (event.target.closest("[data-wallet-swap]")) { closeSearch(); closeSheet(); setView("wallet-swap"); return; }
     if (event.target.closest("[data-wallet-open-terminal]")) { state.walletSwapSelecting = false; openSearch(); return; }
     if (event.target.closest("[data-wallet-pick-token]")) { openWalletSwapAssetPicker("receive"); return; }
-    const walletSwapPicker = event.target.closest("[data-wallet-pick-asset]"); if (walletSwapPicker) { openWalletSwapAssetPicker(walletSwapPicker.dataset.walletPickAsset || "receive"); return; }
     if (event.target.closest("[data-wallet-swap-reverse]")) {
-      if (!coinKey(state.selected)) { openWalletSwapAssetPicker("receive"); return; }
       const input = String($("[data-wallet-swap-input]")?.value || "").trim();
       if (state.walletSwapSide === "sell") state.walletSwapSellPercent = input || state.walletSwapSellPercent;
       else state.walletSwapAmount = input || state.walletSwapAmount;
@@ -4141,6 +4139,7 @@
       renderWalletSwap();
       return;
     }
+    const walletSwapPicker = event.target.closest("[data-wallet-pick-asset]"); if (walletSwapPicker) { openWalletSwapAssetPicker(walletSwapPicker.dataset.walletPickAsset || "receive"); return; }
     const walletSwapCoin = event.target.closest("[data-wallet-swap-select-coin]"); if (walletSwapCoin) {
       const role = walletSwapCoin.dataset.walletSwapRole || state.walletSwapPickerRole || "receive";
       state.walletSwapSide = role === "pay" ? "sell" : "buy";

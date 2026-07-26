@@ -35,12 +35,12 @@ test("Cash and Fun source shells install the same funding release", () => {
   assert.match(publicCashHtml, /cash\.js\?v=35/);
   assert.match(publicCashWorker, /cash\.css\?v=35/);
   assert.match(publicCashWorker, /cash\.js\?v=35/);
-  assert.match(publicFunHtml, /fun\.css\?v=62/);
-  assert.match(publicFunHtml, /fun\.js\?v=82/);
+  assert.match(publicFunHtml, /fun\.css\?v=63/);
+  assert.match(publicFunHtml, /fun\.js\?v=83/);
   assert.doesNotMatch(publicFunHtml, /fun-indicators\.js\?v=7/);
   assert.match(publicFunJs, /loadFunScript\("\/fun-indicators\.js\?v=7"\)/);
-  assert.match(publicFunWorker, /fun\.css\?v=62/);
-  assert.match(publicFunWorker, /fun\.js\?v=82/);
+  assert.match(publicFunWorker, /fun\.css\?v=63/);
+  assert.match(publicFunWorker, /fun\.js\?v=83/);
   assert.doesNotMatch(publicFunWorker, /fun-indicators\.js\?v=7/);
 });
 
@@ -60,7 +60,7 @@ test("installed Cash and Fun apps force worker updates and isolate their caches"
   assert.match(publicCashJs, /serviceWorker\.register\("\/cash\/sw\.js", \{ updateViaCache: "none" \}\)/);
   assert.match(publicFunJs, /serviceWorker\.register\("\/fun-sw\.js", \{ scope: IS_WALLET_ROUTE \? "\/wallet\/" : "\/fun\/", updateViaCache: "none" \}\)/);
   assert.match(publicCashWorker, /const CACHE = "slimecash-v37"/);
-  assert.match(publicFunWorker, /"slimewire-fun-v79"/);
+  assert.match(publicFunWorker, /"slimewire-fun-v80"/);
   assert.match(publicCashWorker, /key\.startsWith\("slimecash-"\) && key !== CACHE/);
   assert.match(publicFunWorker, /key\.startsWith\(FUN_CACHE_PREFIX\) && key !== FUN_CACHE/);
   assert.doesNotMatch(publicCashWorker, /keys\.filter\(\(key\) => key !== CACHE\)/);
