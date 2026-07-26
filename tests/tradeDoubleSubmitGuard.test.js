@@ -36,9 +36,14 @@ test("Pufcat campaign page keeps live market, chart, trade, and community paths 
   assert.match(pufcatSource, /\/api\/web\/community\?ca=/);
   assert.match(pufcatSource, /\/api\/web\/community\/post/);
   assert.match(pufcatSource, /\/api\/web\/community\/react/);
-  assert.match(pufcatSource, /#trade\//);
+  assert.match(pufcatSource, /\/fun\?quick=1&amp;ca=/);
+  assert.match(pufcatSource, /data-quick-buy/);
   assert.match(pufcatSource, /pufcat-hero\.webp/);
   assert.match(pufcatSource, /pufcat-community\.webp/);
+  assert.match(serverSource, /const PUFCAT_COMMUNITY_OWNER_ID = "system:pufcat"/);
+  assert.match(serverSource, /store\.communities\[PUFCAT_MINT\] = pufcatCommunityDefaults\(\)/);
+  assert.match(serverSource, /bannerUrl: "\/assets\/pufcat\/pufcat-hero\.webp"/);
+  assert.match(serverSource, /mediaUrl: "\/assets\/pufcat\/pufcat-community\.webp"/);
   assert.doesNotMatch(pufcatSource, /market cap[^<]{0,30}\$[0-9]/i, "volatile market values must not be hard-coded");
 });
 
