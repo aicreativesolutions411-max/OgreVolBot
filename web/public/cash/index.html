@@ -6,7 +6,7 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="34">
+<meta name="slimecash-build" content="35">
 <link rel="manifest" href="/cash/manifest.webmanifest?v=11">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
@@ -20,7 +20,7 @@
 <link rel="preconnect" href="https://app.slimewire.org" crossorigin>
 <link rel="dns-prefetch" href="//app.slimewire.org">
 <link rel="preconnect" href="https://api.dexscreener.com" crossorigin>
-<link rel="stylesheet" href="/cash/cash.css?v=34">
+<link rel="stylesheet" href="/cash/cash.css?v=35">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -32,7 +32,7 @@
 <main id="app" class="app" hidden>
   <header class="topbar">
     <a class="brand" href="/fun" aria-label="SlimeWire Go home"><img src="/assets/slimewire/png/slimewire-mark-64.png" alt=""><span><span class="w1">Slime</span><span class="w2">Cash</span></span></a>
-    <button id="avatarBtn" class="avatar" type="button" aria-label="Profile"></button>
+    <div class="top-actions"><a class="top-terminal" href="/fun?from=cash" aria-label="Open SlimeWire Go terminal">Terminal</a><button id="avatarBtn" class="avatar" type="button" aria-label="Profile and wallets"></button></div>
   </header>
 
   <!-- CASH TAB -->
@@ -85,11 +85,10 @@
       <div class="section-title">Send</div>
       <button id="sendCloseBtn" class="view-close" type="button" aria-label="Close Send and return to Cash">&times;</button>
     </div>
-    <div class="asset-switch" aria-label="Asset to send">
-      <button class="guide-pill active" data-send-asset="USDC" type="button">USD</button>
-      <button class="guide-pill" data-send-asset="SOL" type="button">SOL</button>
-      <button class="guide-pill" data-send-asset="ETH" type="button">RH ETH</button>
-    </div>
+    <label class="field-label" for="sendWalletSelect">From wallet</label>
+    <select id="sendWalletSelect" class="field wallet-select" aria-label="Wallet to send from"></select>
+    <label class="field-label" for="sendAssetSelect">Asset</label>
+    <select id="sendAssetSelect" class="field asset-select" aria-label="Asset to send"><option value="USDC">USD · USDC on Solana</option><option value="SOL">SOL · Solana</option><option value="ETH">ETH · Robinhood Chain</option></select>
     <label class="field-label" for="sendTo">To — $handle or wallet address</label>
     <div class="field-wrap">
       <input id="sendTo" class="field" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="$frankie or 7xKq…">
@@ -112,7 +111,7 @@
   <section id="view-trade" class="view" hidden>
     <div class="view-title-row">
       <div><div class="section-title">Coin positions</div><div class="trade-view-copy">Every managed wallet, with the wallet that actually holds each bag.</div></div>
-      <button id="positionsRefreshBtn" class="text-action" type="button">Refresh</button>
+      <div class="view-title-actions"><button id="buyCoinOpenBtn" class="mini-primary" type="button">Buy coin</button><button id="positionsRefreshBtn" class="text-action" type="button">Refresh</button></div>
     </div>
     <div id="cashPositionsStatus" class="status"></div>
     <section id="portfolioCreatorRewardsCard" class="cash-pump-rewards cash-creator-portfolio" data-cash-pump-rewards data-cash-creator-only hidden aria-live="polite"></section>
@@ -135,6 +134,7 @@
       </div>
     </div>
     <div class="account-summary" id="accountSummary"><b>SlimeWire account</b><span id="accountSummaryText">Not signed in</span></div>
+    <div class="profile-wallet-section"><div class="profile-wallet-heading"><span><b>Wallet overview</b><small>SOL, Robinhood ETH and coin bags by wallet</small></span><button id="profileWalletManageBtn" type="button">Manage</button></div><div id="profileWalletSummary" class="profile-wallet-summary"><div class="activity-empty">Sign in to load wallets.</div></div></div>
     <div class="more-list">
       <button class="more-item" id="accountAccessBtn" type="button">Account login &amp; profile</button>
       <button class="more-item" id="claimHandleBtn" type="button">Claim / change $handle</button>
@@ -253,12 +253,10 @@
     <button class="sheet-close" data-close="receive" type="button" aria-label="Close">×</button>
     <div class="sheet-title">Receive</div>
     <p class="sheet-copy">Share your address, or request an exact amount through Solana Pay.</p>
-    <div class="asset-switch">
-      <button class="guide-pill active" data-receive-asset="USDC" type="button">USD</button>
-      <button class="guide-pill" data-receive-asset="SOL" type="button">SOL</button>
-      <button class="guide-pill" data-receive-asset="ETH" type="button">RH ETH</button>
-      <span class="network-chip" id="receiveNetwork">Solana network</span>
-    </div>
+    <label class="field-label" for="receiveWalletSelect">Receive to wallet</label>
+    <select id="receiveWalletSelect" class="field wallet-select" aria-label="Wallet to receive into"></select>
+    <label class="field-label" for="receiveAssetSelect">Asset</label>
+    <div class="asset-select-line"><select id="receiveAssetSelect" class="field asset-select" aria-label="Asset to receive"><option value="USDC">USD · USDC on Solana</option><option value="SOL">SOL · Solana</option><option value="ETH">ETH or coin · Robinhood Chain</option></select><span class="network-chip" id="receiveNetwork">Solana network</span></div>
     <label class="field-label" for="receiveAmount">Request amount (optional)</label>
     <input id="receiveAmount" class="field" type="number" inputmode="decimal" min="0" step="any" placeholder="25.00">
     <div class="qr-wrap"><canvas id="receiveQr" width="220" height="220"></canvas></div>
@@ -302,7 +300,7 @@
 <div id="receipt" class="sheet-backdrop" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="receiptTitle">
     <button class="sheet-close" data-close="receipt" type="button" aria-label="Close">×</button>
-    <div id="receiptTitle" class="sheet-title">Payment receipt</div>
+    <div id="receiptTitle" class="sheet-title">Transaction details</div>
     <div id="receiptBody" class="receipt-card"></div>
     <a id="receiptExplorer" class="btn primary block" href="#" target="_blank" rel="noopener">View on Solana</a>
     <button id="shareReceiptBtn" class="btn ghost block" type="button">Share receipt</button>
@@ -451,17 +449,13 @@
   <div class="sheet">
     <button class="sheet-close" data-close="convert" type="button" aria-label="Close">×</button>
     <div class="sheet-title">Convert</div>
-    <p class="sheet-copy">Swap between USD (USDC on Solana) and SOL, then use the same wallet in SlimeWire Go.</p>
-    <label class="field-label">From</label>
-    <div class="asset-switch">
-      <button class="guide-pill active" data-convert-from="USDC" type="button">USD</button>
-      <button class="guide-pill" data-convert-from="SOL" type="button">SOL</button>
-    </div>
-    <label class="field-label">To</label>
-    <div class="asset-switch">
-      <button class="guide-pill active" data-convert-to="SOL" type="button">SOL</button>
-      <button class="guide-pill" data-convert-to="USDC" type="button">USD</button>
-    </div>
+    <p class="sheet-copy">Convert USD ↔ SOL or SOL ↔ Robinhood ETH inside one exact managed wallet.</p>
+    <label class="field-label" for="convertWalletSelect">Wallet</label>
+    <select id="convertWalletSelect" class="field wallet-select" aria-label="Wallet to convert in"></select>
+    <label class="field-label" for="convertFromSelect">From</label>
+    <select id="convertFromSelect" class="field asset-select" aria-label="Convert from"><option value="USDC">USD · USDC on Solana</option><option value="SOL">SOL · Solana</option><option value="ETH">ETH · Robinhood Chain</option></select>
+    <label class="field-label" for="convertToSelect">To</label>
+    <select id="convertToSelect" class="field asset-select" aria-label="Convert to"><option value="SOL">SOL · Solana</option><option value="USDC">USD · USDC on Solana</option><option value="ETH">ETH · Robinhood Chain</option></select>
     <label class="field-label" for="convertAmount">Amount</label>
     <div class="amount-wrap">
       <input id="convertAmount" class="field amount" type="number" inputmode="decimal" min="0" step="any" placeholder="0.00">
@@ -471,6 +465,26 @@
     <button id="convertGoBtn" class="btn primary block" type="button">Convert</button>
     <div id="convertStatus" class="status"></div>
     <a class="more-item" href="/fun?from=cash" style="border-bottom:0; margin-top:6px">Want memecoins? Open SlimeWire Go →</a>
+  </div>
+</div>
+
+<!-- WALLET-SCOPED COIN BUY -->
+<div id="coinbuy" class="sheet-backdrop" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="coinBuyTitle">
+    <button class="sheet-close" data-close="coinbuy" type="button" aria-label="Close">×</button>
+    <div id="coinBuyTitle" class="sheet-title">Buy a coin</div>
+    <p class="sheet-copy">Paste a Solana or Robinhood Chain coin address, choose the exact wallet, then pay with SOL or Robinhood ETH.</p>
+    <label class="field-label" for="coinBuyToken">Coin contract address</label>
+    <input id="coinBuyToken" class="field" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Solana CA or Robinhood 0x…">
+    <div id="coinBuyNetwork" class="field-hint">Network is detected from the address.</div>
+    <label class="field-label" for="coinBuyWalletSelect">Wallet</label>
+    <select id="coinBuyWalletSelect" class="field wallet-select" aria-label="Wallet to buy from"></select>
+    <label class="field-label" for="coinBuyAssetSelect">Pay with</label>
+    <select id="coinBuyAssetSelect" class="field asset-select" aria-label="Asset to pay with"><option value="SOL">SOL</option><option value="ETH">Robinhood ETH</option></select>
+    <label class="field-label" for="coinBuyAmount">Amount</label>
+    <input id="coinBuyAmount" class="field amount" type="number" inputmode="decimal" min="0" step="any" value="0.1">
+    <button id="coinBuyGoBtn" class="btn primary block" type="button">Review buy</button>
+    <div id="coinBuyStatus" class="status">Robinhood coins can use SOL with automatic conversion or ETH already in the paired wallet.</div>
   </div>
 </div>
 
@@ -494,7 +508,7 @@
 <!-- WALLET MANAGER -->
 <div id="wallets" class="sheet-backdrop" hidden>
   <div class="sheet">
-    <button class="sheet-close" data-close="wallets" type="button" aria-label="Close">Ã—</button>
+    <button class="sheet-close" data-close="wallets" type="button" aria-label="Close">×</button>
     <div class="sheet-title">Wallets</div>
     <p class="sheet-copy">Use your Main wallet for everyday SlimeCash. No username is required for backup. Every new wallet automatically downloads SlimeWire, Solflare/Phantom, and Robinhood/EVM recovery files.</p>
     <div id="cashWalletList" class="cash-wallet-list"></div>
@@ -517,6 +531,6 @@
 <div id="toast" class="toast" hidden></div>
 <script src="/config.js"></script>
 <script src="/slimewire-funding.js?v=8"></script>
-<script src="/cash/cash.js?v=34"></script>
+<script src="/cash/cash.js?v=35"></script>
 </body>
 </html>

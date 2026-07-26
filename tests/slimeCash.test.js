@@ -175,6 +175,7 @@ test("SlimeCash loads Pump rewards after Cash Balance without mixing them into s
   assert.match(cash, /state\.confirmedAccountRef !== accountRef/);
   assert.match(cash, /loadCashPumpRewardsAfterBalance\(activeBalanceRefresh\)/);
   assert.match(cash, /Held on-chain until claimed/);
+  assert.match(cash, /<details class="cash-rewards-fold"/);
   assert.match(cash, /PumpSwap may pay WSOL when this wallet already has a WSOL account/);
   assert.match(cash, /result\.data\.payoutAsset/);
   assert.match(cash, /PumpSwap proceeds remain WSOL in this wallet's existing WSOL account/);
@@ -182,8 +183,8 @@ test("SlimeCash loads Pump rewards after Cash Balance without mixing them into s
 
 test("SlimeCash service worker prefers the current deploy and retains offline fallback", () => {
   const build = html.match(/slimecash-build" content="(\d+)"/)?.[1];
-  assert.equal(build, "34", "SlimeCash should publish the current app build");
-  assert.match(sw, /const CACHE = "slimecash-v36"/);
+  assert.equal(build, "35", "SlimeCash should publish the current app build");
+  assert.match(sw, /const CACHE = "slimecash-v37"/);
   assert.match(html, new RegExp(`cash\\.js\\?v=${build}`));
   assert.match(html, new RegExp(`cash\\.css\\?v=${build}`));
   assert.match(sw, /const fetched = fetch/);
@@ -280,7 +281,7 @@ test("USDC funding and sending stay explicit in the SlimeCash client", () => {
   assert.match(cash, /active\?\.cashAssets/);
   assert.match(cash, /assets\.USDC\?\.rawAmount/);
   assert.match(cash, /asset: state\.sendAsset/);
-  assert.match(html, /data-send-asset="USDC"/);
+  assert.match(html, /id="sendAssetSelect"[\s\S]{0,220}<option value="USDC"/);
   assert.match(html, />USD</);
 });
 
@@ -295,8 +296,8 @@ test("SlimeCash can send a fee-aware maximum SOL balance", () => {
 });
 
 test("SlimeCash can receive, send, convert, value, and recover Robinhood ETH", () => {
-  assert.match(html, /data-send-asset="ETH"/);
-  assert.match(html, /data-receive-asset="ETH"/);
+  assert.match(html, /id="sendAssetSelect"[\s\S]{0,260}<option value="ETH"/);
+  assert.match(html, /id="receiveAssetSelect"[\s\S]{0,260}<option value="ETH"/);
   assert.match(html, /id="rhwallet"/);
   assert.match(cash, /state\.sendAsset === "ETH"[\s\S]{0,260}amountEth/);
   assert.match(cash, /post\("\/api\/web\/rh\/fund-with-sol"/);
@@ -308,6 +309,27 @@ test("SlimeCash can receive, send, convert, value, and recover Robinhood ETH", (
   assert.match(server, /if \(asset === "ETH"\) return webRhSendEthCore/);
   assert.match(server, /amountEth: result\.amountEth/);
   assert.match(server, /explorerUrl: result\.explorerUrl/);
+});
+
+test("SlimeCash makes wallet-scoped swaps, profile balances, and trade receipts first-class", () => {
+  for (const id of ["sendWalletSelect", "receiveWalletSelect", "convertWalletSelect", "coinBuyWalletSelect"]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /class="top-terminal" href="\/fun\?from=cash"/);
+  assert.match(html, /id="buyCoinOpenBtn"[^>]*>Buy coin</);
+  assert.match(html, /id="coinBuyAssetSelect"[\s\S]{0,180}<option value="ETH"/);
+  assert.match(cash, /payAsset === "ETH" \? \{ amountEth: String\(amount\), payCurrency: "eth" \}/);
+  assert.match(cash, /post\("\/api\/web\/rh\/fund-with-sol"/);
+  assert.match(cash, /post\("\/api\/web\/rh\/bridge-to-sol"/);
+  assert.match(cash, /function renderProfileWalletSummary/);
+  assert.match(cash, /walletCoinCounts/);
+  assert.match(cash, /activityKind: "swap"/);
+  assert.match(cash, /data-activity-chart/);
+  assert.match(cash, /<span>Paid<\/span>/);
+  assert.match(cash, /<span>Received<\/span>/);
+  assert.match(server, /function clientCashTradeReceipt/);
+  assert.match(server, /cashTradeMetadataForHistory/);
+  assert.match(server, /tokenUiAmount:/);
 });
 
 test("SlimeCash presents one clean USD, SOL and Robinhood ETH wallet with Coinbase as its only fiat vendor", () => {
@@ -397,8 +419,8 @@ test("SlimeCash uses a separate PWA identity and a synchronized shell", () => {
   assert.equal(manifest.id, "/slimecash-app");
   assert.equal(manifest.start_url, "/cash/?src=slimecash-pwa");
   assert.equal(manifest.scope, "/cash/");
-  assert.match(html, /slimecash-build" content="34"/);
-  assert.match(sw, /slimecash-v36/);
+  assert.match(html, /slimecash-build" content="35"/);
+  assert.match(sw, /slimecash-v37/);
   assert.match(sw, /\/slimewire-funding\.js\?v=8/);
   assert.match(cash, /serviceWorker\.register\("\/cash\/sw\.js", \{ updateViaCache: "none" \}\)/);
   assert.match(sw, /key\.startsWith\("slimecash-"\) && key !== CACHE/);
