@@ -1260,30 +1260,74 @@
     return data.wallet || (data.wallets || []).find((row) => Number(row.walletIndex) === Number(state.wallet.index)) || null;
   }
 
+  function cashCreatorWallet(row = {}) {
+    const claimed = row.creatorClaims || {};
+    return Boolean(row.creatorEligible)
+      || cashPumpRewardLamports(row.creator || {}) > 0n
+      || Number(claimed.claimedSol || 0) > 0
+      || cashPumpRewardLamports({ totalLamports: claimed.claimedAtomic }) > 0n;
+  }
+
+  function cashPumpRewardCards() {
+    return [...document.querySelectorAll("[data-cash-pump-rewards]")];
+  }
+
+  function paintCashPumpRewardCards(paint) {
+    for (const card of cashPumpRewardCards()) paint(card, card.hasAttribute("data-cash-creator-only"));
+  }
+
   function renderCashPumpRewards() {
-    const card = $("pumpRewardsCard");
-    if (!card) return;
-    if (!state.token || !state.confirmedAccountRef || !state.wallet) { card.hidden = true; card.innerHTML = ""; return; }
-    card.hidden = false;
+    if (!cashPumpRewardCards().length) return;
+    if (!state.token || !state.confirmedAccountRef || !state.wallet) {
+      paintCashPumpRewardCards((card) => { card.hidden = true; card.innerHTML = ""; });
+      return;
+    }
     const label = escapeHtml(state.wallet.label || ("Wallet " + state.wallet.index));
     if (state.pumpRewardsStatus === "loading") {
-      card.innerHTML = '<div class="cash-pump-head"><span><i>↻</i><b>Pump rewards</b></span><small>Checking ' + label + '…</small></div><p>Loaded after Cash Balance. Rewards stay separate until claimed.</p>';
+      paintCashPumpRewardCards((card, creatorOnly) => {
+        if (creatorOnly) { card.hidden = true; card.innerHTML = ""; return; }
+        card.hidden = false;
+        card.innerHTML = '<div class="cash-pump-head"><span><i>↻</i><b>' + (creatorOnly ? 'Creator fees' : 'Wallet rewards') + '</b></span><small>Checking ' + label + '…</small></div><p>Reading the wallet\'s on-chain reward vaults.</p>';
+      });
       return;
     }
     if (state.pumpRewardsStatus === "error") {
-      card.innerHTML = '<div class="cash-pump-head"><span><i>↻</i><b>Pump rewards</b></span><small>On-chain check delayed</small></div><button class="cash-pump-retry" type="button" data-cash-refresh-pump-rewards>Check again</button><p>Rewards remain on-chain and your spendable balance is unaffected.</p>';
+      paintCashPumpRewardCards((card, creatorOnly) => {
+        if (creatorOnly) { card.hidden = true; card.innerHTML = ""; return; }
+        card.hidden = false;
+        card.innerHTML = '<div class="cash-pump-head"><span><i>↻</i><b>' + (creatorOnly ? 'Creator fees' : 'Wallet rewards') + '</b></span><small>On-chain check delayed</small></div><button class="cash-pump-retry" type="button" data-cash-refresh-pump-rewards>Check again</button><p>Rewards remain safely on-chain.</p>';
+      });
       return;
     }
     const row = selectedCashPumpRewards();
     if (!row) {
-      card.innerHTML = '<button class="cash-pump-open" type="button" data-cash-refresh-pump-rewards><span><b>Pump rewards</b><small>Creator fees + Cash back</small></span><em>Check →</em></button><p>Separate from Cash Balance until claimed.</p>';
+      paintCashPumpRewardCards((card, creatorOnly) => {
+        if (creatorOnly) { card.hidden = true; card.innerHTML = ""; return; }
+        card.hidden = false;
+        card.innerHTML = '<button class="cash-pump-open" type="button" data-cash-refresh-pump-rewards><span><b>' + (creatorOnly ? 'Creator fees' : 'Wallet rewards') + '</b><small>Check live claimable earnings</small></span><em>Check →</em></button><p>Separate from Cash Balance until claimed.</p>';
+      });
       return;
     }
     const rewardHtml = (kind, reward, rewardLabel) => {
       const available = cashPumpRewardLamports(reward) > 0n;
       return '<div class="cash-pump-row"><span><small>' + escapeHtml(rewardLabel) + '</small><b>' + escapeHtml(formatCashPumpReward(reward)) + '</b></span><button type="button" data-cash-claim-pump-reward="' + kind + '" ' + (available ? "" : "disabled") + '>' + (available ? "Claim" : "None yet") + "</button></div>";
     };
-    card.innerHTML = '<div class="cash-pump-head"><span><i>↻</i><b>Pump rewards</b></span><small>' + escapeHtml(row.label || state.wallet.label || ("Wallet " + state.wallet.index)) + ' · wallet-wide</small></div><div class="cash-pump-grid">' + rewardHtml("creator", row.creator || {}, "Creator fees") + rewardHtml("cashback", row.cashback || {}, "Cash back") + '</div><p>On-chain and not included in Cash Balance until claimed. Bonding-curve rewards arrive as SOL; PumpSwap rewards can remain WSOL when this wallet already has a WSOL account. SlimeWire never closes an existing WSOL account.</p>';
+    const isCreator = cashCreatorWallet(row);
+    const creatorClaims = row.creatorClaims || {};
+    const creatorReady = cashPumpRewardLamports(row.creator || {}) > 0n;
+    const creatorCount = Math.max(0, Number(row.creatorLaunchCount || 0));
+    const claimedLifetime = formatCashPumpReward({ totalLamports: creatorClaims.claimedAtomic });
+    const walletLabel = escapeHtml(row.label || state.wallet.label || ("Wallet " + state.wallet.index));
+    paintCashPumpRewardCards((card, creatorOnly) => {
+      if (creatorOnly) {
+        if (!isCreator) { card.hidden = true; card.innerHTML = ""; return; }
+        card.hidden = false;
+        card.innerHTML = '<div class="cash-creator-kicker"><span class="cash-dev-badge">Dev wallet</span><small>' + walletLabel + '</small></div><div class="cash-creator-title"><span><b>Creator Fees</b><small>' + (creatorCount ? creatorCount + (creatorCount === 1 ? ' launch pays' : ' launches pay') + ' this wallet' : 'Wallet-wide Pump earnings') + '</small></span><strong>' + escapeHtml(formatCashPumpReward(row.creator || {})) + '</strong></div><div class="cash-creator-actions"><span><small>Claimed lifetime</small><b>' + escapeHtml(claimedLifetime) + '</b></span><button type="button" data-cash-claim-pump-reward="creator" ' + (creatorReady ? '' : 'disabled') + '>' + (creatorReady ? 'Claim creator fees' : 'Nothing ready yet') + '</button></div><p>Live on-chain earnings for this creator wallet. Claimable funds stay separate from Cash Balance until sent.</p>';
+        return;
+      }
+      card.hidden = false;
+      card.innerHTML = '<div class="cash-pump-head"><span><i>↻</i><b>' + (isCreator ? 'Creator + wallet rewards' : 'Wallet rewards') + '</b>' + (isCreator ? '<em class="cash-dev-badge">Dev wallet</em>' : '') + '</span><small>' + walletLabel + ' · wallet-wide</small></div><div class="cash-pump-grid' + (isCreator ? '' : ' single') + '">' + (isCreator ? rewardHtml("creator", row.creator || {}, "Creator fees") : '') + rewardHtml("cashback", row.cashback || {}, "Cash back") + '</div><p>Held on-chain until claimed. PumpSwap may pay WSOL when this wallet already has a WSOL account.</p>';
+    });
   }
 
   async function loadCashPumpRewards({ force = false } = {}) {
@@ -2425,8 +2469,8 @@
     const positionsAccountRef = String(state.confirmedAccountRef || "");
     if (!state.token || !positionsAccountRef) { wrap.innerHTML = '<div class="activity-empty">Sign in to see coin positions.</div>'; return; }
     state.positionsLoading = true;
-    status.textContent = "Reading every wallet on-chainâ€¦"; status.className = "status";
-    if (!wrap.querySelector(".cash-position-group")) wrap.innerHTML = '<div class="activity-empty">Loading coin positionsâ€¦</div>';
+    status.textContent = "Reading every wallet on-chain…"; status.className = "status";
+    if (!wrap.querySelector(".cash-position-group")) wrap.innerHTML = '<div class="activity-empty">Loading coin positions…</div>';
     try {
       if (!state.wallets.length) await ensureWallet({ create: false });
       const [solResult, rhResult] = await Promise.all([
@@ -2480,7 +2524,7 @@
       const fundsHtml = rhCashWallets.length ? `<section class="cash-position-group cash-rh-funds"><div class="cash-position-head"><div><b>Robinhood ETH wallets</b><span>Receive, convert, send, trade and recover each exact wallet</span></div><em>${rhCashWallets.length} wallets</em></div>${rhCashWallets.map((wallet) => `<div class="cash-position-row cash-fund-row"><div class="cash-position-coin"><span class="cash-position-avatar">RH</span><span><b>${escapeHtml(wallet.label || `Wallet ${wallet.walletIndex}`)}</b><small>Wallet ${wallet.walletIndex} · ${escapeHtml(shortAddress(wallet.address || ""))}</small></span></div><div class="cash-position-balance"><b>${Number(wallet.eth).toFixed(6)} ETH</b><small>${formatUsd(Number(wallet.eth || 0) * Number(state.rhEthUsd || 0))}</small></div><div class="cash-position-actions"><button type="button" data-rh-wallet-tools="${wallet.walletIndex}">Manage ETH</button><a href="/fun?from=cash" class="cash-position-link">Trade</a></div></div>`).join("")}</section>` : "";
       const positionsHtml = byWallet.size ? [...byWallet.values()].map((rows) => {
         const first = rows[0], rh = first.chain === "robinhood";
-        return `<section class="cash-position-group"><div class="cash-position-head"><div><b>${escapeHtml(first.walletLabel)}</b><span>${rh ? "Robinhood Chain" : "Solana"} Â· wallet ${first.walletIndex}</span></div><em>${rows.length} ${rows.length === 1 ? "coin" : "coins"}</em></div>${rows.map((row) => {
+        return `<section class="cash-position-group"><div class="cash-position-head"><div><b>${escapeHtml(first.walletLabel)}</b><span>${rh ? "Robinhood Chain" : "Solana"} · wallet ${first.walletIndex}</span></div><em>${rows.length} ${rows.length === 1 ? "coin" : "coins"}</em></div>${rows.map((row) => {
           const href = `/fun?from=cash#${row.chain === "robinhood" ? "rhtrade" : "trade"}/${encodeURIComponent(row.token)}`;
           return `<div class="cash-position-row"><a class="cash-position-coin" href="${href}"><span class="cash-position-avatar">${escapeHtml(String(row.symbol || "?").slice(0, 2).toUpperCase())}</span><span><b>${escapeHtml(row.symbol || "Coin")}</b><small>${escapeHtml(row.name || shortAddress(row.token))}</small></span></a><div class="cash-position-balance"><b>${Number(row.amount).toLocaleString(undefined,{maximumSignificantDigits:7})}</b>${row.valueUsd != null ? `<small>${formatUsd(row.valueUsd)}</small>` : ""}</div><div class="cash-position-actions"><button type="button" data-cash-sell="25" data-chain="${row.chain}" data-wallet-index="${row.walletIndex}" data-token="${escapeHtml(row.token)}" data-symbol="${escapeHtml(row.symbol || "Coin")}">25%</button><button class="sell-all" type="button" data-cash-sell="100" data-chain="${row.chain}" data-wallet-index="${row.walletIndex}" data-token="${escapeHtml(row.token)}" data-symbol="${escapeHtml(row.symbol || "Coin")}">Sell all</button></div></div>`;
         }).join("")}</section>`;
@@ -2499,14 +2543,14 @@
     const token = String(button.dataset.token || ""), symbol = String(button.dataset.symbol || "coin");
     if (![25, 100].includes(percent) || !walletIndex || !token) return;
     if (!confirm(`Sell ${percent}% of ${symbol} from wallet ${walletIndex}?${button.dataset.chain === "robinhood" ? " Proceeds return to SOL automatically." : ""}`)) return;
-    const old = button.textContent; button.disabled = true; button.textContent = "Sellingâ€¦";
+    const old = button.textContent; button.disabled = true; button.textContent = "Selling…";
     const tradeAttemptId = `cash-sell-${Date.now()}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`;
     const result = button.dataset.chain === "robinhood"
       ? await post("/api/web/rh/trade", { walletIndex, side: "sell", tokenAddress: token, percent, tradeAttemptId })
       : await post("/api/web/trade/sell", { walletIndex, tokenMint: token, percent: String(percent), slippageBps: "1200", tradeAttemptId });
     button.disabled = false; button.textContent = old;
     if (result.ok && result.data?.ok) {
-      toast(button.dataset.chain === "robinhood" && result.data.solCashout?.outSol ? `Sold Â· ${result.data.solCashout.outSol} SOL returned` : "Sell confirmed");
+      toast(button.dataset.chain === "robinhood" && result.data.solCashout?.outSol ? `Sold · ${result.data.solCashout.outSol} SOL returned` : "Sell confirmed");
       setTimeout(() => loadCashPositions({ force: true }), 1600);
     } else toast(result.data?.message || result.data?.error || "Sell failed", true);
   }
@@ -2514,7 +2558,7 @@
   async function cashOutRhWallet(button) {
     const walletIndex = Number(button.dataset.rhCashout || 0);
     if (!walletIndex || !confirm(`Return the available Robinhood ETH in wallet ${walletIndex} to that wallet's SOL address?`)) return;
-    const old = button.textContent; button.disabled = true; button.textContent = "Returningâ€¦";
+    const old = button.textContent; button.disabled = true; button.textContent = "Returning…";
     const tradeAttemptId = button.dataset.rhCashoutAttempt || `cash-rh-return-${Date.now()}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`;
     button.dataset.rhCashoutAttempt = tradeAttemptId;
     const result = await post("/api/web/rh/bridge-to-sol", { walletIndex, amountEth: "all", tradeAttemptId });
@@ -2592,6 +2636,7 @@
     if (tab === "more") { loadAccount(); refreshProfile(); }
     if (tab === "trade") void loadCashPositions();
     if (tab !== "home") stopDepositWatch();
+    window.scrollTo(0, 0);
   }
 
   function closeSendView() {

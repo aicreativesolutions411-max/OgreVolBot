@@ -780,24 +780,34 @@
     if (!wallet || !data) return null;
     return data.wallet || (data.wallets || []).find((row) => Number(row.walletIndex) === Number(wallet.index)) || null;
   }
+  function creatorRewardWallet(row = {}) {
+    const claims = row.creatorClaims || {};
+    return Boolean(row.creatorEligible)
+      || pumpRewardAvailable(row.creator || {})
+      || pumpRewardLamports({ totalLamports: claims.claimedAtomic }) > 0n
+      || Number(claims.claimedSol || 0) > 0;
+  }
   function renderPumpRewardsCard() {
     const card = $("[data-pump-rewards]");
     if (!card) return;
     const wallet = activeWallet();
-    if (!state.token || !wallet) { card.hidden = true; card.innerHTML = ""; return; }
+    if (!state.token || !wallet) { card.hidden = true; card.innerHTML = ""; card.classList.remove("creator-wallet"); return; }
     const walletLabel = escapeHtml(wallet.label || ("Wallet " + wallet.index));
     card.hidden = false;
     if (state.pumpRewardsStatus === "loading") {
-      card.innerHTML = '<div class="pump-rewards-heading"><span><i>↻</i><b>Pump rewards</b></span><small>Checking ' + walletLabel + '…</small></div><p class="pump-rewards-note">Loaded after your spendable balance. Rewards never inflate the balance above.</p>';
+      card.classList.remove("creator-wallet");
+      card.innerHTML = '<div class="pump-rewards-heading"><span><i>↻</i><b>Wallet rewards</b></span><small>Checking ' + walletLabel + '…</small></div><p class="pump-rewards-note">Reading this wallet\'s live on-chain reward vaults.</p>';
       return;
     }
     if (state.pumpRewardsStatus === "error") {
-      card.innerHTML = '<div class="pump-rewards-heading"><span><i>↻</i><b>Pump rewards</b></span><small>On-chain check delayed</small></div><button class="pump-rewards-retry" type="button" data-refresh-pump-rewards>Check again</button><p class="pump-rewards-note">Your funds are unaffected. Rewards stay on-chain until claimed.</p>';
+      card.classList.remove("creator-wallet");
+      card.innerHTML = '<div class="pump-rewards-heading"><span><i>↻</i><b>Wallet rewards</b></span><small>On-chain check delayed</small></div><button class="pump-rewards-retry" type="button" data-refresh-pump-rewards>Check again</button><p class="pump-rewards-note">Your funds are unaffected. Rewards stay safely on-chain.</p>';
       return;
     }
     const row = selectedPumpRewards();
     if (!row) {
-      card.innerHTML = '<button class="pump-rewards-open" type="button" data-refresh-pump-rewards><span><i>↻</i><b>Pump rewards</b><small>Check creator fees and Cash back</small></span><em>Check →</em></button><p class="pump-rewards-note">Separate from your spendable wallet balance until claimed.</p>';
+      card.classList.remove("creator-wallet");
+      card.innerHTML = '<button class="pump-rewards-open" type="button" data-refresh-pump-rewards><span><i>↻</i><b>Wallet rewards</b><small>Check live claimable earnings</small></span><em>Check →</em></button><p class="pump-rewards-note">Separate from your spendable wallet balance until claimed.</p>';
       return;
     }
     const creator = row.creator || {}, cashback = row.cashback || {};
@@ -806,7 +816,11 @@
       return '<div class="pump-reward-row"><span><small>' + escapeHtml(label) + '</small><b>' + escapeHtml(formatPumpRewardSol(reward)) + '</b></span><button type="button" data-claim-pump-reward="' + kind + '" ' + (available ? "" : "disabled") + '>' + (available ? "Claim" : "None yet") + "</button></div>";
     };
     const rowLabel = escapeHtml(row.label || wallet.label || ("Wallet " + wallet.index));
-    card.innerHTML = '<div class="pump-rewards-heading"><span><i>↻</i><b>Pump rewards</b></span><small>' + rowLabel + ' · wallet-wide</small></div><div class="pump-reward-grid">' + rewardRow("creator", "Creator fees", creator) + rewardRow("cashback", "Cash back", cashback) + '</div><p class="pump-rewards-note">On-chain and separate from spendable SOL until you claim. Bonding-curve rewards arrive as SOL; PumpSwap rewards can remain WSOL when this wallet already has a WSOL account. SlimeWire never closes an existing WSOL account.</p>';
+    const isCreator = creatorRewardWallet(row), claims = row.creatorClaims || {};
+    const creatorLaunchCount = Math.max(0, Number(row.creatorLaunchCount || 0));
+    const claimedLifetime = formatPumpRewardSol({ totalLamports: claims.claimedAtomic });
+    card.classList.toggle("creator-wallet", isCreator);
+    card.innerHTML = '<div class="pump-rewards-heading"><span><i>' + (isCreator ? '↗' : '↻') + '</i><b>' + (isCreator ? 'Creator earnings' : 'Wallet rewards') + '</b>' + (isCreator ? '<em class="pump-dev-badge">Dev wallet</em>' : '') + '</span><small>' + rowLabel + ' · wallet-wide</small></div>' + (isCreator ? '<div class="pump-creator-summary"><span><small>Claimed lifetime</small><b>' + escapeHtml(claimedLifetime) + '</b></span><span><small>' + (creatorLaunchCount ? 'Coins created' : 'Creator status') + '</small><b>' + escapeHtml(creatorLaunchCount ? String(creatorLaunchCount) : 'Active') + '</b></span></div>' : '') + '<div class="pump-reward-grid' + (isCreator ? '' : ' single') + '">' + (isCreator ? rewardRow("creator", "Creator fees ready", creator) : '') + rewardRow("cashback", "Cash back ready", cashback) + '</div><p class="pump-rewards-note">Live on-chain earnings, separate from spendable SOL until claimed. PumpSwap may pay WSOL when this wallet already has a WSOL account.</p>';
   }
   async function loadPumpRewardsForActiveWallet({ force = false } = {}) {
     const wallet = activeWallet();

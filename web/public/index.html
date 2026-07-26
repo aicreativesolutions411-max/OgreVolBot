@@ -62,7 +62,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="SlimeWire">
-<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/assets/slimewire/png/apple-touch-icon.png">
 <script src="/config.js"></script>
 <style>
   :root{
@@ -86,6 +86,7 @@
   a{color:inherit;text-decoration:none}
   button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
   input{font-family:inherit}
+  a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--green);outline-offset:2px}
   ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:rgba(137,255,67,.16);border-radius:6px}::-webkit-scrollbar-track{background:transparent}
   .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
   .up{color:var(--green)}.down{color:var(--red)}.mut{color:var(--muted)}
@@ -442,10 +443,11 @@
   .statusbar a:hover{color:var(--green)}
   .statusbar .right{margin-left:auto;display:flex;align-items:center;gap:16px}.statusbar .px{font-family:var(--mono);color:var(--text)}
   .statusbar .s.delayed{color:#ffd66b}.statusbar .s.delayed .dot{background:#ffd66b;box-shadow:0 0 7px rgba(255,214,107,.6)}
-  .orientation{display:flex;align-items:center;gap:12px;margin:8px 12px 3px;padding:8px 10px;border:1px solid rgba(137,255,67,.18);border-radius:12px;background:linear-gradient(135deg,rgba(14,24,16,.94),rgba(7,12,9,.94));box-shadow:0 8px 20px rgba(0,0,0,.16)}
-  .orientation .ocopy{display:flex;align-items:baseline;gap:8px;min-width:0;flex:1}.orientation .ocopy b{font-size:12px;white-space:nowrap}.orientation .ocopy span{color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .orientation .oa{display:flex;gap:6px;flex:0 0 auto}.orientation .oa button{min-height:32px;border:1px solid var(--border2);border-radius:9px;padding:0 11px;display:inline-flex;align-items:center;justify-content:center;background:rgba(137,255,67,.05);color:var(--text);font-size:11px;font-weight:800;cursor:pointer}
+  .orientation{display:flex;align-items:center;gap:16px;margin:8px 12px 3px;padding:10px 12px;border:1px solid rgba(137,255,67,.2);border-radius:13px;background:radial-gradient(440px 90px at 0 0,rgba(114,255,35,.1),transparent 72%),linear-gradient(135deg,rgba(14,24,16,.96),rgba(7,12,9,.96));box-shadow:0 10px 28px rgba(0,0,0,.2),inset 0 1px rgba(255,255,255,.025)}
+  .orientation .ocopy{display:flex;align-items:center;gap:14px;min-width:0;flex:1}.orientation .ointro{display:flex;flex-direction:column;gap:2px;min-width:142px}.orientation .ointro small{color:var(--green);font-size:8px;font-weight:900;letter-spacing:.11em}.orientation .ointro b{font-size:12px;white-space:nowrap}.orientation .osteps{display:flex;align-items:center;gap:6px;min-width:0}.orientation .osteps span{display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-size:10px;white-space:nowrap}.orientation .osteps i{display:grid;place-items:center;width:18px;height:18px;border:1px solid rgba(137,255,67,.22);border-radius:6px;background:rgba(137,255,67,.06);color:var(--green2);font:800 9px/1 var(--mono)}
+  .orientation .oa{display:flex;align-items:center;gap:6px;flex:0 0 auto}.orientation .oa button,.orientation .oa a{min-height:34px;border:1px solid var(--border2);border-radius:9px;padding:0 11px;display:inline-flex;align-items:center;justify-content:center;background:rgba(137,255,67,.05);color:var(--text);font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap}.orientation .oa a{color:var(--green2)}
   .orientation .oa .primary{border-color:transparent;background:linear-gradient(180deg,#b6ff75,var(--green));color:#061006}
+  @media(min-width:821px){#v-trending>.feedChainBar{display:none}}
 
   .loading,.msg{padding:40px;text-align:center;color:var(--muted)}
   .spin{display:inline-block;width:22px;height:22px;border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:sp .7s linear infinite}
@@ -496,7 +498,7 @@
   .reward-mode:has(input:checked){border-color:rgba(114,255,35,.6);background:rgba(114,255,35,.09);box-shadow:0 0 0 1px rgba(114,255,35,.14) inset}
   .reward-mode input{margin-top:2px;accent-color:var(--green);flex:0 0 auto}.reward-mode b{display:block;font-size:12px;color:var(--text);margin-bottom:4px}.reward-mode small{display:block;color:var(--muted);font-size:10px;line-height:1.35}
   .cashback-badge{display:inline-flex;align-items:center;gap:4px;border:1px solid rgba(114,255,35,.5);border-radius:999px;padding:2px 7px;background:rgba(114,255,35,.1);color:var(--green2);font-size:9px;font-weight:900;letter-spacing:.03em;text-transform:uppercase;vertical-align:middle}
-  .pump-reward-totals{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}.pump-reward-total{padding:11px;border:1px solid var(--border2);border-radius:11px;background:rgba(0,0,0,.15)}.pump-reward-total b{display:block;color:var(--green2);font-family:var(--mono);font-size:14px}.pump-reward-total span{display:block;color:var(--muted);font-size:9px;margin-top:3px;text-transform:uppercase;letter-spacing:.04em}
+  .pump-reward-totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin:10px 0}.pump-reward-total{padding:11px;border:1px solid var(--border2);border-radius:11px;background:rgba(0,0,0,.15)}.pump-reward-total b{display:block;color:var(--green2);font-family:var(--mono);font-size:14px}.pump-reward-total span{display:block;color:var(--muted);font-size:9px;margin-top:3px;text-transform:uppercase;letter-spacing:.04em}.creator-wallet-badge{display:inline-flex;align-items:center;margin-left:6px;padding:2px 6px;border:1px solid rgba(114,255,35,.38);border-radius:999px;background:rgba(114,255,35,.11);color:var(--green2);font-size:8px;font-weight:900;letter-spacing:.05em;text-transform:uppercase;vertical-align:middle}.creator-claimed{margin-top:3px;color:var(--green2);font:700 10px/1.3 var(--mono)}
   .pump-reward-row{display:grid;grid-template-columns:minmax(120px,1fr) minmax(150px,1.2fr) auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--border2)}.pump-reward-row:first-of-type{border-top:0}.pump-reward-values{font-size:10px;color:var(--muted);line-height:1.55}.pump-reward-values b{color:var(--text);font-family:var(--mono);font-size:11px}.pump-reward-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.pump-reward-actions .wbtn{padding:7px 9px;font-size:10px;white-space:nowrap}
 
   /* mobile bottom nav */
@@ -547,7 +549,7 @@
     .botnav button .i,.botnav a .i{font-size:18px;line-height:1}
     .botnav button.on,.botnav a.on{color:var(--green)}
     .statusbar .right span:last-child{display:none}
-    .orientation{margin:6px 8px 2px;padding:7px 8px;gap:8px}.orientation .ocopy{display:block}.orientation .ocopy b,.orientation .ocopy span{display:block}.orientation .ocopy span{margin-top:2px}.orientation .oa button{min-height:30px;padding:0 9px}.orientation #orientationConnect{display:none}
+    .orientation{margin:6px 8px 2px;padding:9px;gap:8px}.orientation .ocopy{display:block}.orientation .ointro{min-width:0}.orientation .ointro small,.orientation .ointro b{display:block}.orientation .osteps{display:none}.orientation .oa button,.orientation .oa a{min-height:36px;padding:0 10px}.orientation #orientationConnect,.orientation .oa a{display:none}
     .wgrid{padding:12px}
     .fundWalletHead,.fundWalletList{grid-template-columns:1fr}.fundWalletPresets{grid-template-columns:repeat(2,minmax(0,1fr))}
   }
@@ -580,6 +582,7 @@
     html,body{overflow-x:hidden}
   }
   /* Same launcher, embedded inside SlimeWire Go without Terminal chrome. */
+  @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
   body.fun-launch-embed #app,body.fun-tool-embed #app{height:100dvh!important;zoom:1!important}
   body.fun-launch-embed .topbar,body.fun-launch-embed #subbar,body.fun-launch-embed .statusbar,body.fun-launch-embed .botnav,body.fun-tool-embed .topbar,body.fun-tool-embed #subbar,body.fun-tool-embed .statusbar,body.fun-tool-embed .botnav{display:none!important}
   body.fun-launch-embed main,body.fun-tool-embed main{padding:0!important;overflow:hidden}
@@ -612,14 +615,14 @@
 <div id="app">
   <header class="topbar">
     <a class="brand" href="#trending">
-      <img src="/assets/slimewire/png/slimewire-mark.png?v=logo4" alt="SlimeWire">
+      <img src="/assets/slimewire/png/slimewire-mark-64.png" alt="SlimeWire">
       <span><b>SLIMEWIRE</b><small>TERMINAL</small></span>
     </a>
     <nav class="mainnav" id="nav">
-      <a data-route="trending">Market</a>
-      <a data-trade-entry>Trade</a>
-      <a data-route="portfolio">Portfolio</a>
-      <a data-route="copy">Traders</a>
+      <a href="#trending" data-route="trending">Market</a>
+      <a href="#trade" data-trade-entry>Trade</a>
+      <a href="#portfolio" data-route="portfolio">Portfolio</a>
+      <a href="#copy" data-route="copy">Traders</a>
       <div class="navdrop">
         <button class="dropbtn">Automate ▾</button>
         <div class="dropmenu" id="toolsMenu"></div>
@@ -628,7 +631,7 @@
     <div class="topctrls">
       <label class="searchbox" title="Search a token or paste its contract address"><span>🔍</span><input id="search" aria-label="Search token or paste contract address" placeholder="Search or paste CA" readonly><kbd>/</kbd></label>
       <button class="iconbtn watchbtn" id="watchBtn" title="Watchlist — your saved coins">★</button>
-      <div class="walletpill" id="walletPill" title="Wallet"><span class="dot off"></span><b id="solBal">Connect</b></div>
+      <button class="walletpill" id="walletPill" type="button" title="Wallet"><span class="dot off"></span><b id="solBal">Connect</b></button>
       <button class="iconbtn clipbtn" id="clipFarmBtn" data-icon="1" title="Clip farm — record a shareable SlimeWire clip (works on phone too)">🎬</button>
       <a class="iconbtn" href="/manual" target="_blank" rel="noopener noreferrer" title="Help">?</a>
     </div>
@@ -1809,7 +1812,7 @@
   }
   function orientationHtml(){
     try{if(localStorage.getItem(ORIENTATION_KEY)==="1")return"";}catch(e){}
-    return '<section class="orientation" id="orientation"><div class="ocopy"><b>Trade Solana + Robinhood coins</b><span>Every advanced tool stays one tap away.</span></div><div class="oa"><button class="primary" type="button" id="orientationExplore">Explore</button><button type="button" id="orientationConnect">Connect</button></div></section>';
+    return '<section class="orientation" id="orientation" aria-label="Start with SlimeWire"><div class="ocopy"><div class="ointro"><small>NEW TO SLIMEWIRE?</small><b>Find. Check. Trade.</b></div><div class="osteps"><span><i>1</i>Search a coin</span><span><i>2</i>Review risk</span><span><i>3</i>Choose an amount</span></div></div><div class="oa"><button class="primary" type="button" id="orientationExplore">Browse market</button><button type="button" id="orientationConnect">Set up wallet</button><a href="https://t.me/SlimeWiredBot" target="_blank" rel="noopener noreferrer">Telegram ↗</a></div></section>';
   }
   function wireOrientation(){
     const card=$("#orientation");if(!card)return;
@@ -3627,13 +3630,13 @@
     if(/^\d+$/.test(raw)){try{const n=BigInt(raw),whole=n/1000000000n,frac=String(n%1000000000n).padStart(9,"0").replace(/0+$/,"");return String(whole)+(frac?"."+frac:"");}catch(e){}}
     const n=Number(part&&part.totalSol||0);return isFinite(n)?n.toFixed(9).replace(/0+$/,"").replace(/\.$/,""):"0";
   }
-  function pumpRewardBreakdown(part){return "Curve "+pumpRewardSol({totalLamports:part&&part.curveLamports})+" / PumpSwap "+pumpRewardSol({totalLamports:part&&part.ammLamports});}
+  function pumpRewardBreakdown(part){return "Curve "+pumpRewardSol({totalLamports:part&&part.curveLamports})+" / PumpSwap "+pumpRewardSol({totalLamports:part&&(part.ammWsolAtomic||part.ammLamports)});}
   function pumpRewardsInnerHtml(){
     const data=state.pumpRewards,loading=state._pumpRewardsLoading;
-    if(!data)return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><div><h3 style="margin:0 0 3px">Pump rewards</h3><p class="sub" style="margin:0">Live creator fees and trader Cash back, by wallet.</p></div><span class="mut" style="font-size:11px">'+(loading?'<span class="spin"></span> Loading...':esc(state.pumpRewardsError||"Tap refresh"))+'</span></div><button class="wbtn ghost" style="margin-top:10px" onclick="GG.loadPumpRewards(true)">Refresh</button>';
+    if(!data)return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><div><h3 style="margin:0 0 3px">Creator fees &amp; rewards</h3><p class="sub" style="margin:0">Live claimable earnings for every managed wallet.</p></div><span class="mut" style="font-size:11px">'+(loading?'<span class="spin"></span> Loading...':esc(state.pumpRewardsError||"Tap refresh"))+'</span></div><button class="wbtn ghost" style="margin-top:10px" onclick="GG.loadPumpRewards(true)">Refresh</button>';
     const wallets=Array.isArray(data.wallets)?data.wallets:[],totals=data.totals||{};
-    const rows=wallets.map(w=>{const creator=w.creator||{},cashback=w.cashback||{},creatorSol=pumpRewardSol(creator),cashbackSol=pumpRewardSol(cashback),canCreator=Number(creator.totalLamports||0)>0||Number(creator.totalSol||0)>0,canCashback=Number(cashback.totalLamports||0)>0||Number(cashback.totalSol||0)>0;return '<div class="pump-reward-row"><div style="min-width:0"><b>'+esc(w.label||("Wallet "+w.walletIndex))+'</b><div class="addr mut" style="font-size:10px">'+esc(w.shortPublicKey||short(w.publicKey||""))+'</div></div><div class="pump-reward-values"><div>Creator fees <b>'+esc(creatorSol)+' SOL</b></div><div>Cash back <b>'+esc(cashbackSol)+' SOL</b></div><div style="font-size:9px">Creator: '+esc(pumpRewardBreakdown(creator))+'<br>Cash back: '+esc(pumpRewardBreakdown(cashback))+'</div></div><div class="pump-reward-actions">'+(canCreator?'<button class="wbtn" onclick="GG.claimPumpReward('+Number(w.walletIndex)+',\'creator\',this)">Claim creator</button>':'')+(canCashback?'<button class="wbtn" onclick="GG.claimPumpReward('+Number(w.walletIndex)+',\'cashback\',this)">Claim Cash back</button>':'')+(!canCreator&&!canCashback?'<span class="mut" style="font-size:10px">Nothing claimable</span>':'')+'</div></div>';}).join("");
-    return '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px"><div><h3 style="margin:0 0 3px">Pump rewards</h3><p class="sub" style="margin:0">Exact on-chain claimable vault balances, separate from spendable SOL.</p></div><button class="wbtn ghost" style="padding:7px 9px" onclick="GG.loadPumpRewards(true)" '+(loading?'disabled':'')+'>'+(loading?'Refreshing...':'Refresh')+'</button></div><div class="pump-reward-totals"><div class="pump-reward-total"><b>'+esc(pumpRewardSol({totalSol:totals.creatorSol}))+' SOL</b><span>Creator fees</span></div><div class="pump-reward-total"><b>'+esc(pumpRewardSol({totalSol:totals.cashbackSol}))+' SOL</b><span>Trader Cash back</span></div></div>'+(state.pumpRewardsError?'<p class="wnote" style="color:var(--red)">'+esc(state.pumpRewardsError)+'</p>':'')+(rows||'<p class="mut" style="font-size:12px">No managed wallets yet.</p>')+'<p class="wnote" style="margin:9px 0 0">Amounts are wallet-wide across Pump and PumpSwap, never assigned to one coin. Bonding-curve rewards arrive as SOL. PumpSwap rewards can remain WSOL when the wallet already has a WSOL account; SlimeWire never closes that existing account.</p>';
+    const rows=wallets.map(w=>{const creator=w.creator||{},cashback=w.cashback||{},claims=w.creatorClaims||{},creatorSol=pumpRewardSol(creator),cashbackSol=pumpRewardSol(cashback),claimedSol=pumpRewardSol({totalLamports:claims.claimedAtomic,totalSol:claims.claimedSol}),canCreator=Number(creator.totalLamports||0)>0||Number(creator.totalSol||0)>0,canCashback=Number(cashback.totalLamports||0)>0||Number(cashback.totalSol||0)>0,isCreator=!!w.creatorEligible||canCreator||claimedSol!=="0",launchCount=Math.max(0,Number(w.creatorLaunchCount||0));return '<div class="pump-reward-row"><div style="min-width:0"><b>'+esc(w.label||("Wallet "+w.walletIndex))+(isCreator?'<span class="creator-wallet-badge">Dev wallet</span>':'')+'</b><div class="addr mut" style="font-size:10px">'+esc(w.shortPublicKey||short(w.publicKey||""))+(launchCount?' · '+launchCount+(launchCount===1?' launch':' launches'):'')+'</div></div><div class="pump-reward-values">'+(isCreator?'<div>Creator fees ready <b>'+esc(creatorSol)+' SOL</b></div><div class="creator-claimed">'+esc(claimedSol)+' SOL claimed lifetime</div>':'')+'<div>Cash back ready <b>'+esc(cashbackSol)+' SOL</b></div><div style="font-size:9px">'+(isCreator?'Creator: '+esc(pumpRewardBreakdown(creator))+'<br>':'')+'Cash back: '+esc(pumpRewardBreakdown(cashback))+'</div></div><div class="pump-reward-actions">'+(isCreator&&canCreator?'<button class="wbtn" onclick="GG.claimPumpReward('+Number(w.walletIndex)+',\'creator\',this)">Claim creator fees</button>':'')+(canCashback?'<button class="wbtn" onclick="GG.claimPumpReward('+Number(w.walletIndex)+',\'cashback\',this)">Claim Cash back</button>':'')+(!canCreator&&!canCashback?'<span class="mut" style="font-size:10px">Nothing ready yet</span>':'')+'</div></div>';}).join("");
+    return '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px"><div><h3 style="margin:0 0 3px">Creator fees &amp; rewards</h3><p class="sub" style="margin:0">Exact wallet-wide earnings, separate from spendable SOL.</p></div><button class="wbtn ghost" style="padding:7px 9px" onclick="GG.loadPumpRewards(true)" '+(loading?'disabled':'')+'>'+(loading?'Refreshing...':'Refresh')+'</button></div><div class="pump-reward-totals"><div class="pump-reward-total"><b>'+esc(pumpRewardSol({totalSol:totals.creatorSol}))+' SOL</b><span>Creator fees ready</span></div><div class="pump-reward-total"><b>'+esc(pumpRewardSol({totalSol:totals.creatorClaimedSol}))+' SOL</b><span>Creator fees claimed</span></div><div class="pump-reward-total"><b>'+esc(pumpRewardSol({totalSol:totals.cashbackSol}))+' SOL</b><span>Trader Cash back</span></div></div>'+(state.pumpRewardsError?'<p class="wnote" style="color:var(--red)">'+esc(state.pumpRewardsError)+'</p>':'')+(rows||'<p class="mut" style="font-size:12px">No managed wallets yet.</p>')+'<p class="wnote" style="margin:9px 0 0">Dev wallets are identified privately from your successful launches or real on-chain creator earnings. PumpSwap may pay WSOL when an existing WSOL account is present; SlimeWire never closes that account.</p>';
   }
   function pumpRewardsCardHtml(){return '<div class="wbox" data-pump-rewards-panel>'+pumpRewardsInnerHtml()+'</div>';}
   function paintPumpRewardsPanels(){document.querySelectorAll("[data-pump-rewards-panel]").forEach(box=>box.innerHTML=pumpRewardsInnerHtml());}
@@ -4627,8 +4630,8 @@
   // runAutoRoundTrip/pollAutoRoundTrip work unchanged.
   let seasonRun=null,seasonPollT=null;
   function seasonFoldHtml(){
-    const opts=(state.wallets||[]).map(w=>'<option value="'+w.index+'"'+(Number(w.index)===Number(state.activeWallet)?' selected':'')+'>'+esc(w.label||"Wallet")+' Â· â—Ž'+Number(w.sol||0).toFixed(4)+'</option>').join('');
-    return '<details class="fold" id="seasonFold"><summary>ðŸŒ± Season<span class="sub">3-5 fast low-cap round trips</span><span class="chev">â–¾</span></summary><div class="foldbody">'+
+    const opts=(state.wallets||[]).map(w=>'<option value="'+w.index+'"'+(Number(w.index)===Number(state.activeWallet)?' selected':'')+'>'+esc(w.label||"Wallet")+' · ◎'+Number(w.sol||0).toFixed(4)+'</option>').join('');
+    return '<details class="fold" id="seasonFold"><summary>🌱 Season<span class="sub">3-5 fast low-cap round trips</span><span class="chev">▾</span></summary><div class="foldbody">'+
       '<p class="wnote" style="margin:0 0 10px">Season randomly selects 3-5 active Solana coins at or below <b>$2.1K market cap</b>, buys only <b>0.005 SOL</b>, then exits each one back to SOL immediately. Existing safety checks stay on and uncertain transactions are never repeated.</p>'+
       '<div class="field"><label>Season wallet</label><select id="seasonWallet">'+(opts||'<option value="">No managed wallet available</option>')+'</select></div>'+
       '<button class="wbtn" id="seasonGo" style="width:100%">Season</button>'+
@@ -4636,11 +4639,11 @@
       '</div></details>';
   }
   function seasonStatusHtml(run){
-    if(!run)return '<p class="wnote">Ready Â· 3-5 coins Â· 0.005 SOL each Â· immediate exit</p>';
-    const labels={choosing:"Finding a safety-checked coin â‰¤ $2.1K MC",buy_ready:"Preparing buy",buy_submitting:"Buying",buy_outcome_unknown:"Checking buy confirmation",holding:"Exiting to SOL",sell_submitting:"Selling to SOL",sell_outcome_unknown:"Checking sell confirmation",attention:"Paused safely",done:"Complete"};
+    if(!run)return '<p class="wnote">Ready · 3-5 coins · 0.005 SOL each · immediate exit</p>';
+    const labels={choosing:"Finding a safety-checked coin ≤ $2.1K MC",buy_ready:"Preparing buy",buy_submitting:"Buying",buy_outcome_unknown:"Checking buy confirmation",holding:"Exiting to SOL",sell_submitting:"Selling to SOL",sell_outcome_unknown:"Checking sell confirmation",attention:"Paused safely",done:"Complete"};
     const cur=run.current||{};const logs=(run.log||[]).slice(-6).map(l=>esc(l.message||"")).join('<br>');
-    const trades=(run.trades||[]).slice().reverse().map(t=>'<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--border2)"><b>$'+esc(t.symbol||short(t.tokenMint||""))+'</b><span class="mut">$'+Math.round(Number(t.marketCapUsd||0)).toLocaleString()+' MC Â· '+esc(t.status||"closed")+'</span></div>').join('');
-    return '<div class="wnote" style="font-size:12px"><b>'+esc(labels[run.stage]||(run.status==="completed"?"Complete":"Season"))+'</b> Â· '+Number(run.tradesCompleted||0)+'/'+Number(run.tradesTarget||0)+(cur.symbol?' Â· $'+esc(cur.symbol)+' Â· $'+Math.round(Number(cur.marketCapUsd||0)).toLocaleString()+' MC':'')+(run.lastError?'<br><span style="color:var(--amber)">'+esc(run.lastError)+'</span>':'')+(logs?'<br><br>'+logs:'')+'</div>'+trades;
+    const trades=(run.trades||[]).slice().reverse().map(t=>'<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--border2)"><b>$'+esc(t.symbol||short(t.tokenMint||""))+'</b><span class="mut">$'+Math.round(Number(t.marketCapUsd||0)).toLocaleString()+' MC · '+esc(t.status||"closed")+'</span></div>').join('');
+    return '<div class="wnote" style="font-size:12px"><b>'+esc(labels[run.stage]||(run.status==="completed"?"Complete":"Season"))+'</b> · '+Number(run.tradesCompleted||0)+'/'+Number(run.tradesTarget||0)+(cur.symbol?' · $'+esc(cur.symbol)+' · $'+Math.round(Number(cur.marketCapUsd||0)).toLocaleString()+' MC':'')+(run.lastError?'<br><span style="color:var(--amber)">'+esc(run.lastError)+'</span>':'')+(logs?'<br><br>'+logs:'')+'</div>'+trades;
   }
   function scheduleSeasonPoll(){
     if(seasonPollT){clearTimeout(seasonPollT);seasonPollT=null;}
@@ -4657,10 +4660,10 @@
     const walletIndex=Number(($("#seasonWallet")||{}).value||state.activeWallet||1);
     if(!(await ensureTradeReady()))return;
     if(!confirm('Start Season with real funds? It will make 3-5 tiny 0.005 SOL low-cap buys and sell each back to SOL immediately. Losses are possible.'))return;
-    const btn=$("#seasonGo");if(btn){btn.disabled=true;btn.textContent="Startingâ€¦";}
+    const btn=$("#seasonGo");if(btn){btn.disabled=true;btn.textContent="Starting…";}
     const {ok,status,d}=await jpost('/api/web/season/start',{walletIndex,tradeAttemptId:attemptId()},180000);
-    if(status===401){toast("Couldn't authorize â€” open Wallet and reconnect.",true);return;}
-    if(ok&&d&&d.ok&&d.run){seasonRun=d.run;toast('Season started Â· '+seasonRun.tradesTarget+' coins');const box=$("#seasonStatus");if(box)box.innerHTML=seasonStatusHtml(seasonRun);scheduleSeasonPoll();}
+    if(status===401){toast("Couldn't authorize — open Wallet and reconnect.",true);return;}
+    if(ok&&d&&d.ok&&d.run){seasonRun=d.run;toast('Season started · '+seasonRun.tradesTarget+' coins');const box=$("#seasonStatus");if(box)box.innerHTML=seasonStatusHtml(seasonRun);scheduleSeasonPoll();}
     else{if(btn){btn.disabled=false;btn.textContent="Season";}toast((d&&(d.message||d.error))||"Could not start Season",true);}
   }
   function autoRoundTripFoldHtml(){
@@ -5443,7 +5446,7 @@
   document.addEventListener("keydown",e=>{if(e.key==="/"&&document.activeElement.tagName!=="INPUT"){e.preventDefault();openTradeSearch();}});
   document.querySelectorAll("#nav a[data-route]").forEach(a=>a.onclick=e=>{e.preventDefault();go(a.dataset.route);});
   document.querySelectorAll("#botnav button[data-route]").forEach(b=>b.onclick=()=>go(b.dataset.route));
-  document.querySelectorAll("[data-trade-entry]").forEach(b=>b.onclick=openTradeSearch);
+  document.querySelectorAll("[data-trade-entry]").forEach(b=>b.onclick=e=>{if(e)e.preventDefault();openTradeSearch();});
   $("#search").onclick=openTradeSearch;
   document.querySelectorAll("#botnav button[data-tools]").forEach(b=>b.onclick=()=>openToolsSheet());
   $("#walletPill").onclick=()=>go("wallet");

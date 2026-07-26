@@ -210,3 +210,12 @@ test("chart prefetch and debug commands are wired", () => {
   assert.match(packageSource, /debug:chart-prefetch/);
   assert.match(packageSource, /debug:route-requests/);
 });
+
+test("standalone chart keeps the original brand and routes its trade CTA to the requested coin", () => {
+  assert.doesNotMatch(chartLabSource, /ca=DEMO/);
+  assert.match(chartLabSource, /id="tradeCta" href="\/">Open SlimeWire Market<\/a>/);
+  assert.match(chartLabSource, /TRADE_CTA\.href='\/t\?ca='\+encodeURIComponent\(CA\)/);
+  assert.match(chartLabSource, /slimewire-mark-64\.png/);
+  assert.doesNotMatch(chartLabSource, /<span class="dot">◢<\/span>/);
+  assert.match(chartLabSource, /aria-pressed="true">5m<\/button>/);
+});

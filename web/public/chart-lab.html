@@ -5,13 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#07120c" />
 <title>SlimeWire Chart — preview</title>
+<link rel="icon" type="image/png" sizes="64x64" href="/assets/slimewire/png/slimewire-mark-64.png" />
+<link rel="apple-touch-icon" sizes="180x180" href="/assets/slimewire/png/apple-touch-icon.png" />
 <style>
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;background:#060f0a;color:#e8f5ec;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   body{padding:max(12px,env(safe-area-inset-top)) 12px max(18px,env(safe-area-inset-bottom));max-width:840px;margin:0 auto}
   .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-  .brand{display:flex;align-items:center;gap:9px;font-weight:700;font-size:15px;letter-spacing:.3px}
-  .brand .dot{width:27px;height:27px;border-radius:8px;background:radial-gradient(circle at 35% 30%,#1c5a2e,#0c2415);border:1px solid #2f7a44;display:flex;align-items:center;justify-content:center;color:#9dff6a;font-size:14px;box-shadow:0 0 14px rgba(124,255,79,.25)}
+  .brand{display:flex;align-items:center;gap:9px;color:#e8f5ec;font-weight:700;font-size:15px;letter-spacing:.3px;text-decoration:none}
+  .brand img{width:27px;height:27px;border-radius:8px;object-fit:contain;filter:drop-shadow(0 0 8px rgba(124,255,79,.38))}
   .tag{font-size:11px;color:#9dff6a;background:linear-gradient(180deg,rgba(24,56,36,.85),rgba(10,28,18,.85));border:1px solid #2c6e40;border-radius:20px;padding:5px 12px;box-shadow:0 0 16px rgba(124,255,79,.2),inset 0 1px 0 rgba(255,255,255,.08);backdrop-filter:blur(6px)}
   .glass{position:relative;border-radius:18px;padding:14px;overflow:hidden;background:linear-gradient(180deg,#0b1812,#070f0a);
     border:1px solid #244c36;box-shadow:0 24px 64px -26px rgba(0,0,0,.85),0 0 50px -18px rgba(124,255,79,.3),inset 0 1px 0 rgba(255,255,255,.05)}
@@ -32,7 +34,7 @@
   .live .pls{width:7px;height:7px;border-radius:50%;background:#7CFF4F;box-shadow:0 0 8px #7CFF4F;animation:pls 1.4s ease-in-out infinite}
   @keyframes pls{0%,100%{opacity:1}50%{opacity:.2}}
   .tfs{display:flex;gap:5px;margin-bottom:9px}
-  .tf{font-size:11px;color:#7fb094;background:rgba(12,30,20,.6);border:1px solid #1d3b29;border-radius:9px;padding:5px 12px;cursor:pointer;transition:.18s;backdrop-filter:blur(4px)}
+  .tf{font:inherit;font-size:11px;color:#7fb094;background:rgba(12,30,20,.6);border:1px solid #1d3b29;border-radius:9px;padding:5px 12px;cursor:pointer;transition:.18s;backdrop-filter:blur(4px)}
   .tf:hover{border-color:#2f7a44;color:#cfeede}
   .tf.on{color:#06210f;background:linear-gradient(180deg,#b6ff7a,#5fe03a);border-color:#7CFF4F;font-weight:700;box-shadow:0 0 18px rgba(124,255,79,.5),inset 0 1px 0 rgba(255,255,255,.4)}
   .wrap{display:flex;gap:10px;align-items:stretch}
@@ -73,11 +75,13 @@
   body.embed .top,body.embed .cta,body.embed .foot{display:none}
   body.embed .glass{border-radius:0;border:none;box-shadow:none;padding-bottom:0}
   body.embed .tape:not(.expanded){max-height:28px;overflow:hidden}
+  :focus-visible{outline:2px solid #7CFF4F;outline-offset:3px}
+  @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
 </style>
 </head>
 <body>
   <div class="top">
-    <div class="brand"><span class="dot">◢</span> SlimeWire</div>
+    <a class="brand" href="/"><img src="/assets/slimewire/png/slimewire-mark-64.png" alt=""> SlimeWire</a>
     <span class="tag">live preview · real slime + blood</span>
   </div>
 
@@ -99,7 +103,7 @@
         </div>
       </div>
 
-      <div class="tfs"><span class="tf" data-tf="1m">1m</span><span class="tf on" data-tf="5m">5m</span><span class="tf" data-tf="15m">15m</span><span class="tf" data-tf="1h">1h</span></div>
+      <div class="tfs" aria-label="Chart timeframe"><button class="tf" type="button" data-tf="1m" aria-pressed="false">1m</button><button class="tf on" type="button" data-tf="5m" aria-pressed="true">5m</button><button class="tf" type="button" data-tf="15m" aria-pressed="false">15m</button><button class="tf" type="button" data-tf="1h" aria-pressed="false">1h</button></div>
 
       <div class="wrap">
         <div class="chartcol">
@@ -125,7 +129,7 @@
     </div>
   </div>
 
-  <a class="cta" href="/t?ca=DEMO">⚡ Quick Buy on SlimeWire</a>
+  <a class="cta" id="tradeCta" href="/">Open SlimeWire Market</a>
   <div class="foot">Live candles and trades from SlimeWire's chain-aware market resolver.</div>
 <script src="/vendor/lightweight-charts.standalone.production.js"></script>
 
@@ -133,6 +137,7 @@
 (function(){
   var el=document.getElementById('chart'); if(!el||!window.LightweightCharts) return;
   var QP=new URLSearchParams(location.search),CA=(QP.get('ca')||'').trim(),EMBED=QP.get('embed')==='1',TF=QP.get('tf')||'5m';
+  var TRADE_CTA=document.getElementById('tradeCta');if(TRADE_CTA&&CA){TRADE_CTA.href='/t?ca='+encodeURIComponent(CA);TRADE_CTA.textContent='⚡ Quick Buy on SlimeWire';}
   var NETWORK=/^0x[0-9a-f]{40}$/i.test(CA)?'robinhood':'solana';
   var POOL=(QP.get('pool')||'').trim(),VALID_POOL=NETWORK==='robinhood'?/^0x[0-9a-f]{40}$/i.test(POOL):/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(POOL);
   if(!VALID_POOL||(NETWORK==='robinhood'?POOL.toLowerCase()===CA.toLowerCase():POOL===CA))POOL='';
@@ -489,12 +494,12 @@
 
   // TF switch — refetch the real OHLCV at the new aggregate + reset the forming bar.
   Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(b){b.addEventListener('click',function(){
-    Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(x){x.classList.remove('on');}); b.classList.add('on');
+    Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(x){x.classList.remove('on');x.setAttribute('aria-pressed','false');}); b.classList.add('on');b.setAttribute('aria-pressed','true');
     TF=b.getAttribute('data-tf')||'5m'; haveCandles=false; forming=null; var l=document.getElementById('chartload'); if(l)l.classList.remove('hidden');
     if(CA){ loadServer(); loadDex(); }
   });});
   // keep the active TF button in sync with the URL on load
-  Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(b){b.classList.toggle('on',b.getAttribute('data-tf')===TF);});
+  Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(b){var active=b.getAttribute('data-tf')===TF;b.classList.toggle('on',active);b.setAttribute('aria-pressed',active?'true':'false');});
 
   var _tb=document.getElementById('txtoggle');if(_tb)_tb.addEventListener('click',function(){expanded=!expanded;var tp=document.getElementById('tape');if(tp)tp.classList.toggle('expanded',expanded);_tb.textContent=expanded?'Collapse ▴':'Expand ▾';renderTape();});
   // (autoSize:true keeps the chart fitted to #chart on resize — no manual resize handler needed.)

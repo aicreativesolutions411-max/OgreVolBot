@@ -180,7 +180,7 @@ test("Trade opens the focused cross-chain search with shared recent coins", () =
   assert.match(ggSource, /function openTradeSearch\(/);
   assert.match(ggSource, /TRADE_RECENTS_KEY="slimewireFunRecents"/);
   assert.match(ggSource, /Search ticker, name, Solana or 0x CA/);
-  assert.match(ggSource, /document\.querySelectorAll\("\[data-trade-entry\]"\)\.forEach\(b=>b\.onclick=openTradeSearch\)/);
+  assert.match(ggSource, /document\.querySelectorAll\("\[data-trade-entry\]"\)\.forEach\(b=>b\.onclick=e=>\{if\(e\)e\.preventDefault\(\);openTradeSearch\(\);\}\)/);
   assert.match(ggSource, /<span>Recent searches<\/span>/);
   assert.match(ggSource, /function openTradeSearchRow\(row\)/);
   assert.match(ggSource, /state\._nextTradeFocus="buy"/);
@@ -206,8 +206,14 @@ test("unknown market and security fields stay honest while details hydrate", () 
 });
 
 test("first-visit market orientation stays a compact action strip", () => {
-  assert.match(ggSource, /Trade Solana \+ Robinhood coins/);
-  assert.match(ggSource, /Every advanced tool stays one tap away/);
+  assert.match(ggSource, /NEW TO SLIMEWIRE\?/);
+  assert.match(ggSource, /Find\. Check\. Trade\./);
+  assert.match(ggSource, /Search a coin/);
+  assert.match(ggSource, /Review risk/);
+  assert.match(ggSource, /Choose an amount/);
+  assert.match(ggSource, />Browse market<\/button>/);
+  assert.match(ggSource, />Set up wallet<\/button>/);
+  assert.match(ggSource, />Telegram ↗<\/a>/);
   assert.doesNotMatch(ggSource, /Find it\. Trade it\./);
 });
 

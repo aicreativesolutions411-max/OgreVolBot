@@ -6,7 +6,7 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="32">
+<meta name="slimecash-build" content="34">
 <link rel="manifest" href="/cash/manifest.webmanifest?v=11">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
@@ -20,7 +20,7 @@
 <link rel="preconnect" href="https://app.slimewire.org" crossorigin>
 <link rel="dns-prefetch" href="//app.slimewire.org">
 <link rel="preconnect" href="https://api.dexscreener.com" crossorigin>
-<link rel="stylesheet" href="/cash/cash.css?v=32">
+<link rel="stylesheet" href="/cash/cash.css?v=34">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -31,7 +31,7 @@
 
 <main id="app" class="app" hidden>
   <header class="topbar">
-    <div class="brand"><span class="w1">Slime</span><span class="w2">Cash</span></div>
+    <a class="brand" href="/fun" aria-label="SlimeWire Go home"><img src="/assets/slimewire/png/slimewire-mark-64.png" alt=""><span><span class="w1">Slime</span><span class="w2">Cash</span></span></a>
     <button id="avatarBtn" class="avatar" type="button" aria-label="Profile"></button>
   </header>
 
@@ -52,10 +52,10 @@
       <button id="receiveBtn" class="btn ghost" type="button">Receive</button>
       <button id="convertBtn" class="btn ghost" type="button">Convert</button>
     </div>
-    <section id="pumpRewardsCard" class="cash-pump-rewards" hidden aria-live="polite"></section>
+    <section id="pumpRewardsCard" class="cash-pump-rewards" data-cash-pump-rewards hidden aria-live="polite"></section>
     <button id="homeWalletsBtn" class="wallet-safety-link" type="button"><span>Wallets &amp; backups</span><small>Manage, create, import, or recover</small><em>Open</em></button>
     <a class="suite-handoff" href="/fun?from=cash">
-      <img src="/assets/slimewire/png/slimewire-mark.png" alt="" loading="lazy" decoding="async">
+      <img src="/assets/slimewire/png/slimewire-mark-64.png" alt="" loading="lazy" decoding="async">
       <span><b>Trade with this wallet</b><small>Open SlimeWire Go without signing in again</small></span>
       <em>Open →</em>
     </a>
@@ -115,9 +115,10 @@
       <button id="positionsRefreshBtn" class="text-action" type="button">Refresh</button>
     </div>
     <div id="cashPositionsStatus" class="status"></div>
+    <section id="portfolioCreatorRewardsCard" class="cash-pump-rewards cash-creator-portfolio" data-cash-pump-rewards data-cash-creator-only hidden aria-live="polite"></section>
     <div id="cashPositions" class="cash-positions"><div class="activity-empty">Open this tab to load your coins.</div></div>
     <a class="suite-handoff" href="/fun?from=cash">
-      <img src="/assets/slimewire/png/slimewire-mark.png" alt="" loading="lazy" decoding="async">
+      <img src="/assets/slimewire/png/slimewire-mark-64.png" alt="" loading="lazy" decoding="async">
       <span><b>Open the full terminal</b><small>Charts, buys, TP/SL and advanced orders</small></span>
       <em>Open →</em>
     </a>
@@ -516,6 +517,6 @@
 <div id="toast" class="toast" hidden></div>
 <script src="/config.js"></script>
 <script src="/slimewire-funding.js?v=8"></script>
-<script src="/cash/cash.js?v=32"></script>
+<script src="/cash/cash.js?v=34"></script>
 </body>
 </html>

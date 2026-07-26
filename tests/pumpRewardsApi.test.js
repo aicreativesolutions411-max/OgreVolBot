@@ -46,11 +46,34 @@ test("GET Pump rewards returns every owned wallet plus the selected wallet and w
   assert.match(handler, /totals:\s*\{[\s\S]*?creatorAtomic:[\s\S]*?creatorSol:[\s\S]*?cashbackAtomic:[\s\S]*?cashbackSol:/);
   assert.match(handler, /creatorClaims:[\s\S]*?scope: "wallet"[\s\S]*?claimedAtomic:[\s\S]*?claimedSol:[\s\S]*?pendingCount:/);
   assert.match(handler, /creatorClaimedAtomic:[\s\S]*?creatorClaimedSol:/);
+  assert.match(handler, /const receiptStore = await readPumpLaunchAttempts\(\)/, "creator eligibility must reuse the launch/receipt store read");
+  assert.match(handler, /String\(attempt\.userId \|\| ""\) !== String\(userId\)/, "only this account's launch history can mark its wallets");
+  assert.match(handler, /String\(attempt\.rail \|\| "pump"\)\.toLowerCase\(\) !== "pump"/);
+  assert.match(handler, /normalizePumpCashback\(attempt\.pumpCashback\)/, "Cash Back launches do not make their signer a creator-fee wallet");
+  assert.match(handler, /\["COMPLETE", "CONFIRMED", "LAUNCHED", "SUBMITTED"\]\.includes\(status\)/, "failed drafts cannot create a dev-wallet badge");
+  assert.match(handler, /const creatorLaunchCount = creatorLaunchMintsByWallet\.get\(row\.publicKey\)\?\.size \|\| 0/);
+  assert.match(handler, /const creatorEligible = creatorLaunchCount > 0[\s\S]*?pumpRewardAtomic\(row\.creator\?\.totalAtomic\) > 0n[\s\S]*?claims\.claimedAtomic > 0n[\s\S]*?claims\.pendingCount > 0/);
+  assert.match(handler, /creatorEligible,[\s\S]*?creatorLaunchCount,[\s\S]*?creatorClaims:/);
 
   const serializer = functionSection(server, "publicPumpRewardWallet", "webPumpRewards");
   assert.match(serializer, /creator:\s*\{[\s\S]*?curveLamports:[\s\S]*?ammWsolAtomic:[\s\S]*?totalLamports:[\s\S]*?totalSol:/);
   assert.match(serializer, /cashback:\s*\{[\s\S]*?curveLamports:[\s\S]*?ammWsolAtomic:[\s\S]*?totalLamports:[\s\S]*?totalSol:/);
   assert.doesNotMatch(serializer, /\bmint\s*:/);
+});
+
+test("desktop terminal shows creator-wallet claim counters without labeling ordinary wallets as dev wallets", () => {
+  for (const page of [desktop, desktopAlias]) {
+    const panel = functionSection(page, "pumpRewardsInnerHtml", "pumpRewardsCardHtml");
+    assert.match(panel, /Creator fees &amp; rewards/);
+    assert.match(panel, /creatorEligible/);
+    assert.match(panel, /creatorLaunchCount/);
+    assert.match(panel, /creatorClaimedSol/);
+    assert.match(page, /part\.ammWsolAtomic\|\|part\.ammLamports/);
+    assert.match(panel, /Creator fees claimed/);
+    assert.match(panel, /creator-wallet-badge/);
+    assert.match(panel, /isCreator&&canCreator/);
+    assert.match(panel, /Claim creator fees/);
+  }
 });
 
 test("POST Pump reward claims are wallet-owned, kind-limited, and idempotent", () => {
@@ -109,8 +132,8 @@ test("temporary WSOL ATA creation is idempotent and pre-existing user accounts a
   assert.match(send, /programName === "pumpAmm" && destinationExists \? "WSOL" : "SOL"/);
 
   for (const page of [desktop, desktopAlias]) {
-    assert.match(page, /PumpSwap rewards can remain WSOL when the wallet already has a WSOL account/);
-    assert.match(page, /SlimeWire never closes that existing account/);
+    assert.match(page, /PumpSwap may pay WSOL when an existing WSOL account is present/);
+    assert.match(page, /SlimeWire never closes that account/);
     assert.match(page, /d\.payoutAsset/);
     assert.match(page, /PumpSwap proceeds remain WSOL in the wallet's existing WSOL account/);
   }

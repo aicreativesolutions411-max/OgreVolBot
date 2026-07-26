@@ -956,10 +956,10 @@ const TERMINAL_FEEDS = [
 const TERMINAL_FEED_MAP = Object.fromEntries(TERMINAL_FEEDS.map((feed) => [feed.tabKey, feed]));
 
 const SLIMEWIRE_CRITICAL_IMAGE_ASSETS = [
-  "./assets/slimewire/png/slimewire-mark.png",
+  "./assets/slimewire/png/slimewire-mark-64.png",
   "./assets/slimewire/svg/icons/wallet.svg",
-  "./assets/slimewire/svg/icons/terminal.svg",
-  "./assets/slimewire/svg/icons/chart.svg",
+  "./assets/slimewire/svg/nav-icons/terminal.svg",
+  "./assets/slimewire/svg/nav-icons/chart.svg",
   "./assets/slimewire/svg/icons/refresh.svg",
   "./assets/slimewire/svg/powered-by-ogres-badge.svg",
   "./assets/slimewire/clean-ui/wallet_icons/default/phantom.png",
@@ -991,7 +991,7 @@ function fallbackImageForSource(image) {
   if (source.includes("phantom")) return walletChoiceIcon("phantom");
   if (source.includes("solflare")) return walletChoiceIcon("solflare");
   if (source.includes("wallet") || source.includes("/icons/")) return "./assets/slimewire/svg/icons/wallet.svg";
-  if (source.includes("powered-by") || source.includes("wordmark") || source.includes("slimewire-mark")) return "./assets/slimewire/png/slimewire-mark.png";
+  if (source.includes("powered-by") || source.includes("wordmark") || source.includes("slimewire-mark")) return "./assets/slimewire/png/slimewire-mark-64.png";
   return tokenMascotSrc(image?.alt || source || "slimewire");
 }
 
