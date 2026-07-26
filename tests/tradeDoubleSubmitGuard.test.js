@@ -2974,7 +2974,7 @@ test("OCR image scan: cloud-offloaded, concurrency-capped, gated, delete-only", 
 
 // ---- Scan card buy row: ONE clean Buy button (the 0.5/1/5/custom amount buttons all just opened
 // the site, so they were consolidated). The &amount= deep-link helper still exists for the web preload.
-test("Sol/RH scan and buy-bot cards share TG Buy, Web Buy, and categorized More", () => {
+test("Sol/RH scan cards surface SlimeWire Chart, TG Buy, Web Buy, and categorized More", () => {
   const kb = functionBody(serverSource, "slimeScanKeyboard");
   assert.match(kb, /compactTradeCardKeyboard\(mint, "s"\)/);
   const gbi = serverSource.indexOf("const groupBuyMarkup =");
@@ -2985,6 +2985,8 @@ test("Sol/RH scan and buy-bot cards share TG Buy, Web Buy, and categorized More"
   const compact = functionBody(serverSource, "compactTradeCardKeyboard");
   assert.match(compact, /TG Quick Buy/);
   assert.match(compact, /Web Quick Buy/);
+  assert.match(compact, /SlimeWire Chart/);
+  assert.match(compact, /links\.telegramSiteLogin/);
   assert.match(compact, /telegramWebLoginButton/);
   assert.match(compact, /📂 More/);
   const more = functionBody(serverSource, "compactCardMoreKeyboard");
@@ -3033,7 +3035,10 @@ test("Telegram /buy prioritizes the card coin and posts a compact TG/Web chooser
   assert.match(keyboard, /callback_data: `qbp:\$\{target\}`/);
   assert.match(keyboard, /callback_data: `rqbp:\$\{amount\}:/);
   assert.match(keyboard, /callback_data: `rqbp:\$\{target\}`/);
+  assert.match(keyboard, /Buy \$\{prefs\.quickAmount\}/);
+  assert.match(keyboard, /Edit preset/);
   assert.match(keyboard, /Full scan/);
+  assert.match(keyboard, /links\.telegramSiteLogin/);
   assert.match(serverSource, /const quickBuyCommand = \/\^\\\/buy/);
   assert.match(serverSource, /sendTelegramQuickBuyPanel\(chatId, userId, message, quickBuyCommand\[1\]/);
   assert.match(functionBody(serverSource, "slimewireTokenLinks"), /\/fun\?quick=1&ca=/);
