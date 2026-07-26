@@ -565,13 +565,18 @@ test("Ogre A.I. does not blanket-block Token-2022 trusted-pool candidates", () =
   }), true);
 });
 
-test("Ogre A.I. and buy safety use trusted-pool Token-2022 routing instead of a blanket block", () => {
+test("Ogre A.I. and buy safety route unknown Token-2022 venues through an executable order", () => {
   assert.match(serverSource, /TRUSTED_TOKEN_2022_POOL_RE/);
-  // The non-route safety (incl. trusted-pool Token-2022 routing) lives in the shared base
-  // helper that assertTokenBuySafety calls, so it stays enforced on the pump-pool buy path too.
+  // Pool naming is useful context, not a safety proof. An unknown venue must take the Jupiter path,
+  // while mint/freeze and market-risk checks remain in the shared base helper.
   assert.match(serverFunctionBody("assertTokenBuyBaseSafety"), /market\?\.trustedToken2022Pool/);
+  assert.match(serverFunctionBody("assertTokenBuyBaseSafety"), /token2022RouteRequired/);
   assert.match(serverFunctionBody("assertTokenBuySafety"), /assertTokenBuyBaseSafety/);
   assert.doesNotMatch(serverFunctionBody("assertTokenBuyBaseSafety"), /Token-2022 mints are blocked for fast buys/);
+  assert.doesNotMatch(serverFunctionBody("assertTokenBuyBaseSafety"), /Token-2022 requires a trusted/);
+  const buy = serverFunctionBody("buyTokenForPlan");
+  assert.match(buy, /!token2022RouteRequired && isPumpBondingCurveBuy/);
+  assert.match(buy, /if \(token2022RouteRequired\) throw jupiterError/);
   assert.match(serverFunctionBody("filterOgreAiRowsForHardSafety"), /hasTrustedToken2022Pool\(row\)/);
   assert.match(serverFunctionBody("webOgreAiPickSummary"), /poolLabel/);
 });
@@ -767,9 +772,11 @@ test("Token-2022 buy guard falls back to the cached feed row for brand-new token
   // Token-2022 launches get rejected purely for being too new to be indexed.
   const body = serverFunctionBody("tokenMarketSafetyInfo");
   assert.match(body, /localMarketRowForMint\(tokenMint\)/);
-  assert.match(body, /\.\.\.feedRow/);
-  // The honeypot / mint-freeze guard text must still be present and unchanged.
-  assert.match(serverFunctionBody("assertTokenBuyBaseSafety"), /Token-2022 requires a trusted/);
+  assert.match(body, /slimeScanCache\.get/);
+  assert.match(body, /slimeScanPreviewCache\.get/);
+  assert.match(body, /\.\.\.cachedScanRow/);
+  // The real on-chain mint/freeze guards stay unchanged; only the flaky venue-name rejection is gone.
+  assert.doesNotMatch(serverFunctionBody("assertTokenBuyBaseSafety"), /Token-2022 requires a trusted/);
   assert.match(serverFunctionBody("assertTokenBuyBaseSafety"), /freeze authority is still active/);
 });
 
