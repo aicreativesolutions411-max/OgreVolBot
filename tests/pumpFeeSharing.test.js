@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createRequire } from "node:module";
 import {
   Connection,
   Keypair,
@@ -8,16 +9,6 @@ import {
 import {
   TOKEN_PROGRAM_ID
 } from "@solana/spl-token";
-import {
-  PUMP_FEE_PROGRAM_ID,
-  PUMP_SDK,
-  canonicalPumpPoolPda,
-  getPumpFeeProgram
-} from "@pump-fun/pump-sdk";
-import {
-  PUMP_AMM_PROGRAM_ID,
-  PUMP_PROGRAM_ID
-} from "@pump-fun/pump-swap-sdk";
 import {
   PUMP_FEE_SHARING_MAX_SHAREHOLDERS,
   PUMP_FEE_SHARING_QUOTE_MINT,
@@ -34,6 +25,18 @@ import {
   readPumpFeeSharingConfig,
   validatePumpFeeShareholders
 } from "../src/lib/pumpFeeSharing.js";
+
+const requireModule = createRequire(import.meta.url);
+const {
+  PUMP_FEE_PROGRAM_ID,
+  PUMP_SDK,
+  canonicalPumpPoolPda,
+  getPumpFeeProgram
+} = requireModule("@pump-fun/pump-sdk");
+const {
+  PUMP_AMM_PROGRAM_ID,
+  PUMP_PROGRAM_ID
+} = requireModule("@pump-fun/pump-swap-sdk");
 
 const offlineConnection = new Connection("http://127.0.0.1:8899", "confirmed");
 

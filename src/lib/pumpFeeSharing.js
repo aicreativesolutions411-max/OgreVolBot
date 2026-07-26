@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import {
   PublicKey
 } from "@solana/web3.js";
@@ -5,7 +6,8 @@ import {
   NATIVE_MINT,
   TOKEN_PROGRAM_ID
 } from "@solana/spl-token";
-import {
+const requireModule = createRequire(import.meta.url);
+const {
   PUMP_FEE_PROGRAM_ID,
   PUMP_SDK,
   canonicalPumpPoolPda,
@@ -13,13 +15,13 @@ import {
   feeSharingConfigPda,
   isSharingConfigEditable,
   quoteAta
-} from "@pump-fun/pump-sdk";
-import {
+} = requireModule("@pump-fun/pump-sdk");
+const {
   PUMP_AMM_PROGRAM_ID,
   PUMP_PROGRAM_ID,
   coinCreatorVaultAtaPda,
   coinCreatorVaultAuthorityPda
-} from "@pump-fun/pump-swap-sdk";
+} = requireModule("@pump-fun/pump-swap-sdk");
 
 export const PUMP_FEE_SHARING_TOTAL_BPS = 10_000;
 export const PUMP_FEE_SHARING_MAX_SHAREHOLDERS = 2;

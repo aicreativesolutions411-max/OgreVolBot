@@ -1,14 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createRequire } from "node:module";
 import {
   Connection,
   Keypair,
   PublicKey
 } from "@solana/web3.js";
-import {
-  PUMP_AMM_PROGRAM_ID,
-  PUMP_PROGRAM_ID
-} from "@pump-fun/pump-sdk";
 import {
   PUMP_TOKEN_PROGRAM_ID,
   PUMP_WRAPPED_SOL_MINT,
@@ -17,6 +14,12 @@ import {
   getPumpRewardAddresses,
   getPumpRewardBalances
 } from "../src/lib/pumpRewards.js";
+
+const requireModule = createRequire(import.meta.url);
+const {
+  PUMP_AMM_PROGRAM_ID,
+  PUMP_PROGRAM_ID
+} = requireModule("@pump-fun/pump-sdk");
 
 function accountInfo({
   lamports = 0,

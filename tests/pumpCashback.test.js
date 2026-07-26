@@ -1,8 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PumpSdk, PUMP_PROGRAM_ID } from "@pump-fun/pump-sdk";
+import { createRequire } from "node:module";
 import { Keypair, TransactionMessage } from "@solana/web3.js";
 import { buildPumpCashbackCreateTransaction, normalizePumpCashback } from "../src/lib/pumpCashback.js";
+
+const requireModule = createRequire(import.meta.url);
+const { PumpSdk, PUMP_PROGRAM_ID } = requireModule("@pump-fun/pump-sdk");
 
 test("native Pump Cash back builder emits the official create_v2 cashback instruction", async () => {
   const mint = Keypair.generate();

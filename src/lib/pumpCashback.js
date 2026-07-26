@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import {
   ComputeBudgetProgram,
   PublicKey,
@@ -7,10 +8,13 @@ import {
 } from "@solana/web3.js";
 
 const PUMP_CREATE_COMPUTE_UNITS = 350_000;
+const requireModule = createRequire(import.meta.url);
 let pumpSdkModulePromise = null;
 
 function loadPumpSdk() {
-  pumpSdkModulePromise ||= import("@pump-fun/pump-sdk");
+  // Pump SDK's ESM barrel currently re-exports agent-payments-sdk, whose named BN import fails on
+  // Node 20. The official CommonJS export exposes the same PumpSdk API and works across Node 20-24.
+  pumpSdkModulePromise ||= Promise.resolve(requireModule("@pump-fun/pump-sdk"));
   return pumpSdkModulePromise;
 }
 

@@ -1,8 +1,10 @@
+import { createRequire } from "node:module";
 import {
   PublicKey,
   SystemProgram
 } from "@solana/web3.js";
-import {
+const requireModule = createRequire(import.meta.url);
+const {
   PUMP_AMM_EVENT_AUTHORITY_PDA,
   PUMP_AMM_PROGRAM_ID,
   PUMP_EVENT_AUTHORITY_PDA,
@@ -14,7 +16,7 @@ import {
   getPumpProgram,
   quoteAta,
   userVolumeAccumulatorPda
-} from "@pump-fun/pump-sdk";
+} = requireModule("@pump-fun/pump-sdk");
 
 // Pump's legacy SOL quote is represented by wrapped SOL in token accounts.
 export const PUMP_WRAPPED_SOL_MINT = new PublicKey(
