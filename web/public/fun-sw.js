@@ -1,17 +1,15 @@
 /* SlimeWire Go + SlimeWallet: isolated installable shells and push worker. */
 const IS_WALLET_WORKER = new URL(self.registration.scope).pathname.startsWith("/wallet/");
-const FUN_CACHE = IS_WALLET_WORKER ? "slimewallet-v21" : "slimewire-fun-v78";
+const FUN_CACHE = IS_WALLET_WORKER ? "slimewallet-v22" : "slimewire-fun-v79";
 const FUN_CACHE_PREFIX = IS_WALLET_WORKER ? "slimewallet-" : "slimewire-fun-";
 const FUN_SHELL = [
   IS_WALLET_WORKER ? "/wallet/" : "/fun/",
   "/fun.html",
-  "/fun.css?v=60",
-  "/fun.js?v=81",
+  "/fun.css?v=62",
+  "/fun.js?v=82",
   IS_WALLET_WORKER ? "/wallet-manifest.webmanifest?v=2" : "/fun-manifest.webmanifest?v=2",
   "/config.js",
-  IS_WALLET_WORKER ? "/assets/slimewire/slimewallet-icon-192.png" : "/assets/slimewire/fun-app-icon-192.png",
-  "/assets/slimewire/slimewallet-swap-bg-v1.webp",
-  "/assets/slimewire/slimewallet-swap-liquid-v1.webp"
+  IS_WALLET_WORKER ? "/assets/slimewire/slimewallet-icon-192.png" : "/assets/slimewire/fun-app-icon-192.png"
 ];
 
 self.addEventListener("install", (event) => {
