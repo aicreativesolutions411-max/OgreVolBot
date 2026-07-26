@@ -4918,13 +4918,16 @@ test("Telegram Slime Charts offer compact 10m, 30m, 1h, and 1d ranges", () => {
   assert.match(serverSource, /candle-blood\.webp/);
   assert.match(serverSource, /chart-bg\.webp/);
   assert.match(serverSource, /keyedTelegramCandleTexture/);
+  assert.match(serverSource, /data:image\/png;base64/);
+  assert.match(serverSource, /pro-emblem\.webp/);
+  assert.match(serverSource, /keyedTelegramPremiumEmblem/);
   assert.match(serverSource, /void telegramSlimeChartAssets\(\)/);
   assert.match(serverSource, /telegramTokenChartSnapshotInFlight/);
   assert.match(serverSource, /\[0, 1_250, 3_000, 6_000\]/);
   assert.match(serverSource, /tokenChartSnapshot\(mint, "solana", "1m"\)/);
   assert.match(serverSource, /tokenChartSnapshot\(address, "robinhood", "1m"\)/);
-  assert.match(renderer, /url\(#slimeTexture\)/);
-  assert.match(renderer, /url\(#bloodTexture\)/);
+  assert.match(renderer, /slimeTextureSymbol/);
+  assert.match(renderer, /bloodTextureSymbol/);
   assert.match(renderer, /#33e08a/);
   assert.match(renderer, /#7cff4f/);
   assert.match(renderer, /#9dff6a/);
@@ -4933,6 +4936,8 @@ test("Telegram Slime Charts offer compact 10m, 30m, 1h, and 1d ranges", () => {
   assert.match(renderer, /#ff8a96/);
   assert.match(renderer, /filter="url\(#gelGlow\)"/);
   assert.match(renderer, /SLIMEWIRE · SCAN CHART/);
+  assert.match(renderer, /Paint the keyed Higgs art directly/);
+  assert.doesNotMatch(renderer, /pattern id="slimeTexture"/);
   assert.match(renderer, /SLIME MODE/);
 });
 
