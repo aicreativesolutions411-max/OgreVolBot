@@ -38,6 +38,11 @@ test("Pufcat campaign page keeps live market, chart, trade, and community paths 
   assert.match(pufcatSource, /\/api\/web\/community\/react/);
   assert.match(pufcatSource, /\/fun\?quick=1&amp;ca=/);
   assert.match(pufcatSource, /data-quick-buy/);
+  assert.match(pufcatSource, /data-live-chart/);
+  assert.match(pufcatSource, /\/chart-lab\.html\?ca=/);
+  assert.match(pufcatSource, /data-dex-link/);
+  assert.match(pufcatSource, /function syncChart\(pair\)/);
+  assert.doesNotMatch(pufcatSource, /dexscreener\.com\/solana\/8G1Z1Mde7AFEUon6iiGpGJzVbUiZCBnsy3Xn495cpump\?embed=/);
   assert.match(pufcatSource, /pufcat-hero\.webp/);
   assert.match(pufcatSource, /pufcat-community\.webp/);
   assert.match(serverSource, /const PUFCAT_COMMUNITY_OWNER_ID = "system:pufcat"/);
