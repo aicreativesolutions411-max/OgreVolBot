@@ -25,6 +25,22 @@ const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.ur
 const polyTradingSource = fs.readFileSync(new URL("../src/lib/polymarketTrading.js", import.meta.url), "utf8");
 const polyHubSource = fs.readFileSync(new URL("../web/public/polymarket.html", import.meta.url), "utf8");
 const pumpCashbackSource = fs.readFileSync(new URL("../src/lib/pumpCashback.js", import.meta.url), "utf8");
+const pufcatSource = fs.readFileSync(new URL("../web/public/pufcat.html", import.meta.url), "utf8");
+
+test("Pufcat campaign page keeps live market, chart, trade, and community paths together", () => {
+  const mint = "8G1Z1Mde7AFEUon6iiGpGJzVbUiZCBnsy3Xn495cpump";
+  assert.match(serverSource, /\["\/pufcat", "\/pufcat\/", "\/puf"\]/);
+  assert.match(serverSource, /serveStaticHtmlPage\(response, "pufcat\.html", "no-store, max-age=0"\)/);
+  assert.match(pufcatSource, new RegExp(mint));
+  assert.match(pufcatSource, /\/api\/web\/pair-lite\?mint=/);
+  assert.match(pufcatSource, /\/api\/web\/community\?ca=/);
+  assert.match(pufcatSource, /\/api\/web\/community\/post/);
+  assert.match(pufcatSource, /\/api\/web\/community\/react/);
+  assert.match(pufcatSource, /#trade\//);
+  assert.match(pufcatSource, /pufcat-hero\.webp/);
+  assert.match(pufcatSource, /pufcat-community\.webp/);
+  assert.doesNotMatch(pufcatSource, /market cap[^<]{0,30}\$[0-9]/i, "volatile market values must not be hard-coded");
+});
 
 test("Pump native Cash back uses official create_v2 and stays distinct from holder rewards", () => {
   assert.match(pumpCashbackSource, /createV2Instruction/);
