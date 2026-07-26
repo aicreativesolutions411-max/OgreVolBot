@@ -1754,13 +1754,19 @@
     const amount = state.walletSwapAmount || preset?.amountSol || "0.10";
     const coinLabel = key ? escapeHtml(coin.symbol || short(key)) : "Choose coin";
     const route = coin.chain === "robinhood" ? "Robinhood · SOL converts automatically" : "Solana · Best route";
-    panel.innerHTML = `<header class="wallet-screen-head"><button type="button" data-wallet-route-back aria-label="Back">←</button><h1>Swap</h1><button class="wallet-head-account" type="button" data-manage-wallets>${escapeHtml(wallet?.label || "Main Slime")}⌄</button></header>
+    const swapAction = !wallet || loading
+      ? 'data-wallet-review-swap disabled'
+      : key
+        ? 'data-wallet-review-swap'
+        : 'data-wallet-pick-token';
+    const swapActionLabel = !wallet ? "Create or fund wallet" : key ? "Review swap" : "Choose a coin";
+    panel.innerHTML = `<header class="wallet-screen-head wallet-swap-head"><button type="button" data-wallet-route-back aria-label="Back">←</button><h1><span>SWAP</span><small><i aria-hidden="true">&#128274;</i> Secure route</small></h1><button class="wallet-head-account" type="button" data-manage-wallets>${escapeHtml(wallet?.label || "Main Slime")}⌄</button></header>
       <form class="wallet-ca-form" data-wallet-ca-form><span>⌕</span><input data-wallet-ca-input autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Search token or paste Solana / 0x CA"><button type="submit">Load</button></form>
       <section class="wallet-swap-card ${loading ? "loading" : ""}"><div class="wallet-swap-side"><span>You pay <em>Balance ${wallet ? `${Number(wallet.sol || 0).toFixed(4)} SOL` : "—"}</em></span><div><button type="button" class="wallet-token-selector static"><i class="solana-glyph">S</i><b>SOL</b></button><input data-wallet-swap-input inputmode="decimal" value="${escapeHtml(amount)}" aria-label="SOL amount"></div></div><button class="wallet-swap-reverse" type="button" aria-label="Swap direction">⇅</button><div class="wallet-swap-side receive"><span>You receive</span><button class="wallet-token-selector" type="button" data-wallet-pick-token><img src="${escapeHtml(key ? coinImage(coin) : TOKEN_FALLBACK)}" alt=""><b>${coinLabel}</b><i>⌄</i></button><strong>${loading ? "Loading…" : (key ? "Live quote at review" : "Select a coin")}</strong></div></section>
       <button class="wallet-route-pill" type="button" ${key ? `data-wallet-show-asset` : "data-wallet-pick-token"}><span>${coin.chain === "robinhood" ? "◆" : "S"}</span><b>${escapeHtml(key ? route : "Choose a coin to load its route")}</b><i>›</i></button>
-      <div class="wallet-swap-presets">${["0.05", "0.10", "0.25", "0.50"].map((value) => `<button type="button" data-wallet-swap-amount="${value}" class="${Number(value) === Number(amount) ? "active" : ""}">${value}</button>`).join("")}<button type="button" data-manage-presets>Presets ⚙</button></div>
-      <section class="wallet-swap-details"><div><span>Funding asset</span><b>SOL</b></div><div><span>Price impact</span><b>${key ? "Checked before submit" : "—"}</b></div><div><span>Minimum received</span><b>${key ? "Shown on review" : "—"}</b></div><div><span>Network fee</span><b>Estimated live</b></div></section>
-      <button class="wallet-review-swap" type="button" data-wallet-review-swap ${key && wallet && !loading ? "" : "disabled"}>${wallet ? "Review swap" : "Create or fund wallet"}</button><p class="wallet-route-note">✧ Robinhood trades convert automatically. Sells return SOL.</p>`;
+      <div class="wallet-swap-presets">${["0.05", "0.10", "0.25", "0.50"].map((value) => `<button type="button" data-wallet-swap-amount="${value}" class="${Number(value) === Number(amount) ? "active" : ""}">${value}</button>`).join("")}<button class="wallet-preset-settings" type="button" data-manage-presets aria-label="Open trade presets"><span aria-hidden="true">&#9881;</span><small>Presets</small></button></div>
+      <section class="wallet-swap-details"><div><span>Best route</span><b>${key ? "Auto selected" : "Select coin"}</b></div><div><span>Price impact</span><b>${key ? "Checked live" : "—"}</b></div><div><span>Network fee</span><b>Estimated live</b></div></section>
+      <button class="wallet-review-swap" type="button" ${swapAction}>${escapeHtml(swapActionLabel)}</button><p class="wallet-route-note">✧ Robinhood trades convert automatically. Sells return SOL.</p>`;
     syncWalletRouteNav();
   }
   function selectedWalletHolding() {
