@@ -3051,11 +3051,11 @@ test("Sol/RH scan cards surface an in-chat Slime Chart, TG Buy, Web Buy, and cat
   assert.match(functionBody(serverSource, "sendRhScanCard"), /compactTradeCardKeyboard\(address, "s"\)/);
   assert.match(rhBuy, /tap Slime Chart below to open signed in/);
   const autoChart = functionBody(serverSource, "queueTelegramAutoScanChart");
-  assert.match(autoChart, /sendTokenChart\(chatId, mint, network, "30m", null, \{ silent: true, replyToMessageId \}\)/);
+  assert.match(autoChart, /sendTokenChart\(chatId, mint, network, "30m", null, \{ silent: true, replyToMessageId, identity: knownIdentity \}\)/);
   assert.match(autoChart, /telegramAutoScanChartPosts\.has\(key\)/);
   assert.match(autoChart, /\[0, 1_250, 3_000, 6_000\]/);
-  assert.match(functionBody(serverSource, "handleTelegramLookCommand"), /queueTelegramAutoScanChart\(chatId, mint, "solana", (?:activeMessageId|delivered\.messageId)\)/);
-  assert.match(functionBody(serverSource, "sendRhScanCard"), /queueTelegramAutoScanChart\(chatId, address, "robinhood", activeMessageId\)/);
+  assert.match(functionBody(serverSource, "handleTelegramLookCommand"), /queueTelegramAutoScanChart\(chatId, mint, "solana", (?:activeMessageId|delivered\.messageId), \{/);
+  assert.match(functionBody(serverSource, "sendRhScanCard"), /queueTelegramAutoScanChart\(chatId, address, "robinhood", activeMessageId, \{/);
   assert.match(functionBody(serverSource, "sendPhoto"), /reply_parameters/);
 });
 
@@ -4908,6 +4908,7 @@ test("Telegram Slime Charts offer compact 10m, 30m, 1h, and 1d ranges", () => {
   assert.match(keyboard, /`◷ \$\{range\}`/);
   const chart = functionBody(serverSource, "sendTokenChart");
   const renderer = functionBody(serverSource, "candleChartSvg");
+  const autoChart = functionBody(serverSource, "queueTelegramAutoScanChart");
   assert.match(chart, /telegramTokenChartRange\(range\)/);
   assert.match(chart, /latestSeconds - rangeConfig\.seconds/);
   assert.match(chart, /slice\(-120\)/);
@@ -4923,6 +4924,7 @@ test("Telegram Slime Charts offer compact 10m, 30m, 1h, and 1d ranges", () => {
   assert.match(serverSource, /keyedTelegramPremiumEmblem/);
   assert.match(serverSource, /void telegramSlimeChartAssets\(\)/);
   assert.match(serverSource, /telegramTokenChartSnapshotInFlight/);
+  assert.match(serverSource, /telegramTokenChartIdentityCache/);
   assert.match(serverSource, /\[0, 1_250, 3_000, 6_000\]/);
   assert.match(serverSource, /tokenChartSnapshot\(mint, "solana", "1m"\)/);
   assert.match(serverSource, /tokenChartSnapshot\(address, "robinhood", "1m"\)/);
@@ -4939,6 +4941,9 @@ test("Telegram Slime Charts offer compact 10m, 30m, 1h, and 1d ranges", () => {
   assert.match(renderer, /Paint the keyed Higgs art directly/);
   assert.doesNotMatch(renderer, /pattern id="slimeTexture"/);
   assert.match(renderer, /SLIME MODE/);
+  assert.match(chart, /rememberTelegramTokenChartIdentity\(mint, options\?\.identity/);
+  assert.match(chart, /resolvedIdentity\?\.symbol \|\| providerSymbol/);
+  assert.match(autoChart, /identity: knownIdentity/);
 });
 
 test("Telegram /i resolves a CA, ticker, or coin name into an in-chat market info card", () => {
