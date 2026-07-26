@@ -3053,9 +3053,9 @@ test("Sol/RH scan cards surface an in-chat Slime Chart, TG Buy, Web Buy, and cat
   const autoChart = functionBody(serverSource, "queueTelegramAutoScanChart");
   assert.match(autoChart, /sendTokenChart\(chatId, mint, network, "30m", null, \{ silent: true, replyToMessageId \}\)/);
   assert.match(autoChart, /telegramAutoScanChartPosts\.has\(key\)/);
-  assert.match(autoChart, /\[0, 8_000\]/);
-  assert.match(functionBody(serverSource, "handleTelegramLookCommand"), /queueTelegramAutoScanChart\(chatId, mint, "solana", (?:sent\.message_id|delivered\.messageId)\)/);
-  assert.match(functionBody(serverSource, "sendRhScanCard"), /queueTelegramAutoScanChart\(chatId, address, "robinhood", (?:sent\.message_id)\)/);
+  assert.match(autoChart, /\[0, 5_000, 10_000, 20_000\]/);
+  assert.match(functionBody(serverSource, "handleTelegramLookCommand"), /queueTelegramAutoScanChart\(chatId, mint, "solana", (?:activeMessageId|delivered\.messageId)\)/);
+  assert.match(functionBody(serverSource, "sendRhScanCard"), /queueTelegramAutoScanChart\(chatId, address, "robinhood", activeMessageId\)/);
   assert.match(functionBody(serverSource, "sendPhoto"), /reply_parameters/);
 });
 

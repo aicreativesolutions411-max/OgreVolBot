@@ -59,14 +59,20 @@ test("ordinary cold scan acknowledgement never waits on rendering or a Telegram 
   assert.match(functionBody(serverSource, "slimeScanKeyboardForResult"), /slimeScanSafetyProofReady/);
 });
 
-test("warm Solana and Robinhood scans stay text-first outside branded smart calls", () => {
+test("ordinary scans promote the fast text shell into a branded card", () => {
   const look = functionBody(serverSource, "handleTelegramLookCommand");
+  const deliver = functionBody(serverSource, "deliverTelegramSolScan");
   const rh = functionBody(serverSource, "sendRhScanCard");
 
-  assert.match(look, /preferText:\s*!String\(options\.contextHtml/);
+  assert.match(look, /preferText:\s*false/);
+  assert.match(look, /photoOnly:\s*true/);
+  assert.match(look, /telegram\("deleteMessage"/);
+  assert.match(deliver, /photoOnly \? null : sayHtml/);
   assert.match(rh, /const quickMediaAllowed = options\.brandedMedia === true/);
   assert.match(rh, /quickMediaAllowed\s*\?\s*await scanFastTimeout\(renderRhScanCardPng/);
-  assert.match(rh, /const fullMediaAllowed = options\.brandedMedia === true/);
+  assert.match(rh, /const promoteToPhoto = async/);
+  assert.match(rh, /telegram\("deleteMessage"/);
+  assert.doesNotMatch(rh, /const fullMediaAllowed = options\.brandedMedia === true/);
 });
 
 test("progressive scan updates do not stampede the shared RPC queue", () => {
