@@ -801,17 +801,24 @@ test("Robinhood ETH sends are wallet-scoped, idempotent, recoverable, and leave 
 
 test("Telegram Robinhood quick trades use the funded/holding wallet and keep a durable receipt", () => {
   const callback = functionBody(serverSource, "handleRhQuickTradeCallback");
-  assert.match(callback, /selectTgRhSolWallet\(userId, amt\)/);
+  assert.match(callback, /selectTgSolFundingWallet\(userId, amt\)/);
   assert.match(callback, /walletIndex: String\(selected\.walletIndex\), walletPublicKey: selected\.wallet\.publicKey/);
   assert.match(callback, /selectTgRhTokenWallet\(userId, tokenAddress\)/);
   assert.match(callback, /telegram\("editMessageText"/);             // slow bridge progress becomes the receipt
   assert.match(callback, /createHash\("sha256"\)[\s\S]*query\.id/); // one Telegram tap = one stable attempt
   assert.doesNotMatch(callback, /walletIndex:\s*"1"/);               // never silently force Wallet 1
 
-  const funded = functionBody(serverSource, "selectTgRhSolWallet");
+  const funded = functionBody(serverSource, "selectTgSolFundingWallet");
   assert.match(funded, /!wallet\.volumeBot && !wallet\.ephemeral/);   // don't spend from ghost wallets
   assert.match(funded, /2_500_000/);                                  // bridge amount plus Solana fees
   assert.match(funded, /runWithConcurrency/);                          // bounded lookup across multiple wallets
+
+  const solBuy = functionBody(serverSource, "tgExecuteQuickBuy");
+  assert.match(solBuy, /selectTgSolFundingWallet\(userId, amt\)/);     // Sol quick buys also find the funded wallet
+  assert.match(solBuy, /walletIndex: selected\.walletIndex/);
+  assert.doesNotMatch(solBuy, /wallets\s*&&\s*wallets\[0\]/);         // never silently force Wallet 1
+  const preset = functionBody(serverSource, "tgExecuteQuickBuyPreset");
+  assert.match(preset, /walletIndex: String\(r\.walletIndex \|\| 1\)/); // arm exits on the wallet that bought
 
   const holding = functionBody(serverSource, "selectTgRhTokenWallet");
   assert.match(holding, /rhErc20Balance/);
@@ -2645,10 +2652,10 @@ test("SlimeWire Alerts = a menu toggle any admin flips per channel, on the main 
 });
 test("⚡ one-click group buy fires from the tapper's OWN wallet, idempotent, receipt goes to DM", () => {
   const exec = functionBody(serverSource, "tgExecuteQuickBuy");
-  assert.match(exec, /walletsForOwner\(await readWalletStore\(\), userId\)/);   // the tapper's own wallet
+  assert.match(exec, /selectTgSolFundingWallet\(userId, amt\)/);               // the tapper's funded wallet
   assert.match(exec, /runIdempotentMoneyOp\("tg-quick-buy"/);                   // dedup double-taps
   assert.match(exec, /buyTokenForPlan\(wallet, mint, lamports/);
-  assert.match(exec, /if \(!wallet\) return \{ ok: false, needWallet: true \}/); // no wallet → funnel, not crash
+  assert.match(exec, /error\?\.needWallet/);                                    // no wallet → funnel, not crash
   const cb = functionBody(serverSource, "handleQuickBuyCallback");
   assert.match(cb, /quickBuySendReceipt\(userId, mint, amt, r\.result\)/);       // receipt to DM (userId), never the group; now carries live buy result
   assert.match(cb, /noWalletAckText\(await funnelNoWallet\(userId\)\)/);        // no-wallet → DM a Create-Wallet button + guide
@@ -3031,6 +3038,8 @@ test("Sol/RH scan cards surface an in-chat Slime Chart, TG Buy, Web Buy, and cat
   assert.match(compact, /Web Quick Buy/);
   assert.match(compact, /Slime Chart/);
   assert.match(compact, /callback_data: `scchart:\$\{chartNetwork\}:\$\{target\}:30m`/);
+  assert.match(compact, /scanQuickBuyCallback = chartNetwork === "r" \? `rqbp:\$\{target\}` : `qbp:\$\{target\}`/);
+  assert.match(compact, /callback_data: scanQuickBuyCallback/); // scan Quick Buy executes the saved TG preset
   assert.match(compact, /links\.telegramSiteLogin/);
   assert.match(compact, /telegramWebLoginButton/);
   assert.match(compact, /📂 More/);
@@ -4906,6 +4915,8 @@ test("Telegram Slime Charts offer compact 10m, 30m, 1h, and 1d ranges", () => {
   const keyboard = functionBody(serverSource, "tokenChartKeyboard");
   assert.match(keyboard, /Object\.keys\(TELEGRAM_TOKEN_CHART_RANGES\)/);
   assert.match(keyboard, /`◷ \$\{range\}`/);
+  assert.match(keyboard, /network === "robinhood" \? `rqbp:\$\{mint\}` : `qbp:\$\{mint\}`/);
+  assert.match(keyboard, /callback_data: quickBuyCallback/); // chart Quick Buy stays in Telegram and executes
   const chart = functionBody(serverSource, "sendTokenChart");
   const renderer = functionBody(serverSource, "candleChartSvg");
   const autoChart = functionBody(serverSource, "queueTelegramAutoScanChart");
@@ -4915,6 +4926,7 @@ test("Telegram Slime Charts offer compact 10m, 30m, 1h, and 1d ranges", () => {
   assert.match(chart, /replyToMessageId: options\?\.replyToMessageId/);
   assert.match(chart, /skin: "slime"/);
   assert.match(renderer, /opts\.skin === "slime"/);
+  assert.match(renderer, /Math\.min\(9,/); // sparse charts keep thin trader-style bodies
   assert.match(serverSource, /candle-slime\.webp/);
   assert.match(serverSource, /candle-blood\.webp/);
   assert.match(serverSource, /chart-bg\.webp/);
