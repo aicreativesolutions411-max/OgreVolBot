@@ -2494,6 +2494,24 @@ test("Rose captcha offers a quiet pre-entry Telegram verification portal", () =>
   assert.match(functionBody(serverSource, "handleGroupRose"), /cfg\.captcha/); // old/public links remain safely muted
 });
 
+test("group admins can brand the Verify Portal name and permanent Telegram link", () => {
+  assert.match(serverSource, /portalName:\s*"", portalSlug:\s*"", portalAliases:\s*\[\]/);
+  assert.match(serverSource, /function rosePortalIdentityInput/);
+  assert.match(serverSource, /function configureRosePortalIdentity/);
+  assert.match(serverSource, /That portal link name is already taken/);
+  assert.match(serverSource, /portalAliases/);                    // prior custom links stay valid
+  assert.match(serverSource, /\[a-z0-9_-\]\{2,31\}/i);          // Telegram-safe custom start ending
+  assert.match(serverSource, /Portal Name \| custom_link/);
+  assert.match(serverSource, /gb:in:portal/);
+  assert.match(serverSource, /\/portal Cash Cow Club \| cash_cow/);
+  const invite = functionBody(serverSource, "ensureRosePortalInviteLink");
+  assert.match(invite, /portalSlug \|\| portalCode/);
+  assert.match(invite, /editChatInviteLink/);
+  const lookup = functionBody(serverSource, "findRosePortalByCode");
+  assert.match(lookup, /portalSlug/);
+  assert.match(lookup, /aliases\.includes\(wanted\)/);
+});
+
 test("whales / web verify gate new members (mute until verified)", () => {
   assert.match(serverSource, /function whalesConfig\(/);
   assert.match(serverSource, /function webverifyConfig\(/);
