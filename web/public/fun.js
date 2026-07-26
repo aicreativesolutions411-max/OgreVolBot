@@ -98,6 +98,9 @@
     quickAmount: "0.1",
     quickPanel: "trade",
     walletSwapAmount: "0.10",
+    walletSwapSellPercent: "100",
+    walletSwapSide: "buy",
+    walletSwapPickerRole: "receive",
     walletSwapSelecting: false,
     pendingSolSend: null,
     pendingTokenSend: null,
@@ -316,6 +319,10 @@
   function coinImageAttrs(coin) {
     const key = coinKey(coin), proxy = coinProxyImage(coin), direct = directCoinImage(coin);
     return `src="${escapeHtml(coinImage(coin))}" data-token-image data-coin-image-key="${escapeHtml(key.toLowerCase())}" data-coin-symbol="${escapeHtml(coin.symbol || coin.name || "?")}" data-chain="${coin?.chain === "robinhood" ? "rh" : "sol"}" data-direct-image="${escapeHtml(direct)}" data-proxy-image="${escapeHtml(proxy)}"`;
+  }
+  function nativeAssetIcon(kind = "sol") {
+    if (kind === "eth") return `<span class="wallet-native-icon eth" aria-hidden="true"><svg viewBox="0 0 64 64"><path class="eth-top" d="M32 5 14 33l18 10 18-10L32 5Z"/><path class="eth-left" d="M32 5v38L14 33 32 5Z"/><path class="eth-bottom" d="m14 37 18 22 18-22-18 10-18-10Z"/></svg></span>`;
+    return `<span class="wallet-native-icon sol" aria-hidden="true"><svg viewBox="0 0 64 64"><defs><linearGradient id="solMark" x1="8" y1="56" x2="56" y2="8" gradientUnits="userSpaceOnUse"><stop stop-color="#57f7c4"/><stop offset=".52" stop-color="#52c7ff"/><stop offset="1" stop-color="#9a65ff"/></linearGradient></defs><path d="M17 13h35l-7 8H10l7-8Zm0 15h35l-7 8H10l7-8Zm0 15h35l-7 8H10l7-8Z" fill="url(#solMark)"/></svg></span>`;
   }
   async function resolvedCoinImageFromMetadata(image) {
     const key = image?.dataset?.coinImageKey || "";
@@ -1736,7 +1743,7 @@
           : state.portfolioStatus === "stale" ? `Saved · ${freshnessAgeLabel(state.portfolioUpdatedAt)} · updating`
             : "Unavailable · retrying";
       const freshnessState = ["live", "refreshing"].includes(state.portfolioStatus) ? "live" : state.portfolioStatus;
-      hero.innerHTML = `<button class="wallet-account-switcher" type="button" data-manage-wallets><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>ACTIVE WALLET</small><b>${escapeHtml(wallet.label || "Main Slime")}</b></span><i>⌄</i></button>${accountAccess}<div class="wallet-hero-tools"><button type="button" data-manage-wallets>Manage / restore</button><button type="button" data-export-wallets>Back up all wallets</button></div><div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>${escapeHtml(totalLabel)}</h1><p data-freshness="${freshnessState}">${escapeHtml(freshness)}</p></div><div class="wallet-chain-cards"><button type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}"><i class="solana-glyph">S</i><span><b>SOL</b><small>${sol.toFixed(4)} SOL</small></span><em>${state.solUsd > 0 ? escapeHtml(formatWalletUsd(sol * state.solUsd)) : "Copy"}</em></button><button type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress || "")}"><i class="eth-glyph">◆</i><span><b>ETH</b><small>${rhEth == null ? "Updating…" : `${rhEth.toFixed(6)} ETH`}</small></span><em>${rhEth != null && state.rhEthUsd > 0 ? escapeHtml(formatWalletUsd(rhEth * state.rhEthUsd)) : "Copy"}</em></button></div>`;
+      hero.innerHTML = `<button class="wallet-account-switcher" type="button" data-manage-wallets><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>ACTIVE WALLET</small><b>${escapeHtml(wallet.label || "Main Slime")}</b></span><i>⌄</i></button>${accountAccess}<div class="wallet-hero-tools"><button type="button" data-manage-wallets>Manage / restore</button><button type="button" data-export-wallets>Back up all wallets</button></div><div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>${escapeHtml(totalLabel)}</h1><p data-freshness="${freshnessState}">${escapeHtml(freshness)}</p></div><div class="wallet-chain-cards"><button type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}">${nativeAssetIcon("sol")}<span><b>SOL</b><small>${sol.toFixed(4)} SOL</small></span><em>${state.solUsd > 0 ? escapeHtml(formatWalletUsd(sol * state.solUsd)) : "Copy"}</em></button><button type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress || "")}">${nativeAssetIcon("eth")}<span><b>ETH</b><small>${rhEth == null ? "Updating…" : `${rhEth.toFixed(6)} ETH`}</small></span><em>${rhEth != null && state.rhEthUsd > 0 ? escapeHtml(formatWalletUsd(rhEth * state.rhEthUsd)) : "Copy"}</em></button></div>`;
       return;
     }
     const rhAddress = wallet.rhAddress ? `<button class="wallet-hero-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress)}" aria-label="Copy full Robinhood address"><b>RH ${escapeHtml(short(wallet.rhAddress))}</b><span>Tap to copy ETH address</span></button>` : "";
@@ -1746,38 +1753,85 @@
     const key = coinKey(coin);
     return key ? `/chart-lab?ca=${encodeURIComponent(key)}&tf=15m&embed=1&cv=wallet76&sym=${encodeURIComponent(coin.symbol || "")}` : "";
   }
+  function walletSwapCoinButton(coin, role, emptyLabel = "Choose coin") {
+    const key = coinKey(coin);
+    if (!key) return `<button class="wallet-token-selector empty" type="button" data-wallet-pick-asset="${role}"><span class="wallet-empty-token"><img src="${TOKEN_FALLBACK}" alt=""></span><b>${emptyLabel}</b><i>⌄</i></button>`;
+    return `<button class="wallet-token-selector" type="button" data-wallet-pick-asset="${role}"><img ${coinImageAttrs(coin)} alt="${escapeHtml(coin.symbol || "Coin")}" referrerpolicy="no-referrer"><b>${escapeHtml(coin.symbol || short(key))}</b><i>⌄</i></button>`;
+  }
+  function walletSwapNativeButton(role) {
+    return `<button class="wallet-token-selector native" type="button" data-wallet-pick-asset="${role}">${nativeAssetIcon("sol")}<b>SOL</b><i>⌄</i></button>`;
+  }
+  function walletSwapRecentHtml() {
+    const seen = new Set(), rows = [];
+    for (const coin of [state.selected, ...state.recents]) {
+      const key = coinKey(coin) || coin?.key || "", normalized = key.toLowerCase();
+      if (!key || seen.has(normalized)) continue;
+      seen.add(normalized);
+      rows.push({ ...coin, address: coin.address || key, tokenMint: coin.tokenMint || key });
+      if (rows.length >= 5) break;
+    }
+    if (!rows.length) return "";
+    return `<section class="wallet-swap-recents"><header><span>Recent coins</span><button type="button" data-wallet-pick-asset="receive">View all</button></header><div>${rows.map((coin) => `<button type="button" data-wallet-swap-select-coin="${escapeHtml(coinKey(coin))}" data-chain-kind="${coin.chain === "robinhood" ? "rh" : "sol"}" data-wallet-swap-role="receive"><img ${coinImageAttrs(coin)} alt=""><span><b>${escapeHtml(coin.symbol || short(coinKey(coin)))}</b><small>${coin.chain === "robinhood" ? "RH" : "SOL"}</small></span></button>`).join("")}</div></section>`;
+  }
+  function walletSwapPickerRow(coin, role, balance = "") {
+    const key = coinKey(coin);
+    if (!key) return "";
+    return `<button class="wallet-swap-picker-row" type="button" data-wallet-swap-select-coin="${escapeHtml(key)}" data-chain-kind="${coin.chain === "robinhood" ? "rh" : "sol"}" data-wallet-swap-role="${role}"><img ${coinImageAttrs(coin)} alt=""><span><b>${escapeHtml(coin.symbol || short(key))}</b><small>${escapeHtml(coin.name || (coin.chain === "robinhood" ? "Robinhood Chain" : "Solana"))}</small></span><em>${escapeHtml(balance || short(key))}</em><i>›</i></button>`;
+  }
+  function walletSwapSolanaAssets(wallet = {}) {
+    const merged = new Map(walletPositionAssets(wallet).map((asset) => [String(asset.tokenMint || "").toLowerCase(), asset]));
+    for (const token of Array.isArray(wallet.tokens) ? wallet.tokens : []) {
+      const tokenMint = String(token?.mint || token?.tokenMint || "").trim(), quantity = positionNumber(token?.uiAmount);
+      if (!tokenMint || quantity == null || quantity <= 0 || tokenIsHidden(tokenMint)) continue;
+      const known = merged.get(tokenMint.toLowerCase()) || {};
+      merged.set(tokenMint.toLowerCase(), { ...token, ...known, tokenMint, quantity: Number(known.quantity) > 0 ? known.quantity : quantity, symbol: known.symbol || token.symbol || short(tokenMint), name: known.name || token.name || "Solana token", chain: "solana" });
+    }
+    return [...merged.values()].filter((asset) => asset.tokenMint && Number(asset.quantity) > 0 && !tokenIsHidden(asset.tokenMint));
+  }
+  function openWalletSwapAssetPicker(role = "receive") {
+    const wallet = activeWallet();
+    state.walletSwapPickerRole = role === "pay" ? "pay" : "receive";
+    const solAssets = wallet ? walletSwapSolanaAssets(wallet) : [];
+    const heldSol = solAssets.map((asset) => walletSwapPickerRow(asset, state.walletSwapPickerRole, `${formatTokenQuantity(asset.quantity)} held`)).join("");
+    const heldRh = wallet && Number(state.rhWalletPosition?.walletIndex) === Number(wallet.index)
+      ? (state.rhWalletPosition?.tokens || []).filter((token) => Number(token.uiAmount || 0) > 0 && !tokenIsHidden(token.address)).map((token) => walletSwapPickerRow({ ...token, chain: "robinhood", tokenMint: token.address, imageUrl: token.iconUrl }, state.walletSwapPickerRole, `${formatTokenQuantity(token.uiAmount)} held`)).join("")
+      : "";
+    const heldKeys = new Set([...solAssets.map((asset) => String(asset.tokenMint || "").toLowerCase()), ...(state.rhWalletPosition?.tokens || []).map((token) => String(token.address || "").toLowerCase())]);
+    const recents = state.recents.map((coin) => ({ ...coin, address: coin.address || coin.key, tokenMint: coin.tokenMint || coin.key })).filter((coin) => coinKey(coin) && !heldKeys.has(coinKey(coin).toLowerCase())).slice(0, 8).map((coin) => walletSwapPickerRow(coin, state.walletSwapPickerRole)).join("");
+    const title = state.walletSwapPickerRole === "pay" ? "Choose what to sell" : "Choose a coin to buy";
+    openSheet(`<div class="sheet-title wallet-swap-picker-title">${nativeAssetIcon("sol")}<div><h2>${title}</h2><p>Wallet assets, recent coins, or any contract</p></div></div><form class="wallet-swap-picker-search" data-wallet-swap-asset-form><span>⌕</span><input data-wallet-swap-asset-input autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste Solana / 0x CA or search"><button type="submit">Load</button></form><section class="wallet-swap-picker-list"><h3>Native balance</h3><button class="wallet-swap-picker-row native" type="button" data-wallet-swap-select-sol data-wallet-swap-role="${state.walletSwapPickerRole}">${nativeAssetIcon("sol")}<span><b>SOL</b><small>Solana</small></span><em>${wallet ? `${Number(wallet.sol || 0).toFixed(4)} SOL` : "Not funded"}</em><i>›</i></button>${wallet?.rhAddress ? `<button class="wallet-swap-picker-row native" type="button" data-rh-wallet-tools="${wallet.index}">${nativeAssetIcon("eth")}<span><b>ETH</b><small>Robinhood funding controls</small></span><em>${wallet.rhEth == null ? "Loading…" : `${Number(wallet.rhEth).toFixed(5)} ETH`}</em><i>›</i></button>` : ""}${heldSol || heldRh ? `<h3>Coins in this wallet</h3>${heldSol}${heldRh}` : ""}${recents ? `<h3>Recent contracts</h3>${recents}` : ""}</section><button class="sheet-secondary" type="button" data-wallet-swap-search>Search all coins</button><p class="fineprint">Supported routes stay simple: SOL buys a coin; selling a held coin returns SOL automatically.</p>`);
+  }
   function renderWalletSwap(loading = false) {
     if (!IS_WALLET_ROUTE) return;
     const panel = $("[data-wallet-swap-panel]");
     if (!panel) return;
     const wallet = activeWallet(), coin = state.selected || {}, key = coinKey(coin), preset = activePreset();
-    const amount = state.walletSwapAmount || preset?.amountSol || "0.10";
-    const coinLabel = key ? escapeHtml(coin.symbol || short(key)) : "Choose coin";
-    const route = coin.chain === "robinhood" ? "Robinhood · SOL converts automatically" : "Solana · Best route";
-    const swapAction = !wallet || loading
-      ? 'data-wallet-review-swap disabled'
-      : key
-        ? 'data-wallet-review-swap'
-        : 'data-wallet-pick-token';
-    const swapActionLabel = !wallet ? "Create or fund wallet" : key ? "Review swap" : "Choose a coin";
-    panel.innerHTML = `<header class="wallet-screen-head wallet-swap-head"><button type="button" data-wallet-route-back aria-label="Back">←</button><h1><span>SWAP</span><small><i aria-hidden="true">&#128274;</i> Secure route</small></h1><button class="wallet-head-account" type="button" data-manage-wallets>${escapeHtml(wallet?.label || "Main Slime")}⌄</button></header>
-      <form class="wallet-ca-form" data-wallet-ca-form><span>⌕</span><input data-wallet-ca-input autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Search token or paste Solana / 0x CA"><button type="submit">Load</button></form>
-      <section class="wallet-swap-card ${loading ? "loading" : ""}"><div class="wallet-swap-side"><span>You pay <em>Balance ${wallet ? `${Number(wallet.sol || 0).toFixed(4)} SOL` : "—"}</em></span><div><button type="button" class="wallet-token-selector static"><i class="solana-glyph">S</i><b>SOL</b></button><input data-wallet-swap-input inputmode="decimal" value="${escapeHtml(amount)}" aria-label="SOL amount"></div></div><button class="wallet-swap-reverse" type="button" aria-label="Swap direction">⇅</button><div class="wallet-swap-side receive"><span>You receive</span><button class="wallet-token-selector" type="button" data-wallet-pick-token><img src="${escapeHtml(key ? coinImage(coin) : TOKEN_FALLBACK)}" alt=""><b>${coinLabel}</b><i>⌄</i></button><strong>${loading ? "Loading…" : (key ? "Live quote at review" : "Select a coin")}</strong></div></section>
-      <button class="wallet-route-pill" type="button" ${key ? `data-wallet-show-asset` : "data-wallet-pick-token"}><span>${coin.chain === "robinhood" ? "◆" : "S"}</span><b>${escapeHtml(key ? route : "Choose a coin to load its route")}</b><i>›</i></button>
-      <div class="wallet-swap-presets">${["0.05", "0.10", "0.25", "0.50"].map((value) => `<button type="button" data-wallet-swap-amount="${value}" class="${Number(value) === Number(amount) ? "active" : ""}">${value}</button>`).join("")}<button class="wallet-preset-settings" type="button" data-manage-presets aria-label="Open trade presets"><span aria-hidden="true">&#9881;</span><small>Presets</small></button></div>
-      <section class="wallet-swap-details"><div><span>Best route</span><b>${key ? "Auto selected" : "Select coin"}</b></div><div><span>Price impact</span><b>${key ? "Checked live" : "—"}</b></div><div><span>Network fee</span><b>Estimated live</b></div></section>
-      <button class="wallet-review-swap" type="button" ${swapAction}>${escapeHtml(swapActionLabel)}</button><p class="wallet-route-note">✧ Robinhood trades convert automatically. Sells return SOL.</p>`;
+    const side = state.walletSwapSide === "sell" ? "sell" : "buy";
+    const amount = side === "sell" ? (state.walletSwapSellPercent || "100") : (state.walletSwapAmount || preset?.amountSol || "0.10");
+    const holding = selectedWalletHolding(), quantity = coin.chain === "robinhood" ? positionNumber(holding?.uiAmount) : (positionQuantity(holding) ?? positionNumber(holding?.quantity)), hasHolding = Number(quantity) > 0;
+    const paySelector = side === "sell" ? walletSwapCoinButton(coin, "pay", "Choose coin") : walletSwapNativeButton("pay");
+    const receiveSelector = side === "sell" ? walletSwapNativeButton("receive") : walletSwapCoinButton(coin, "receive", "Choose coin");
+    const payBalance = side === "sell" ? (hasHolding ? `${formatTokenQuantity(quantity)} ${coin.symbol || "tokens"}` : "No balance") : (wallet ? `${Number(wallet.sol || 0).toFixed(4)} SOL` : "—");
+    const receiveNote = loading ? "Loading…" : !key ? "Select a coin" : side === "sell" ? "Proceeds return to SOL" : "Live quote at review";
+    const values = side === "sell" ? ["25", "50", "75", "100"] : ["0.05", "0.10", "0.25", "0.50"];
+    const swapAction = !wallet || loading || (side === "sell" && key && !hasHolding) ? "data-wallet-review-swap disabled" : key ? "data-wallet-review-swap" : 'data-wallet-pick-asset="receive"';
+    const swapActionLabel = !wallet ? "Create or fund wallet" : !key ? "Choose a coin" : side === "sell" && !hasHolding ? "No coin balance" : side === "sell" ? `Review sell ${amount}%` : `Review ${amount} SOL swap`;
+    panel.innerHTML = `<header class="wallet-swap-head"><button type="button" data-wallet-route-back aria-label="Back to wallet"><img src="${WALLET_BRAND_ASSET}" alt=""></button><h1><span>SWAP</span><small><i aria-hidden="true">&#128274;</i> Secure route</small></h1><button class="wallet-swap-menu" type="button" data-manage-wallets aria-label="Manage wallets"><span></span><span></span><span></span></button></header>
+      <section class="wallet-swap-shell ${side === "sell" ? "direction-sell" : "direction-buy"}"><div class="wallet-swap-card ${loading ? "loading" : ""}"><div class="wallet-swap-side pay"><header><span>PAY</span><em>Balance ${escapeHtml(payBalance)}</em></header><div class="wallet-swap-asset-line">${paySelector}<label class="wallet-swap-amount"><input data-wallet-swap-input inputmode="decimal" value="${escapeHtml(amount)}" aria-label="${side === "sell" ? "Sell percent" : "SOL amount"}"><small>${side === "sell" ? "%" : ""}</small></label></div></div><button class="wallet-swap-reverse" type="button" data-wallet-swap-reverse aria-label="Flip pay and receive assets"><span>↑</span><span>↓</span></button><div class="wallet-swap-side receive"><header><span>RECEIVE</span><em>${coin.chain === "robinhood" ? "Robinhood route" : "Best route"}</em></header><div class="wallet-swap-asset-line">${receiveSelector}<strong>${escapeHtml(receiveNote)}</strong></div></div></div>
+      ${walletSwapRecentHtml()}<div class="wallet-swap-presets">${values.map((value) => `<button type="button" data-wallet-swap-amount="${value}" class="${Number(value) === Number(amount) ? "active" : ""}">${value}${side === "sell" ? "%" : ""}</button>`).join("")}<button class="wallet-preset-settings" type="button" data-manage-presets aria-label="Open trade presets"><span aria-hidden="true">&#9881;</span><small>Presets</small></button></div>
+      <section class="wallet-swap-details"><div><span>Best route</span><b>${key ? (side === "sell" ? "Coin → SOL" : "SOL → coin") : "Select coin"}</b></div><div><span>Price impact</span><b>${key ? "Checked live" : "—"}</b></div><div><span>Network fee</span><b>Estimated live</b></div></section></section>
+      <button class="wallet-review-swap" type="button" ${swapAction}>${escapeHtml(swapActionLabel)}</button><p class="wallet-route-note">✧ SOL buys coins. Flip a held coin above to sell it back to SOL.</p>`;
     syncWalletRouteNav();
   }
   function selectedWalletHolding() {
     const coin = state.selected || {}, key = coinKey(coin).toLowerCase(), wallet = activeWallet();
     if (!key || !wallet) return null;
     if (coin.chain === "robinhood") return (state.rhWalletPosition?.tokens || []).find((token) => String(token.address || "").toLowerCase() === key) || null;
-    return walletPositionAssets(wallet).find((position) => String(position.tokenMint || "").toLowerCase() === key) || currentPosition();
+    return walletSwapSolanaAssets(wallet).find((position) => String(position.tokenMint || "").toLowerCase() === key) || currentPosition();
   }
   function walletAssetMetrics(coin = state.selected || {}) {
     const holding = selectedWalletHolding();
-    const quantity = coin.chain === "robinhood" ? positionNumber(holding?.uiAmount) : positionQuantity(holding);
+    const quantity = coin.chain === "robinhood" ? positionNumber(holding?.uiAmount) : (positionQuantity(holding) ?? positionNumber(holding?.quantity));
     const priceUsd = positiveMarketNumber(coin.priceUsd, coin.price, state.selectedDetail?.priceUsd, state.selectedDetail?.price);
     const reportedValueUsd = coin.chain === "robinhood"
       ? positionNumber(holding?.valueUsd)
@@ -2101,7 +2155,7 @@
         const pnl = positionNumber(token.pnlPercent), pnlClass = pnl == null ? "" : pnl >= 0 ? "up" : "down";
         return `<button class="wallet-route-asset-row" type="button" data-open-coin="${escapeHtml(token.address)}" data-chain-kind="robinhood"><img ${coinImageAttrs({ ...token, chain: "robinhood", tokenMint: token.address, imageUrl: token.iconUrl })} alt=""><span><b>${escapeHtml(token.symbol || short(token.address))}</b><small>${escapeHtml(formatTokenQuantity(token.uiAmount))} tokens · RH</small></span><strong>${token.valueUsd == null ? "Pricing…" : escapeHtml(formatWalletUsd(token.valueUsd))}<small class="${pnlClass}">${pnl == null ? "PnL —" : escapeHtml(formatPct(pnl))}</small></strong><i>›</i></button>`;
       }).join("") : "";
-      panel.innerHTML = `<div class="wallet-assets-head"><h2>Assets</h2><button type="button" data-manage-wallets>Manage wallets</button></div><section class="wallet-route-assets"><button class="wallet-route-asset-row native" type="button" data-receive><i class="solana-glyph">S</i><span><b>SOL</b><small>Solana</small></span><strong>${escapeHtml(formatPositionSol(summary.liquidSol))} SOL<small>${solUsd == null ? "Tap to receive" : escapeHtml(formatWalletUsd(solUsd))}</small></strong><em>›</em></button>${wallet.rhAddress ? `<button class="wallet-route-asset-row native" type="button" data-rh-wallet-tools="${wallet.index}"><i class="eth-glyph">◆</i><span><b>ETH</b><small>Robinhood Chain</small></span><strong>${wallet.rhEth == null ? "Loading…" : `${escapeHtml(Number(wallet.rhEth).toFixed(6))} ETH`}<small>${wallet.rhEth != null && state.rhEthUsd > 0 ? escapeHtml(formatWalletUsd(Number(wallet.rhEth) * state.rhEthUsd)) : "Manage ETH"}</small></strong><em>›</em></button>` : ""}${tokenRows}${rhRows}</section><div class="wallet-extra-actions"><button type="button" data-season-open>Season wallet</button><button type="button" data-manage-wallets>Backups &amp; settings</button></div>`;
+      panel.innerHTML = `<div class="wallet-assets-head"><h2>Assets</h2><button type="button" data-manage-wallets>Manage wallets</button></div><section class="wallet-route-assets"><button class="wallet-route-asset-row native" type="button" data-receive>${nativeAssetIcon("sol")}<span><b>SOL</b><small>Solana</small></span><strong>${escapeHtml(formatPositionSol(summary.liquidSol))} SOL<small>${solUsd == null ? "Tap to receive" : escapeHtml(formatWalletUsd(solUsd))}</small></strong><em>›</em></button>${wallet.rhAddress ? `<button class="wallet-route-asset-row native" type="button" data-rh-wallet-tools="${wallet.index}">${nativeAssetIcon("eth")}<span><b>ETH</b><small>Robinhood Chain</small></span><strong>${wallet.rhEth == null ? "Loading…" : `${escapeHtml(Number(wallet.rhEth).toFixed(6))} ETH`}<small>${wallet.rhEth != null && state.rhEthUsd > 0 ? escapeHtml(formatWalletUsd(Number(wallet.rhEth) * state.rhEthUsd)) : "Manage ETH"}</small></strong><em>›</em></button>` : ""}${tokenRows}${rhRows}</section><div class="wallet-extra-actions"><button type="button" data-season-open>Season wallet</button><button type="button" data-manage-wallets>Backups &amp; settings</button></div>`;
       return;
     }
     const groups = state.wallets.map((wallet) => ({ wallet, summary: walletAssetSummary(wallet) })).filter((group) => group.summary.assets.length);
@@ -3007,7 +3061,8 @@
     const buyFields = `<div class="field"><label>${rh ? "Spend SOL · auto-converts for Robinhood" : "Buy amount · SOL"}</label><input data-trade-amount inputmode="decimal" value="${escapeHtml(amount)}" aria-label="Trade amount"><div class="amount-chips">${(rh ? ["0.01", "0.025", "0.05", "0.1"] : ["0.05", "0.1", "0.25", "0.5"]).map((value) => `<button type="button" data-amount-chip="${value}">${value}</button>`).join("")}</div></div>
       <div class="field-row"><div class="field"><label>Take profit %</label><input data-trade-tp inputmode="decimal" value="${escapeHtml(tp)}" placeholder="off"></div><div class="field"><label>Stop loss %</label><input data-trade-sl inputmode="decimal" value="${escapeHtml(sl)}" placeholder="off"></div></div>
       ${!rh ? `<details ${preset.ladder || preset.trail ? "open" : ""}><summary style="color:var(--muted);font-size:11px">Ladder, trailing stop & break-even</summary><input type="hidden" data-trade-ladder value="${escapeHtml(preset.ladder || "")}"><div class="ladder-presets"><button type="button" data-ladder-preset="" class="${preset.ladder ? "" : "active"}">Single TP</button><button type="button" data-ladder-preset="smart" class="${preset.ladder === "smart" ? "active" : ""}">25% ladder</button><button type="button" data-ladder-preset="fast" class="${preset.ladder === "fast" ? "active" : ""}">Fast ladder</button></div><div class="field-row"><div class="field"><label>Trailing stop %</label><input data-trade-trail inputmode="decimal" value="${escapeHtml(preset.trail || "")}" placeholder="off"></div><div class="field"><label>Arm after +%</label><input data-trade-trail-arm inputmode="decimal" value="${escapeHtml(preset.trailArm || "")}" placeholder="auto"></div></div><label class="check-row"><input type="checkbox" data-trade-be ${preset.be ? "checked" : ""}> Move stop to break-even after TP1</label></details>` : '<p class="fineprint">Your SOL wallet funds this trade automatically. No separate Robinhood wallet setup or manual ETH conversion is required.</p>'}`;
-    const sellFields = `<div class="field"><label>Sell percent</label><input data-trade-percent inputmode="numeric" value="100"><div class="amount-chips">${[25, 50, 75, 100].map((value) => `<button type="button" data-percent-chip="${value}">${value}%</button>`).join("")}</div></div>${rh ? '<p class="fineprint">Sale proceeds return to this SOL wallet automatically.</p>' : ""}`;
+    const sellPercent = Math.min(100, Math.max(1, Number(preset.percent) || 100));
+    const sellFields = `<div class="field"><label>Sell percent</label><input data-trade-percent inputmode="numeric" value="${escapeHtml(String(sellPercent))}"><div class="amount-chips">${[25, 50, 75, 100].map((value) => `<button type="button" data-percent-chip="${value}" class="${value === sellPercent ? "active" : ""}">${value}%</button>`).join("")}</div></div>${rh ? '<p class="fineprint">Sale proceeds return to this SOL wallet automatically.</p>' : ""}`;
     openSheet(`<div class="sheet-title"><img src="${escapeHtml(coinImage(coin))}" alt=""><div><h2>${escapeHtml(coin.symbol || short(key))}</h2><p>${rh ? "Robinhood · one SOL wallet" : "Solana"} · ${escapeHtml(short(key))}</p></div></div>
       <div class="trade-toggle"><button class="${side === "buy" ? "active buy" : ""}" type="button" data-sheet-side="buy">Buy</button><button class="${side === "sell" ? "active sell" : ""}" type="button" data-sheet-side="sell">Sell</button></div>
       <div class="field"><label>Wallet</label><select data-trade-wallet>${wallets}</select></div>${side === "buy" ? buyFields : sellFields}
@@ -4063,11 +4118,38 @@
     if (event.target.closest("[data-wallet-route-back]")) { closeSearch(); closeSheet(); setView("wallet"); return; }
     if (event.target.closest("[data-wallet-swap]")) { closeSearch(); closeSheet(); setView("wallet-swap"); return; }
     if (event.target.closest("[data-wallet-open-terminal]")) { state.walletSwapSelecting = false; openSearch(); return; }
-    if (event.target.closest("[data-wallet-pick-token]")) { state.walletSwapSelecting = true; openSearch(); const input = $("[data-search-input]"); if (input) input.placeholder = "Search token or paste Solana / 0x CA"; return; }
+    if (event.target.closest("[data-wallet-pick-token]")) { openWalletSwapAssetPicker("receive"); return; }
+    const walletSwapPicker = event.target.closest("[data-wallet-pick-asset]"); if (walletSwapPicker) { openWalletSwapAssetPicker(walletSwapPicker.dataset.walletPickAsset || "receive"); return; }
+    if (event.target.closest("[data-wallet-swap-reverse]")) {
+      if (!coinKey(state.selected)) { openWalletSwapAssetPicker("receive"); return; }
+      const input = String($("[data-wallet-swap-input]")?.value || "").trim();
+      if (state.walletSwapSide === "sell") state.walletSwapSellPercent = input || state.walletSwapSellPercent;
+      else state.walletSwapAmount = input || state.walletSwapAmount;
+      state.walletSwapSide = state.walletSwapSide === "sell" ? "buy" : "sell";
+      renderWalletSwap();
+      return;
+    }
+    const walletSwapCoin = event.target.closest("[data-wallet-swap-select-coin]"); if (walletSwapCoin) {
+      const role = walletSwapCoin.dataset.walletSwapRole || state.walletSwapPickerRole || "receive";
+      state.walletSwapSide = role === "pay" ? "sell" : "buy";
+      state.walletSwapPickerRole = role;
+      state.walletSwapSelecting = false;
+      closeSheet(); closeSearch();
+      await openCoin(walletSwapCoin.dataset.walletSwapSelectCoin, walletSwapCoin.dataset.chainKind, { walletSwap: true });
+      return;
+    }
+    const walletSwapSol = event.target.closest("[data-wallet-swap-select-sol]"); if (walletSwapSol) {
+      const role = walletSwapSol.dataset.walletSwapRole || state.walletSwapPickerRole || "pay";
+      state.walletSwapSide = role === "receive" && coinKey(state.selected) ? "sell" : "buy";
+      closeSheet(); renderWalletSwap();
+      if (role === "receive" && !coinKey(state.selected)) openWalletSwapAssetPicker("pay");
+      return;
+    }
+    if (event.target.closest("[data-wallet-swap-search]")) { state.walletSwapSelecting = true; closeSheet(); openSearch(); const input = $("[data-search-input]"); if (input) { input.placeholder = "Search token or paste Solana / 0x CA"; input.focus(); } return; }
     if (event.target.closest("[data-wallet-show-asset]")) { setView("wallet-asset"); return; }
     if (event.target.closest("[data-wallet-expand-chart]")) { $(".wallet-inline-chart")?.classList.toggle("expanded"); return; }
-    const walletSwapAmount = event.target.closest("[data-wallet-swap-amount]"); if (walletSwapAmount) { state.walletSwapAmount = walletSwapAmount.dataset.walletSwapAmount || "0.10"; renderWalletSwap(); return; }
-    if (event.target.closest("[data-wallet-review-swap]")) { state.walletSwapAmount = String($("[data-wallet-swap-input]")?.value || state.walletSwapAmount || "0.10"); if (!activeWallet()) { openFundingSheet(); return; } openTradeSheet("buy", { amount: state.walletSwapAmount }); return; }
+    const walletSwapAmount = event.target.closest("[data-wallet-swap-amount]"); if (walletSwapAmount) { if (state.walletSwapSide === "sell") state.walletSwapSellPercent = walletSwapAmount.dataset.walletSwapAmount || "100"; else state.walletSwapAmount = walletSwapAmount.dataset.walletSwapAmount || "0.10"; renderWalletSwap(); return; }
+    if (event.target.closest("[data-wallet-review-swap]")) { const value = String($("[data-wallet-swap-input]")?.value || "").trim(); if (!activeWallet()) { openFundingSheet(); return; } if (state.walletSwapSide === "sell") { state.walletSwapSellPercent = value || state.walletSwapSellPercent || "100"; openTradeSheet("sell", { percent: state.walletSwapSellPercent }); } else { state.walletSwapAmount = value || state.walletSwapAmount || "0.10"; openTradeSheet("buy", { amount: state.walletSwapAmount }); } return; }
     const nav = event.target.closest("[data-nav]"); if (nav) { closeSearch(); closeSheet(); setView(nav.dataset.nav); return; }
     if (event.target.closest("[data-open-search]")) { openSearch(); return; }
     if (event.target.closest("[data-open-cash]")) { location.assign("/cash/?from=fun"); return; }
@@ -4104,7 +4186,7 @@
     if (event.target.closest("[data-refresh-pump-rewards]")) { await loadPumpRewardsForActiveWallet({ force: true }); return; }
     const claimReward = event.target.closest("[data-claim-pump-reward]"); if (claimReward) { await claimPumpReward(claimReward); return; }
     const claimCreatorFees = event.target.closest("[data-claim-creator-fees]"); if (claimCreatorFees) { await claimFunCreatorFees(claimCreatorFees); return; }
-    const coinButton = event.target.closest("[data-open-coin]"); if (coinButton) { const selectingSwap = IS_WALLET_ROUTE && (state.walletSwapSelecting || state.view === "wallet-swap"); state.walletSwapSelecting = false; closeSearch(); closeSheet(); await openCoin(coinButton.dataset.openCoin, coinButton.dataset.chainKind, { walletSwap: selectingSwap }); return; }
+    const coinButton = event.target.closest("[data-open-coin]"); if (coinButton) { const selectingSwap = IS_WALLET_ROUTE && (state.walletSwapSelecting || state.view === "wallet-swap"); if (selectingSwap) state.walletSwapSide = (state.walletSwapPickerRole || "receive") === "pay" ? "sell" : "buy"; state.walletSwapSelecting = false; closeSearch(); closeSheet(); await openCoin(coinButton.dataset.openCoin, coinButton.dataset.chainKind, { walletSwap: selectingSwap }); return; }
     const chainButton = event.target.closest("[data-chain]"); if (chainButton) { state.chain = chainButton.dataset.chain; $$("[data-chain]").forEach((button) => button.classList.toggle("active", button.dataset.chain === state.chain)); loadFeed(true); return; }
     const feedButton = event.target.closest("[data-feed]"); if (feedButton) { state.feed = feedButton.dataset.feed; $$("[data-feed]").forEach((button) => button.classList.toggle("active", button === feedButton)); loadFeed(); return; }
     const leaderTab = event.target.closest("[data-leader-tab]"); if (leaderTab) { state.leaderTab = leaderTab.dataset.leaderTab || "top"; state.traderSearch = ""; const input = $("[data-trader-search]"); if (input) input.value = ""; syncLeaderTabs(); await loadLeaders(); return; }
@@ -4293,6 +4375,16 @@
   $("[data-search-input]").addEventListener("input", (event) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(event.target.value), 130); });
   $("[data-trader-search-form]")?.addEventListener("submit", (event) => { event.preventDefault(); void searchTraders($("[data-trader-search]")?.value); });
   document.addEventListener("submit", (event) => {
+    if (event.target.matches("[data-wallet-swap-asset-form]")) {
+      event.preventDefault();
+      const query = String($("[data-wallet-swap-asset-input]")?.value || "").trim();
+      if (!query) return;
+      const role = state.walletSwapPickerRole || "receive";
+      state.walletSwapSide = role === "pay" ? "sell" : "buy";
+      if (/^(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$/.test(query)) { closeSheet(); void openCoin(query, isRh(query) ? "rh" : "sol", { walletSwap: true }); }
+      else { state.walletSwapSelecting = true; closeSheet(); openSearch(); const input = $("[data-search-input]"); if (input) { input.value = query; input.placeholder = "Search token or paste Solana / 0x CA"; void runSearch(query); } }
+      return;
+    }
     if (!event.target.matches("[data-wallet-ca-form]")) return;
     event.preventDefault();
     const query = String($("[data-wallet-ca-input]")?.value || "").trim();
