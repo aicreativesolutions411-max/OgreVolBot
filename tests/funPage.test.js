@@ -74,7 +74,7 @@ test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH tr
   assert.match(html, /wallet-manifest\.webmanifest\?v=2/);
   assert.match(html, /wallet-install-head[^>]+data-install-fun hidden[^>]+><span>Install<\/span>/);
   assert.match(funWorker, /IS_WALLET_WORKER/);
-  assert.match(funWorker, /slimewallet-v18/);
+  assert.match(funWorker, /slimewallet-v19/);
   assert.match(JSON.stringify(walletManifest.icons), /slimewallet-icon-512\.png/);
   assert.match(js, /WALLET_BRAND_ASSET = "\/assets\/slimewire\/slimewallet-icon-192\.png"/);
   assert.match(css, /slimewallet-vault-bg\.webp/);
@@ -192,7 +192,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: IS_WALLET_ROUTE \? "\/wallet\/" : "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v75/);
+  assert.match(funWorker, /slimewire-fun-v76/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -257,9 +257,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=57/);
-  assert.match(funWorker, /slimewire-fun-v75/);
-  assert.match(funWorker, /fun\.css\?v=57/);
+  assert.match(html, /fun\.css\?v=58/);
+  assert.match(funWorker, /slimewire-fun-v76/);
+  assert.match(funWorker, /fun\.css\?v=58/);
   assert.match(css, /\.wallet-bottom-nav\[hidden\]\{display:none!important\}/);
   assert.match(js, /walletNav\.hidden = hideWalletNav/);
 });
@@ -337,7 +337,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /"slimewire-fun-v75"/);
+  assert.match(funWorker, /"slimewire-fun-v76"/);
   assert.doesNotMatch(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(js, /loadFunScript\("\/slimewire-funding\.js\?v=8"\)/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
@@ -910,7 +910,7 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, MACD, and 
   assert.match(js, /loadFunScript\("\/vendor\/lightweight-charts\.standalone\.production\.js"\)/);
   assert.match(js, /loadFunScript\("\/fun-indicators\.js\?v=7"\)/);
   assert.doesNotMatch(funWorker, /fun-indicators\.js\?v=7/);
-  assert.match(funWorker, /fun\.css\?v=57/);
+  assert.match(funWorker, /fun\.css\?v=58/);
   assert.match(indicators, /new URLSearchParams\(\{ ca: key, tf: timeframe \}\)/);
   assert.match(indicators, /`\$\{API_BASE\}\/api\/chart\?\$\{query\.toString\(\)\}`/);
   assert.match(indicators, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/pools/);
