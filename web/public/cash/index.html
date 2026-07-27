@@ -6,7 +6,7 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="37">
+<meta name="slimecash-build" content="38">
 <link rel="manifest" href="/cash/manifest.webmanifest?v=11">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
@@ -20,7 +20,7 @@
 <link rel="preconnect" href="https://app.slimewire.org" crossorigin>
 <link rel="dns-prefetch" href="//app.slimewire.org">
 <link rel="preconnect" href="https://api.dexscreener.com" crossorigin>
-<link rel="stylesheet" href="/cash/cash.css?v=37">
+<link rel="stylesheet" href="/cash/cash.css?v=38">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -525,11 +525,11 @@
     </details>
     <details class="cash-details">
       <summary>Sell &amp; consolidate</summary>
-      <label class="field-label" for="multiFundsDestination">Send everything to</label>
+      <label class="field-label" for="multiFundsDestination">For sweep, send SOL to</label>
       <select id="multiFundsDestination" class="field"></select>
       <input id="multiFundsCustomDestination" class="field" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Paste outside Solana wallet" hidden>
-      <div class="multi-funds-actions"><button id="multiFundsSweepBtn" class="btn ghost" type="button">Sweep SOL</button><button id="multiFundsSellSweepBtn" class="btn primary" type="button">Sell all tokens + sweep</button></div>
-      <p class="fineprint">Only checked wallets are used. Unsellable tokens stay put and are reported; transferable SOL still sweeps.</p>
+      <div class="multi-funds-actions"><button id="multiFundsSellBtn" class="btn ghost" type="button">Sell all tokens</button><button id="multiFundsSweepBtn" class="btn ghost" type="button">Sweep SOL</button><button id="multiFundsSellSweepBtn" class="btn primary" type="button">Sell tokens + sweep</button></div>
+      <p class="fineprint">Sell only keeps SOL in each source wallet. Sweep works with or without tokens. Unsellable tokens stay put and are reported.</p>
     </details>
     <div id="multiFundsStatus" class="status">Nothing moves until you confirm.</div>
   </div>
@@ -580,6 +580,6 @@
 <div id="toast" class="toast" hidden></div>
 <script src="/config.js"></script>
 <script src="/slimewire-funding.js?v=8"></script>
-<script src="/cash/cash.js?v=37"></script>
+<script src="/cash/cash.js?v=38"></script>
 </body>
 </html>

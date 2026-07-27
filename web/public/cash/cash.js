@@ -2849,16 +2849,18 @@
     $("multiFundsStatus").textContent = result.data.sweep?.summary || result.data.summary || `Funded ${allocations.length} wallets.`; $("multiFundsStatus").className = "status ok"; toast($("multiFundsStatus").textContent); await ensureWallet({ create: false }); void refreshBalance({ silent: true });
   }
 
-  async function runCashMultiSweep({ sellTokens = false } = {}) {
-    const destination = cashMultiFundsDestination();
-    const walletIndexes = cashMultiFundsSelectedIndexes().filter((index) => state.wallets.find((wallet) => Number(wallet.index) === index)?.publicKey !== destination);
-    if (!destination || !walletIndexes.length) { toast("Choose source wallets and a receiving wallet.", true); return; }
-    const action = sellTokens ? "sell all sellable tokens, then sweep all transferable SOL" : "sweep all transferable SOL";
-    if (!confirm(`From ${walletIndexes.length} wallet${walletIndexes.length === 1 ? "" : "s"}, ${action} to ${shortAddress(destination)}?`)) return;
-    const button = sellTokens ? $("multiFundsSellSweepBtn") : $("multiFundsSweepBtn"), old = button.textContent;
-    button.disabled = true; button.textContent = sellTokens ? "Selling & sweeping…" : "Sweeping…";
-    const path = sellTokens ? "/api/web/wallets/return-to-connected" : "/api/web/wallets/sweep-sol";
-    const result = await post(path, { walletIndexes, destination, slippageBps: "1200", tradeAttemptId: `cash-sweep-${Date.now()}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}` });
+  async function runCashMultiSweep({ mode = "sweep" } = {}) {
+    const sellOnly = mode === "sell", sellAndSweep = mode === "sell-sweep";
+    const destination = sellOnly ? "" : cashMultiFundsDestination();
+    const walletIndexes = cashMultiFundsSelectedIndexes().filter((index) => sellOnly || state.wallets.find((wallet) => Number(wallet.index) === index)?.publicKey !== destination);
+    if (!walletIndexes.length || (!sellOnly && !destination)) { toast(sellOnly ? "Choose at least one source wallet." : "Choose source wallets and a receiving wallet.", true); return; }
+    if (!sellOnly && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(destination)) { toast("Paste a valid Solana receiving wallet.", true); return; }
+    const action = sellOnly ? "sell all sellable tokens and keep the SOL in each wallet" : sellAndSweep ? `sell all sellable tokens, then sweep all transferable SOL to ${shortAddress(destination)}` : `sweep all transferable SOL to ${shortAddress(destination)}`;
+    if (!confirm(`From ${walletIndexes.length} wallet${walletIndexes.length === 1 ? "" : "s"}, ${action}?`)) return;
+    const button = sellOnly ? $("multiFundsSellBtn") : sellAndSweep ? $("multiFundsSellSweepBtn") : $("multiFundsSweepBtn"), old = button.textContent;
+    button.disabled = true; button.textContent = sellOnly ? "Selling…" : sellAndSweep ? "Selling & sweeping…" : "Sweeping…";
+    const path = sellOnly ? "/api/web/wallets/sell-all-tokens" : sellAndSweep ? "/api/web/wallets/return-to-connected" : "/api/web/wallets/sweep-sol";
+    const result = await post(path, { walletIndexes, ...(destination ? { destination } : {}), slippageBps: "1200", tradeAttemptId: `cash-${mode}-${Date.now()}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}` });
     button.disabled = false; button.textContent = old;
     if (!result.ok || !result.data?.ok) { $("multiFundsStatus").textContent = result.data?.message || result.data?.error || "Consolidation failed."; $("multiFundsStatus").className = "status bad"; return; }
     $("multiFundsStatus").textContent = result.data.sweep?.summary || result.data.summary || "Wallets consolidated."; $("multiFundsStatus").className = "status ok"; toast($("multiFundsStatus").textContent); await ensureWallet({ create: false }); void refreshBalance({ silent: true }); setTimeout(() => loadCashPositions({ force: true }), 700);
@@ -3293,8 +3295,9 @@
   $("multiFundsDestination").addEventListener("change", renderCashMultiFunds);
   $("multiFundsWallets").addEventListener("change", renderCashMultiFunds);
   $("multiFundsFundBtn").addEventListener("click", runCashMultiFunding);
-  $("multiFundsSweepBtn").addEventListener("click", () => runCashMultiSweep({ sellTokens: false }));
-  $("multiFundsSellSweepBtn").addEventListener("click", () => runCashMultiSweep({ sellTokens: true }));
+  $("multiFundsSellBtn").addEventListener("click", () => runCashMultiSweep({ mode: "sell" }));
+  $("multiFundsSweepBtn").addEventListener("click", () => runCashMultiSweep({ mode: "sweep" }));
+  $("multiFundsSellSweepBtn").addEventListener("click", () => runCashMultiSweep({ mode: "sell-sweep" }));
   $("shareReceiptBtn").addEventListener("click", async () => {
     const entry = state.selectedReceipt; if (!entry) return;
     const url = entry.signature ? (entry.explorerUrl || `https://solscan.io/tx/${entry.signature}`) : "";

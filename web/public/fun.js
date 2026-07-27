@@ -3252,7 +3252,7 @@
       <div class="wallet-manager-list">${rows}</div>
       <div class="wallet-manager-actions"><button type="button" data-create-wallet>+ Add one wallet</button><button type="button" data-export-wallets ${state.wallets.length ? "" : "disabled"}>Download all backups</button></div>
       ${state.wallets.length > 1 ? `<section class="wallet-batch-card" data-wallet-funding-card><div class="wallet-batch-heading"><div><h3>Fund selected wallets</h3><p>One review, one transaction.</p></div></div><div class="field"><label>Fund from</label><select data-wallet-fund-source>${walletOptions}</select></div><div class="wallet-mode-toggle"><button class="active" type="button" data-wallet-fund-mode="equal">Same amount each</button><button type="button" data-wallet-fund-mode="custom">Different amounts</button></div><div class="field" data-wallet-equal-funding><label>SOL per wallet</label><input data-wallet-fund-equal inputmode="decimal" value="0.1" placeholder="0.1"></div><button class="submit-trade" type="button" data-review-wallet-fund>Review funding</button><p class="fineprint">The Main/source wallet is never funded into itself. Network fees are shown by Solana when submitted.</p></section>` : ""}
-      ${state.wallets.length ? `<section class="wallet-batch-card" data-wallet-consolidate-card><div class="wallet-batch-heading"><div><h3>Sell &amp; consolidate</h3><p>Use the selected wallets, or tap Only on a wallet above.</p></div></div><div class="field"><label>Sweep SOL into</label><select data-wallet-consolidate-destination>${walletOptions}</select></div><div class="wallet-consolidate-actions"><button type="button" data-review-wallet-action="sell">Sell all tokens</button><button type="button" data-review-wallet-action="sweep">Sweep SOL</button><button class="primary" type="button" data-review-wallet-action="sell-sweep">Sell tokens + sweep</button></div><p class="fineprint">Selling swaps every sellable token to SOL. Sweeping drains transferable SOL into the wallet above and keeps network fees covered.</p></section>` : ""}
+      ${state.wallets.length ? `<section class="wallet-batch-card" data-wallet-consolidate-card><div class="wallet-batch-heading"><div><h3>Sell &amp; consolidate</h3><p>Use the selected wallets, or tap Only on a wallet above.</p></div></div><div class="field"><label>Sweep SOL into</label><select data-wallet-consolidate-destination>${walletOptions}<option value="custom">Outside wallet…</option></select></div><div class="field" data-wallet-consolidate-custom-wrap hidden><label>Outside Solana wallet</label><input data-wallet-consolidate-custom autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Paste destination wallet"></div><div class="wallet-consolidate-actions"><button type="button" data-review-wallet-action="sell">Sell all tokens</button><button type="button" data-review-wallet-action="sweep">Sweep SOL</button><button class="primary" type="button" data-review-wallet-action="sell-sweep">Sell tokens + sweep</button></div><p class="fineprint">Sell only keeps the resulting SOL in each source wallet. Sweep only works even when a wallet has no tokens. Choose one of your wallets or paste an outside address.</p></section>` : ""}
       <details class="wallet-restore-box" ${options.restore ? "open" : ""}><summary>Restore or import a wallet</summary><label class="file-button">Choose backup file<input type="file" data-wallet-backup-file accept=".txt,.json,application/json,text/plain" hidden></label><textarea data-wallet-backup-text placeholder="Or paste an encrypted backup, recovery file, Phantom/Solflare private key, or Robinhood/EVM key"></textarea><button class="submit-trade" type="button" data-restore-wallet>Restore / import wallet</button></details><div class="external-wallet-links"><a href="https://phantom.app/download" target="_blank" rel="noreferrer">Open Phantom to load</a><a href="https://solflare.com/download" target="_blank" rel="noreferrer">Open Solflare to load</a></div><p class="wallet-manager-status" data-wallet-manager-status></p><p class="fineprint">No username or named profile is required. New wallets automatically download the encrypted SlimeWire backup, Solflare/Phantom recovery file, and a separate Robinhood/EVM key file. Keep all files private.</p></div>`);
     updateWalletManagerSelection();
     updateWalletFundingSource();
@@ -3299,6 +3299,11 @@
     setWalletManagerSelection([Number(index)]);
     $("[data-wallet-consolidate-card]")?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
+  function syncWalletConsolidateDestination() {
+    const outside = $(`[data-wallet-consolidate-destination]`)?.value === "custom";
+    const wrap = $(`[data-wallet-consolidate-custom-wrap]`);
+    if (wrap) wrap.hidden = !outside;
+  }
   function reviewWalletFunding() {
     const sourceWalletIndex = Number($("[data-wallet-fund-source]")?.value || state.activeWallet);
     const mode = $("[data-wallet-fund-mode].active")?.dataset.walletFundMode || "equal";
@@ -3322,18 +3327,22 @@
     openSheet(`<div class="sheet-title"><img src="${slimePfp(source?.publicKey || "fund-wallets")}" alt=""><div><h2>Review wallet funding</h2><p>${allocations.length} wallet${allocations.length === 1 ? "" : "s"} from ${escapeHtml(source?.label || `Wallet ${sourceWalletIndex}`)}</p></div></div><div class="read-card"><h3>${totalSol.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")} SOL total</h3><p>${allocations.map((allocation) => `${escapeHtml(allocation.label)} · ${escapeHtml(allocation.amountSol)} SOL`).join("<br>")}</p></div><button class="submit-trade" type="button" data-confirm-wallet-manager-action>Fund selected wallets</button><button class="sheet-secondary" type="button" data-manage-wallets>Edit selection</button><p class="fineprint">This sends one Solana transaction containing one transfer per selected wallet. It cannot be reversed.</p>`);
   }
   function reviewWalletAction(kind) {
-    const destinationIndex = Number($("[data-wallet-consolidate-destination]")?.value || state.activeWallet);
-    const destinationWallet = state.wallets.find((wallet) => Number(wallet.index) === destinationIndex);
+    const destinationValue = String($("[data-wallet-consolidate-destination]")?.value || state.activeWallet);
+    const outside = destinationValue === "custom";
+    const destinationIndex = outside ? null : Number(destinationValue);
+    const destinationWallet = outside ? null : state.wallets.find((wallet) => Number(wallet.index) === destinationIndex);
+    const destination = outside ? String($("[data-wallet-consolidate-custom]")?.value || "").trim() : String(destinationWallet?.publicKey || "");
     const selected = selectedManagerWalletIndexes();
     if (!selected.length) { toast("Select at least one wallet.", true); return; }
-    if (!destinationWallet) { toast("Choose the wallet that should receive the SOL.", true); return; }
-    const walletIndexes = kind === "sweep" ? selected.filter((index) => index !== destinationIndex) : selected;
+    if (kind !== "sell" && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(destination)) { toast(outside ? "Paste a valid outside Solana wallet." : "Choose the wallet that should receive the SOL.", true); return; }
+    const walletIndexes = kind === "sweep" && destinationIndex != null ? selected.filter((index) => index !== destinationIndex) : selected;
     if (!walletIndexes.length && kind === "sweep") { toast("Select another wallet to sweep into this one.", true); return; }
     const labels = selected.map((index) => state.wallets.find((wallet) => Number(wallet.index) === index)?.label || `Wallet ${index}`);
-    state.pendingWalletManagerAction = { kind, walletIndexes, selectedWalletIndexes: selected, destination: destinationWallet.publicKey, destinationIndex, attemptId: attemptId(`wallet-${kind}`) };
+    state.pendingWalletManagerAction = { kind, walletIndexes, selectedWalletIndexes: selected, destination, destinationIndex, attemptId: attemptId(`wallet-${kind}`) };
     const title = kind === "sell" ? "Sell all tokens" : kind === "sweep" ? "Sweep all SOL" : "Sell tokens & sweep SOL";
     const actionLabel = kind === "sell" ? "Sell selected token balances" : kind === "sweep" ? "Sweep selected SOL" : "Sell & sweep selected wallets";
-    openSheet(`<div class="sheet-title"><img src="${slimePfp(destinationWallet.publicKey)}" alt=""><div><h2>${title}</h2><p>${selected.length} selected wallet${selected.length === 1 ? "" : "s"}</p></div></div><div class="read-card"><h3>${escapeHtml(labels.join(", "))}</h3><p>${kind === "sell" ? "Every sellable token will be swapped to SOL." : `SOL will finish in ${escapeHtml(destinationWallet.label || `Wallet ${destinationIndex}`)} (${escapeHtml(short(destinationWallet.publicKey))}).`}</p></div><button class="submit-trade" type="button" data-confirm-wallet-manager-action>${actionLabel}</button><button class="sheet-secondary" type="button" data-manage-wallets>Edit selection</button><p class="fineprint">On-chain sells and transfers cannot be reversed. Failed or unsellable token balances stay in their original wallet and are reported in the result.</p>`);
+    const destinationLabel = outside ? `outside wallet ${short(destination)}` : (destinationWallet?.label || `Wallet ${destinationIndex}`);
+    openSheet(`<div class="sheet-title"><img src="${slimePfp(destination || "sell-all")}" alt=""><div><h2>${title}</h2><p>${selected.length} selected wallet${selected.length === 1 ? "" : "s"}</p></div></div><div class="read-card"><h3>${escapeHtml(labels.join(", "))}</h3><p>${kind === "sell" ? "Every sellable token will be swapped to SOL and kept in its source wallet." : `All transferable SOL will finish in ${escapeHtml(destinationLabel)} (${escapeHtml(short(destination))}).`}</p></div><button class="submit-trade" type="button" data-confirm-wallet-manager-action>${actionLabel}</button><button class="sheet-secondary" type="button" data-manage-wallets>Edit selection</button><p class="fineprint">On-chain sells and transfers cannot be reversed. Failed or unsellable token balances stay in their original wallet and are reported in the result.</p>`);
   }
   async function confirmWalletManagerAction(button) {
     const pending = state.pendingWalletManagerAction;
@@ -4444,6 +4453,7 @@
     if (event.target.matches("[data-send-sol-wallet]")) { const input = $("[data-send-sol-amount]"); if (input?.dataset.sendAll === "true") selectFunSendAll(); return; }
     if (event.target.matches("[data-wallet-batch-select]")) { updateWalletManagerSelection(); return; }
     if (event.target.matches("[data-wallet-fund-source]")) { updateWalletFundingSource(); return; }
+    if (event.target.matches("[data-wallet-consolidate-destination]")) { syncWalletConsolidateDestination(); return; }
     if (!event.target.matches("[data-wallet-backup-file]")) return;
     const file = event.target.files?.[0], textarea = $("[data-wallet-backup-text]"), status = $("[data-wallet-manager-status]");
     if (!file || !textarea) return;

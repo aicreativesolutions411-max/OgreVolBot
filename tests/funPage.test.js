@@ -48,7 +48,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "85", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "86", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -74,7 +74,7 @@ test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH tr
   assert.match(html, /wallet-manifest\.webmanifest\?v=2/);
   assert.match(html, /wallet-install-head[^>]+data-install-fun hidden[^>]+><span>Install<\/span>/);
   assert.match(funWorker, /IS_WALLET_WORKER/);
-  assert.match(funWorker, /slimewallet-v25/);
+  assert.match(funWorker, /slimewallet-v26/);
   assert.match(JSON.stringify(walletManifest.icons), /slimewallet-icon-512\.png/);
   assert.match(js, /WALLET_BRAND_ASSET = "\/assets\/slimewire\/slimewallet-icon-192\.png"/);
   assert.match(css, /slimewallet-vault-bg\.webp/);
@@ -229,7 +229,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: IS_WALLET_ROUTE \? "\/wallet\/" : "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v82/);
+  assert.match(funWorker, /slimewire-fun-v83/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -295,7 +295,7 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
   assert.match(html, /fun\.css\?v=65/);
-  assert.match(funWorker, /slimewire-fun-v82/);
+  assert.match(funWorker, /slimewire-fun-v83/);
   assert.match(funWorker, /fun\.css\?v=65/);
   assert.match(css, /\.wallet-bottom-nav\[hidden\]\{display:none!important\}/);
   assert.match(js, /walletNav\.hidden = hideWalletNav/);
@@ -307,8 +307,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=85/);
-  assert.match(funWorker, /fun\.js\?v=85/);
+  assert.match(html, /fun\.js\?v=86/);
+  assert.match(funWorker, /fun\.js\?v=86/);
 });
 
 test("Fun volume switches pasted contracts to their authoritative chain", () => {
@@ -374,7 +374,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /"slimewire-fun-v82"/);
+  assert.match(funWorker, /"slimewire-fun-v83"/);
   assert.doesNotMatch(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(js, /loadFunScript\("\/slimewire-funding\.js\?v=8"\)/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
@@ -1175,6 +1175,8 @@ test("mobile wallet addresses are visible and tap-to-copy from the hero, manager
 });
 
 test("wallet manager batch-funds exact allocations and can sell or consolidate selected wallets", () => {
+  const cash = fs.readFileSync(new URL("../web/public/cash/cash.js", import.meta.url), "utf8");
+  const cashHtml = fs.readFileSync(new URL("../web/public/cash/index.html", import.meta.url), "utf8");
   for (const path of ["/api/web/wallets/send-sol", "/api/web/wallets/sell-all-tokens", "/api/web/wallets/sweep-sol", "/api/web/wallets/return-to-connected"]) {
     assert.match(js, new RegExp(path.replaceAll("/", "\\/")));
   }
@@ -1187,6 +1189,14 @@ test("wallet manager batch-funds exact allocations and can sell or consolidate s
   assert.match(server, /Each destination wallet can appear only once/);
   assert.match(server, /The funding wallet changed after review/);
   assert.match(server, /totalSol:\s*lamportsToSol\(totalLamports\)/);
+  assert.match(js, /data-wallet-consolidate-destination>[\s\S]*Outside wallet…/);
+  assert.match(js, /data-wallet-consolidate-custom/);
+  assert.match(js, /kind !== "sell" && !\/\^\[1-9A-HJ-NP-Za-km-z\]/);
+  assert.match(cashHtml, /id="multiFundsSellBtn"[^>]*>Sell all tokens</);
+  assert.match(cashHtml, /id="multiFundsSweepBtn"[^>]*>Sweep SOL</);
+  assert.match(cashHtml, /id="multiFundsSellSweepBtn"[^>]*>Sell tokens \+ sweep</);
+  assert.match(cash, /mode === "sell"/);
+  assert.match(cash, /\/api\/web\/wallets\/sell-all-tokens/);
 });
 
 test("wallet manager shows SOL, priced coin positions, and total value for every wallet", () => {

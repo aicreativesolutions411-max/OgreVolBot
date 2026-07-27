@@ -30,17 +30,17 @@ test("Cash and Fun source shells install the same funding release", () => {
   }
   assert.doesNotMatch(publicFunHtml, new RegExp(fundingAsset.replace(/[.?]/g, "\\$&")));
   assert.doesNotMatch(publicFunWorker, new RegExp(fundingAsset.replace(/[.?]/g, "\\$&")));
-  assert.match(publicCashHtml, /slimecash-build" content="37"/);
-  assert.match(publicCashHtml, /cash\.css\?v=37/);
-  assert.match(publicCashHtml, /cash\.js\?v=37/);
-  assert.match(publicCashWorker, /cash\.css\?v=37/);
-  assert.match(publicCashWorker, /cash\.js\?v=37/);
+  assert.match(publicCashHtml, /slimecash-build" content="38"/);
+  assert.match(publicCashHtml, /cash\.css\?v=38/);
+  assert.match(publicCashHtml, /cash\.js\?v=38/);
+  assert.match(publicCashWorker, /cash\.css\?v=38/);
+  assert.match(publicCashWorker, /cash\.js\?v=38/);
   assert.match(publicFunHtml, /fun\.css\?v=65/);
-  assert.match(publicFunHtml, /fun\.js\?v=85/);
+  assert.match(publicFunHtml, /fun\.js\?v=86/);
   assert.doesNotMatch(publicFunHtml, /fun-indicators\.js\?v=7/);
   assert.match(publicFunJs, /loadFunScript\("\/fun-indicators\.js\?v=7"\)/);
   assert.match(publicFunWorker, /fun\.css\?v=65/);
-  assert.match(publicFunWorker, /fun\.js\?v=85/);
+  assert.match(publicFunWorker, /fun\.js\?v=86/);
   assert.doesNotMatch(publicFunWorker, /fun-indicators\.js\?v=7/);
 });
 
@@ -59,8 +59,8 @@ test("built PWA shells contain the same funding release as web/public", () => {
 test("installed Cash and Fun apps force worker updates and isolate their caches", () => {
   assert.match(publicCashJs, /serviceWorker\.register\("\/cash\/sw\.js", \{ updateViaCache: "none" \}\)/);
   assert.match(publicFunJs, /serviceWorker\.register\("\/fun-sw\.js", \{ scope: IS_WALLET_ROUTE \? "\/wallet\/" : "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(publicCashWorker, /const CACHE = "slimecash-v39"/);
-  assert.match(publicFunWorker, /"slimewire-fun-v82"/);
+  assert.match(publicCashWorker, /const CACHE = "slimecash-v40"/);
+  assert.match(publicFunWorker, /"slimewire-fun-v83"/);
   assert.match(publicCashWorker, /key\.startsWith\("slimecash-"\) && key !== CACHE/);
   assert.match(publicFunWorker, /key\.startsWith\(FUN_CACHE_PREFIX\) && key !== FUN_CACHE/);
   assert.doesNotMatch(publicCashWorker, /keys\.filter\(\(key\) => key !== CACHE\)/);
