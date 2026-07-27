@@ -2764,7 +2764,7 @@ test("DM terminal hub: trading-first main menu + Settings (presets + slippage), 
   assert.match(links, /text: "🌐 SlimeWire Website"/);            // single site link
   // Settings hub = per-user slippage + presets; the quick-buy USES the user's slippage
   assert.match(serverSource, /SLIP_TIERS = \[300, 500, 1000, 1500, 2500\]/);
-  assert.match(functionBody(serverSource, "tgExecuteQuickBuy"), /userBuyPrefs\(await readBuyPrefs\(\), userId\)\.slippageBps/);
+  assert.match(functionBody(serverSource, "tgExecuteQuickBuy"), /userBuyPrefs\(prefStore, userId\)\.slippageBps/);
   assert.match(serverSource, /startsWith\("st:"\)/);
 });
 test("Copy Trade (input a wallet): 3-step flow arms the same site copy-wallet watcher", () => {
@@ -2813,7 +2813,7 @@ test("in-DM one-tap SELL (qs:*): own-wallet, idempotent, on the receipt + positi
   assert.match(serverSource, /startsWith\("qs:"\)/);
   assert.match(serverSource, /handleQuickSellCallback\(query, userId\)/);
   const sell = functionBody(serverSource, "tgExecuteQuickSell");
-  assert.match(sell, /walletsForOwner\(await readWalletStore\(\), userId\)/);   // the tapper's OWN wallets
+  assert.match(sell, /walletsForOwner\(walletStore, userId\)/);   // the tapper's OWN wallets
   assert.match(sell, /sellTokenFromWallet\(w, mint, pct, slippageBps/);          // real sell money-path
   assert.match(sell, /runIdempotentMoneyOp\("tg-quick-sell"/);                   // double-tap-proof
   assert.match(sell, /type: "sell", source: "tg-quick-sell"/);                   // recorded for PnL

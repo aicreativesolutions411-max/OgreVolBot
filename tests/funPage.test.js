@@ -48,7 +48,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "83", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "84", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -74,7 +74,7 @@ test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH tr
   assert.match(html, /wallet-manifest\.webmanifest\?v=2/);
   assert.match(html, /wallet-install-head[^>]+data-install-fun hidden[^>]+><span>Install<\/span>/);
   assert.match(funWorker, /IS_WALLET_WORKER/);
-  assert.match(funWorker, /slimewallet-v23/);
+  assert.match(funWorker, /slimewallet-v24/);
   assert.match(JSON.stringify(walletManifest.icons), /slimewallet-icon-512\.png/);
   assert.match(js, /WALLET_BRAND_ASSET = "\/assets\/slimewire\/slimewallet-icon-192\.png"/);
   assert.match(css, /slimewallet-vault-bg\.webp/);
@@ -229,7 +229,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: IS_WALLET_ROUTE \? "\/wallet\/" : "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v80/);
+  assert.match(funWorker, /slimewire-fun-v81/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -294,9 +294,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=63/);
-  assert.match(funWorker, /slimewire-fun-v80/);
-  assert.match(funWorker, /fun\.css\?v=63/);
+  assert.match(html, /fun\.css\?v=64/);
+  assert.match(funWorker, /slimewire-fun-v81/);
+  assert.match(funWorker, /fun\.css\?v=64/);
   assert.match(css, /\.wallet-bottom-nav\[hidden\]\{display:none!important\}/);
   assert.match(js, /walletNav\.hidden = hideWalletNav/);
 });
@@ -307,8 +307,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=83/);
-  assert.match(funWorker, /fun\.js\?v=83/);
+  assert.match(html, /fun\.js\?v=84/);
+  assert.match(funWorker, /fun\.js\?v=84/);
 });
 
 test("Fun volume switches pasted contracts to their authoritative chain", () => {
@@ -374,7 +374,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /"slimewire-fun-v80"/);
+  assert.match(funWorker, /"slimewire-fun-v81"/);
   assert.doesNotMatch(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(js, /loadFunScript\("\/slimewire-funding\.js\?v=8"\)/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
@@ -877,7 +877,7 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(server, /String\(row\?\.baseToken\?\.address \|\| ""\)\.toLowerCase\(\) === key/);
   assert.match(js, /const detailTask = request\(path\)\.then/);
   assert.match(js, /const searchTask = request\(`\/api\/web\/token-search/);
-  assert.match(js, /const dexTask = \(chain === "robinhood" \|\| walletMode/);
+  assert.match(js, /const dexTask = funDexBatch\(\[targetKey\], chain\)/);
   assert.match(js, /await Promise\.allSettled\(\[searchTask, detailTask, dexTask\]\)/);
 });
 
@@ -902,6 +902,15 @@ test("coin search paints cached matches immediately, preserves the newest query,
   assert.match(js, />Liq \$\{escapeHtml\(formatUsd\(coin\.liquidity\)\)\}/);
   assert.match(js, /class="coin-ca-button"[^>]+data-copy-coin/);
   assert.match(css, /\.coin-ca-button\{/);
+});
+
+test("mobile coin details expose a large reliable contract copy and paste/search action", () => {
+  assert.match(html, /class="coin-contract-bar" data-coin-contract/);
+  assert.match(js, /class="coin-contract-copy"[^>]+data-copy-coin/);
+  assert.match(js, />Copy CA<\/b>/);
+  assert.match(js, /class="coin-contract-search"[^>]+data-open-search>Paste \/ search/);
+  assert.match(js, /await writeClipboardText\(coinKey\(state\.selected\)\)/);
+  assert.match(css, /\.coin-contract-copy,\.coin-contract-search\{min-height:45px/);
 });
 
 test("coin setup exposes fast buys, ladder exits, one-wallet RH trades, and the full volume engine", () => {
@@ -936,6 +945,9 @@ test("balanced pro chart keeps core stats visible and adds working chart/transac
   assert.match(js, /trades=\$\{trades\}/);
   assert.match(js, /interval=\$\{state\.chartInterval\}/);
   assert.match(js, /frame\.dataset\.src === src/);
+  assert.match(js, /const hasPair = Boolean\(pairAddress/);
+  assert.match(js, /\/chart-lab\?ca=\$\{encodeURIComponent\(key\)\}/);
+  assert.match(js, /pairAddress: String\(p\.pairAddress \|\| ""\)/);
 });
 
 test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, MACD, and harmonics", () => {
@@ -947,7 +959,7 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, MACD, and 
   assert.match(js, /loadFunScript\("\/vendor\/lightweight-charts\.standalone\.production\.js"\)/);
   assert.match(js, /loadFunScript\("\/fun-indicators\.js\?v=7"\)/);
   assert.doesNotMatch(funWorker, /fun-indicators\.js\?v=7/);
-  assert.match(funWorker, /fun\.css\?v=63/);
+  assert.match(funWorker, /fun\.css\?v=64/);
   assert.match(indicators, /new URLSearchParams\(\{ ca: key, tf: timeframe \}\)/);
   assert.match(indicators, /`\$\{API_BASE\}\/api\/chart\?\$\{query\.toString\(\)\}`/);
   assert.match(indicators, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/pools/);

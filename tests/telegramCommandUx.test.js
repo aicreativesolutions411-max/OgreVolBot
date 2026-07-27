@@ -123,6 +123,24 @@ test("Telegram quick trades acknowledge immediately and scan wallets concurrentl
   assert.match(functionBody(serverSource, "tgExecuteQuickSell"), /runWithConcurrency\(holders/);
 });
 
+test("Telegram balance, buy, sell, and receipts avoid serial provider waits", () => {
+  const balances = functionBody(serverSource, "showWalletBalances");
+  assert.match(balances, /primeSolBalancesBatch\(wallets\.map/);
+  assert.match(balances, /priority: true/);
+
+  const funding = functionBody(serverSource, "selectTgSolFundingWallet");
+  assert.match(funding, /primeSolBalancesBatch\(candidates\.map/);
+  assert.doesNotMatch(funding, /const first = await readBalance/);
+
+  const buy = functionBody(serverSource, "tgExecuteQuickBuy");
+  assert.match(buy, /Promise\.all\(\[readState\(\)\.catch/);
+  const sell = functionBody(serverSource, "tgExecuteQuickSell");
+  assert.match(sell, /getTokenBalanceForMintCached/);
+  assert.doesNotMatch(sell, /walletTokenUiBalanceRead/);
+  assert.match(functionBody(serverSource, "quickBuySendReceipt"), /Promise\.all/);
+  assert.match(functionBody(serverSource, "tgQuickSellReceipt"), /Promise\.all/);
+});
+
 test("Telegram positions resolve token names and holdings without blocking on live quotes", () => {
   const view = functionBody(serverSource, "showPositionsOverview");
   assert.match(view, /buildPositionsOverview\(userId, \{ fast: true, priority: true \}\)/);

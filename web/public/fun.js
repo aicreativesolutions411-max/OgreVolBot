@@ -1380,11 +1380,13 @@
       // but cannot replace a fresher Dex/chart snapshot already on this screen.
       applySelected(raw, state.selected || {}, raw);
     });
-    const dexTask = (chain === "robinhood" || walletMode ? funDexBatch([targetKey], chain) : Promise.resolve({})).then((by) => {
+    // Resolve the strongest pair from the phone for both chains. This avoids a
+    // cold Render/provider read holding the coin header and chart on placeholders.
+    const dexTask = funDexBatch([targetKey], chain).then((by) => {
       if (!isCurrent()) return;
       const dexMarket = by[targetKey] || Object.entries(by).find(([address]) => address.toLowerCase() === targetLower)?.[1] || null;
       if (!dexMarket) return;
-      applySelected({ imageUrl: dexMarket.img || "", symbol: dexMarket.symbol || "", name: dexMarket.name || "" }, dexMarket);
+      applySelected({ imageUrl: dexMarket.img || "", symbol: dexMarket.symbol || "", name: dexMarket.name || "", pairAddress: dexMarket.pairAddress || "" }, dexMarket);
     });
     await Promise.allSettled([searchTask, detailTask, dexTask]);
     if (!isCurrent()) return;
@@ -1454,6 +1456,8 @@
     const volume = coin.volume == null ? (coin.volumeLabel || "Unavailable") : (Number(coin.volume) === 0 ? "$0" : formatUsd(coin.volume));
     $("[data-coin-mini]").innerHTML = `<div class="coin-identity"><img ${coinImageAttrs(coin)} style="background-image:url('${coinBadge(coin)}')" alt="" decoding="async" referrerpolicy="no-referrer"><div><b>${escapeHtml(coin.symbol || short(key))}</b><button class="coin-ca-button" type="button" data-copy-coin title="Copy ${escapeHtml(key)}"><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span><i>▣</i></button></div></div><div class="coin-head-quote"><b>${formatUsd(marketNumber(coin.marketCap, coin.mc))}</b><span class="${change == null ? "" : (change >= 0 ? "up" : "down")}">${change == null ? "—" : formatPct(change)} · 1H</span></div>`;
     $("[data-coin-stats]").innerHTML = `<div><span>Market cap</span><b>${formatUsd(marketNumber(coin.marketCap, coin.mc))}</b></div><div><span>Liquidity</span><b>${formatUsd(marketNumber(coin.liquidity, coin.liq, coin.liquidityUsd))}</b></div><div><span>Holders</span><b>${holders != null && holders > 0 ? holders.toLocaleString() : "Unavailable"}</b></div><div><span>Volume</span><b>${escapeHtml(volume)}</b></div>`;
+    const contractBar = $("[data-coin-contract]");
+    if (contractBar) contractBar.innerHTML = `<button class="coin-contract-copy" type="button" data-copy-coin aria-label="Copy full contract address"><span><small>Contract address</small><code>${escapeHtml(key)}</code></span><b>Copy CA</b></button><button class="coin-contract-search" type="button" data-open-search>Paste / search</button>`;
     $(`[data-coin-mini] .coin-head-quote`)?.insertAdjacentHTML("beforebegin", `<a class="coin-community-link" href="/community?ca=${encodeURIComponent(key)}">Community</a>`);
     renderChart();
     renderQuickTrade();
@@ -1463,9 +1467,16 @@
   function renderChart() {
     const coin = state.selected || {}, key = coinKey(coin), frame = $("[data-chart-frame]");
     const trades = state.chartMode === "transactions" ? 1 : 0;
-    const src = coin.chain === "robinhood"
-      ? `https://dexscreener.com/robinhood/${encodeURIComponent(coin.pairAddress || key)}?embed=1&theme=dark&trades=${trades}&info=0&chartLeftToolbar=0&interval=${state.chartInterval}`
-      : `https://dexscreener.com/solana/${encodeURIComponent(coin.pairAddress || key)}?embed=1&theme=dark&trades=${trades}&info=0&chartLeftToolbar=0&interval=${state.chartInterval}`;
+    const pairAddress = String(coin.pairAddress || "").trim();
+    const hasPair = Boolean(pairAddress && pairAddress.toLowerCase() !== key.toLowerCase());
+    const chainName = coin.chain === "robinhood" ? "robinhood" : "solana";
+    const tf = state.chartInterval === "60" ? "1h" : `${state.chartInterval}m`;
+    // A token-address Dex embed can sit on "Loading pair". Paint SlimeWire's
+    // own CA chart immediately, then switch to the full pair embed as soon as
+    // the parallel browser market lookup resolves the strongest pool.
+    const src = hasPair
+      ? `https://dexscreener.com/${chainName}/${encodeURIComponent(pairAddress)}?embed=1&theme=dark&trades=${trades}&info=0&chartLeftToolbar=0&interval=${state.chartInterval}`
+      : `/chart-lab?ca=${encodeURIComponent(key)}&tf=${encodeURIComponent(tf)}&embed=1&cv=fun84&sym=${encodeURIComponent(coin.symbol || "")}`;
     $$("[data-chart-interval]").forEach((button) => button.classList.toggle("active", button.dataset.chartInterval === state.chartInterval));
     $$("[data-chart-mode]").forEach((button) => button.classList.toggle("active", button.dataset.chartMode === state.chartMode));
     frame.dataset.token = key;
@@ -2527,7 +2538,7 @@
         const previousKey = Object.keys(by).find((address) => address.toLowerCase() === String(m).toLowerCase());
         if (previousKey && by[previousKey]._liq >= liq) continue;
         if (previousKey && previousKey !== m) delete by[previousKey];
-        by[m] = { _liq: liq, priceUsd: positiveMarketNumber(p.priceUsd), mc: positiveMarketNumber(p.marketCap, p.fdv), liq: positiveMarketNumber(liq), v24: positiveMarketNumber(p.volume && p.volume.h24), v1: positiveMarketNumber(p.volume && p.volume.h1), img: (p.info && p.info.imageUrl) || "", m5: Number((p.priceChange && (p.priceChange.m5 ?? p.priceChange.h1))), symbol: p.baseToken?.symbol || "", name: p.baseToken?.name || "", marketSource: "browser-dex", marketPriority: 40, marketUpdatedAt: Date.now() };
+        by[m] = { _liq: liq, pairAddress: String(p.pairAddress || ""), priceUsd: positiveMarketNumber(p.priceUsd), mc: positiveMarketNumber(p.marketCap, p.fdv), liq: positiveMarketNumber(liq), v24: positiveMarketNumber(p.volume && p.volume.h24), v1: positiveMarketNumber(p.volume && p.volume.h1), img: (p.info && p.info.imageUrl) || "", m5: Number((p.priceChange && (p.priceChange.m5 ?? p.priceChange.h1))), symbol: p.baseToken?.symbol || "", name: p.baseToken?.name || "", marketSource: "browser-dex", marketPriority: 40, marketUpdatedAt: Date.now() };
       }
       return by;
     } catch { return {}; }
@@ -4205,7 +4216,7 @@
     if (event.target.closest("[data-launch-back]")) { closeFunLaunch(); return; }
     if (event.target.closest("[data-tool-back]")) { closeFunTool(); return; }
     if (event.target.closest("[data-coin-back]")) { history.replaceState(null, "", "#"); setView(state.previousView || "home"); return; }
-    if (event.target.closest("[data-copy-coin]")) { navigator.clipboard?.writeText(coinKey(state.selected)); toast("Contract copied"); return; }
+    if (event.target.closest("[data-copy-coin]")) { try { await writeClipboardText(coinKey(state.selected)); toast("Contract address copied"); } catch { toast("Could not copy automatically", true); } return; }
     const detail = event.target.closest("[data-detail]"); if (detail) { state.detailTab = detail.dataset.detail; $$("[data-detail]").forEach((button) => button.classList.toggle("active", button === detail)); renderDetailPanel(); return; }
     const chartInterval = event.target.closest("[data-chart-interval]"); if (chartInterval) { state.chartInterval = chartInterval.dataset.chartInterval || "15"; renderChart(); return; }
     const chartMode = event.target.closest("[data-chart-mode]"); if (chartMode) { state.chartMode = chartMode.dataset.chartMode || "chart"; renderChart(); return; }
