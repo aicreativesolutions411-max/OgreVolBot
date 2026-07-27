@@ -1474,6 +1474,22 @@ test("Jito fallback requires exact candidate proof before recording atomic buys"
     "mint existence must never synthesize atomic buy receipts");
 });
 
+test("PumpPortal bundle-build rejection falls back through the same mint instead of stranding launch", () => {
+  const requestBundle = functionBody(serverSource, "requestPumpPortalBundleTxs");
+  const atomic = functionBody(serverSource, "webLaunchPumpJitoBundle");
+
+  assert.match(requestBundle, /error\.code = "PUMPPORTAL_BUNDLE_BUILD_REJECTED"/);
+  assert.match(requestBundle, /error\.providerStatus = response\.status/);
+  assert.match(requestBundle, /error\.providerResponseBody = text/);
+  assert.match(atomic, /let bundleBuildFailure = null/);
+  assert.match(atomic, /pump_launch_jito_bundle_build_rejected/);
+  assert.match(atomic, /jito_bundle_build_rejected_fallback/);
+  assert.match(atomic, /findConfirmedJitoBundleCandidate\([\s\S]*submittedBundleCandidates/);
+  assert.match(atomic, /fallbackReason: bundleBuildFailure \? "provider-build-rejected" : "bundle-not-landed"/);
+  assert.match(atomic, /webLaunchPumpPortalLocal\(userId, body, basePayload, \{ mintKeypair, metadata \}\)/,
+    "provider fallback must reuse the reserved mint and uploaded metadata");
+});
+
 test("Jito candidates reconcile durably after submit-response loss or restart", () => {
   const atomic = functionBody(serverSource, "webLaunchPumpJitoBundle");
   const reconcile = functionBody(serverSource, "reconcilePersistedJitoAttempt");
