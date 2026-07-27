@@ -53,11 +53,12 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
 });
 
 test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH trading", () => {
-  assert.match(server, /requestUrl\.pathname === "\/wallet"[\s\S]{0,180}Location: "\/wallet\/"/);
+  assert.match(server, /requestUrl\.pathname === "\/wallet"[\s\S]{0,180}Location: "\/wallet\/\?install=1"/);
   assert.match(server, /requestUrl\.pathname === "\/wallet\/"[\s\S]{0,260}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
-  assert.match(redirects, /^\/wallet\s+\/wallet\/\s+302$/m);
-  assert.match(redirects, /^\/wallet\/\*\s+\/fun\.html\s+200$/m);
-  assert.match(redirects, /^\/wallet\.html\s+\/fun\.html\s+200$/m);
+  for (const route of ["/wallet", "/wallet/", "/wallet/*", "/wallet.html"]) {
+    assert.match(redirects, new RegExp(`^${route.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s+https:\\/\\/app\\.slimewire\\.org\\/wallet\\/\\?install=1\\s+302$`, "m"));
+  }
+  assert.doesNotMatch(redirects, /^\/wallet(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /data-view="wallet-swap"/);
   assert.match(html, /data-view="wallet-asset"/);
   assert.match(js, /data-wallet-ca-form/);
@@ -73,6 +74,7 @@ test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH tr
   assert.equal(walletManifest.scope, "/wallet/");
   assert.match(html, /wallet-manifest\.webmanifest\?v=2/);
   assert.match(html, /wallet-install-head[^>]+data-install-fun hidden[^>]+><span>Install<\/span>/);
+  assert.match(js, /if \(routeParams\.get\("install"\) === "1"\) setTimeout\(showFunInstallGuide, 350\)/);
   assert.match(funWorker, /IS_WALLET_WORKER/);
   assert.match(funWorker, /slimewallet-v26/);
   assert.match(JSON.stringify(walletManifest.icons), /slimewallet-icon-512\.png/);

@@ -22,9 +22,13 @@
 /launch-coin    /#launch               302
 /quick          /fun.html              200
 /quick/*        /fun.html              200
-/wallet         /wallet/               302
-/wallet/*       /fun.html              200
-/wallet.html    /fun.html              200
+# SlimeWallet installs from the branded app origin so it keeps its own PWA
+# identity and never gets canonicalized to /fun by Pages' pretty-URL handling.
+# ?install=1 opens the install guide after the focused wallet shell renders.
+/wallet         https://app.slimewire.org/wallet/?install=1  302
+/wallet/        https://app.slimewire.org/wallet/?install=1  302
+/wallet/*       https://app.slimewire.org/wallet/?install=1  302
+/wallet.html    https://app.slimewire.org/wallet/?install=1  302
 # SlimeCash installable PWA lives in its own /cash/ folder (own manifest + service
 # worker scope so it installs as a separate app). Assets under /cash/* are real
 # files and serve directly — only the bare path needs the shell rewrite.
