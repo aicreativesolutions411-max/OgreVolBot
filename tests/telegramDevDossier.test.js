@@ -18,10 +18,22 @@ test("Telegram exposes a paged source-backed developer dossier", () => {
 });
 
 test("developer dossier combines creator launches, tracked outcomes, and market history", () => {
+  assert.match(source, /getSolanaTrackerDeployerLaunches\(wallet, \{ limit: 100/);
+  assert.match(source, /\/deployer\/\$\{encodeURIComponent\(wallet\)\}/);
+  assert.match(source, /Array\.isArray\(payload\?\.tokens\)/);
   assert.match(source, /getPumpFunCreatorLaunches\(wallet, \{ limit: 50/);
+  assert.match(source, /coins-v2\/user-created-coins/);
   assert.match(source, /deployerWarehouse\.get\(wallet\)/);
+  assert.match(source, /readPostgresDevLaunchHistory\(wallet, 100\)/);
+  assert.match(source, /from dev_wallet_candidates/);
+  assert.match(source, /from dev_wallet_events/);
+  assert.match(source, /from processed_transactions/);
   assert.match(source, /readPostgresDevLaunchMarketHistory/);
   assert.match(source, /from pair_snapshots/);
+  assert.match(source, /recordsRecovered: launches\.length/);
+  assert.match(source, /Prior coin records available/);
+  assert.match(source, /Active markets now/);
+  assert.match(source, /Low markets now/);
   assert.match(source, /Sold &gt;50% in 15m/);
   assert.match(source, /Typical first dev sell/);
   assert.match(source, /Best tracked market cap/);
