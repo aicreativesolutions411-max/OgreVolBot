@@ -142,10 +142,15 @@ test("Robinhood chart keeps one market-cap scale after Dex stats land", () => {
   assert.match(chartLabSource, /applyStats\(s,true,true\)/);
 });
 
-test("native chart API uses Solana Tracker primary with swap-api fallback", () => {
+test("native chart API keeps Solana Tracker primary while Telegram Pump scans prefer the free candle feed", () => {
   const body = functionBody(serverSource, "buildChartData");
+  const telegramSnapshot = functionBody(serverSource, "tokenChartSnapshot");
   assert.match(body, /requestedPoolCandidate !== String\(mint \|\| ""\)\.trim\(\)/);
+  assert.match(telegramSnapshot, /buildChartData\(mint, tf, \{ preferPumpFirst: true \}\)/);
+  assert.match(body, /options\.preferPumpFirst && pumpEligible/);
+  assert.match(body, /pumpCandles\.length >= 8/);
   assert.match(body, /solanaTrackerJson\(`\/chart\/\$\{mint\}\?type=\$\{encodeURIComponent\(tf\)\}&currency=usd`/);
+  assert.match(body, /if \(!candles\.length && CONFIG\.solanaTrackerApiKey\)/);
   assert.match(body, /Array\.isArray\(st\.oclhv\)/);
   assert.match(body, /swap-api\.pump\.fun\/v1\/coins\/\$\{mint\}\/candles/);
   assert.match(body, /swap-api\.pump\.fun\/v2\/coins\/\$\{mint\}\/trades/);
