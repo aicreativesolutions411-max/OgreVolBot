@@ -30,7 +30,7 @@ function evaluateLiteralTextFunction(name) {
 
 test("Telegram registers the first-use commands in DM and groups", () => {
   const commands = functionBody(serverSource, "registerTelegramBotCommands");
-  for (const command of ["menu", "help", "buy", "buybot", "raidbot", "raid", "next"]) {
+  for (const command of ["menu", "help", "buy", "buybot", "raidbot", "raid", "next", "verifyoff"]) {
     assert.match(commands, new RegExp(`command: "${command}"`));
   }
   assert.match(commands, /groupCommands\.filter\(\(item\) => item\.command !== "s"\)/);

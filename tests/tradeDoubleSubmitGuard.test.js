@@ -2551,12 +2551,32 @@ test("whales / web verify gate new members (mute until verified)", () => {
   assert.match(serverSource, /function webverifyConfig\(/);
   assert.match(serverSource, /function groupNeedsWebVerify\(/);
   assert.match(serverSource, /async function postWebVerifyGate\(/);
-  assert.match(functionBody(serverSource, "postWebVerifyGate"), /restrictChatMember.*ROSE_MUTE_PERMS/);
+  const gate = functionBody(serverSource, "postWebVerifyGate");
+  assert.match(gate, /restrictChatMember.*ROSE_MUTE_PERMS/);
+  assert.match(gate, /hydrateGroupWhalesConfig/);
+  assert.match(gate, /Math\.max\(1, Number\(w\.minHold\) \|\| 1\)/);
+  assert.doesNotMatch(gate, /\$\{w\.symbol \|\| "token"\}/);
   // gate is wired into the join loop
   assert.match(functionBody(serverSource, "handleGroupRose"), /groupNeedsWebVerify\(entry\)/);
   // banned-fingerprint alt block
   assert.match(functionBody(serverSource, "handleTgVerifySubmit"), /bannedFps/);
   assert.match(serverSource, /async function shieldRecordBannedFp\(/);
+});
+
+test("entry verification has a complete admin off switch and releases muted members", () => {
+  const menu = functionBody(serverSource, "groupBotModuleView");
+  assert.match(menu, /Turn OFF all entry verification/);
+  assert.match(menu, /Token hold gate/);
+  const disable = functionBody(serverSource, "disableGroupEntryVerification");
+  assert.match(disable, /webverifyConfig\(entry\), on: false/);
+  assert.match(disable, /whalesConfig\(entry\), on: false/);
+  assert.match(disable, /releaseGroupVerifyPending/);
+  const release = functionBody(serverSource, "releaseGroupVerifyPending");
+  assert.match(release, /ROSE_UNMUTE_PERMS/);
+  assert.match(release, /clearWebVerifyPending/);
+  const commands = functionBody(serverSource, "handleGroupBotCommand");
+  assert.match(commands, /\/verifyoff/);
+  assert.match(commands, /disableGroupEntryVerification\(chatId\)/);
 });
 
 test("referral contests: unique invite links + join attribution + leaderboard", () => {
@@ -2599,6 +2619,7 @@ test("phase-2 menu: Referral tile + whales/web-verify toggles routed", () => {
   assert.match(cb, /gb:m:\(buy\|raid\|rose\|scan\|ref\)/);
   assert.match(cb, /gb:wv:web/);
   assert.match(cb, /gb:wv:whales/);
+  assert.match(cb, /gb:wv:off/);
   assert.match(cb, /gb:ref:start/);
   assert.match(cb, /gb:ref:stop/);
 });
