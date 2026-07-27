@@ -30,7 +30,7 @@ function evaluateLiteralTextFunction(name) {
 
 test("Telegram registers the first-use commands in DM and groups", () => {
   const commands = functionBody(serverSource, "registerTelegramBotCommands");
-  for (const command of ["menu", "help", "buy", "raid", "next"]) {
+  for (const command of ["menu", "help", "buy", "buybot", "raidbot", "raid", "next"]) {
     assert.match(commands, new RegExp(`command: "${command}"`));
   }
   assert.match(commands, /groupCommands\.filter\(\(item\) => item\.command !== "s"\)/);
@@ -88,4 +88,46 @@ test("DM Quick Buy posts controls before requesting slow market metadata", () =>
   assert.match(panel, /void alphaRadarFetchMc/);
   assert.doesNotMatch(panel, /await alphaRadarFetchMc/);
   assert.match(functionBody(serverSource, "dmBuyPanelText"), /Loading live market details/);
+});
+
+test("Buy Bot and Raid Bot shortcuts open their settings submenus directly", () => {
+  const handler = functionBody(serverSource, "handleGroupBotCommand");
+  assert.match(handler, /buybot\|raidbot\|raid/);
+  assert.match(handler, /requestedCmd === "raidbot" \? "raid"/);
+  assert.match(handler, /groupBotModuleView\(module, await getGroupBotEntry\(chatId\)\)/);
+  assert.match(handler, /requestedCmd === "raid" && !arg/);
+});
+
+test("managed exits value and sell only the tokens acquired by that plan", () => {
+  const scopedSellAmount = Function(
+    "currentRawAmount",
+    "percent",
+    "baseRawAmount",
+    functionBody(serverSource, "sellAmountForPercent")
+  );
+  assert.equal(scopedSellAmount(5_000n, 100, 1_000n), 1_000n);
+  assert.equal(scopedSellAmount(500n, 100, 1_000n), 500n);
+  assert.equal(scopedSellAmount(5_000n, 50, 1_000n), 500n);
+  assert.match(functionBody(serverSource, "sellTradePlanWalletWithRetriesUnlocked"), /exactTokenUiAmount/);
+  const evaluator = functionBody(serverSource, "evaluatePlanWalletPriceExit");
+  assert.doesNotMatch(evaluator, /moves\.push\([\s\S]*marketMovePct/);
+  assert.match(evaluator, /awaiting a second executable quote/);
+});
+
+test("Telegram quick trades acknowledge immediately and scan wallets concurrently", () => {
+  const buy = functionBody(serverSource, "handleQuickBuyCallback");
+  assert.ok(buy.indexOf("await ack(`⚡ Buying") < buy.indexOf("await tgExecuteQuickBuy("));
+  const sell = functionBody(serverSource, "handleQuickSellCallback");
+  assert.ok(sell.indexOf("await ack(`🔴 Selling") < sell.indexOf("await tgExecuteQuickSell("));
+  assert.match(functionBody(serverSource, "tgExecuteQuickSell"), /runWithConcurrency\(wallets/);
+  assert.match(functionBody(serverSource, "tgExecuteQuickSell"), /runWithConcurrency\(holders/);
+});
+
+test("Telegram positions resolve token names and holdings without blocking on live quotes", () => {
+  const view = functionBody(serverSource, "showPositionsOverview");
+  assert.match(view, /buildPositionsOverview\(userId, \{ fast: true, priority: true \}\)/);
+  assert.match(view, /tokenMetadataMapForMints/);
+  assert.match(view, /identity\.symbol/);
+  assert.match(view, /holdings:/);
+  assert.match(functionBody(serverSource, "buildPositionsOverview"), /getTimedCache\(positionValueCache/);
 });

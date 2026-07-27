@@ -2200,7 +2200,7 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   assert.match(tweetParser, /fxtwitter\|vxtwitter\|fixupx/);
   assert.match(tweetParser, /status\\\/\(\\d\+\)/);
   const groupCommand = functionBody(serverSource, "handleGroupBotCommand");
-  assert.match(groupCommand, /cmd === "raid" && !arg/);
+  assert.match(groupCommand, /requestedCmd === "raid" && !arg/);
   const messageHandler = functionBody(serverSource, "handleMessage");
   assert.match(messageHandler, /setGroupBotFeature\(chatId, "raid", true\)/);
   const channelHandler = functionBody(serverSource, "handleChannelPostCommands");
@@ -2263,8 +2263,9 @@ test("settings menu is multi-level: home -> per-bot sub-menus, clickable toggles
   assert.match(serverSource, /function groupBotModuleView\(/);
   assert.match(serverSource, /async function groupBotRenderModule\(/);
   const command = functionBody(serverSource, "handleGroupBotCommand");
-  assert.match(command, /\(s\|settings\|buybot\|raid\|rose\|scan\)/); // /s opens group settings too
-  assert.match(command, /m\[1\]\.toLowerCase\(\) === "s" \? "settings"/);
+  assert.match(command, /\(s\|settings\|buybot\|raidbot\|raid\|rose\|scan\)/); // /s opens group settings too
+  assert.match(command, /requestedCmd === "s" \? "settings"/);
+  assert.match(command, /requestedCmd === "raidbot" \? "raid"/);
   assert.match(command, /group-settings-command:\$\{message\.message_id\}/); // one menu per Telegram update
   const cb = functionBody(serverSource, "handleGroupBotCallback");
   assert.match(cb, /gb:m:\(buy\|raid\|rose\|scan/);   // open a module sub-menu
