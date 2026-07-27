@@ -1199,6 +1199,10 @@ test("wallet manager batch-funds exact allocations and can sell or consolidate s
   assert.match(cashHtml, /id="multiFundsSellSweepBtn"[^>]*>Sell tokens \+ sweep</);
   assert.match(cash, /mode === "sell"/);
   assert.match(cash, /\/api\/web\/wallets\/sell-all-tokens/);
+  assert.match(html, /data-wallet-consolidate-entry>[\s\S]*Sell all &amp; sweep/);
+  assert.match(js, /data-wallet-consolidate-from-bundle/);
+  assert.match(js, /openWalletManager\(\{ consolidate: true, selectedIndexes \}\)/);
+  assert.match(js, /Sell all tokens \+ sweep SOL/);
 });
 
 test("wallet manager shows SOL, priced coin positions, and total value for every wallet", () => {
