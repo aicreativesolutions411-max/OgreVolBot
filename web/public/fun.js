@@ -102,6 +102,7 @@
     walletSwapSide: "buy",
     walletSwapPickerRole: "receive",
     walletSwapSelecting: false,
+    pendingMultiWalletSelecting: false,
     walletSwapAnimate: false,
     pendingSolSend: null,
     pendingTokenSend: null,
@@ -1315,6 +1316,7 @@
     const chain = chainHint === "rh" || isRh(targetKey) ? "robinhood" : "solana";
     const walletMode = IS_WALLET_ROUTE;
     const walletSwap = walletMode && Boolean(options.walletSwap);
+    const multiWallet = Boolean(options.multiWallet);
     const coin = [...state.rows, ...state.searchRows].find((row) => coinKey(row).toLowerCase() === targetLower) || { address: targetKey, tokenMint: targetKey, chain };
     state.selected = coin;
     state.selectedDetail = null;
@@ -1325,13 +1327,14 @@
     addRecent(coin);
     const isCurrent = () => requestVersion === state.coinRequestVersion && coinKey(state.selected).toLowerCase() === targetLower;
     const quick = Boolean(options.quick || IS_QUICK_ROUTE);
-    setView(quick ? "quick" : (walletSwap ? "wallet-swap" : (walletMode ? "wallet-asset" : "coin")), { hideNav: quick });
-    if (quick) renderQuickRoute(); else if (!walletMode) renderCoinShell();
-    if (!walletMode) history.replaceState(null, "", quick ? `/quick?ca=${encodeURIComponent(targetKey)}` : `#coin/${encodeURIComponent(targetKey)}`);
+    if (!multiWallet) setView(quick ? "quick" : (walletSwap ? "wallet-swap" : (walletMode ? "wallet-asset" : "coin")), { hideNav: quick });
+    if (quick) renderQuickRoute(); else if (!walletMode && !multiWallet) renderCoinShell();
+    if (!walletMode && !multiWallet) history.replaceState(null, "", quick ? `/quick?ca=${encodeURIComponent(targetKey)}` : `#coin/${encodeURIComponent(targetKey)}`);
 
     const paintSelected = () => {
       if (!isCurrent()) return;
       addRecent(state.selected);
+      if (multiWallet) return;
       if (quick) renderQuickRoute();
       else if (walletSwap) renderWalletSwap();
       else if (walletMode) refreshWalletAssetMarketUi();
@@ -1388,10 +1391,11 @@
       if (!dexMarket) return;
       applySelected({ imageUrl: dexMarket.img || "", symbol: dexMarket.symbol || "", name: dexMarket.name || "", pairAddress: dexMarket.pairAddress || "" }, dexMarket);
     });
-    await Promise.allSettled([searchTask, detailTask, dexTask]);
+    const multiWalletTask = multiWallet ? openMultiWalletSheet() : Promise.resolve();
+    await Promise.allSettled([searchTask, detailTask, dexTask, multiWalletTask]);
     if (!isCurrent()) return;
     if (walletMode) refreshWalletAssetMarketUi();
-    else if (!state.selectedDetail && !quick) renderDetailPanel();
+    else if (!multiWallet && !state.selectedDetail && !quick) renderDetailPanel();
   }
 
   function quickSafetyLabel(coin = {}) {
@@ -1913,6 +1917,7 @@
     panel.innerHTML = `<header class="wallet-screen-head asset"><button type="button" data-wallet-route-back aria-label="Back">←</button><div><img data-wallet-asset-image src="${escapeHtml(coinImage(coin))}" alt=""><span><h1 data-wallet-asset-symbol>${escapeHtml(coin.symbol || short(key))}</h1><small data-wallet-asset-name>${escapeHtml(coin.name || (coin.chain === "robinhood" ? "Robinhood Chain" : "Solana"))}</small></span></div><button type="button" data-copy-coin aria-label="Copy contract">⧉</button></header>
       <section class="wallet-asset-balance"><span data-wallet-asset-value>${loading ? "Loading…" : (valueUsd == null ? "$0.00" : formatWalletUsd(valueUsd))}</span><h2 data-wallet-asset-quantity>${quantity == null ? "No holding yet" : `${escapeHtml(formatTokenQuantity(quantity))} ${escapeHtml(coin.symbol || "tokens")}`}</h2><p data-wallet-asset-pnl class="${pnlClass}">${pnl == null ? "Live market details" : `${escapeHtml(formatPct(pnl))} open PnL`}</p></section>
       <div class="wallet-asset-actions"><button type="button" data-open-trade="buy"><i>＋</i><b>Buy</b></button><button type="button" data-open-trade="sell" ${quantity > 0 ? "" : "disabled"}><i>−</i><b>Sell</b></button><button type="button" data-wallet-swap><i>⇄</i><b>Swap</b></button><button type="button" ${sendAttrs} data-fun-send-wallet-index="${wallet?.index || ""}" data-fun-send-wallet="${escapeHtml(wallet?.publicKey || "")}" data-fun-send-wallet-label="${escapeHtml(wallet?.label || "Wallet")}" data-fun-send-symbol="${escapeHtml(coin.symbol || short(key))}" data-fun-send-balance="${escapeHtml(String(quantity || 0))}" ${quantity > 0 ? "" : "disabled"}><i>↗</i><b>Send</b></button></div>
+      <button class="wallet-asset-multi" type="button" data-multi-wallet-entry><span>▦</span><b>Bundle this coin<small>Choose wallets, amounts, buy or sell</small></b><i>›</i></button>
       <section class="wallet-market-cards"><div><span>Price</span><b data-wallet-market="price">${escapeHtml(formatUsd(priceUsd))}</b></div><div><span>Market cap</span><b data-wallet-market="marketCap">${escapeHtml(formatUsd(marketCap))}</b></div><div><span>24h volume</span><b data-wallet-market="volume">${escapeHtml(formatUsd(volume))}</b></div><div><span>Liquidity</span><b data-wallet-market="liquidity">${escapeHtml(formatUsd(liquidity))}</b></div></section>
       <section class="wallet-inline-chart"><div class="wallet-chart-tabs"><b>Live chart</b><span>15m</span></div>${chart ? `<iframe src="${escapeHtml(chart)}" title="${escapeHtml(coin.symbol || "Coin")} live chart" loading="lazy"></iframe>` : ""}<button type="button" data-wallet-expand-chart>Expand chart inside wallet <i>›</i></button></section>
       <section class="wallet-auto-exits"><div><span>Auto exits</span><h3 data-wallet-auto-state>${holding ? "Server protection" : "Set after buying"}</h3></div><div><small>Take profit</small><b data-wallet-auto-tp>${holding?.takeProfitPct ? `+${escapeHtml(holding.takeProfitPct)}%` : "Off"}</b></div><div><small>Stop loss</small><b data-wallet-auto-sl class="down">${holding?.stopLossPct ? `-${escapeHtml(holding.stopLossPct)}%` : "Off"}</b></div><button type="button" data-open-trade="buy">Edit</button></section>
@@ -2414,10 +2419,13 @@
     }
   }
 
-  function openSearch() {
-    const overlay = $("[data-search-overlay]"), input = $("[data-search-input]"); overlay.hidden = false; renderSearchHome(); setTimeout(() => input.focus(), 30);
+  function openSearch(options = {}) {
+    const overlay = $("[data-search-overlay]"), input = $("[data-search-input]");
+    state.pendingMultiWalletSelecting = Boolean(options.multiWallet);
+    input.placeholder = state.pendingMultiWalletSelecting ? "Paste CA or search coin for multi-wallet trade" : "Search ticker, name, Solana or 0x CA";
+    overlay.hidden = false; renderSearchHome(); setTimeout(() => input.focus(), 30);
   }
-  function closeSearch() { state.searchRequestVersion += 1; $("[data-search-overlay]").hidden = true; $("[data-search-input]").value = ""; }
+  function closeSearch() { state.searchRequestVersion += 1; state.pendingMultiWalletSelecting = false; $("[data-search-overlay]").hidden = true; const input = $("[data-search-input]"); input.value = ""; input.placeholder = "Search ticker, name, Solana or 0x CA"; }
   function renderSearchHome(refreshLive = true) {
     const content = $("[data-search-content]");
     // Big names doing well: the highest-liquidity coins from the live feed, one tap to open.
@@ -3903,6 +3911,27 @@
     syncMultiWalletSheet();
   }
 
+  async function openMultiWalletEntry() {
+    if (!(await ensureAccount())) {
+      openFunAccount("create");
+      toast("Create or log in to use bundle trading.");
+      return;
+    }
+    await loadWallets();
+    if (!state.wallets.length) {
+      await openWalletManager();
+      toast("Add or restore a wallet first.", true);
+      return;
+    }
+    if (state.view === "wallet-asset" && coinKey(state.selected)) {
+      await openMultiWalletSheet();
+      return;
+    }
+    closeSheet();
+    openSearch({ multiWallet: true });
+    toast("Choose a coin, then select the wallets and amounts.");
+  }
+
   function syncMultiWalletSheet() {
     const side = String($('[data-multi-side]')?.value || "buy"), custom = $('[data-multi-allocation]')?.value === "custom";
     $$('[data-multi-amount]').forEach((input) => { input.hidden = !custom || side !== "buy"; });
@@ -4213,6 +4242,7 @@
     }
     const walletRouteTab = event.target.closest("[data-wallet-route-tab]"); if (walletRouteTab) { closeSearch(); closeSheet(); state.profileTab = walletRouteTab.dataset.walletRouteTab || "positions"; $$('[data-profile]').forEach((button) => button.classList.toggle("active", button.dataset.profile === state.profileTab)); setView("wallet"); return; }
     if (event.target.closest("[data-wallet-route-back]")) { closeSearch(); closeSheet(); setView("wallet"); return; }
+    if (event.target.closest("[data-multi-wallet-entry]")) { await openMultiWalletEntry(); return; }
     if (event.target.closest("[data-wallet-swap]")) { closeSearch(); closeSheet(); setView("wallet-swap"); return; }
     if (event.target.closest("[data-wallet-open-terminal]")) { state.walletSwapSelecting = false; openSearch(); return; }
     if (event.target.closest("[data-wallet-pick-token]")) { openWalletSwapAssetPicker("receive"); return; }
@@ -4284,7 +4314,7 @@
     if (event.target.closest("[data-refresh-pump-rewards]")) { await loadPumpRewardsForActiveWallet({ force: true }); return; }
     const claimReward = event.target.closest("[data-claim-pump-reward]"); if (claimReward) { await claimPumpReward(claimReward); return; }
     const claimCreatorFees = event.target.closest("[data-claim-creator-fees]"); if (claimCreatorFees) { await claimFunCreatorFees(claimCreatorFees); return; }
-    const coinButton = event.target.closest("[data-open-coin]"); if (coinButton) { const selectingSwap = IS_WALLET_ROUTE && (state.walletSwapSelecting || state.view === "wallet-swap"); if (selectingSwap) state.walletSwapSide = (state.walletSwapPickerRole || "receive") === "pay" ? "sell" : "buy"; state.walletSwapSelecting = false; closeSearch(); closeSheet(); await openCoin(coinButton.dataset.openCoin, coinButton.dataset.chainKind, { walletSwap: selectingSwap }); return; }
+    const coinButton = event.target.closest("[data-open-coin]"); if (coinButton) { const selectingSwap = IS_WALLET_ROUTE && (state.walletSwapSelecting || state.view === "wallet-swap"), selectingMultiWallet = state.pendingMultiWalletSelecting; if (selectingSwap) state.walletSwapSide = (state.walletSwapPickerRole || "receive") === "pay" ? "sell" : "buy"; state.walletSwapSelecting = false; state.pendingMultiWalletSelecting = false; closeSearch(); closeSheet(); await openCoin(coinButton.dataset.openCoin, coinButton.dataset.chainKind, { walletSwap: selectingSwap, multiWallet: selectingMultiWallet }); return; }
     const chainButton = event.target.closest("[data-chain]"); if (chainButton) { state.chain = chainButton.dataset.chain; $$("[data-chain]").forEach((button) => button.classList.toggle("active", button.dataset.chain === state.chain)); loadFeed(true); return; }
     const feedButton = event.target.closest("[data-feed]"); if (feedButton) { state.feed = feedButton.dataset.feed; $$("[data-feed]").forEach((button) => button.classList.toggle("active", button === feedButton)); loadFeed(); return; }
     const leaderTab = event.target.closest("[data-leader-tab]"); if (leaderTab) { state.leaderTab = leaderTab.dataset.leaderTab || "top"; state.traderSearch = ""; const input = $("[data-trader-search]"); if (input) input.value = ""; syncLeaderTabs(); await loadLeaders(); return; }

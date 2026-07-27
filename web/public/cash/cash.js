@@ -3270,6 +3270,7 @@
   $("positionsRefreshBtn").addEventListener("click", () => loadCashPositions({ force: true }));
   $("multiWalletOpenBtn").addEventListener("click", () => openCashMultiTrade());
   $("multiFundsOpenBtn").addEventListener("click", openCashMultiFunds);
+  $("cashWalletMultiTradeBtn").addEventListener("click", () => { closeSheet("wallets"); openCashMultiTrade(); });
   $("cashWalletMoveFundsBtn").addEventListener("click", () => { closeSheet("wallets"); openCashMultiFunds(); });
   $("buyCoinOpenBtn").addEventListener("click", () => openCoinBuy());
   $("coinBuyGoBtn").addEventListener("click", runCashCoinBuy);

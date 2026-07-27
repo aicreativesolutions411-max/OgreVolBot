@@ -6,7 +6,7 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="35">
+<meta name="slimecash-build" content="37">
 <link rel="manifest" href="/cash/manifest.webmanifest?v=11">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
@@ -20,7 +20,7 @@
 <link rel="preconnect" href="https://app.slimewire.org" crossorigin>
 <link rel="dns-prefetch" href="//app.slimewire.org">
 <link rel="preconnect" href="https://api.dexscreener.com" crossorigin>
-<link rel="stylesheet" href="/cash/cash.css?v=36">
+<link rel="stylesheet" href="/cash/cash.css?v=37">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -561,6 +561,7 @@
     <div id="cashWalletList" class="cash-wallet-list"></div>
     <div class="cash-wallet-actions">
       <button id="addCashWalletBtn" class="btn primary" type="button">Add wallet</button>
+      <button id="cashWalletMultiTradeBtn" class="btn ghost" type="button">Bundle / multi-wallet</button>
       <button id="cashWalletMoveFundsBtn" class="btn ghost" type="button">Move funds</button>
       <button id="backupCashWalletsBtn" class="btn ghost" type="button">Back up all wallets</button>
     </div>
@@ -579,6 +580,6 @@
 <div id="toast" class="toast" hidden></div>
 <script src="/config.js"></script>
 <script src="/slimewire-funding.js?v=8"></script>
-<script src="/cash/cash.js?v=36"></script>
+<script src="/cash/cash.js?v=37"></script>
 </body>
 </html>
