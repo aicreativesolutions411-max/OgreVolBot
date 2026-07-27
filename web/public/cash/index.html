@@ -20,7 +20,7 @@
 <link rel="preconnect" href="https://app.slimewire.org" crossorigin>
 <link rel="dns-prefetch" href="//app.slimewire.org">
 <link rel="preconnect" href="https://api.dexscreener.com" crossorigin>
-<link rel="stylesheet" href="/cash/cash.css?v=35">
+<link rel="stylesheet" href="/cash/cash.css?v=36">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -111,7 +111,7 @@
   <section id="view-trade" class="view" hidden>
     <div class="view-title-row">
       <div><div class="section-title">Coin positions</div><div class="trade-view-copy">Every managed wallet, with the wallet that actually holds each bag.</div></div>
-      <div class="view-title-actions"><button id="buyCoinOpenBtn" class="mini-primary" type="button">Buy coin</button><button id="positionsRefreshBtn" class="text-action" type="button">Refresh</button></div>
+      <div class="view-title-actions"><button id="multiWalletOpenBtn" class="mini-primary" type="button">Multi-wallet</button><button id="multiFundsOpenBtn" class="mini-primary" type="button">Move funds</button><button id="buyCoinOpenBtn" class="mini-primary" type="button">Buy coin</button><button id="positionsRefreshBtn" class="text-action" type="button">Refresh</button></div>
     </div>
     <div id="cashPositionsStatus" class="status"></div>
     <section id="portfolioCreatorRewardsCard" class="cash-pump-rewards cash-creator-portfolio" data-cash-pump-rewards data-cash-creator-only hidden aria-live="polite"></section>
@@ -488,6 +488,53 @@
   </div>
 </div>
 
+<!-- MULTI-WALLET COIN TRADE -->
+<div id="multitrade" class="sheet-backdrop" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="multiTradeTitle">
+    <button class="sheet-close" data-close="multitrade" type="button" aria-label="Close">Ã—</button>
+    <div id="multiTradeTitle" class="sheet-title">Multi-wallet trade</div>
+    <p class="sheet-copy">Use a saved preset, the same size for every wallet, or a different size for each wallet.</p>
+    <label class="field-label" for="multiTradeToken">Coin contract address</label>
+    <input id="multiTradeToken" class="field" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Solana CA or Robinhood 0xâ€¦">
+    <div class="multi-trade-grid"><label><span>Action</span><select id="multiTradeSide" class="field"><option value="buy">Buy selected</option><option value="sell">Sell selected</option></select></label><label><span>Preset</span><select id="multiTradePreset" class="field"><option value="">Manual setup</option></select></label></div>
+    <label class="field-label" for="multiTradePattern">Wallet pattern</label>
+    <select id="multiTradePattern" class="field"><option value="same">Same for every wallet</option><option value="custom">Different per wallet</option></select>
+    <div id="multiTradeSame" class="multi-trade-grid"><label><span>Buy SOL each</span><input id="multiTradeAmount" class="field" type="number" min="0" step="any" value="0.1"></label><label><span>Sell % each</span><input id="multiTradePercent" class="field" type="number" min="1" max="100" value="100"></label></div>
+    <details class="cash-details" open><summary>Wallets & custom sizes</summary><div id="multiTradeWallets" class="multi-wallet-list"></div></details>
+    <details class="cash-details"><summary>Save or update the pattern</summary><input id="multiTradePresetName" class="field" placeholder="Preset name"><div class="multi-trade-grid"><label><span>TP %</span><input id="multiTradeTp" class="field" value="25"></label><label><span>Stop %</span><input id="multiTradeSl" class="field" value="8"></label></div><button id="multiTradeSavePreset" class="btn ghost block" type="button">Save preset</button></details>
+    <button id="multiTradeGoBtn" class="btn primary block" type="button">Review bundle buy</button>
+    <div id="multiTradeStatus" class="status">No trade is sent until you review and confirm.</div>
+  </div>
+</div>
+
+<!-- MULTI-WALLET FUNDING & SWEEP -->
+<div id="multifunds" class="sheet-backdrop" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="multiFundsTitle">
+    <button class="sheet-close" data-close="multifunds" type="button" aria-label="Close">Ã—</button>
+    <div id="multiFundsTitle" class="sheet-title">Move wallet funds</div>
+    <p class="sheet-copy">Fund several wallets in one transaction, or consolidate coins and SOL into one wallet.</p>
+    <details class="cash-details" open>
+      <summary>Fund selected wallets</summary>
+      <label class="field-label" for="multiFundsSource">Fund from</label>
+      <select id="multiFundsSource" class="field"></select>
+      <label class="field-label" for="multiFundsPattern">Amounts</label>
+      <select id="multiFundsPattern" class="field"><option value="same">Same amount each</option><option value="custom">Different per wallet</option></select>
+      <label id="multiFundsSameWrap"><span class="field-label">SOL per wallet</span><input id="multiFundsSameAmount" class="field" type="number" min="0.001" step="any" value="0.1"></label>
+      <div id="multiFundsWallets" class="multi-wallet-list"></div>
+      <button id="multiFundsFundBtn" class="btn primary block" type="button">Review wallet funding</button>
+    </details>
+    <details class="cash-details">
+      <summary>Sell &amp; consolidate</summary>
+      <label class="field-label" for="multiFundsDestination">Send everything to</label>
+      <select id="multiFundsDestination" class="field"></select>
+      <input id="multiFundsCustomDestination" class="field" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Paste outside Solana wallet" hidden>
+      <div class="multi-funds-actions"><button id="multiFundsSweepBtn" class="btn ghost" type="button">Sweep SOL</button><button id="multiFundsSellSweepBtn" class="btn primary" type="button">Sell all tokens + sweep</button></div>
+      <p class="fineprint">Only checked wallets are used. Unsellable tokens stay put and are reported; transferable SOL still sweeps.</p>
+    </details>
+    <div id="multiFundsStatus" class="status">Nothing moves until you confirm.</div>
+  </div>
+</div>
+
 <!-- INVITE & EARN SHEET -->
 <div id="invite" class="sheet-backdrop" hidden>
   <div class="sheet">
@@ -514,6 +561,7 @@
     <div id="cashWalletList" class="cash-wallet-list"></div>
     <div class="cash-wallet-actions">
       <button id="addCashWalletBtn" class="btn primary" type="button">Add wallet</button>
+      <button id="cashWalletMoveFundsBtn" class="btn ghost" type="button">Move funds</button>
       <button id="backupCashWalletsBtn" class="btn ghost" type="button">Back up all wallets</button>
     </div>
     <div class="wallet-import-box">
@@ -531,6 +579,6 @@
 <div id="toast" class="toast" hidden></div>
 <script src="/config.js"></script>
 <script src="/slimewire-funding.js?v=8"></script>
-<script src="/cash/cash.js?v=35"></script>
+<script src="/cash/cash.js?v=36"></script>
 </body>
 </html>

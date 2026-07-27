@@ -10330,3 +10330,4 @@ body {
   [data-app][data-route="terminal"] .topbar { top: calc(env(safe-area-inset-top, 0px) + 10px); }
   .command-title { top: calc(env(safe-area-inset-top, 0px) + 76px); }
 }
+.wallet-pattern-list{display:grid;gap:7px;margin-top:10px}.wallet-pattern-row{display:grid;grid-template-columns:minmax(120px,1fr) minmax(90px,.7fr) minmax(80px,.6fr);align-items:end;gap:8px;padding:8px;border:1px solid var(--border);border-radius:10px;background:rgba(6,12,7,.65)}.wallet-pattern-row>span{align-self:center;font-size:12px;font-weight:800}.wallet-pattern-row label{margin:0;font-size:9px}.wallet-pattern-row input{width:100%;margin-top:3px}

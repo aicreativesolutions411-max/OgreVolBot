@@ -9018,6 +9018,10 @@ function bundleHtml() {
           ${walletChecksHtml("bundle")}
         </div>
         ${walletGroupHtml("bundle")}
+        <label>Wallet pattern
+          <select data-bundle-allocation><option value="same">Same for every wallet</option><option value="custom">Different per wallet</option></select>
+        </label>
+        <details><summary>Per-wallet buy / sell sizes</summary>${bundlePatternRowsHtml("bundle")}</details>
         <div class="volume-grid">
           <label>
             Buy Per Wallet
@@ -9166,6 +9170,14 @@ function walletChecksHtml(prefix, selectedIndexes = null) {
       <code>${escapeHtml(wallet.shortPublicKey || wallet.publicKey)}</code>
     </label>
   `).join("");
+}
+
+function bundlePatternRowsHtml(prefix, preset = {}) {
+  const byIndex = new Map((preset.walletConfigs || []).map((row) => [Number(row.walletIndex), row]));
+  return `<div class="wallet-pattern-list">${displayWallets().map((wallet) => {
+    const row = byIndex.get(Number(wallet.index)) || {};
+    return `<div class="wallet-pattern-row"><span>${wallet.index}. ${escapeHtml(wallet.label || "Wallet")}</span><label>Buy SOL<input data-${prefix}-wallet-amount="${wallet.index}" type="number" min="0" step="0.01" value="${escapeHtml(row.amountSol || preset.amountSol || "0.1")}"></label><label>Sell %<input data-${prefix}-wallet-percent="${wallet.index}" type="number" min="1" max="100" value="${escapeHtml(row.sellPercent || preset.sellPercent || "100")}"></label></div>`;
+  }).join("")}</div>`;
 }
 
 function walletGroupHtml(prefix, value = "") {
@@ -9430,6 +9442,8 @@ function bundlePresetManagerHtml() {
       <label>Name <input data-bundle-preset-name type="text" placeholder="Six wallet send" value="${escapeHtml(preset?.name || "")}"></label>
       <div class="wallet-checks preset-wallets">${walletChecksHtml("bundle-preset", preset?.walletIndexes || null)}</div>
       ${walletGroupHtml("bundle-preset", preset?.walletGroup || "")}
+      <label>Wallet pattern <select data-bundle-preset-allocation><option value="same" ${preset?.allocationMode !== "custom" ? "selected" : ""}>Same for every wallet</option><option value="custom" ${preset?.allocationMode === "custom" ? "selected" : ""}>Different per wallet</option></select></label>
+      <details ${preset?.allocationMode === "custom" ? "open" : ""}><summary>Per-wallet buy / sell sizes</summary>${bundlePatternRowsHtml("bundle-preset", preset || {})}</details>
       <div class="volume-grid compact-grid">
         <label>Buy SOL <input data-bundle-preset-amount type="number" min="0" step="0.01" value="${escapeHtml(preset?.amountSol || "0.1")}"></label>
         <label>Take Profit <input data-bundle-preset-tp type="text" value="${escapeHtml(preset?.takeProfitPct || "60")}"></label>
@@ -15202,7 +15216,13 @@ function readBundleForm() {
   if (!tokenMint) throw new Error("Paste a token CA first.");
   if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
   state.bundleToken = tokenMint;
-  return { tokenMint, walletIndexes, walletGroup, amountSol, percent, slippageBps };
+  const allocationMode = $("[data-bundle-allocation]")?.value === "custom" ? "custom" : "same";
+  const walletConfigs = walletIndexes.map((walletIndex) => ({
+    walletIndex: Number(walletIndex),
+    amountSol: allocationMode === "custom" ? $(`[data-bundle-wallet-amount="${walletIndex}"]`)?.value || amountSol : amountSol,
+    sellPercent: allocationMode === "custom" ? $(`[data-bundle-wallet-percent="${walletIndex}"]`)?.value || percent : percent
+  }));
+  return { tokenMint, walletIndexes, walletGroup, amountSol, percent, slippageBps, allocationMode, walletConfigs };
 }
 
 function readBundlePlanForm() {
@@ -16443,17 +16463,27 @@ function readPresetForm(kind, source = "manager") {
       slippageBps: $(`[data-${prefix}-preset-slippage]`)?.value || "400"
     };
   }
+  const walletIndexes = checkedWalletIndexes(`${prefix}-preset`);
+  const amountSol = $(`[data-${prefix}-preset-amount]`)?.value || "0.1";
+  const sellPercent = $(`[data-${prefix}-preset-sell-percent]`)?.value || "100";
+  const allocationMode = $(`[data-${prefix}-preset-allocation]`)?.value === "custom" ? "custom" : "same";
   return {
     id: $(`[data-${prefix}-preset-id]`)?.value || "",
     name: $(`[data-${prefix}-preset-name]`)?.value || "Bundle Preset",
-    walletIndexes: checkedWalletIndexes(`${prefix}-preset`),
+    walletIndexes,
     walletGroup: $(`[data-${prefix}-preset-group]`)?.value?.trim() || "",
-    amountSol: $(`[data-${prefix}-preset-amount]`)?.value || "0.1",
+    amountSol,
     takeProfitPct: $(`[data-${prefix}-preset-tp]`)?.value || "60",
     stopLossPct: $(`[data-${prefix}-preset-sl]`)?.value || "10",
     sellDelay: fieldValue(`[data-${prefix}-preset-delay]`, `[data-${prefix}-preset-delay-custom]`, "off"),
-    sellPercent: $(`[data-${prefix}-preset-sell-percent]`)?.value || "100",
-    slippageBps: $(`[data-${prefix}-preset-slippage]`)?.value || "400"
+    sellPercent,
+    slippageBps: $(`[data-${prefix}-preset-slippage]`)?.value || "400",
+    allocationMode,
+    walletConfigs: walletIndexes.map((walletIndex) => ({
+      walletIndex: Number(walletIndex),
+      amountSol: $(`[data-${prefix}-preset-wallet-amount="${walletIndex}"]`)?.value || amountSol,
+      sellPercent: $(`[data-${prefix}-preset-wallet-percent="${walletIndex}"]`)?.value || sellPercent
+    }))
   };
 }
 

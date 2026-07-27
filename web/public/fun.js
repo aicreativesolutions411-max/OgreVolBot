@@ -3885,13 +3885,89 @@
     } else toast(result.data?.error || result.data?.message || "Bundle failed", true);
   }
 
+  async function openMultiWalletSheet() {
+    if (!(await ensureAccount())) return;
+    await Promise.all([loadWallets(), loadPresets()]);
+    const coin = state.selected || {}, key = coinKey(coin), rh = coin.chain === "robinhood";
+    if (!key) { closeSheet(); openSearch(); toast("Choose a coin for the multi-wallet trade."); return; }
+    const presets = Array.isArray(state.presets?.bundle) ? state.presets.bundle : [];
+    const presetOptions = presets.map((preset) => `<option value="${escapeHtml(preset.id)}">${escapeHtml(preset.name)}</option>`).join("");
+    const walletRows = state.wallets.map((wallet) => `<label class="bundle-wallet-row"><input type="checkbox" data-multi-wallet value="${wallet.index}" checked><span><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}</b><small>${Number(wallet.sol || 0).toFixed(3)} SOL</small></span><input data-multi-amount="${wallet.index}" value="0.1" inputmode="decimal" aria-label="Wallet ${wallet.index} buy SOL"><input data-multi-percent="${wallet.index}" value="100" inputmode="numeric" aria-label="Wallet ${wallet.index} sell percent"></label>`).join("");
+    openSheet(`<div class="sheet-title"><img ${coinImageAttrs(coin)} alt=""><div><h2>Multi-wallet trade</h2><p>${escapeHtml(coin.symbol || short(key))} Â· ${rh ? "Robinhood" : "Solana"}</p></div></div>
+      <div class="field-row"><div class="field"><label>Action</label><select data-multi-side><option value="buy">Buy selected</option><option value="sell">Sell selected</option></select></div><div class="field"><label>Saved preset</label><select data-multi-preset><option value="">Manual setup</option>${presetOptions}</select></div></div>
+      <div class="field"><label>Wallet pattern</label><select data-multi-allocation><option value="same">Same for every wallet</option><option value="custom">Different per wallet</option></select></div>
+      <div class="field-row" data-multi-same-fields><div class="field"><label>Buy SOL per wallet</label><input data-multi-same-amount value="0.1" inputmode="decimal"></div><div class="field"><label>Sell from each wallet</label><input data-multi-same-percent value="100" inputmode="numeric"></div></div>
+      <details><summary>Wallets & custom amounts</summary><div class="bundle-wallets bundle-wallet-grid">${walletRows}</div></details>
+      <details><summary>Preset & protection</summary><div class="field"><label>Preset name</label><input data-multi-preset-name placeholder="My bundle"></div><div class="field-row"><div class="field"><label>Take profit %</label><input data-multi-tp value="25"></div><div class="field"><label>Stop loss %</label><input data-multi-sl value="8"></div></div><div class="field-row"><div class="field"><label>Slippage bps</label><input data-multi-slip value="600"></div><div class="field"><label>Exit timer</label><input data-multi-delay value="off"></div></div><button class="sheet-secondary" type="button" data-save-multi-preset>Save this preset</button></details>
+      <button class="submit-trade" type="button" data-submit-multi-bundle>Review bundle buy</button><p class="fineprint" data-multi-summary>All wallets selected Â· same 0.1 SOL buy.</p>`);
+    syncMultiWalletSheet();
+  }
+
+  function syncMultiWalletSheet() {
+    const side = String($('[data-multi-side]')?.value || "buy"), custom = $('[data-multi-allocation]')?.value === "custom";
+    $$('[data-multi-amount]').forEach((input) => { input.hidden = !custom || side !== "buy"; });
+    $$('[data-multi-percent]').forEach((input) => { input.hidden = !custom || side !== "sell"; });
+    const same = $('[data-multi-same-fields]'); if (same) same.hidden = custom;
+    const selected = $$('[data-multi-wallet]:checked').length;
+    const amount = $('[data-multi-same-amount]')?.value || "0.1", percent = $('[data-multi-same-percent]')?.value || "100";
+    const button = $('[data-submit-multi-bundle]'); if (button) { button.textContent = `Review bundle ${side}`; button.classList.toggle("sell", side === "sell"); }
+    const summary = $('[data-multi-summary]'); if (summary) summary.textContent = `${selected} wallet${selected === 1 ? "" : "s"} selected Â· ${custom ? "custom per-wallet pattern" : side === "buy" ? `${amount} SOL each` : `${percent}% from each`}.`;
+  }
+
+  function applyMultiWalletPreset(id) {
+    const preset = (state.presets?.bundle || []).find((row) => row.id === id);
+    if (!preset) return;
+    const selected = new Set((preset.walletIndexes || []).map(Number));
+    $$('[data-multi-wallet]').forEach((input) => { input.checked = selected.has(Number(input.value)); });
+    const values = { '[data-multi-same-amount]': preset.amountSol || "0.1", '[data-multi-same-percent]': preset.sellPercent || "100", '[data-multi-tp]': preset.takeProfitPct || "25", '[data-multi-sl]': preset.stopLossPct || "8", '[data-multi-slip]': preset.slippageBps || "600", '[data-multi-delay]': preset.sellDelay || "off", '[data-multi-preset-name]': preset.name || "" };
+    Object.entries(values).forEach(([selector, value]) => { const input = $(selector); if (input) input.value = value; });
+    if ($('[data-multi-allocation]')) $('[data-multi-allocation]').value = preset.allocationMode === "custom" ? "custom" : "same";
+    (preset.walletConfigs || []).forEach((row) => { const amount = $(`[data-multi-amount="${row.walletIndex}"]`), percent = $(`[data-multi-percent="${row.walletIndex}"]`); if (amount) amount.value = row.amountSol || preset.amountSol || "0.1"; if (percent) percent.value = row.sellPercent || preset.sellPercent || "100"; });
+    syncMultiWalletSheet();
+  }
+
+  function multiWalletPayload() {
+    const walletIndexes = $$('[data-multi-wallet]:checked').map((input) => Number(input.value));
+    const custom = $('[data-multi-allocation]')?.value === "custom", amountSol = String($('[data-multi-same-amount]')?.value || "0.1"), percent = String($('[data-multi-same-percent]')?.value || "100");
+    return { walletIndexes, allocationMode: custom ? "custom" : "same", amountSol, percent, walletConfigs: walletIndexes.map((walletIndex) => ({ walletIndex, amountSol: custom ? String($(`[data-multi-amount="${walletIndex}"]`)?.value || amountSol) : amountSol, sellPercent: custom ? String($(`[data-multi-percent="${walletIndex}"]`)?.value || percent) : percent })) };
+  }
+
+  async function saveMultiWalletPreset() {
+    const payload = multiWalletPayload(), name = String($('[data-multi-preset-name]')?.value || "").trim();
+    if (!name || !payload.walletIndexes.length) { toast("Add a preset name and choose wallets.", true); return; }
+    const preset = { ...payload, name, sellPercent: payload.percent, takeProfitPct: $('[data-multi-tp]')?.value || "25", stopLossPct: $('[data-multi-sl]')?.value || "8", slippageBps: $('[data-multi-slip]')?.value || "600", sellDelay: $('[data-multi-delay]')?.value || "off" };
+    const result = await post("/api/web/presets", { type: "bundle", action: "save", preset });
+    if (!result.ok || !result.data?.ok) { toast(result.data?.error || "Could not save bundle preset", true); return; }
+    state.presets = result.data.presets; toast("Bundle preset saved"); await openMultiWalletSheet();
+  }
+
+  async function submitMultiWalletTrade(button) {
+    if (!(await ensureTradeReady())) return;
+    const coin = state.selected || {}, key = coinKey(coin), side = String($('[data-multi-side]')?.value || "buy"), payload = multiWalletPayload();
+    if (!payload.walletIndexes.length) { toast("Choose at least one wallet.", true); return; }
+    const total = payload.walletConfigs.reduce((sum, row) => sum + Number(row.amountSol || 0), 0);
+    if (!confirm(side === "buy" ? `Buy across ${payload.walletIndexes.length} wallets for up to ${total.toFixed(4)} SOL total?` : `Sell ${payload.allocationMode === "custom" ? "the custom percentages" : `${payload.percent}%`} from ${payload.walletIndexes.length} wallets?`)) return;
+    button.disabled = true; button.textContent = "Submittingâ€¦";
+    const base = { ...payload, tradeAttemptId: attemptId(`fun-${coin.chain}-${side}-bundle`) };
+    const result = coin.chain === "robinhood"
+      ? await post(side === "buy" ? "/api/web/rh/bundle" : "/api/web/rh/bundle/sell", side === "buy" ? { ...base, tokenAddress: key, payCurrency: "SOL", minSol: payload.amountSol, maxSol: payload.amountSol } : { ...base, tokenAddress: key })
+      : await post(`/api/web/bundle/${side}`, { ...base, tokenMint: key, slippageBps: $('[data-multi-slip]')?.value || 600 });
+    button.disabled = false; syncMultiWalletSheet();
+    if (result.ok && result.data?.ok) {
+      const receipt = bundleTradeReceiptData(result.data, coin, coin.chain === "robinhood" ? "robinhood" : "solana");
+      toast(receipt.successCount > 0 ? `${receipt.successCount} wallet trade${receipt.successCount === 1 ? "" : "s"} submitted` : "No wallet trades submitted", receipt.successCount === 0);
+      openSheet(bundleTradeReceiptHtml(receipt));
+      setTimeout(() => loadPortfolioSnapshot({ force: true }).then(() => state.view === "wallet" ? renderWalletPositions() : renderCoinShell()), 900);
+    } else toast(result.data?.error || result.data?.message || "Multi-wallet trade failed", true);
+  }
+
   function handleTool(action) {
     const coin = state.selected || {}, key = coinKey(coin);
     if (action === "exits") { openExitSheet(); return; }
     if (action === "map") { location.href = `/map?target=${encodeURIComponent(key)}`; return; }
     if (action === "safety") { const shield = state.selectedDetail?.shield || state.selectedDetail?.safety || coin.safety || {}; openSheet(`<div class="sheet-title"><img src="${escapeHtml(coinImage(coin))}" alt=""><div><h2>SlimeShield safety</h2><p>${escapeHtml(coin.symbol || short(key))}</p></div></div><div class="read-card"><h3>${escapeHtml(String(shield.verdict || "Live safety read").toUpperCase())}${Number.isFinite(Number(shield.score)) ? ` · ${Math.round(Number(shield.score))}/100` : ""}</h3><p>${escapeHtml(shield.summary || "Safety data is still resolving. Trading protection and honeypot checks remain active.")}</p></div>`); return; }
     if (action === "swap") { if (key) openTradeSheet("buy"); else { closeSheet(); openSearch(); } return; }
-    if (action === "bundle") { openBundleSheet(); return; }
+    if (action === "bundle") { openMultiWalletSheet(); return; }
     if (action === "cash") { location.assign("/cash/?from=fun"); return; }
     if (action === "poly") { location.assign("/polymarket"); return; }
     if (action === "profile") { closeSheet(); state.profileTab = "social"; $$('[data-profile]').forEach((button) => button.classList.toggle("active", button.dataset.profile === "social")); setView("wallet"); loadWalletView(); return; }
@@ -4276,7 +4352,7 @@
     if (event.target.closest("[data-quick-custom-focus]")) { $("[data-quick-custom-amount]")?.focus(); return; }
     if (event.target.closest("[data-quick-set-custom]")) { const amount = String($("[data-quick-custom-amount]")?.value || "").trim(); if (!(Number(amount) > 0)) { toast("Enter a valid SOL amount.", true); return; } state.quickAmount = amount; renderQuickRoute(); return; }
     if (event.target.closest("[data-quick-review]")) { if (!activeWallet()) { openFundingSheet(); return; } openTradeSheet("buy", { amount: state.quickAmount || "0.1" }); return; }
-    if (event.target.closest("[data-quick-bundle]")) { await openBundleSheet(); return; }
+    if (event.target.closest("[data-quick-bundle]")) { await openMultiWalletSheet(); return; }
     const accountMode = event.target.closest("[data-fun-account]"); if (accountMode) { openFunAccount(accountMode.dataset.funAccount || "login"); return; }
     const submitAccount = event.target.closest("[data-submit-fun-account]"); if (submitAccount) { await submitFunAccount(submitAccount, submitAccount.dataset.submitFunAccount || "login"); return; }
     const saveReferral = event.target.closest("[data-save-referral-code]"); if (saveReferral) { await saveFunReferralCode(saveReferral); return; }
@@ -4316,6 +4392,8 @@
     const releaseVolume = event.target.closest("[data-release-volume]"); if (releaseVolume) { await releaseFunVolume(releaseVolume.dataset.releaseVolume); return; }
     if (event.target.closest("[data-sweep-volume]")) { await sweepFunVolume(); return; }
     const submitBundle = event.target.closest("[data-submit-bundle]"); if (submitBundle) { await submitFunBundle(submitBundle); return; }
+    const submitMultiBundle = event.target.closest("[data-submit-multi-bundle]"); if (submitMultiBundle) { await submitMultiWalletTrade(submitMultiBundle); return; }
+    if (event.target.closest("[data-save-multi-preset]")) { await saveMultiWalletPreset(); return; }
     const walletAddressCopy = event.target.closest("[data-copy-wallet-address]"); if (walletAddressCopy) { await copyWalletAddress(walletAddressCopy.dataset.copyWalletAddress); return; }
     if (event.target.closest("[data-copy-wallet]")) { const wallet = activeWallet(); if (wallet) await copyWalletAddress(wallet.publicKey); return; }
     if (event.target.closest("[data-market-orders]")) { await openMarketOrdersSheet(); return; }
@@ -4325,6 +4403,8 @@
   });
 
   document.addEventListener("change", (event) => {
+    if (event.target.matches("[data-multi-preset]")) { applyMultiWalletPreset(event.target.value); return; }
+    if (event.target.matches("[data-multi-side], [data-multi-allocation], [data-multi-wallet]")) { syncMultiWalletSheet(); return; }
     if (event.target.matches("[data-volume-funding]")) {
       const tokenFunding = event.target.value === "token";
       $$("[data-volume-token-funding], [data-volume-token-funding-note]").forEach((node) => { node.hidden = !tokenFunding; });
@@ -4343,6 +4423,7 @@
     reader.readAsText(file);
   });
   document.addEventListener("input", (event) => {
+    if (event.target.matches("[data-multi-same-amount], [data-multi-same-percent], [data-multi-amount], [data-multi-percent]")) syncMultiWalletSheet();
     if (event.target.matches("[data-volume-token]")) {
       const token = String(event.target.value || "").trim();
       const configuredRh = event.target.dataset.volumeChain === "robinhood";

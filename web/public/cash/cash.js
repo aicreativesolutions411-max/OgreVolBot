@@ -85,7 +85,8 @@
     pumpRewardsError: "",
     pumpRewardsWalletIndex: null,
     pumpRewardsRequestVersion: 0,
-    pumpRewardsPromise: null
+    pumpRewardsPromise: null,
+    bundlePresets: []
   };
 
   const inFlightReads = new Map();
@@ -2640,7 +2641,7 @@
         return `<section class="cash-position-group"><div class="cash-position-head"><div><b>${escapeHtml(first.walletLabel)}</b><span>${rh ? "Robinhood Chain" : "Solana"} · wallet ${first.walletIndex}</span></div><em>${rows.length} ${rows.length === 1 ? "coin" : "coins"}</em></div>${rows.map((row) => {
           const href = `/fun?from=cash#${row.chain === "robinhood" ? "rhtrade" : "trade"}/${encodeURIComponent(row.token)}`;
           const avatar = row.imageUrl ? `<img src="${escapeHtml(row.imageUrl)}" alt="" loading="lazy" decoding="async">` : escapeHtml(String(row.symbol || "?").slice(0, 2).toUpperCase());
-          return `<div class="cash-position-row"><a class="cash-position-coin" href="${href}"><span class="cash-position-avatar">${avatar}</span><span><b>${escapeHtml(row.symbol || "Coin")}</b><small>${escapeHtml(row.name || shortAddress(row.token))}</small></span></a><div class="cash-position-balance"><b>${Number(row.amount).toLocaleString(undefined,{maximumSignificantDigits:7})}</b>${row.valueUsd != null ? `<small>${formatUsd(row.valueUsd)}</small>` : ""}</div><div class="cash-position-actions"><button type="button" data-cash-sell="25" data-chain="${row.chain}" data-wallet-index="${row.walletIndex}" data-token="${escapeHtml(row.token)}" data-symbol="${escapeHtml(row.symbol || "Coin")}">25%</button><button class="sell-all" type="button" data-cash-sell="100" data-chain="${row.chain}" data-wallet-index="${row.walletIndex}" data-token="${escapeHtml(row.token)}" data-symbol="${escapeHtml(row.symbol || "Coin")}">Sell all</button></div></div>`;
+          return `<div class="cash-position-row"><a class="cash-position-coin" href="${href}"><span class="cash-position-avatar">${avatar}</span><span><b>${escapeHtml(row.symbol || "Coin")}</b><small>${escapeHtml(row.name || shortAddress(row.token))}</small></span></a><div class="cash-position-balance"><b>${Number(row.amount).toLocaleString(undefined,{maximumSignificantDigits:7})}</b>${row.valueUsd != null ? `<small>${formatUsd(row.valueUsd)}</small>` : ""}</div><div class="cash-position-actions"><button type="button" data-cash-sell="25" data-chain="${row.chain}" data-wallet-index="${row.walletIndex}" data-token="${escapeHtml(row.token)}" data-symbol="${escapeHtml(row.symbol || "Coin")}">25%</button><button class="sell-all" type="button" data-cash-sell="100" data-chain="${row.chain}" data-wallet-index="${row.walletIndex}" data-token="${escapeHtml(row.token)}" data-symbol="${escapeHtml(row.symbol || "Coin")}">Sell all</button><button type="button" data-cash-multi="${escapeHtml(row.token)}">All wallets</button></div></div>`;
         }).join("")}</section>`;
       }).join("") : '<div class="activity-empty">No coin positions found in your managed wallets.</div>';
       wrap.innerHTML = fundsHtml + positionsHtml;
@@ -2779,6 +2780,152 @@
     $("coinBuyStatus").className = "status";
     renderCoinBuy();
     openSheet("coinbuy");
+  }
+
+  async function loadCashBundlePresets() {
+    const result = await get("/api/web/presets");
+    if (result.ok && result.data?.ok) state.bundlePresets = Array.isArray(result.data.presets?.bundle) ? result.data.presets.bundle : [];
+    return state.bundlePresets;
+  }
+
+  function cashMultiFundsSelectedIndexes() {
+    return [...document.querySelectorAll("[data-cash-funds-wallet]:checked")].map((input) => Number(input.value)).filter(Number.isInteger);
+  }
+
+  function cashMultiFundsDestination() {
+    const value = String($("multiFundsDestination").value || "");
+    if (value === "custom") return String($("multiFundsCustomDestination").value || "").trim();
+    return state.wallets.find((wallet) => Number(wallet.index) === Number(value))?.publicKey || "";
+  }
+
+  function renderCashMultiFunds() {
+    const sourceIndex = Number($("multiFundsSource").value || state.wallet?.index || 0);
+    const custom = $("multiFundsPattern").value === "custom";
+    $("multiFundsSameWrap").hidden = custom;
+    document.querySelectorAll("[data-cash-funds-wallet]").forEach((input) => {
+      const row = input.closest(".multi-wallet-row"), isSource = Number(input.value) === sourceIndex;
+      row?.classList.toggle("source-wallet", isSource);
+      input.disabled = false;
+      const amount = row?.querySelector("[data-cash-funds-amount]");
+      if (amount) amount.hidden = !custom || isSource;
+    });
+    const outside = $("multiFundsDestination").value === "custom";
+    $("multiFundsCustomDestination").hidden = !outside;
+    const count = cashMultiFundsSelectedIndexes().length;
+    $("multiFundsStatus").textContent = `${count} wallet${count === 1 ? "" : "s"} selected. Nothing moves until you confirm.`;
+    $("multiFundsStatus").className = "status";
+  }
+
+  async function openCashMultiFunds() {
+    if (!(await ensureAccount())) return;
+    if (!state.wallets.length && !(await ensureWallet({ create: true, label: "SlimeCash" }))) return;
+    const options = state.wallets.map((wallet) => `<option value="${wallet.index}" ${Number(wallet.index) === Number(state.wallet?.index) ? "selected" : ""}>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)} · ${cashWalletSol(wallet).toFixed(4)} SOL</option>`).join("");
+    $("multiFundsSource").innerHTML = options;
+    $("multiFundsDestination").innerHTML = `${options}<option value="custom">Outside wallet…</option>`;
+    $("multiFundsWallets").innerHTML = state.wallets.map((wallet) => `<label class="multi-wallet-row"><input type="checkbox" data-cash-funds-wallet value="${wallet.index}" checked><span><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}</b><small>${cashWalletSol(wallet).toFixed(4)} SOL · ${escapeHtml(shortAddress(wallet.publicKey))}</small></span><input data-cash-funds-amount="${wallet.index}" type="number" min="0.001" step="any" value="0.1" hidden></label>`).join("");
+    $("multiFundsPattern").value = "same";
+    $("multiFundsSameAmount").value = "0.1";
+    $("multiFundsCustomDestination").value = "";
+    renderCashMultiFunds();
+    openSheet("multifunds");
+  }
+
+  async function runCashMultiFunding() {
+    const sourceIndex = Number($("multiFundsSource").value || 0);
+    const source = state.wallets.find((wallet) => Number(wallet.index) === sourceIndex);
+    const custom = $("multiFundsPattern").value === "custom";
+    const sameAmount = String($("multiFundsSameAmount").value || "").trim();
+    const allocations = cashMultiFundsSelectedIndexes().filter((index) => index !== sourceIndex).map((index) => {
+      const wallet = state.wallets.find((row) => Number(row.index) === index);
+      return { destination: wallet?.publicKey || "", amountSol: custom ? String(document.querySelector(`[data-cash-funds-amount="${index}"]`)?.value || "").trim() : sameAmount };
+    });
+    const total = allocations.reduce((sum, row) => sum + Number(row.amountSol || 0), 0);
+    if (!source || !allocations.length || allocations.some((row) => !row.destination || !(Number(row.amountSol) > 0))) { toast("Choose receiving wallets and enter every SOL amount.", true); return; }
+    if (!confirm(`Send ${total.toFixed(6)} SOL from ${source.label || `Wallet ${sourceIndex}`} across ${allocations.length} wallet${allocations.length === 1 ? "" : "s"}?`)) return;
+    const button = $("multiFundsFundBtn"); button.disabled = true; button.textContent = "Funding…";
+    const result = await post("/api/web/wallets/send-sol", { fromWalletIndex: sourceIndex, sourcePublicKey: source.publicKey, allocations, sendAttemptId: `cash-fund-${Date.now()}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}` });
+    button.disabled = false; button.textContent = "Review wallet funding";
+    if (!result.ok || !result.data?.ok) { $("multiFundsStatus").textContent = result.data?.message || result.data?.error || "Wallet funding failed."; $("multiFundsStatus").className = "status bad"; return; }
+    $("multiFundsStatus").textContent = result.data.sweep?.summary || result.data.summary || `Funded ${allocations.length} wallets.`; $("multiFundsStatus").className = "status ok"; toast($("multiFundsStatus").textContent); await ensureWallet({ create: false }); void refreshBalance({ silent: true });
+  }
+
+  async function runCashMultiSweep({ sellTokens = false } = {}) {
+    const destination = cashMultiFundsDestination();
+    const walletIndexes = cashMultiFundsSelectedIndexes().filter((index) => state.wallets.find((wallet) => Number(wallet.index) === index)?.publicKey !== destination);
+    if (!destination || !walletIndexes.length) { toast("Choose source wallets and a receiving wallet.", true); return; }
+    const action = sellTokens ? "sell all sellable tokens, then sweep all transferable SOL" : "sweep all transferable SOL";
+    if (!confirm(`From ${walletIndexes.length} wallet${walletIndexes.length === 1 ? "" : "s"}, ${action} to ${shortAddress(destination)}?`)) return;
+    const button = sellTokens ? $("multiFundsSellSweepBtn") : $("multiFundsSweepBtn"), old = button.textContent;
+    button.disabled = true; button.textContent = sellTokens ? "Selling & sweeping…" : "Sweeping…";
+    const path = sellTokens ? "/api/web/wallets/return-to-connected" : "/api/web/wallets/sweep-sol";
+    const result = await post(path, { walletIndexes, destination, slippageBps: "1200", tradeAttemptId: `cash-sweep-${Date.now()}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}` });
+    button.disabled = false; button.textContent = old;
+    if (!result.ok || !result.data?.ok) { $("multiFundsStatus").textContent = result.data?.message || result.data?.error || "Consolidation failed."; $("multiFundsStatus").className = "status bad"; return; }
+    $("multiFundsStatus").textContent = result.data.sweep?.summary || result.data.summary || "Wallets consolidated."; $("multiFundsStatus").className = "status ok"; toast($("multiFundsStatus").textContent); await ensureWallet({ create: false }); void refreshBalance({ silent: true }); setTimeout(() => loadCashPositions({ force: true }), 700);
+  }
+
+  function cashMultiPayload() {
+    const custom = $("multiTradePattern").value === "custom";
+    const amountSol = String($("multiTradeAmount").value || "0.1"), percent = String($("multiTradePercent").value || "100");
+    const walletIndexes = [...document.querySelectorAll("[data-cash-multi-wallet]:checked")].map((input) => Number(input.value));
+    return { walletIndexes, allocationMode: custom ? "custom" : "same", amountSol, percent, walletConfigs: walletIndexes.map((walletIndex) => ({ walletIndex, amountSol: custom ? String(document.querySelector(`[data-cash-multi-size="${walletIndex}"]`)?.value || amountSol) : amountSol, sellPercent: custom ? String(document.querySelector(`[data-cash-multi-size="${walletIndex}"]`)?.value || percent) : percent })) };
+  }
+
+  function renderCashMultiTrade() {
+    const side = $("multiTradeSide").value || "buy", custom = $("multiTradePattern").value === "custom";
+    $("multiTradeSame").hidden = custom;
+    document.querySelectorAll("[data-cash-multi-size]").forEach((input) => { input.hidden = !custom; input.placeholder = side === "buy" ? "SOL" : "%"; });
+    const selected = document.querySelectorAll("[data-cash-multi-wallet]:checked").length;
+    $("multiTradeGoBtn").textContent = `Review bundle ${side}`;
+    $("multiTradeGoBtn").classList.toggle("danger", side === "sell");
+    $("multiTradeStatus").textContent = `${selected} wallet${selected === 1 ? "" : "s"} selected Â· ${custom ? "different size per wallet" : side === "buy" ? `${$("multiTradeAmount").value || "0.1"} SOL each` : `${$("multiTradePercent").value || "100"}% each`}.`;
+  }
+
+  function applyCashBundlePreset(id) {
+    const preset = state.bundlePresets.find((row) => row.id === id);
+    if (!preset) return;
+    const selected = new Set((preset.walletIndexes || []).map(Number));
+    document.querySelectorAll("[data-cash-multi-wallet]").forEach((input) => { input.checked = selected.has(Number(input.value)); });
+    $("multiTradePattern").value = preset.allocationMode === "custom" ? "custom" : "same";
+    $("multiTradeAmount").value = preset.amountSol || "0.1"; $("multiTradePercent").value = preset.sellPercent || "100";
+    $("multiTradeTp").value = preset.takeProfitPct || "25"; $("multiTradeSl").value = preset.stopLossPct || "8"; $("multiTradePresetName").value = preset.name || "";
+    (preset.walletConfigs || []).forEach((row) => { const input = document.querySelector(`[data-cash-multi-size="${row.walletIndex}"]`); if (input) input.value = $("multiTradeSide").value === "buy" ? (row.amountSol || preset.amountSol || "0.1") : (row.sellPercent || preset.sellPercent || "100"); });
+    renderCashMultiTrade();
+  }
+
+  async function openCashMultiTrade(token = "") {
+    if (!(await ensureAccount())) return;
+    if (!state.wallets.length && !(await ensureWallet({ create: true, label: "SlimeCash" }))) return;
+    await loadCashBundlePresets();
+    $("multiTradeToken").value = String(token || "");
+    $("multiTradePreset").innerHTML = `<option value="">Manual setup</option>${state.bundlePresets.map((preset) => `<option value="${escapeHtml(preset.id)}">${escapeHtml(preset.name)}</option>`).join("")}`;
+    $("multiTradeWallets").innerHTML = state.wallets.map((wallet) => `<label class="multi-wallet-row"><input type="checkbox" data-cash-multi-wallet value="${wallet.index}" checked><span><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}</b><small>${Number(wallet.sol || 0).toFixed(3)} SOL</small></span><input data-cash-multi-size="${wallet.index}" type="number" min="0" step="any" value="0.1"></label>`).join("");
+    $("multiTradeSide").value = "buy"; $("multiTradePattern").value = "same"; renderCashMultiTrade(); openSheet("multitrade");
+  }
+
+  async function saveCashBundlePreset() {
+    const payload = cashMultiPayload(), name = String($("multiTradePresetName").value || "").trim();
+    if (!name || !payload.walletIndexes.length) { toast("Add a preset name and choose wallets.", true); return; }
+    const result = await post("/api/web/presets", { type: "bundle", action: "save", preset: { ...payload, name, sellPercent: payload.percent, takeProfitPct: $("multiTradeTp").value || "25", stopLossPct: $("multiTradeSl").value || "8", slippageBps: "600", sellDelay: "off" } });
+    if (!result.ok || !result.data?.ok) { toast(result.data?.error || "Could not save preset", true); return; }
+    state.bundlePresets = result.data.presets?.bundle || []; toast("Bundle preset saved"); await openCashMultiTrade($("multiTradeToken").value);
+  }
+
+  async function runCashMultiTrade() {
+    const token = String($("multiTradeToken").value || "").trim(), network = cashCoinNetwork(token), side = $("multiTradeSide").value, payload = cashMultiPayload(), status = $("multiTradeStatus");
+    if (!network || !payload.walletIndexes.length) { status.textContent = "Paste a valid CA and choose at least one wallet."; status.className = "status bad"; return; }
+    const total = payload.walletConfigs.reduce((sum, row) => sum + Number(row.amountSol || 0), 0);
+    if (!confirm(side === "buy" ? `Buy from ${payload.walletIndexes.length} wallets for up to ${total.toFixed(4)} SOL?` : `Sell from ${payload.walletIndexes.length} wallets?`)) return;
+    const button = $("multiTradeGoBtn"); button.disabled = true; button.textContent = "Submittingâ€¦";
+    const base = { ...payload, tradeAttemptId: `cash-bundle-${side}-${Date.now()}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}` };
+    const result = network === "robinhood"
+      ? await post(side === "buy" ? "/api/web/rh/bundle" : "/api/web/rh/bundle/sell", side === "buy" ? { ...base, tokenAddress: token, payCurrency: "SOL", minSol: payload.amountSol, maxSol: payload.amountSol } : { ...base, tokenAddress: token })
+      : await post(`/api/web/bundle/${side}`, { ...base, tokenMint: token, slippageBps: "1200" });
+    button.disabled = false; renderCashMultiTrade();
+    if (!result.ok || !result.data?.ok) { status.textContent = result.data?.error || result.data?.message || "Multi-wallet trade failed."; status.className = "status bad"; return; }
+    const rows = result.data.bundle?.results || result.data.rows || [];
+    const success = rows.filter((row) => row.ok).length;
+    status.textContent = `${success}/${rows.length || payload.walletIndexes.length} wallet trades submitted.`; status.className = success ? "status ok" : "status bad"; toast(status.textContent, !success); setTimeout(() => loadCashPositions({ force: true }), 1300);
   }
 
   async function runCashCoinBuy() {
@@ -3086,6 +3233,8 @@
     if (pumpRewardClaim) void claimCashPumpReward(pumpRewardClaim);
     const sellPosition = event.target.closest("[data-cash-sell]");
     if (sellPosition) void sellCashPosition(sellPosition);
+    const multiPosition = event.target.closest("[data-cash-multi]");
+    if (multiPosition) void openCashMultiTrade(multiPosition.dataset.cashMulti || "");
     const rhWalletTools = event.target.closest("[data-rh-wallet-tools]");
     if (rhWalletTools) void openRhCashWallet(rhWalletTools.dataset.rhWalletTools);
     const rhCashout = event.target.closest("[data-rh-cashout]");
@@ -3119,10 +3268,32 @@
   $("activityAllBtn").addEventListener("click", () => loadCashHistory({ open: true }));
   $("activityRefreshBtn").addEventListener("click", () => loadCashHistory({ open: true }));
   $("positionsRefreshBtn").addEventListener("click", () => loadCashPositions({ force: true }));
+  $("multiWalletOpenBtn").addEventListener("click", () => openCashMultiTrade());
+  $("multiFundsOpenBtn").addEventListener("click", openCashMultiFunds);
+  $("cashWalletMoveFundsBtn").addEventListener("click", () => { closeSheet("wallets"); openCashMultiFunds(); });
   $("buyCoinOpenBtn").addEventListener("click", () => openCoinBuy());
   $("coinBuyGoBtn").addEventListener("click", runCashCoinBuy);
   $("coinBuyToken").addEventListener("input", renderCoinBuy);
   $("coinBuyAssetSelect").addEventListener("change", renderCoinBuy);
+  $("multiTradeSide").addEventListener("change", () => {
+    const value = $("multiTradeSide").value === "sell" ? ($("multiTradePercent").value || "100") : ($("multiTradeAmount").value || "0.1");
+    document.querySelectorAll("[data-cash-multi-size]").forEach((input) => { input.value = value; });
+    renderCashMultiTrade();
+  });
+  $("multiTradePattern").addEventListener("change", renderCashMultiTrade);
+  $("multiTradePreset").addEventListener("change", () => applyCashBundlePreset($("multiTradePreset").value));
+  $("multiTradeWallets").addEventListener("change", renderCashMultiTrade);
+  $("multiTradeAmount").addEventListener("input", renderCashMultiTrade);
+  $("multiTradePercent").addEventListener("input", renderCashMultiTrade);
+  $("multiTradeSavePreset").addEventListener("click", saveCashBundlePreset);
+  $("multiTradeGoBtn").addEventListener("click", runCashMultiTrade);
+  $("multiFundsSource").addEventListener("change", renderCashMultiFunds);
+  $("multiFundsPattern").addEventListener("change", renderCashMultiFunds);
+  $("multiFundsDestination").addEventListener("change", renderCashMultiFunds);
+  $("multiFundsWallets").addEventListener("change", renderCashMultiFunds);
+  $("multiFundsFundBtn").addEventListener("click", runCashMultiFunding);
+  $("multiFundsSweepBtn").addEventListener("click", () => runCashMultiSweep({ sellTokens: false }));
+  $("multiFundsSellSweepBtn").addEventListener("click", () => runCashMultiSweep({ sellTokens: true }));
   $("shareReceiptBtn").addEventListener("click", async () => {
     const entry = state.selectedReceipt; if (!entry) return;
     const url = entry.signature ? (entry.explorerUrl || `https://solscan.io/tx/${entry.signature}`) : "";

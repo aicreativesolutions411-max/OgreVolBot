@@ -4951,11 +4951,13 @@ test("Telegram Slime Charts offer compact 10m, 30m, 1h, and 1d ranges", () => {
   assert.match(renderer, /Math\.min\(9,/); // sparse charts keep thin trader-style bodies
   assert.match(serverSource, /candle-slime\.webp/);
   assert.match(serverSource, /candle-blood\.webp/);
-  assert.match(serverSource, /chart-bg\.webp/);
+  assert.doesNotMatch(serverSource, /chart-bg\.webp/);
   assert.match(serverSource, /keyedTelegramCandleTexture/);
   assert.match(serverSource, /data:image\/png;base64/);
-  assert.match(serverSource, /pro-emblem\.webp/);
-  assert.match(serverSource, /keyedTelegramPremiumEmblem/);
+  assert.doesNotMatch(serverSource, /pro-emblem\.webp/);
+  assert.doesNotMatch(serverSource, /keyedTelegramPremiumEmblem/);
+  assert.match(renderer, /matrixBackdrop/);
+  assert.match(renderer, /matrixFade/);
   assert.match(serverSource, /void telegramSlimeChartAssets\(\)/);
   assert.match(serverSource, /telegramTokenChartSnapshotInFlight/);
   assert.match(serverSource, /telegramTokenChartIdentityCache/);
