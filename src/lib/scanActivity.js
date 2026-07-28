@@ -47,20 +47,25 @@ export function aggregateDexPairActivity(mint, pairs = []) {
   };
 }
 
-// Gecko hourly candles include USD volume as item[5]. When ordinary token metadata omits its volume object,
-// the last 24 candles are an independent exact fallback. PumpPortal synthesized candles cover only the recent
-// tape, so keep that honestly labelled RECENT rather than pretending it is a full day.
+// Hourly candles include USD volume as item[5]. When ordinary token metadata omits its volume object,
+// a full rolling day of candles is an independent exact fallback regardless of which provider returned it.
+// Short PumpPortal-style synthesized tapes stay honestly labelled RECENT rather than pretending to be 24h.
 export function volumeFallbackFromOhlcv(payload = {}) {
   const candles = (Array.isArray(payload?.candles) ? payload.candles : [])
     .map((row) => ({ t: Number(row?.t) || 0, v: Number(row?.v) || 0 }))
     .filter((row) => row.t > 0 && row.v > 0)
     .sort((a, b) => a.t - b.t);
   if (!candles.length) return null;
-  if (String(payload?.source || "").toLowerCase() === "geckoterminal") {
-    const last24 = candles.slice(-24);
+  const latestAt = candles[candles.length - 1]?.t || 0;
+  const oneDayAgo = latestAt - 24 * 60 * 60;
+  const last24 = candles.filter((row) => row.t > oneDayAgo);
+  const spanSeconds = latestAt - (last24[0]?.t || latestAt);
+  // Eighteen hours of coverage tolerates a few missing/late provider candles without turning a
+  // genuinely daily feed into a misleading short-tape number.
+  if (last24.length >= 18 && spanSeconds >= 17 * 60 * 60) {
     const h24 = last24.reduce((sum, row) => sum + row.v, 0);
     const h1 = last24[last24.length - 1]?.v || 0;
-    return h24 > 0 ? { volume: { h24, ...(h1 > 0 ? { h1 } : {}) }, source: "gecko-ohlcv" } : null;
+    return h24 > 0 ? { volume: { h24, ...(h1 > 0 ? { h1 } : {}) }, source: "ohlcv-24h" } : null;
   }
   const recent = candles.reduce((sum, row) => sum + row.v, 0);
   return recent > 0 ? { volumeRecentUsd: recent, source: "recent-trade-tape" } : null;

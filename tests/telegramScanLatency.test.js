@@ -85,7 +85,7 @@ test("progressive scan updates do not stampede the shared RPC queue", () => {
   assert.match(supply, /scanTokenSupplyInFlight\.get\(key\)/);
   assert.match(supply, /retries:\s*0,\s*priority:\s*true/);
   assert.match(settle, /slimeScanRetryMissingFields\(accumulated, mint\)/);
-  assert.match(serverSource, /const SLIME_SCAN_RETRY_FIELDS = new Set\(\["identity", "price", "market cap", "liquidity", "security"\]\)/);
+  assert.match(serverSource, /const SLIME_SCAN_RETRY_FIELDS = new Set\(\["identity", "price", "market cap", "liquidity", "24h volume", "security"\]\)/);
   assert.match(classify, /retries:\s*0,\s*priority:\s*true/);
 });
 

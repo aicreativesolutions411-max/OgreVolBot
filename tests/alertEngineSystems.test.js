@@ -94,3 +94,25 @@ test("client: deep links can open the buy panel and the fast dex lookup is wired
   assert.match(appSource, /function fastDirectDexLookup/);
   assert.match(functionBody(appSource, "prefetchTokenChart"), /fastDirectDexLookup\(mint\)/);
 });
+
+test("Smart Calls route each alert category to Telegram and browser push with durable dedup", () => {
+  const targets = functionBody(serverSource, "smartCallTargets");
+  const receipts = functionBody(serverSource, "smartCallReceiptTick");
+  const pushMany = functionBody(serverSource, "sendWebPushToUsers");
+  for (const key of ["smartXReturn", "smartMigration", "smartDexPaid"]) assert.match(targets, new RegExp(key));
+  assert.match(targets, /readPushSubscriptions/);
+  assert.match(receipts, /migrationAlertedAt/);
+  assert.match(receipts, /dexPaidAlertedAt/);
+  assert.match(receipts, /canAlert && paid/);
+  assert.match(serverSource, /alertSchemaVersion: 1/);
+  assert.match(receipts, /targets\.xReturnGroups/);
+  assert.match(receipts, /targets\.migrationGroups/);
+  assert.match(receipts, /targets\.dexPaidGroups/);
+  assert.match(pushMany, /404, 410/);
+  assert.match(pushMany, /withFileLock\(pushSubscriptionsPath\(\)/);
+});
+
+test("scan retries missing daily volume and normalizes Pump curve LP to total TVL", () => {
+  assert.match(serverSource, /SLIME_SCAN_RETRY_FIELDS[^\n]+"24h volume"/);
+  assert.match(functionBody(serverSource, "scanPumpVirtualLiquidity"), /sol \* usd \* 2/);
+});

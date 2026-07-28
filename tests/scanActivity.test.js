@@ -38,11 +38,19 @@ test("scan activity sums volume across unique token pools", () => {
   assert.deepEqual(result.txns.h24, { buys: 50, sells: 18 });
 });
 
-test("Gecko hourly candles recover exact 24h scan volume", () => {
+test("hourly candles recover exact rolling 24h scan volume", () => {
   const candles = Array.from({ length: 30 }, (_, index) => ({ t: 1_000 + index * 3_600, v: index + 1 }));
   const result = volumeFallbackFromOhlcv({ source: "geckoterminal", candles });
   const expected24h = candles.slice(-24).reduce((sum, row) => sum + row.v, 0);
-  assert.deepEqual(result, { volume: { h24: expected24h, h1: 30 }, source: "gecko-ohlcv" });
+  assert.deepEqual(result, { volume: { h24: expected24h, h1: 30 }, source: "ohlcv-24h" });
+});
+
+test("full-day SolanaTracker candles populate 24h volume too", () => {
+  const candles = Array.from({ length: 24 }, (_, index) => ({ t: 2_000 + index * 3_600, v: 100 }));
+  assert.deepEqual(volumeFallbackFromOhlcv({ source: "solanatracker", candles }), {
+    volume: { h24: 2_400, h1: 100 },
+    source: "ohlcv-24h",
+  });
 });
 
 test("fresh Pump trade candles stay honestly labelled as recent volume", () => {

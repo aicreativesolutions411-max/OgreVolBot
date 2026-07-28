@@ -3106,12 +3106,9 @@ test("Sol/RH scan cards surface an in-chat Slime Chart, TG Buy, Web Buy, and cat
   assert.match(rhBuy, /compactTradeCardKeyboard\(address, "b"\)/);
   assert.match(functionBody(serverSource, "sendRhScanCard"), /compactTradeCardKeyboard\(address, "s"\)/);
   assert.match(rhBuy, /tap Slime Chart below to open signed in/);
-  const autoChart = functionBody(serverSource, "queueTelegramAutoScanChart");
-  assert.match(autoChart, /sendTokenChart\(chatId, mint, network, "30m", null, \{ silent: true, replyToMessageId, identity: knownIdentity \}\)/);
-  assert.match(autoChart, /telegramAutoScanChartPosts\.has\(key\)/);
-  assert.match(autoChart, /\[0, 1_250, 3_000, 6_000\]/);
-  assert.match(functionBody(serverSource, "handleTelegramLookCommand"), /queueTelegramAutoScanChart\(chatId, mint, "solana", (?:activeMessageId|delivered\.messageId), \{/);
-  assert.match(functionBody(serverSource, "sendRhScanCard"), /queueTelegramAutoScanChart\(chatId, address, "robinhood", activeMessageId, \{/);
+  assert.doesNotMatch(serverSource, /function queueTelegramAutoScanChart/);
+  assert.doesNotMatch(functionBody(serverSource, "handleTelegramLookCommand"), /tokenChartSnapshot|sendTokenChart/);
+  assert.doesNotMatch(functionBody(serverSource, "sendRhScanCard"), /tokenChartSnapshot|sendTokenChart/);
   assert.match(functionBody(serverSource, "sendPhoto"), /reply_parameters/);
 });
 
@@ -4064,7 +4061,7 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "resolveXTargetMint"), /allowBareTickerHints: false/);
   assert.match(functionBody(serverSource, "resolveAllXTargets"), /allowBareTickerHints: false/);
   assert.doesNotMatch(functionBody(serverSource, "xReplyPollTick"), /extractBareTickerHints/);
-  assert.match(functionBody(serverSource, "handleTelegramLookCommand"), /resolveScanTargetFromText\(argument\)/);
+  assert.match(functionBody(serverSource, "handleTelegramLookCommand"), /resolveScanTargetFromText\(rawArgument, \[\], \{ chainHint \}\)/);
   assert.match(functionBody(serverSource, "handleXScanCommand"), /allowBareTickerHints: false/);
   assert.match(functionBody(serverSource, "xReplyPollTick"), /no CA\/wallet found yet/);
   assert.match(functionBody(serverSource, "gatherSlimeScan"), /fetchSolanaTrackerTokenReport\(mint, \{ timeoutMs: 3_000 \}\)/);
@@ -4173,13 +4170,27 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(tickerSafety, /scanRecommendationBlocked/);
 
   const ticker = functionBody(serverSource, "resolveTickerToScanTarget");
+  const chainHint = functionBody(serverSource, "tickerChainHintFromText");
   assert.match(ticker, /const solPromise = resolveCashtagToMint/);  // deep Sol work starts concurrently
   assert.match(ticker, /resolveRhTickerCandidate/);
+  assert.match(ticker, /chainHint === "solana"/);
+  assert.match(ticker, /chainHint === "robinhood"/);
+  assert.match(ticker, /tickerRhCandidateHasActiveMarket\(rh\)/); // identity-only RH clones do not win
   assert.match(ticker, /tickerRhClearlyDominates/);                 // decisive RH market returns without waiting for Sol safety
   assert.match(ticker, /providerTimeoutMs: 4_000/);                 // weak Sol dust gets one bounded chain-native retry
   assert.match(ticker, /weakSol.*marketCap.*50_000.*volume24h.*100_000/s);
   assert.match(ticker, /lookupComplete === false.*marketCap/s);     // uncertainty never promotes a micro Sol clone
   assert.match(ticker, /rhLeadership > solLeadership/);             // stronger RH market can beat a weak Sol clone
+  assert.match(chainHint, /replace\(\/\\\$\[A-Za-z\]/);
+  assert.match(chainHint, /return "robinhood"/);
+  assert.match(chainHint, /return "solana"/);
+  const chainHintFn = new Function("text", chainHint);
+  assert.equal(chainHintFn("$WIF sol"), "solana");
+  assert.equal(chainHintFn("$CASHCOW rh"), "robinhood");
+  assert.equal(chainHintFn("$SOL"), "", "a canonical $SOL ticker must not be mistaken for a Solana chain override");
+  assert.equal(chainHintFn("SOL"), "", "a bare SOL ticker must remain canonical unless a separate chain hint is supplied");
+  assert.match(functionBody(serverSource, "tickerMarketLeadership"), /candidate\.liquidityUsd/);
+  assert.doesNotMatch(functionBody(serverSource, "tickerRhClearlyDominates"), /holderDominatesDust/);
   const rhTicker = functionBody(serverSource, "resolveRhTickerCandidate");
   assert.match(rhTicker, /if \(chain === "robinhood"\)/);
   assert.match(rhTicker, /tickerMarketLeadership/);
@@ -4391,8 +4402,9 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(score, /microCapPenalty/);
   assert.match(dominance, /maxima\.marketCap\) \* 60/);
   assert.match(dominance, /maxima\.liquidityUsd\) \* 70/);
-  assert.match(leadership, /Math\.sqrt\(mc \* vol\) \* 220/);
-  assert.match(leadership, /Math\.min\(mc, vol\) \* 140/);
+  assert.match(leadership, /Math\.sqrt\(mc \* vol\) \* 190/);
+  assert.match(leadership, /Math\.min\(mc, vol\) \* 120/);
+  assert.match(leadership, /liq \* 100/);
   assert.match(truth, /exact-symbol contracts found/);
   assert.match(truth, /Unsafe\/unchecked matches are omitted/);
   assert.match(truth, /dominant real market plus live activity/);
@@ -4446,7 +4458,14 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const noxaSolClone = { marketCap: 4_200, volume24h: 165 };
   const noxaMaxima = { marketCap: noxaRh.marketCap, volume24h: noxaRh.volume24h };
   assert.ok(leadershipFn(noxaRh, noxaMaxima) > leadershipFn(noxaSolClone, noxaMaxima) * 20, "$NOXA must resolve to its dominant Robinhood market, never the tiny Sol clone");
-  assert.equal(rhDominatesFn({ contractProof: true, holders: 2376 }, { marketCap: 4_200, volume24h: 165 }), true, "chain-native holder proof must beat a dust Sol clone while market indexes catch up");
+  assert.equal(rhDominatesFn({ contractProof: true, holders: 2376 }, { marketCap: 4_200, volume24h: 165 }), false, "holder count alone must never make a same-symbol RH clone beat a real Sol market");
+  assert.equal(rhDominatesFn({
+    contractProof: true,
+    activityProof: true,
+    activityUniqueTx: 18,
+    activityAgeSeconds: 45,
+    activityPerMinute: 8
+  }, { marketCap: 4_200, volume24h: 165 }), true, "sustained recent RH activity can beat a dust Sol clone while market indexes catch up");
   assert.equal(rhDominatesFn({ contractProof: true, holders: 6961, exactMatches: 20 }, { marketCap: 2_950, volume24h: 297 }), false, "holder-airdropped CASHCOW clone cannot dominate when many exact RH contracts exist");
   assert.equal(rhDominatesFn({ contractProof: true, holders: 2376 }, { marketCap: 500_000, volume24h: 2_000_000 }), false, "identity alone must never displace a strong Sol market");
   const cashcowReal = { address: "0x4ad72e468e38ec204c605f2e058d61e4d79e2ceb", marketCap: 54_833, volume24h: 106_224, liquidityUsd: 21_595 };
@@ -4461,6 +4480,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const ambiguousB = { address: "0x2222222222222222222222222222222222222222", activityPerMinute: 7, activityAgeSeconds: 40, activityUniqueTx: 9, activityScore: 115 };
   assert.equal(rhSelectFn([{ candidate: ambiguousA, isContract: true }, { candidate: ambiguousB, isContract: true }]), null, "similar active clones remain ambiguous instead of being guessed");
   assert.match(functionBody(serverSource, "tickerScanSelectionLine"), /strongest Robinhood/);
+  assert.match(functionBody(serverSource, "tickerScanSelectionLine"), /MC \+ liquidity \+ 24h volume/);
+  assert.match(functionBody(serverSource, "tickerScanSelectionLine"), /verified active Robinhood/);
   assert.match(functionBody(serverSource, "tickerTruthLine"), /Vol/);
   const rhSend = functionBody(serverSource, "sendRhScanCard");
   assert.match(rhSend, /rhTickerCandidateForTarget/);
@@ -4996,7 +5017,7 @@ test("Telegram Slime Charts offer compact 10m, 30m, 1h, and 1d ranges", () => {
   assert.match(keyboard, /callback_data: quickBuyCallback/); // chart Quick Buy stays in Telegram and executes
   const chart = functionBody(serverSource, "sendTokenChart");
   const renderer = functionBody(serverSource, "candleChartSvg");
-  const autoChart = functionBody(serverSource, "queueTelegramAutoScanChart");
+  const chartCommand = functionBody(serverSource, "handleTelegramChartCommand");
   assert.match(chart, /telegramTokenChartRange\(range\)/);
   assert.match(chart, /latestSeconds - rangeConfig\.seconds/);
   assert.match(chart, /slice\(-120\)/);
@@ -5016,9 +5037,9 @@ test("Telegram Slime Charts offer compact 10m, 30m, 1h, and 1d ranges", () => {
   assert.match(serverSource, /void telegramSlimeChartAssets\(\)/);
   assert.match(serverSource, /telegramTokenChartSnapshotInFlight/);
   assert.match(serverSource, /telegramTokenChartIdentityCache/);
-  assert.match(serverSource, /\[0, 1_250, 3_000, 6_000\]/);
-  assert.match(serverSource, /tokenChartSnapshot\(mint, "solana", "1m"\)/);
-  assert.match(serverSource, /tokenChartSnapshot\(address, "robinhood", "1m"\)/);
+  assert.match(chartCommand, /resolveTickerToScanTarget\(query/);
+  assert.match(chartCommand, /sendTokenChart\(chatId, target/);
+  assert.match(chartCommand, /tickerChainHintFromText\(arg\)/);
   assert.match(renderer, /slimeTextureSymbol/);
   assert.match(renderer, /bloodTextureSymbol/);
   assert.match(renderer, /#33e08a/);
@@ -5034,7 +5055,7 @@ test("Telegram Slime Charts offer compact 10m, 30m, 1h, and 1d ranges", () => {
   assert.match(renderer, /SLIME MODE/);
   assert.match(chart, /rememberTelegramTokenChartIdentity\(mint, options\?\.identity/);
   assert.match(chart, /resolvedIdentity\?\.symbol \|\| providerSymbol/);
-  assert.match(autoChart, /identity: knownIdentity/);
+  assert.match(chartCommand, /identity: \{ symbol: query\.toUpperCase\(\)/);
 });
 
 test("Telegram /i resolves a CA, ticker, or coin name into an in-chat market info card", () => {
@@ -5057,6 +5078,9 @@ test("Telegram /i resolves a CA, ticker, or coin name into an in-chat market inf
   assert.match(card, /telegramInfoSocialLine/);
   assert.match(card, /telegramTokenInfoKeyboard/);
   assert.match(cryptoCard, /price_change_percentage_7d_in_currency/);
+  assert.match(cryptoCard, /fetchRawTokenImageBuffer\(market\.image/);
+  assert.match(cryptoCard, /sendPhoto\(chatId, `market-/);
+  assert.match(functionBody(serverSource, "handleMessage"), /canonicalCryptoId = !chainHint \? INFO_MAJOR_CRYPTO_IDS/);
   assert.match(callbackHandler, /startsWith\("info:"\)/);
   assert.match(callbackHandler, /startsWith\("infocg:"\)/);
   assert.match(functionBody(serverSource, "handleMessage"), /\["i", "info", "coininfo"\]/);
