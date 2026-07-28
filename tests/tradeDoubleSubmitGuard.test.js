@@ -3216,7 +3216,8 @@ test("/leaderboard ranks callers by window; /wins keeps the coin hall of fame", 
   assert.match(serverSource, /parseCommandWithArgument\(text, \["halloffame", "hof", "wins"\]\)/);
   // four windows, driven off the caller-intel warehouse filtered by firstAt
   const view = functionBody(serverSource, "buildCallerLeaderboardView");
-  assert.match(view, /callerIntel\.buildLeaderboards\(scoped, \{ minResolved/);
+  assert.match(view, /refreshCallerIntelCalls\(tracked, \{ limit: 180/);
+  assert.match(view, /buildCallerLiveLeaderboard\(scoped\)/);
   assert.match(view, /String\(c\.chatId\) === String\(chatId\)/);
   assert.match(view, /Number\(c\.firstAt\) >= cutoff/);
   assert.match(view, /Number\(c\.marketProofVersion\) >= CALLER_INTEL_MARKET_PROOF_VERSION/);
@@ -3227,6 +3228,8 @@ test("/leaderboard ranks callers by window; /wins keeps the coin hall of fame", 
   assert.match(view, /Group Stats/);
   assert.match(view, /Top Calls/);
   assert.match(view, /callerLeaderboardPoints/);
+  assert.match(view, /bestTrackedPeakX/);
+  assert.doesNotMatch(view, /Calls are still resolving/);
   assert.match(view, /Stats are isolated to this group/);
   const pointsFn = new Function("caller", functionBody(serverSource, "callerLeaderboardPoints"));
   assert.ok(pointsFn({ score: 0.8, resolved: 20 }) > pointsFn({ score: 0.4, resolved: 2 }), "proven high-quality callers must earn more points");
@@ -4104,14 +4107,35 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "sendRhScanCard"), /recordTelegramCall\(message, address, info\.mc, info\.symbol\)/);
   assert.match(functionBody(serverSource, "sendRhScanCard"), /buildScanCallerFooter\(chatId, address, info\.mc, message\)/);
   assert.match(functionBody(serverSource, "recordTelegramCall"), /channelUsername = message\.sender_chat\?\.username \|\| message\.chat\?\.username/);
-  assert.match(functionBody(serverSource, "recordTelegramCall"), /if \(!\(Number\(rec\.entryMc\) > 0\)\) rec\.entryMc = mc/);
+  assert.match(functionBody(serverSource, "recordTelegramCall"), /refreshCallerIntelMarketProof\(rec, \{ mc, symbol \}, nowMs\)/);
+  assert.match(functionBody(serverSource, "recordTelegramCall"), /marketProofVersion: mc > 0 \? CALLER_INTEL_MARKET_PROOF_VERSION : 0/);
   const callerMarket = functionBody(serverSource, "callerIntelExactBaseMarket");
   assert.match(callerMarket, /tokenAddressEquals\(pair\?\.baseToken\?\.address, mint\)/); // quote token MC never becomes the call MC
   assert.doesNotMatch(callerMarket, /quoteToken/);
+  const refreshMarket = new Function(
+    "callerIntel",
+    "CALLER_INTEL_MARKET_PROOF_VERSION",
+    "call",
+    "market",
+    "nowMs",
+    functionBody(serverSource, "refreshCallerIntelMarketProof")
+  );
+  const missingEntry = { firstAt: 100, peakMc: 0, lastMc: 0 };
+  assert.equal(refreshMarket({ WON_MULT: 2 }, 2, missingEntry, { mc: 12_000, symbol: "NEW" }, 200), true);
+  assert.equal(missingEntry.entryMc, 12_000, "first exact market becomes the honest entry baseline");
+  assert.equal(missingEntry.marketProofVersion, 2);
+  assert.equal(missingEntry.peakX, 1);
+  const lateWinner = { entryMc: 10_000, peakMc: 11_000, lastMc: 11_000, marketProofVersion: 2, status: "resolved", outcome: "flat" };
+  refreshMarket({ WON_MULT: 2 }, 2, lateWinner, { mc: 25_000 }, 300);
+  assert.equal(lateWinner.outcome, "won", "a later verified 2x promotes an early flat outcome");
   const callerTick = functionBody(serverSource, "runCallerIntelTick");
   assert.match(callerTick, /const fresh = all\.filter/);                          // winners keep updating after first 2x
-  assert.match(callerTick, /refreshCallerIntelMarketProof/);
+  assert.match(callerTick, /refreshCallerIntelCalls/);
   assert.doesNotMatch(callerTick, /best\?\.marketCap \|\| best\?\.fdv/);
+  const callerRefresh = functionBody(serverSource, "refreshCallerIntelCalls");
+  assert.match(callerRefresh, /callerIntelMintBatches\(selected\)/);
+  assert.match(callerRefresh, /fetchDexScreenerTokenPairsBatch\(mints/);
+  assert.match(callerRefresh, /refreshCallerIntelMarketProof\(call, market, nowMs\)/);
   const callerFooter = functionBody(serverSource, "buildScanCallerFooter");
   assert.match(callerFooter, /at \$\{scanFmtMoney\(entry\)\} MC/);
   assert.match(callerFooter, /pct >= 0 \? "🟢" : "🔴"/);
@@ -4977,10 +5001,11 @@ test("Telegram /calls shows each member's last 15 channel calls with a per-user 
   assert.match(handler, /scanFmtAge\(call\.firstAt\)/);
   assert.match(current, /callerIntel\.lastMultiple\(call\)/);
   assert.match(peak, /callerIntel\.peakMultiple\(call\)/);
-  assert.match(refresh, /fetchDexScreenerTokenPairsBatch\(solMints/);
-  assert.match(refresh, /tokens\/v1\/robinhood/);
-  assert.match(refresh, /callerIntelExactBaseMarket/);
-  assert.match(refresh, /refreshCallerIntelMarketProof\(call, market, nowMs\)/);
+  assert.match(refresh, /refreshCallerIntelCalls\(selected, \{ limit: 15/);
+  const batches = functionBody(serverSource, "callerIntelMintBatches");
+  assert.match(batches, /isLikelySolMint\(call\.mint\)/);
+  assert.match(batches, /\^0x\[0-9a-fA-F\]\{40\}\$/);
+  assert.match(batches, /index \+= 30/);
   assert.match(functionBody(serverSource, "groupBotHelpText"), /<code>\/calls<\/code>/);
 });
 
