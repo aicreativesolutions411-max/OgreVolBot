@@ -23,6 +23,8 @@ export function normalizeGroupBuyDeliveryStore(value) {
     outbox: objectRecord(source.outbox),
     delivered: objectRecord(source.delivered),
     terminal: objectRecord(source.terminal),
+    aliases: objectRecord(source.aliases),
+    chatRedirects: objectRecord(source.chatRedirects),
     pacing: objectRecord(source.pacing),
     sol: objectRecord(source.sol),
     rh: { tokens: objectRecord(rh.tokens) },
@@ -36,13 +38,81 @@ export function groupBuyOutboxId({ chatId, eventKey = "", unique = "" } = {}) {
     .digest("hex");
 }
 
+export function createGroupBuyEventClaimRegistry({
+  successTtlMs = 30_000,
+  nowFn = () => Date.now(),
+} = {}) {
+  const entries = new Map();
+  const ttlMs = Math.max(1_000, finiteInteger(successTtlMs, 30_000));
+  const keyFor = (chatId, eventKey) => {
+    const chat = String(chatId ?? "").trim();
+    const event = String(eventKey || "").trim();
+    return chat && event ? `${chat}:${event}` : "";
+  };
+  const begin = (chatId, eventKey) => {
+    const key = keyFor(chatId, eventKey);
+    if (!key) return { key: "", owner: true, promise: null, settle: () => {} };
+    const now = Number(nowFn()) || Date.now();
+    for (const [claimKey, entry] of entries) {
+      if (entry.settled && Number(entry.expiresAt) <= now) entries.delete(claimKey);
+    }
+    const existing = entries.get(key);
+    if (existing) return { key, owner: false, promise: existing.promise, settle: () => {} };
+    let resolveClaim;
+    const promise = new Promise((resolve) => { resolveClaim = resolve; });
+    const entry = { promise, settled: false, expiresAt: 0 };
+    const settle = (sent) => {
+      if (entry.settled) return;
+      entry.settled = true;
+      entry.expiresAt = (Number(nowFn()) || Date.now()) + (sent?.result ? ttlMs : 0);
+      resolveClaim(sent);
+      if (!sent?.result && entries.get(key) === entry) entries.delete(key);
+    };
+    entries.set(key, entry);
+    return { key, owner: true, promise, settle };
+  };
+  return {
+    begin,
+    size: () => entries.size,
+  };
+}
+
+export function groupBuyCanonicalDeliveryId(storeValue, id) {
+  const store = normalizeGroupBuyDeliveryStore(storeValue);
+  let canonicalId = String(id || "");
+  const visited = new Set();
+  while (store.aliases[canonicalId] && !visited.has(canonicalId)) {
+    visited.add(canonicalId);
+    canonicalId = String(store.aliases[canonicalId]);
+  }
+  return canonicalId;
+}
+
 export function enqueueGroupBuyOutbox(storeValue, item = {}, now = Date.now()) {
   const store = normalizeGroupBuyDeliveryStore(storeValue);
   const chatId = String(item.chatId ?? item.chat_id ?? "").trim();
   if (!chatId) throw new Error("A Telegram chat is required for a Buy Bot delivery.");
   const id = String(item.id || groupBuyOutboxId({ chatId, eventKey: item.eventKey })).trim();
-  if (store.delivered[id] || store.terminal[id]) return { store, id, inserted: false, completed: true };
-  if (store.outbox[id]) return { store, id, inserted: false, completed: false };
+  let canonicalId = groupBuyCanonicalDeliveryId(store, id);
+  const delivered = Boolean(store.delivered[canonicalId]);
+  const terminal = Boolean(store.terminal[canonicalId]);
+  if (delivered || terminal) {
+    return {
+      store, id, canonicalId, aliased: canonicalId !== id,
+      inserted: false, completed: true, delivered, terminal,
+    };
+  }
+  if (store.outbox[canonicalId]) {
+    return {
+      store, id, canonicalId, aliased: canonicalId !== id,
+      inserted: false, completed: false, delivered: false, terminal: false,
+    };
+  }
+  // A stale alias whose canonical receipt has aged out must not suppress an unrelated future retry.
+  if (canonicalId !== id) {
+    delete store.aliases[id];
+    canonicalId = id;
+  }
   store.outbox[id] = {
     ...item,
     id,
@@ -53,7 +123,10 @@ export function enqueueGroupBuyOutbox(storeValue, item = {}, now = Date.now()) {
     nextAttemptAt: finiteInteger(item.nextAttemptAt),
     lastError: String(item.lastError || "").slice(0, 500),
   };
-  return { store, id, inserted: true, completed: false };
+  return {
+    store, id, canonicalId: id, aliased: false,
+    inserted: true, completed: false, delivered: false, terminal: false,
+  };
 }
 
 export function telegramRetryAfterMs(error) {
@@ -66,6 +139,14 @@ export function telegramRetryAfterMs(error) {
   const message = String(error?.message || error || "");
   const match = message.match(/retry after\s+(\d+)/i);
   return match ? Math.max(1_000, Number(match[1]) * 1_000) : 0;
+}
+
+export function telegramMigrateToChatId(value) {
+  const candidate = value?.providerData?.parameters?.migrate_to_chat_id
+    ?? value?.parameters?.migrate_to_chat_id
+    ?? value?.migrate_to_chat_id;
+  const chatId = String(candidate ?? "").trim();
+  return /^-?[1-9]\d*$/.test(chatId) ? chatId : "";
 }
 
 export function isPermanentTelegramChatError(error) {
@@ -83,7 +164,7 @@ export function isPermanentTelegramPayloadError(error) {
 export function isTransientTelegramError(error) {
   if (telegramRetryAfterMs(error) > 0) return true;
   const message = String(error?.providerData?.description || error?.message || error || "");
-  return /(?:429|too many requests|rate.?limit|timeout|timed out|temporar|fetch failed|network|socket|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|502|503|504)/i.test(message);
+  return /(?:429|too many requests|rate.?limit|timeout|timed out|temporar|fetch failed|network|socket|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|502|503|504|group chat was upgraded to a supergroup chat)/i.test(message);
 }
 
 export function groupBuyRetryDelayMs(error, attempts = 1) {
@@ -160,23 +241,263 @@ function pruneReceiptMap(receipts, now, maxRows = 20_000) {
   return Object.fromEntries(rows);
 }
 
-export function markGroupBuyDelivered(storeValue, id, { now = Date.now(), messageId = null } = {}) {
+function pruneAliasMap(store) {
+  for (const [aliasId, targetIdValue] of Object.entries(objectRecord(store.aliases))) {
+    const targetId = String(targetIdValue || "");
+    if (!targetId || (!store.outbox[targetId] && !store.delivered[targetId] && !store.terminal[targetId])) {
+      delete store.aliases[aliasId];
+    }
+  }
+  return store;
+}
+
+function groupBotStoreCopy(value) {
+  const source = objectRecord(value);
+  return { ...source, groups: { ...objectRecord(source.groups) } };
+}
+
+// A dead Telegram destination must stop receiving Buy Bot fanout, but the group's token, custom art,
+// raid/moderation settings and history remain intact so an admin can re-add the bot and turn buys back on.
+export function disableGroupBuyChatConfig(storeValue, chatId, {
+  now = Date.now(), reason = "telegram_unreachable",
+} = {}) {
+  const store = groupBotStoreCopy(storeValue);
+  const key = String(chatId ?? "").trim();
+  const current = objectRecord(store.groups[key]);
+  if (!key || !Object.keys(current).length) return { store, changed: false, entry: null };
+  const entry = {
+    ...current,
+    features: { ...objectRecord(current.features), buybot: false },
+    buyDeliveryDisabledAt: finiteInteger(now),
+    buyDeliveryDisabledReason: String(reason || "telegram_unreachable").slice(0, 80),
+  };
+  store.groups[key] = entry;
+  return { store, changed: Boolean(current.features?.buybot), entry };
+}
+
+// Telegram's structured migrate_to_chat_id is authoritative. Preserve an archived copy under the old
+// invalid ID, move every configured module to the new supergroup, and avoid overwriting a genuinely
+// configured destination with a just-created default entry.
+export function migrateGroupBuyChatConfig(storeValue, fromChatId, toChatId, { now = Date.now() } = {}) {
+  const store = groupBotStoreCopy(storeValue);
+  const fromKey = String(fromChatId ?? "").trim();
+  const toKey = String(toChatId ?? "").trim();
+  if (!fromKey || !toKey || fromKey === toKey) return { store, changed: false, fromEntry: null, toEntry: null };
+  const fromEntry = objectRecord(store.groups[fromKey]);
+  if (!Object.keys(fromEntry).length) return { store, changed: false, fromEntry: null, toEntry: objectRecord(store.groups[toKey]) };
+  const existing = objectRecord(store.groups[toKey]);
+  const fromFeatures = objectRecord(fromEntry.features);
+  const existingFeatures = objectRecord(existing.features);
+  const existingIsConfigured = Boolean(existing.token)
+    || Object.keys(existing).some((key) => !["addedAt", "features", "title", "token"].includes(key));
+  const features = existingIsConfigured
+    ? { ...fromFeatures, ...existingFeatures }
+    : { ...existingFeatures, ...fromFeatures };
+  const target = {
+    ...fromEntry,
+    ...existing,
+    title: String(existing.title || fromEntry.title || "").slice(0, 80),
+    token: existing.token || fromEntry.token || null,
+    features,
+    migratedFromChatId: fromKey,
+    migratedAt: finiteInteger(now),
+  };
+  delete target.buyDeliveryDisabledAt;
+  delete target.buyDeliveryDisabledReason;
+  delete target.migratedToChatId;
+  const archivedFeatureKeys = new Set([...Object.keys(fromFeatures), "buybot"]);
+  const archivedFeatures = Object.fromEntries([...archivedFeatureKeys].map((key) => [key, false]));
+  store.groups[fromKey] = {
+    ...fromEntry,
+    features: archivedFeatures,
+    migratedToChatId: toKey,
+    migratedAt: finiteInteger(now),
+  };
+  store.groups[toKey] = target;
+  return { store, changed: true, fromEntry: store.groups[fromKey], toEntry: target };
+}
+
+// Keep durable IDs stable while moving queued payloads. Waiters and accepted-send receipts are keyed by
+// those IDs, so re-hashing here could orphan a caller or resend a Telegram-accepted message.
+export function migrateGroupBuyDeliveryChat(storeValue, fromChatId, toChatId, {
+  now = Date.now(),
+  moveOutbox = true,
+  acceptedReceipts = {},
+} = {}) {
+  let store = normalizeGroupBuyDeliveryStore(storeValue);
+  const fromKey = String(fromChatId ?? "").trim();
+  const toKey = String(toChatId ?? "").trim();
+  if (!fromKey || !toKey || fromKey === toKey) {
+    return { store, movedIds: [], dedupedIds: [], completedIds: [], acceptedIds: [] };
+  }
+  const movedIds = [];
+  const dedupedIds = [];
+  const completedIds = [];
+  const acceptedIds = [];
+  const accepted = objectRecord(acceptedReceipts);
+  store.chatRedirects[fromKey] = toKey;
+  for (const [chatId, destination] of Object.entries(store.chatRedirects)) {
+    if (String(destination) === fromKey) store.chatRedirects[chatId] = toKey;
+  }
+  while (Object.keys(store.chatRedirects).length > 1_000) {
+    delete store.chatRedirects[Object.keys(store.chatRedirects)[0]];
+  }
+  const destinationEvents = new Map(
+    Object.entries(store.outbox)
+      .filter(([, item]) => String(item?.chatId) === toKey && String(item?.eventKey || ""))
+      .map(([id, item]) => [String(item.eventKey), id]),
+  );
+  const destinationReceipts = new Map();
+  // A delivered receipt is stronger than an older terminal marker for the same event.
+  for (const [kind, receipts] of [["terminal", store.terminal], ["delivered", store.delivered]]) {
+    for (const [id, receiptValue] of Object.entries(receipts)) {
+      const receipt = objectRecord(receiptValue);
+      const eventKey = String(receipt.eventKey || "");
+      if (String(receipt.chatId) !== toKey || !eventKey) continue;
+      destinationReceipts.set(eventKey, { id, kind });
+    }
+  }
+  for (const [id, itemValue] of Object.entries(store.outbox)) {
+    const item = objectRecord(itemValue);
+    if (String(item.chatId) !== fromKey) continue;
+    const eventKey = String(item.eventKey || "");
+    const completedDestination = eventKey ? destinationReceipts.get(eventKey) : null;
+    const completedCanonicalId = completedDestination
+      ? groupBuyCanonicalDeliveryId(store, completedDestination.id)
+      : "";
+    const destinationDelivered = Boolean(store.delivered[completedCanonicalId]);
+    const destinationTerminal = Boolean(store.terminal[completedCanonicalId]);
+    if (
+      completedCanonicalId
+      && completedCanonicalId !== id
+      && (destinationDelivered || destinationTerminal)
+    ) {
+      // The event already reached (or permanently completed at) the new supergroup. The old pending
+      // row must never send a second copy after migration. Alias its durable ID to the completed
+      // destination receipt so replay remains suppressed across process restarts.
+      delete store.outbox[id];
+      store.aliases[id] = completedCanonicalId;
+      const destinationId = groupBuyOutboxId({ chatId: toKey, eventKey });
+      if (destinationId !== completedCanonicalId) store.aliases[destinationId] = completedCanonicalId;
+      completedIds.push({ id, canonicalId: completedCanonicalId, delivered: destinationDelivered });
+      continue;
+    }
+    const duplicateId = eventKey ? destinationEvents.get(eventKey) : "";
+    if (duplicateId && duplicateId !== id && store.outbox[duplicateId]) {
+      const acceptedReceipt = objectRecord(accepted[duplicateId]);
+      if (Object.keys(acceptedReceipt).length) {
+        // Telegram accepted the destination row before its receipt could acquire the delivery-file
+        // lock. Commit that real send atomically and cancel the old source copy instead of converting
+        // the accepted destination into a terminal duplicate.
+        const marked = markGroupBuyDelivered(store, duplicateId, {
+          now: finiteInteger(acceptedReceipt.at, finiteInteger(now)),
+          messageId: acceptedReceipt.messageId,
+          chatId: String(acceptedReceipt.chatId || toKey),
+        });
+        store = marked.store;
+        delete store.outbox[id];
+        store.aliases[id] = duplicateId;
+        const destinationId = groupBuyOutboxId({ chatId: toKey, eventKey });
+        if (destinationId !== duplicateId) store.aliases[destinationId] = duplicateId;
+        completedIds.push({ id, canonicalId: duplicateId, delivered: true });
+        acceptedIds.push(duplicateId);
+        destinationEvents.set(eventKey, duplicateId);
+        continue;
+      }
+      // The source item is the older/canonical queue entry and may be the in-flight message that just
+      // triggered Telegram's migration response. Keep its stable ID and terminalize the destination
+      // duplicate so restart replay can never post the same buy twice.
+      delete store.outbox[duplicateId];
+      store.terminal[duplicateId] = {
+        at: finiteInteger(now),
+        chatId: toKey,
+        eventKey,
+        error: `Deduplicated during Telegram migration to ${toKey}`,
+      };
+      dedupedIds.push(duplicateId);
+    }
+    if (moveOutbox) {
+      store.outbox[id] = { ...item, id: String(item.id || id), chatId: toKey };
+      movedIds.push(id);
+    }
+    if (eventKey) {
+      const destinationId = groupBuyOutboxId({ chatId: toKey, eventKey });
+      if (destinationId !== id) store.aliases[destinationId] = id;
+    }
+    if (eventKey) destinationEvents.set(eventKey, id);
+  }
+  for (const receipts of [store.delivered, store.terminal]) {
+    for (const [id, receiptValue] of Object.entries(receipts)) {
+      const receipt = objectRecord(receiptValue);
+      const eventKey = String(receipt.eventKey || "");
+      if (String(receipt.chatId) !== fromKey || !eventKey) continue;
+      const destinationId = groupBuyOutboxId({ chatId: toKey, eventKey });
+      if (destinationId !== id) store.aliases[destinationId] = id;
+    }
+  }
+  if (moveOutbox) {
+    const sentAt = [
+      ...(Array.isArray(store.pacing[fromKey]?.sentAt) ? store.pacing[fromKey].sentAt : []),
+      ...(Array.isArray(store.pacing[toKey]?.sentAt) ? store.pacing[toKey].sentAt : []),
+    ].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+    if (sentAt.length) store.pacing[toKey] = { sentAt: sentAt.slice(-GROUP_BUY_CHAT_WINDOW_LIMIT) };
+    delete store.pacing[fromKey];
+  }
+  store.terminal = pruneReceiptMap(store.terminal, now, 5_000);
+  return { store: pruneAliasMap(store), movedIds, dedupedIds, completedIds, acceptedIds };
+}
+
+export function terminateGroupBuyChatOutbox(storeValue, chatId, error, { now = Date.now() } = {}) {
   const store = normalizeGroupBuyDeliveryStore(storeValue);
-  const item = store.outbox[id];
-  if (!item) return { store, item: null };
-  delete store.outbox[id];
-  store.delivered[id] = {
+  const key = String(chatId ?? "").trim();
+  const message = String(error?.providerData?.description || error?.message || error || "Telegram destination is unavailable").slice(0, 500);
+  const terminalIds = [];
+  for (const [id, itemValue] of Object.entries(store.outbox)) {
+    const item = objectRecord(itemValue);
+    if (String(item.chatId) !== key) continue;
+    delete store.outbox[id];
+    store.terminal[id] = {
+      at: finiteInteger(now),
+      chatId: key,
+      eventKey: String(item.eventKey || ""),
+      error: message,
+    };
+    terminalIds.push(id);
+  }
+  store.terminal = pruneReceiptMap(store.terminal, now, 5_000);
+  return { store: pruneAliasMap(store), terminalIds };
+}
+
+export function markGroupBuyDelivered(storeValue, id, {
+  now = Date.now(),
+  messageId = null,
+  chatId = null,
+} = {}) {
+  const store = normalizeGroupBuyDeliveryStore(storeValue);
+  const requestedId = String(id || "");
+  const canonicalId = groupBuyCanonicalDeliveryId(store, requestedId);
+  const item = store.outbox[canonicalId];
+  if (!item) return { store, item: null, id: canonicalId, requestedId };
+  const deliveredChatId = String(chatId ?? item.chatId);
+  delete store.outbox[canonicalId];
+  delete store.terminal[requestedId];
+  store.delivered[canonicalId] = {
     at: finiteInteger(now),
     messageId: messageId == null ? null : String(messageId),
     eventKey: String(item.eventKey || ""),
-    chatId: String(item.chatId),
+    chatId: deliveredChatId,
   };
-  const sentAt = pacingRows(store, item.chatId, now);
+  const sentAt = pacingRows(store, deliveredChatId, now);
   sentAt.push(finiteInteger(now));
-  store.pacing[String(item.chatId)] = { sentAt: sentAt.slice(-GROUP_BUY_CHAT_WINDOW_LIMIT) };
+  store.pacing[deliveredChatId] = { sentAt: sentAt.slice(-GROUP_BUY_CHAT_WINDOW_LIMIT) };
   store.delivered = pruneReceiptMap(store.delivered, now);
   store.terminal = pruneReceiptMap(store.terminal, now, 5_000);
-  return { store, item };
+  return {
+    store: pruneAliasMap(store),
+    item: { ...item, chatId: deliveredChatId },
+    id: canonicalId,
+    requestedId,
+  };
 }
 
 export function markGroupBuyFailed(storeValue, id, error, { now = Date.now() } = {}) {
@@ -188,7 +509,7 @@ export function markGroupBuyFailed(storeValue, id, error, { now = Date.now() } =
     delete store.outbox[id];
     store.terminal[id] = { at: finiteInteger(now), chatId: String(item.chatId), eventKey: String(item.eventKey || ""), error: message };
     store.terminal = pruneReceiptMap(store.terminal, now, 5_000);
-    return { store, item, terminal: true };
+    return { store: pruneAliasMap(store), item, terminal: true };
   }
   item.attempts = finiteInteger(item.attempts) + 1;
   item.lastError = message;

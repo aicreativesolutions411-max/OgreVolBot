@@ -57,6 +57,8 @@ const helpers = Function(`"use strict";${helperSource};return {
   createGroupBuyHostRateGate,
   groupBuyRateLimitDelayMs,
   groupBuyBackoffDelayMs,
+  groupBuyFeedRetryDelayMs,
+  retryGroupBuyFeedOperation,
   createGroupBuyHttpState,
   beginGroupBuyHttpProgress,
   applyGroupBuyHttpPage,
@@ -96,6 +98,60 @@ test("one host-wide FIFO gate spaces starts and applies provider-wide 429 cooldo
   assert.deepEqual(starts, [0, 5_000]);
   assert.ok(sleeps.some((milliseconds) => milliseconds >= 5_000));
   assert.ok(helpers.groupBuyBackoffDelayMs(3, 8_000, 0) >= 8_000);
+  assert.match(serverSource, /remainingHeader \? Number\(remainingHeader\) : Number\.NaN/);
+  assert.match(serverSource, /remaining <= 1/);
+});
+
+test("Pump buy pages retry through the shared cooldown and preserve the page until success", async () => {
+  let calls = 0;
+  const cooldowns = [];
+  const retries = [];
+  const result = await helpers.retryGroupBuyFeedOperation(async ({ attempt }) => {
+    calls += 1;
+    if (attempt <= 2) {
+      const error = new Error("Pump trade feed returned HTTP 429");
+      error.status = 429;
+      error.retryAfterMs = attempt === 1 ? 12_000 : 6_000;
+      throw error;
+    }
+    return { trades: [{ id: "buy-after-throttle" }] };
+  }, {
+    maxAttempts: 4,
+    cooldownFn: (delayMs) => cooldowns.push(delayMs),
+    onRetry: (entry) => retries.push(entry),
+  });
+
+  assert.equal(calls, 3);
+  assert.deepEqual(result.trades.map((trade) => trade.id), ["buy-after-throttle"]);
+  assert.equal(cooldowns.length, 2);
+  assert.ok(cooldowns[0] >= 12_000);
+  assert.ok(cooldowns[1] >= 6_000);
+  assert.equal(retries.length, 2);
+});
+
+test("Pump buy page retry policy is bounded and rejects permanent responses immediately", async () => {
+  assert.equal(helpers.groupBuyFeedRetryDelayMs({ status: 400, message: "bad request" }, 1, 0), 0);
+  assert.equal(helpers.groupBuyFeedRetryDelayMs({ status: 429, message: "throttled" }, 1, 0), 5_000);
+  assert.ok(helpers.groupBuyFeedRetryDelayMs({ status: 503, message: "unavailable" }, 2, 0) >= 3_000);
+  assert.ok(helpers.groupBuyFeedRetryDelayMs({ status: 522, message: "Cloudflare timeout" }, 1, 0) > 0);
+
+  let permanentCalls = 0;
+  await assert.rejects(helpers.retryGroupBuyFeedOperation(async () => {
+    permanentCalls += 1;
+    const error = new Error("Pump trade feed returned HTTP 404");
+    error.status = 404;
+    throw error;
+  }, { maxAttempts: 4 }), /HTTP 404/);
+  assert.equal(permanentCalls, 1);
+
+  let throttledCalls = 0;
+  await assert.rejects(helpers.retryGroupBuyFeedOperation(async () => {
+    throttledCalls += 1;
+    const error = new Error("Pump trade feed returned HTTP 429");
+    error.status = 429;
+    throw error;
+  }, { maxAttempts: 3 }), /HTTP 429/);
+  assert.equal(throttledCalls, 3);
 });
 
 test("the shared Pump host gate lets live buy pages jump ahead of queued background reads", async () => {
@@ -187,13 +243,19 @@ test("zero or identity-less websocket events do not poison recovery by HTTP", ()
   assert.match(serverSource, /async function postGroupBuy\(mint, \{ eventKey = ""/);
   const postGroupBuySource = sourceBetween("async function postGroupBuy", "async function warmRhGroupBuyEthUsd");
   assert.match(postGroupBuySource, /firstString\(\s*eventKey,\s*eventAlias,/s);
-  assert.match(serverSource, /queueGroupBuyAlert\([^;]+\{ eventKey: alertEventKey \}\);/s);
+  assert.doesNotMatch(postGroupBuySource, /await resolveGroupTokenImage/);
+  assert.match(postGroupBuySource, /void resolveGroupTokenImage\(mint\)/);
+  assert.match(serverSource, /queueGroupBuyAlert\([^;]+\{ eventKey: alertEventKey, targetGeneration \},\s*\);/s);
   assert.match(functionBody("pollGroupBuyTradesForMint"), /await handoffGroupBuyTrade\(mint, trade\)/);
   assert.match(functionBody("pollGroupBuyTradesForMint"), /if \(!commit\(\)\) throw/);
   assert.match(functionBody("pollGroupBuyTradesForMint"), /await persistGroupBuySolState\(mint\)/);
   assert.match(serverSource, /await restoreGroupBuyReliabilityState\(\)/);
   assert.doesNotMatch(serverSource, /(?<!pumpSwapApi)fetch(?:Json)?\(`https:\/\/swap-api\.pump\.fun/);
-  assert.match(functionBody("fetchGroupBuyTradePage"), /pumpSwapApiFetch\(url,[\s\S]*priority: 100/);
+  const fetchPage = functionBody("fetchGroupBuyTradePage");
+  assert.match(fetchPage, /retryGroupBuyFeedOperation/);
+  assert.match(fetchPage, /priority: attempt > 1 \? 110 : 100/);
+  assert.match(fetchPage, /maxAttempts: GROUP_BUY_TRADE_FETCH_ATTEMPTS/);
+  assert.match(fetchPage, /pumpSwapApiHostGate\.cooldown/);
 });
 
 test("one websocket alias merges with one HTTP slot without collapsing identical instructions", () => {
@@ -318,4 +380,22 @@ test("pagination resumes after page errors or budgets and never finalizes a curs
   assert.equal(helpers.commitGroupBuyHttpProgress(resumedState, resumed, identity, alias, 100), true);
   assert.equal(resumedState.resume, null);
   assert.deepEqual([...resumedState.seen].slice(0, 3), ["id:newest", "id:middle", "id:older"]);
+});
+
+test("healthz exposes buy-feed freshness, retry, and durable delivery backlog signals", () => {
+  assert.match(serverSource, /buyBot:\s*groupBuyHealthSnapshot\(\)/);
+  const health = functionBody("groupBuyHealthSnapshot");
+  for (const field of [
+    "cursorGaps",
+    "retries",
+    "lastSuccessAgoMs",
+    "httpGateQueued",
+    "httpGateCooldownRemainingMs",
+    "deliveryPendingAlerts",
+    "deliveryOldestPendingAgeMs",
+    "deliveryBuysDelivered",
+    "deliveryLastErrorAgoMs",
+  ]) {
+    assert.match(health, new RegExp(`\\b${field}\\b`), `${field} must remain observable`);
+  }
 });
