@@ -191,6 +191,11 @@ export function createPumpPortalStream(options = {}) {
     counters.migrations += 1;
     const creation = creationByMint.get(mint);
     if (creation) creation.migrated = true;
+    if (typeof config.onMigration === "function") {
+      try {
+        config.onMigration({ mint, at: now(), event });
+      } catch {}
+    }
   }
 
   function handleMessage(raw) {

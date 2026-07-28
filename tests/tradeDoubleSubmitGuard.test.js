@@ -25,6 +25,7 @@ const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.ur
 const polyTradingSource = fs.readFileSync(new URL("../src/lib/polymarketTrading.js", import.meta.url), "utf8");
 const polyHubSource = fs.readFileSync(new URL("../web/public/polymarket.html", import.meta.url), "utf8");
 const pumpCashbackSource = fs.readFileSync(new URL("../src/lib/pumpCashback.js", import.meta.url), "utf8");
+const pumpPortalStreamSource = fs.readFileSync(new URL("../src/lib/pumpPortalStream.js", import.meta.url), "utf8");
 const pufcatSource = fs.readFileSync(new URL("../web/public/pufcat.html", import.meta.url), "utf8");
 
 test("Pufcat campaign page keeps live market, chart, trade, and community paths together", () => {
@@ -3816,6 +3817,21 @@ test("Smart Call messages carry website Chart/Quick Buy and verified milestone r
   assert.match(receipts, /SMART_CALL_MILESTONES/);
   assert.match(receipts, /call\.peakMc \/ call\.entryMc/);
   assert.match(receipts, /Verified from the original tracked entry/);
+  assert.match(receipts, /smartCallHasVerifiedPostBondPool\(live, pumpProof\)/); // an LP flicker is not graduation
+  assert.match(receipts, /migrationProofVersion/);                              // false legacy alerts can be invalidated
+  const bondProof = functionBody(serverSource, "smartCallPumpBondingProof");
+  assert.match(bondProof, /getPumpFunTokenMetadata/);
+  assert.match(bondProof, /pump\.graduated/);
+  assert.match(bondProof, /progress.*99\.5/s);
+  const postBond = functionBody(serverSource, "smartCallHasVerifiedPostBondPool");
+  assert.match(postBond, /proof\?\.completed/);
+  assert.match(postBond, /pumpswap\|raydium\|meteora\|orca/);
+  const migrationEvent = functionBody(serverSource, "handleSmartCallPumpMigrationEvent");
+  assert.match(migrationEvent, /pumpMigrationObservedAt/);
+  assert.match(migrationEvent, /call\.lastCheckAt = 0/);
+  assert.match(migrationEvent, /smartCallReceiptTick/);
+  assert.match(serverSource, /onMigration: \(entry\) =>/);
+  assert.match(pumpPortalStreamSource, /config\.onMigration\(\{ mint, at: now\(\), event \}\)/);
   assert.match(serverSource, /setTimeout\(\(\) => \{ void smartCallWalletTick\(\); \}, 3_000\)/);
   assert.match(serverSource, /setInterval\(\(\) => \{ void smartCallWalletTick\(\); \}, 10_000\)/);
   assert.match(serverSource, /setInterval\(\(\) => \{ void smartCallPostTick\(\); \}, 30_000\)/);
@@ -4084,6 +4100,13 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "sendRhScanCard"), /buildScanCallerFooter\(chatId, address, info\.mc, message\)/);
   assert.match(functionBody(serverSource, "recordTelegramCall"), /channelUsername = message\.sender_chat\?\.username \|\| message\.chat\?\.username/);
   assert.match(functionBody(serverSource, "recordTelegramCall"), /if \(!\(Number\(rec\.entryMc\) > 0\)\) rec\.entryMc = mc/);
+  const callerMarket = functionBody(serverSource, "callerIntelExactBaseMarket");
+  assert.match(callerMarket, /tokenAddressEquals\(pair\?\.baseToken\?\.address, mint\)/); // quote token MC never becomes the call MC
+  assert.doesNotMatch(callerMarket, /quoteToken/);
+  const callerTick = functionBody(serverSource, "runCallerIntelTick");
+  assert.match(callerTick, /const fresh = all\.filter/);                          // winners keep updating after first 2x
+  assert.match(callerTick, /refreshCallerIntelMarketProof/);
+  assert.doesNotMatch(callerTick, /best\?\.marketCap \|\| best\?\.fdv/);
   const callerFooter = functionBody(serverSource, "buildScanCallerFooter");
   assert.match(callerFooter, /at \$\{scanFmtMoney\(entry\)\} MC/);
   assert.match(callerFooter, /pct >= 0 \? "🟢" : "🔴"/);
@@ -4951,8 +4974,8 @@ test("Telegram /calls shows each member's last 15 channel calls with a per-user 
   assert.match(peak, /callerIntel\.peakMultiple\(call\)/);
   assert.match(refresh, /fetchDexScreenerTokenPairsBatch\(solMints/);
   assert.match(refresh, /tokens\/v1\/robinhood/);
-  assert.match(refresh, /call\.lastMc = mc/);
-  assert.match(refresh, /call\.peakMc = Math\.max/);
+  assert.match(refresh, /callerIntelExactBaseMarket/);
+  assert.match(refresh, /refreshCallerIntelMarketProof\(call, market, nowMs\)/);
   assert.match(functionBody(serverSource, "groupBotHelpText"), /<code>\/calls<\/code>/);
 });
 
