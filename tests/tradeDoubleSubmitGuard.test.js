@@ -3219,6 +3219,8 @@ test("/leaderboard ranks callers by window; /wins keeps the coin hall of fame", 
   assert.match(view, /callerIntel\.buildLeaderboards\(scoped, \{ minResolved/);
   assert.match(view, /String\(c\.chatId\) === String\(chatId\)/);
   assert.match(view, /Number\(c\.firstAt\) >= cutoff/);
+  assert.match(view, /Number\(c\.marketProofVersion\) >= CALLER_INTEL_MARKET_PROOF_VERSION/);
+  assert.match(view, /Verifying/);
   assert.match(serverSource, /function bestCallerLeaderboardCall/);
   assert.match(view, /topByCaller/);
   assert.match(view, /hydrateCallerLeaderboardSymbols/);
@@ -3236,6 +3238,9 @@ test("/leaderboard ranks callers by window; /wins keeps the coin hall of fame", 
   assert.match(serverSource, /buildCallerLeaderboardView\("14d", chatId\)/);
   assert.doesNotMatch(serverSource, /buildCallerLeaderboardView\((?:win|"14d")\)(?!,)/);
   assert.match(serverSource, /callback_data: `clb:\$\{w\.key\}`/);
+  const globalView = functionBody(serverSource, "buildGlobalCallerBoardView");
+  assert.match(globalView, /Number\(c\.marketProofVersion\) >= CALLER_INTEL_MARKET_PROOF_VERSION/);
+  assert.match(globalView, /calls market-verified/);
 });
 
 // ---- Scan bot: PnL/flex brags → rotating SlimeWire image PnL card ----
