@@ -107,6 +107,82 @@ test("holder-reward launches activate official sharing before any dev or bundle 
   assert.match(launch, /PUMP_HOLDER_REWARDS_REQUIRE_LOCAL_FLOW/);
 });
 
+test("deferred dev and managed-wallet buys persist an exact resumable plan before mint submission", () => {
+  const local = functionBody(server, "webLaunchPumpPortalLocal");
+  const persistIndex = local.indexOf("postLaunchBuyIntent");
+  const launchIndex = local.indexOf("await service.launch");
+  assert.ok(persistIndex >= 0 && launchIndex > persistIndex, "the exact post-launch buy plan must be durable before mint submission");
+  assert.match(local, /buildPumpPostLaunchBuyIntent/);
+  assert.match(local, /executePumpPostLaunchBuyIntent/);
+
+  const intent = functionBody(server, "buildPumpPostLaunchBuyIntent");
+  assert.match(intent, /walletPublicKey/);
+  assert.match(intent, /amountSol/);
+  assert.match(intent, /exitStrategy/);
+  assert.match(intent, /status: "PENDING"/);
+
+  const execute = functionBody(server, "executePumpPostLaunchBuyIntentCore");
+  assert.match(execute, /persistedLaunchBundleFeeSharingDisposition/);
+  assert.match(execute, /disposition\.required && !disposition\.active/);
+  assert.match(execute, /runIdempotentMoneyOp/);
+  assert.match(execute, /pump-post-launch-buy/);
+  assert.match(execute, /ENTRY_CONFIRMED_SETUP_PENDING/);
+  assert.match(execute, /runLaunchBundleInviteWaves\(pending/);
+  const wrapper = functionBody(server, "executePumpPostLaunchBuyIntent");
+  assert.match(wrapper, /LockService\.withLock/);
+});
+
+test("deferred buy recovery never age-terminalizes a launch that may still be live", () => {
+  const execute = functionBody(server, "executePumpPostLaunchBuyIntentCore");
+  const noMint = execute.slice(execute.indexOf("if (!tokenMint)"), execute.indexOf("const disposition"));
+  assert.match(noMint, /launchStatus === "COMPLETE"/);
+  assert.doesNotMatch(noMint, /intentAge|15 \* 60_000|Date\.now\(\) -/);
+
+  const worker = functionBody(server, "resumePumpPostLaunchBuyIntents");
+  assert.match(worker, /launchStatus === "COMPLETE" \|\| launchStatus\.startsWith\("FAILED"\)/);
+  assert.doesNotMatch(
+    worker,
+    /for \(const attempt of \(store\.attempts \|\| \[\]\)\)/,
+    "the timer must not execute arbitrary pre-broadcast intents while their provider call may still be live"
+  );
+
+  const restart = functionBody(server, "pumpLaunchAttemptRestartDisposition");
+  assert.match(restart, /pumpLaunchAttemptHasSignedOrSubmittedEvidence/);
+  assert.match(restart, /restart_intent_only/);
+  assert.match(restart, /terminal_pre_broadcast/);
+  const terminal = functionBody(server, "terminalizePersistedPreBroadcastPumpLaunch");
+  assert.match(terminal, /FAILED_PRE_BROADCAST_RESTART/);
+  assert.match(terminal, /LAUNCH_NOT_SUBMITTED/);
+});
+
+test("deferred launch accounting and auto exits are durable-idempotent", () => {
+  const finalize = functionBody(server, "finalizePumpPostLaunchBuyEntry");
+  assert.match(finalize, /const provenanceId = durableTradeWatchKey/);
+  assert.match(finalize, /status: "ENTRY_CONFIRMED_SETUP_PENDING"/);
+  assert.match(finalize, /provenanceId/);
+  assert.match(finalize, /durablePlanKey/);
+  assert.match(finalize, /source: "pump_post_launch_auto_exit"/);
+
+  const autoExit = functionBody(server, "webCreateSingleTradeAutoExitPlan");
+  assert.match(autoExit, /options\.durablePlanKey/);
+  assert.match(autoExit, /plans\.plans\.find\(\(row\) => String\(row\.durablePlanKey/);
+  assert.match(autoExit, /if \(existing\)[\s\S]*?planCreated = false/);
+
+  const execute = functionBody(server, "executePumpPostLaunchBuyIntentCore");
+  const submit = execute.indexOf('"pump-post-launch-buy"');
+  const submitCallback = execute.slice(submit, execute.indexOf("ENTRY_CONFIRMED_SETUP_PENDING", submit));
+  assert.match(submitCallback, /async \(\) => \{[\s\S]*?await freshServerTradeWalletForOwner/);
+  assert.match(submitCallback, /return buyTokenForPlan\(wallet/);
+  const pending = execute.slice(execute.indexOf("const pending ="));
+  assert.match(pending, /authoritativeRecoveryTokenRawBalance/);
+  assert.match(pending, /preTokenBalanceKnown: true/);
+  const recovery = execute.slice(execute.indexOf("let balanceProofKnown"), execute.indexOf("const pending ="));
+  assert.match(recovery, /authoritativeRecoveryTokenRawBalance/);
+  assert.match(recovery, /5 \* 60_000 && balanceProofKnown/);
+  assert.doesNotMatch(recovery, /safeTokenRawBalance/);
+  assert.match(execute, /!error\?\.launchWalletTerminal && !ambiguous/);
+});
+
 test("holder vaults have an encrypted integrity-protected recovery path outside user wallet views", () => {
   const ensure = functionBody(server, "ensurePumpHolderRewardVault");
   assert.match(ensure, /readPumpHolderVaultRecoveryArtifact/);

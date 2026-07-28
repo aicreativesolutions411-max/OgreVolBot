@@ -61,6 +61,12 @@ test("launch invite reservations remain durable after the invite TTL", () => {
 });
 
 test("all 50 opted-in wallets retain first-opt-in queue order and run in bounded waves", async () => {
+  assert.match(serverSource, /const LAUNCH_BUNDLE_MONEY_WAVE_SIZE = 4/);
+  const inFlight = serverSource.slice(
+    serverSource.indexOf("const LAUNCH_BUNDLE_IN_FLIGHT_STATUSES"),
+    serverSource.indexOf("function launchBundleAttemptRows")
+  );
+  assert.doesNotMatch(inFlight, /ENTRY_CONFIRMED_SETUP_PENDING/);
   const queueValue = loadSyncFunction("launchBundleInviteQueueValue");
   const sortQueue = loadSyncFunction("sortLaunchBundleInviteQueue", { launchBundleInviteQueueValue: queueValue });
   const rows = Array.from({ length: 50 }, (_, index) => ({
@@ -76,7 +82,20 @@ test("all 50 opted-in wallets retain first-opt-in queue order and run in bounded
 
   const reserveBody = functionBody(serverSource, "reserveLaunchBundleInvites");
   assert.match(reserveBody, /allIds\.length > 50/);
-  assert.match(reserveBody, /sortLaunchBundleInviteQueue\(ids\.map/);
+  const missingSeatCheck = reserveBody.indexOf("selectedRows.some((row) => !row)");
+  const queueSort = reserveBody.indexOf("sortLaunchBundleInviteQueue(selectedRows)");
+  assert.ok(missingSeatCheck >= 0 && queueSort > missingSeatCheck, "stale invite IDs must return the intended 409 before queue sorting");
+  const boundSeatScan = reserveBody.slice(
+    reserveBody.indexOf("const alreadyBoundIds"),
+    reserveBody.indexOf("const totalBoundIds")
+  );
+  assert.match(boundSeatScan, /row\.launchAttemptId === launchAttemptId/);
+  assert.doesNotMatch(
+    boundSeatScan,
+    /row\.status === "RESERVED"/,
+    "consumed and terminal seats must still count toward the permanent 50-seat attempt cap"
+  );
+  assert.match(reserveBody, /newlyReservedIds/);
   assert.doesNotMatch(reserveBody, /\.slice\(0,\s*50\)/, "over-limit launches must be rejected, not silently truncated");
 
   const batches = [];
@@ -100,12 +119,12 @@ test("all 50 opted-in wallets retain first-opt-in queue order and run in bounded
 });
 
 test("participant buys persist crash-safe states before money submission and optional setup", () => {
-  for (const name of ["fulfillLaunchBundleInvites", "fulfillRhLaunchBundleInvites"]) {
+  for (const name of ["fulfillLaunchBundleInvitesCore", "fulfillRhLaunchBundleInvitesCore"]) {
     const body = functionBody(serverSource, name);
     const submitting = body.indexOf('status: "SUBMITTING"');
     const moneyOp = body.indexOf("runIdempotentMoneyOp(");
     const confirmedPending = body.indexOf('status: "ENTRY_CONFIRMED_SETUP_PENDING"');
-    const optionalSetup = name === "fulfillLaunchBundleInvites"
+    const optionalSetup = name === "fulfillLaunchBundleInvitesCore"
       ? body.indexOf("recordTradeEvents(")
       : body.indexOf("webRhArmGuard(");
 
@@ -115,7 +134,37 @@ test("participant buys persist crash-safe states before money submission and opt
       `${name} must persist a confirmed entry before optional event/exit setup`
     );
     assert.match(body, /runLaunchBundleInviteWaves\(pending/);
+    assert.match(body, /const availableSlots = Math\.max\(0, LAUNCH_BUNDLE_MONEY_WAVE_SIZE - inFlightCount\)/);
+    assert.match(body, /pendingAll\.slice\(0, availableSlots\)/);
+    const moneyCallback = body.slice(moneyOp, confirmedPending);
+    assert.match(moneyCallback, /async \(\) => \{[\s\S]*?await freshServerTradeWalletForOwner/);
+    assert.match(
+      moneyCallback,
+      name === "fulfillLaunchBundleInvitesCore" ? /return buyTokenForPlan\(wallet/ : /return webRhTradeCore\(participantUserId/
+    );
+    assert.match(body, /!error\?\.launchWalletTerminal && !ambiguous/);
   }
+
+  const freshWallet = functionBody(serverSource, "freshServerTradeWalletForOwner");
+  assert.match(freshWallet, /const store = await readWalletStore\(\)/);
+  assert.match(freshWallet, /walletsForOwner\(store, ownerUserId\)/);
+  assert.match(freshWallet, /wallet\.publicKey[\s\S]*?expectedPublicKey/);
+  assert.match(freshWallet, /assertServerTradeWalletReady/);
+  assert.match(freshWallet, /walletIndex: zeroBasedIndex \+ 1/);
+
+  const solana = functionBody(serverSource, "fulfillLaunchBundleInvitesCore");
+  const provenanceDefinition = solana.indexOf("const provenanceId = launchBundleInviteTradeProvenanceId");
+  const provenanceCheckpoint = solana.indexOf("provenanceId,", provenanceDefinition);
+  assert.ok(provenanceDefinition >= 0 && provenanceCheckpoint > provenanceDefinition);
+  assert.match(solana, /durablePlanKey: launchBundleInviteExitPlanKey\(invite, tokenMint\)/);
+  assert.match(solana, /authoritativeRecoveryTokenRawBalance/);
+  assert.match(solana, /preTokenBalanceKnown/);
+  const rhSuccess = functionBody(serverSource, "fulfillRhLaunchBundleInvitesCore");
+  assert.doesNotMatch(
+    rhSuccess,
+    /launchBundleInviteTradeProvenanceId\(invite,\s*tokenMint\)/,
+    "the Robinhood success path must not reference the Solana-only tokenMint identifier"
+  );
 
   const resume = functionBody(serverSource, "resumeLaunchBundleInviteEntries");
   assert.match(resume, /ENTRY_CONFIRMED_SETUP_PENDING/);
@@ -130,8 +179,10 @@ test("participant buys persist crash-safe states before money submission and opt
     "time-based blockhash expiry is safe for Solana only; an EVM transaction can remain pending beyond five minutes"
   );
   assert.doesNotMatch(expiryDecision, /failedOnChain \|\| safelyExpired/);
+  assert.match(expiryDecision, /safelyExpired && balanceProofKnown/);
+  assert.doesNotMatch(resume, /safeTokenRawBalance\(wallet\.publicKey, invite\.tokenMint\)/);
 
-  const robinhood = functionBody(serverSource, "fulfillRhLaunchBundleInvites");
+  const robinhood = functionBody(serverSource, "fulfillRhLaunchBundleInvitesCore");
   assert.match(
     robinhood,
     /results\.filter\(\(row\) => row\.retrying \|\| row\.ambiguous\)/,
@@ -166,8 +217,8 @@ test("restart recovery binds both Pump and Robinhood launch ledger records", () 
 
   assert.match(
     serverSource,
-    /if \(duplicateComplete && duplicateTokenMint\)[\s\S]*?bindLaunchBundleInvitesToToken\([\s\S]*?fulfillLaunchBundleInvites\(/,
-    "a duplicate COMPLETE Pump launch request must resume reserved participant entries"
+    /if \(duplicateComplete && duplicateTokenMint\)[\s\S]*?void fulfillLaunchBundleInvites\(/,
+    "a duplicate COMPLETE Pump launch request must use the authoritative participant coordinator"
   );
   assert.match(
     serverSource,
@@ -178,8 +229,8 @@ test("restart recovery binds both Pump and Robinhood launch ledger records", () 
 
 test("an ambiguity proven absent can advance to a fresh idempotency generation", () => {
   const resume = functionBody(serverSource, "resumeLaunchBundleInviteEntries");
-  const sol = functionBody(serverSource, "fulfillLaunchBundleInvites");
-  const robinhood = functionBody(serverSource, "fulfillRhLaunchBundleInvites");
+  const sol = functionBody(serverSource, "fulfillLaunchBundleInvitesCore");
+  const robinhood = functionBody(serverSource, "fulfillRhLaunchBundleInvitesCore");
   const generationPattern = /(?:recovery|retry)(?:Generation|Nonce)/i;
   const explicitCacheResetPattern = /(?:clear|delete|reset)[A-Za-z]*(?:Idem|Idempotent|Ambiguous)/i;
 
@@ -211,7 +262,7 @@ test("an ambiguity proven absent can advance to a fresh idempotency generation",
 });
 
 test("Robinhood swap recovery reuses funding instead of bridging the participant SOL twice", () => {
-  const fulfillment = functionBody(serverSource, "fulfillRhLaunchBundleInvites");
+  const fulfillment = functionBody(serverSource, "fulfillRhLaunchBundleInvitesCore");
   const trade = functionBody(serverSource, "webRhTradeCore");
   const fundingField = /fundingAttemptId:\s*([^,\n}]+)/.exec(fulfillment);
 
@@ -227,4 +278,100 @@ test("Robinhood swap recovery reuses funding instead of bridging the participant
     /funding\?\.duplicate|funding\.duplicate/,
     "a replayed funding receipt must not wait for the already-funded ETH balance to increase a second time"
   );
+});
+
+test("Pump participant fulfillment fails closed and reacquires one attempt lock per bounded wave", () => {
+  const coordinator = functionBody(serverSource, "fulfillLaunchBundleInvites");
+  assert.match(coordinator, /persistedLaunchBundleFeeSharingDisposition/);
+  assert.match(coordinator, /terminalizeLaunchBundleInvitesForFeeSharingConflict/);
+  assert.match(coordinator, /deferLaunchBundleInvitesForFeeSharing/);
+  assert.match(coordinator, /drainLaunchBundleFulfillmentWaves/);
+  assert.match(coordinator, /fulfillLaunchBundleInvitesCore/);
+  assert.ok(
+    coordinator.indexOf("drainLaunchBundleFulfillmentWaves") < coordinator.indexOf("persistedLaunchBundleFeeSharingDisposition"),
+    "the persisted fee-sharing gate must execute inside the locked wave callback"
+  );
+
+  const drain = functionBody(serverSource, "drainLaunchBundleFulfillmentWaves");
+  assert.match(drain, /withLaunchBundleFulfillmentLock/);
+  assert.match(drain, /waveNumber < 64/);
+  assert.match(drain, /wave\.blockedByInFlight/);
+
+  const core = functionBody(serverSource, "fulfillLaunchBundleInvitesCore");
+  assert.match(core, /launchBundleDueRows\(attemptRows\)/);
+  assert.match(functionBody(serverSource, "launchBundleDueRows"), /!row\.entry \|\| row\.entry\?\.status === "RETRYING"/);
+  assert.doesNotMatch(core, /WAITING_FEE_SHARING/);
+  assert.match(core, /\["", "RETRYING"\]/, "each worker must atomically claim its row before submitting money");
+
+  const rh = functionBody(serverSource, "fulfillRhLaunchBundleInvites");
+  assert.match(rh, /drainLaunchBundleFulfillmentWaves/);
+  assert.match(rh, /fulfillRhLaunchBundleInvitesCore/);
+
+  const recovery = functionBody(serverSource, "resumeLaunchBundleInviteEntries");
+  assert.match(recovery, /withLaunchBundleFulfillmentLock\(chain, queuedInvite\.ownerUserId/);
+  assert.match(recovery, /withLaunchBundleFulfillmentLock\(queuedChain, queuedInvite\.ownerUserId/);
+
+  const routeStart = serverSource.indexOf('pathname === "/api/web/launch/coin"');
+  const routeEnd = serverSource.indexOf('pathname === "/api/web/launch/split-creator-fees"', routeStart);
+  const launchRoute = serverSource.slice(routeStart, routeEnd);
+  assert.doesNotMatch(
+    launchRoute,
+    /deferLaunchBundleInvitesForFeeSharing\(/,
+    "the HTTP completion path must delegate the fee-sharing decision to the locked coordinator"
+  );
+  const preflightProgress = launchRoute.indexOf('stage: "participant_preflight"');
+  const preflightCall = launchRoute.indexOf("await preflightLaunchBundleInvites");
+  assert.ok(preflightProgress >= 0 && preflightProgress < preflightCall);
+  assert.match(launchRoute.slice(preflightCall, launchRoute.indexOf("body.participantInviteIds", preflightCall)), /status: "FAILED"/);
+});
+
+test("fee-sharing defer is atomic and recovery handles active, pending, and conflict states", () => {
+  const defer = functionBody(serverSource, "deferLaunchBundleInvitesForFeeSharing");
+  assert.match(defer, /withFileLock\(launchBundleInvitesPath\(\)/);
+  assert.match(defer, /invite\.tokenMint =/);
+  assert.match(defer, /status: "WAITING_FEE_SHARING"/);
+  assert.doesNotMatch(defer, /bindLaunchBundleInvitesToToken/);
+
+  const waits = functionBody(serverSource, "reconcileLaunchBundleInviteFeeSharingWaits");
+  assert.match(waits, /persistedLaunchBundleFeeSharingDisposition/);
+  assert.match(waits, /disposition\.conflict/);
+  assert.match(waits, /disposition\.active/);
+  assert.match(waits, /terminalizeLaunchBundleInvitesForFeeSharingConflict/);
+  assert.match(waits, /readyLaunchBundleInvitesAfterFeeSharing/);
+  assert.match(waits, /withLaunchBundleFulfillmentLock\("solana"/);
+});
+
+test("recovered Solana participant bookkeeping is retry-safe without an RPC signature", () => {
+  const authoritativeBalance = functionBody(serverSource, "authoritativeRecoveryTokenRawBalance");
+  assert.match(authoritativeBalance, /getTokenBalanceForMintCached[\s\S]*?force: true/);
+  assert.match(authoritativeBalance, /known: true/);
+  assert.match(authoritativeBalance, /known: false/);
+
+  const recovered = functionBody(serverSource, "finalizeRecoveredLaunchBundleInvite");
+  assert.match(recovered, /const provenanceId = launchBundleInviteTradeProvenanceId/);
+  assert.match(recovered, /signature: landedSignature,[\s\S]*?provenanceId/);
+  assert.match(recovered, /durablePlanKey: launchBundleInviteExitPlanKey/);
+  assert.match(recovered, /const accountingWallet = wallet \|\|/);
+  assert.match(recovered, /source: "launch_bundle_invite_auto_exit"/);
+
+  assert.match(recovered, /recordRhTradeEvent\(\{[\s\S]*?source: "launch_bundle_invite_rh_reconciled"[\s\S]*?provenanceId/);
+  const rhRecorder = functionBody(serverSource, "recordRhTradeEvent");
+  assert.match(rhRecorder, /event\.provenanceId/);
+  assert.match(rhRecorder, /store\.trades\.some\(\(t\) => String\(t\.provenanceId/);
+  const rhCore = functionBody(serverSource, "fulfillRhLaunchBundleInvitesCore");
+  assert.match(rhCore, /tradeProvenanceId: provenanceId/);
+  const rhTrade = functionBody(serverSource, "webRhTradeCore");
+  assert.match(rhTrade, /internal\.tradeProvenanceId/);
+
+  const autoExit = functionBody(serverSource, "webCreateSingleTradeAutoExitPlan");
+  assert.match(autoExit, /plans\.plans\.find\(\(row\) => String\(row\.durablePlanKey/);
+  assert.match(autoExit, /if \(existing\)[\s\S]*?planCreated = false/);
+});
+
+test("invite compaction never age-prunes an active durable money intent", () => {
+  const create = functionBody(serverSource, "createLaunchBundleInvite");
+  const activeIndex = create.indexOf("const active = store.invites.filter");
+  const historyAgeIndex = create.indexOf("30 * 24 * 60 * 60_000");
+  assert.ok(activeIndex >= 0 && historyAgeIndex > activeIndex);
+  assert.doesNotMatch(create, /const retained = store\.invites\.filter/);
 });

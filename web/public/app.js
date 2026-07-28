@@ -11362,7 +11362,7 @@ function launchCoinHtml() {
       key: "live", label: "Live", hint: "Status feed", title: "Live Launch Status",
       html: pumpLivePanelHtml(draft)
     }
-  ];
+  ].filter((section) => section.key !== "nft");
   const launchFocus = window.location.pathname.includes("/launch-coin");
   const focusBar = launchFocus ? `
     <div class="launch-focus-bar">
@@ -11447,15 +11447,7 @@ function readLaunchCoinDraft() {
       minWalletPayoutSol: 0.0001,
       weighting: "balance"
     },
-    nftCollection: {
-      enabled: Boolean($("[data-launch-coin-nft-enabled]")?.checked),
-      name: ($("[data-launch-coin-nft-name]")?.value || "").trim(),
-      description: ($("[data-launch-coin-nft-description]")?.value || "").trim(),
-      supplyMode: $("[data-launch-coin-nft-supply-mode]")?.value || "expandable",
-      supplyCap: Number($("[data-launch-coin-nft-supply-cap]")?.value || 500),
-      royaltyBps: Number($("[data-launch-coin-nft-royalty]")?.value ?? 500),
-      useCoinArt: true
-    },
+    nftCollection: { enabled: false },
     // A positive amount always enables the dev buy. Do not make users also keep a
     // separate switch in sync or let a stale unchecked draft silently drop the buy.
     devBuyEnabled: Number(devBuySol) > 0,

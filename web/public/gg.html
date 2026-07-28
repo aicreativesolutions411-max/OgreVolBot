@@ -480,7 +480,7 @@
   .launch-card{max-width:640px;margin:0 auto;padding:20px}
   .launch-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:18px}
   .launch-head h3{font-size:22px;margin:0 0 5px}.launch-head p{margin:0!important;max-width:430px;line-height:1.45}
-  .launch-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:6px!important;padding:5px;border:1px solid var(--border);border-radius:12px;background:rgba(0,0,0,.16);margin:0 0 18px!important}
+  .launch-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px!important;padding:5px;border:1px solid var(--border);border-radius:12px;background:rgba(0,0,0,.16);margin:0 0 18px!important}
   .launch-tabs button{padding:10px 6px;border-radius:9px;font-size:12px}.launch-tabs button.on{box-shadow:0 0 0 1px rgba(114,255,35,.18) inset}
   .launch-section-title{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:2px 0 8px}
   .launch-media{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
@@ -759,16 +759,28 @@
   const ACTIVE_WALLET_KEY="slimecashActiveWalletIndex"; // shared with SlimeCash + /fun
   const SCOUT_QUEUE_KEY="ggSwampScoutQueue";
   const ALERT_RULE_KEY="ggSwampAlertRules";
+  const LAUNCH_DRAFT_KEY="slimewirePumpLaunchDraftV1";
+  const LAUNCH_INVITE_LINK_KEY="slimewireLaunchInviteLinkV1";
+  function readSavedLaunchDraft(){try{const saved=JSON.parse(localStorage.getItem(LAUNCH_DRAFT_KEY)||"null");return saved&&typeof saved==="object"?saved:{};}catch(e){return {};}}
+  function readSavedLaunchInviteLink(){try{const saved=JSON.parse(localStorage.getItem(LAUNCH_INVITE_LINK_KEY)||"null");return saved&&typeof saved==="object"?saved:{};}catch(e){return {};}}
+  const savedLaunchDraft=readSavedLaunchDraft();
+  const savedLaunchInviteLink=readSavedLaunchInviteLink();
   const state={route:"trending",mint:null,trendTab:"best",trenchTab:"board",volTf:"h1",marketChain:localStorage.getItem("ggMarketChain")||"all",rows:[],pollT:null,
     token:localStorage.getItem(TOKEN_KEY)||"",user:null,wallets:[],activeWallet:Number(localStorage.getItem(ACTIVE_WALLET_KEY))||null,
     presets:{trade:[],bundle:[]},activeTradePreset:localStorage.getItem("ggTradePreset")||"",searchTerm:"",pendingSell:null,portfolioTab:"positions",lcNftMint:"",lcNftOverview:null,lcNftItemImage:null,
-    launchInviteToken:(new URLSearchParams(location.search).get("bundleInvite")||"").trim(),launchInvites:[],launchInviteLastUrl:"",launchCoins:[],pumpRewards:null,pumpRewardsCheckedAt:0,pumpRewardsError:"",
+    launchPumpOnly:(new URLSearchParams(location.search).get("launchMode")||"").toLowerCase()==="pump",launchForm:savedLaunchDraft.form||null,launchImg:savedLaunchDraft.image||null,launchBanner:savedLaunchDraft.banner||null,launchTab:savedLaunchDraft.tab||"coin",launchRail:savedLaunchDraft.rail||"pump",launchActiveAttemptId:String(savedLaunchDraft.activeAttemptId||"").slice(0,80),launchActiveAttemptStartedAt:Number(savedLaunchDraft.activeAttemptStartedAt)||0,launchProgressPolling:"",launchInviteToken:(new URLSearchParams(location.search).get("bundleInvite")||"").trim(),launchInvites:[],launchInviteLastId:String(savedLaunchInviteLink.id||""),launchInviteLastUrl:String(savedLaunchInviteLink.url||""),launchCoins:[],pumpRewards:null,pumpRewardsCheckedAt:0,pumpRewardsError:"",
     watch:new Set(),watchRows:[],
     // Seed positions from the last session so the Portfolio paints INSTANTLY on load, then refreshes.
     posCache:(function(){try{return JSON.parse(localStorage.getItem("ggPosCache")||"null");}catch(e){return null;}})(),
     quickBuy:(function(){try{return JSON.parse(localStorage.getItem("ggQuickBuy")||"null");}catch(e){return null;}})(),
     scoutQueue:(function(){try{const q=JSON.parse(localStorage.getItem(SCOUT_QUEUE_KEY)||"[]");return Array.isArray(q)?q.slice(0,24):[];}catch(e){return [];}})(),
     alertRules:(function(){const d={kol:true,scout:true,launch:true,receipts:true};try{return Object.assign(d,JSON.parse(localStorage.getItem(ALERT_RULE_KEY)||"{}"));}catch(e){return d;}})()};
+  let launchDraftSaveTimer=null;
+  function persistLaunchDraftNow(){const draft={form:state.launchForm||{},image:state.launchImg||null,banner:state.launchBanner||null,tab:state.launchTab||"coin",rail:state.launchPumpOnly?"pump":(state.launchRail||"pump"),activeAttemptId:state.launchActiveAttemptId||"",activeAttemptStartedAt:state.launchActiveAttemptStartedAt||0,updatedAt:new Date().toISOString()};try{localStorage.setItem(LAUNCH_DRAFT_KEY,JSON.stringify(draft));}catch(e){try{localStorage.setItem(LAUNCH_DRAFT_KEY,JSON.stringify({...draft,image:null,banner:null}));}catch(_e){}}}
+  function persistLaunchDraftSoon(){clearTimeout(launchDraftSaveTimer);launchDraftSaveTimer=setTimeout(persistLaunchDraftNow,180);}
+  function clearSavedLaunchDraft(){clearTimeout(launchDraftSaveTimer);state.launchForm=null;state.launchImg=null;state.launchBanner=null;state.launchTab="coin";state.launchActiveAttemptId="";state.launchActiveAttemptStartedAt=0;state.launchProgressPolling="";if(state.launchPumpOnly)state.launchRail="pump";try{localStorage.removeItem(LAUNCH_DRAFT_KEY);}catch(e){}}
+  function saveLaunchInviteLastLink(invite){state.launchInviteLastId=String(invite&&invite.id||"");state.launchInviteLastUrl=String(invite&&invite.inviteUrl||"");try{if(state.launchInviteLastId&&state.launchInviteLastUrl)localStorage.setItem(LAUNCH_INVITE_LINK_KEY,JSON.stringify({id:state.launchInviteLastId,url:state.launchInviteLastUrl}));else localStorage.removeItem(LAUNCH_INVITE_LINK_KEY);localStorage.removeItem("slimewireLaunchInviteUrl");}catch(e){}}
+  function clearLaunchInviteLastLink(){saveLaunchInviteLastLink(null);}
   // No credentials:include — the API returns ACAO:* which forbids credentialed CORS. Auth is the Bearer header.
   async function api(path,opts){
     opts=opts||{};
@@ -3945,7 +3957,7 @@
     const {ok,d}=await api("/api/web/swamp-nfts?wallet="+encodeURIComponent(wallet.publicKey));
     if(state.route!=="portfolio"||state.portfolioTab!=="nfts")return;
     const rows=ok&&d&&d.ok&&Array.isArray(d.nfts)?d.nfts:[];
-    if(!rows.length){view.innerHTML='<div class="empty"><div class="big">◆</div><div><b>No NFTs found in '+esc(wallet.label||"this wallet")+'</b><br><span class="mut">Mint from Launch → NFT Collection, or send a Solana NFT to '+esc(short(wallet.publicKey))+'.</span></div></div>';return;}
+    if(!rows.length){view.innerHTML='<div class="empty"><div class="big">◆</div><div><b>No NFTs found in '+esc(wallet.label||"this wallet")+'</b><br><span class="mut">NFTs already held by '+esc(short(wallet.publicKey))+' will appear here.</span></div></div>';return;}
     view.innerHTML='<div class="poshead"><b style="font-size:13px">'+esc(wallet.label||"Wallet")+' NFTs</b><span class="mut" style="font-size:10px">'+esc(short(wallet.publicKey))+' · '+rows.length+' indexed</span></div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:10px">'+rows.map(n=>'<a href="https://solscan.io/account/'+esc(n.mint||n.id)+'" target="_blank" rel="noopener noreferrer" class="wbox" style="padding:8px;text-decoration:none;color:inherit"><div style="aspect-ratio:1;border-radius:12px;overflow:hidden;background:var(--panel2)">'+(n.imageUrl?'<img src="'+esc(n.imageUrl)+'" loading="lazy" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display=\'none\'">':'<div class="empty" style="height:100%"><div class="big">◆</div></div>')+'</div><b style="display:block;margin-top:8px;font-size:12px">'+esc(n.name||"Wallet NFT")+'</b><span class="mut" style="font-size:10px">'+esc(n.rarity||"NFT")+' · '+esc(n.collection||"")+'</span></a>').join("")+'</div>';
   }
   function paintPositions(view,pos){
@@ -4818,7 +4830,7 @@
   function lcBundleWalletRowsHtml(){
     const wallets=state.wallets||[];
     if(!wallets.length)return '<div class="lcnote">Create and fund another wallet in Wallet before adding bundle buys.</div>';
-    return wallets.map(w=>{const idx=String(w.index),pfx="lcBw"+idx;return '<div class="lc-bundle-wallet" data-lc-wallet-row="'+esc(idx)+'"><label class="lcheck"><input type="checkbox" id="lcBwUse'+esc(idx)+'" data-lc-bundle-pick="'+esc(idx)+'" checked> <span><b>'+esc(w.label||("Wallet "+idx))+'</b> · ◎'+Number(w.sol||0).toFixed(3)+'</span></label><details class="launch-advanced" data-lc-wallet-config="'+esc(idx)+'" style="display:none"><summary>Wallet settings</summary><div><div class="field"><label>Buy amount (SOL)</label><input id="'+pfx+'Amount" inputmode="decimal" value="0.05"></div>'+lcExitStrategyHtml(pfx,"Exit preset")+'</div></details></div>';}).join("");
+    return wallets.map(w=>{const idx=String(w.index),pfx="lcBw"+idx;return '<div class="lc-bundle-wallet" data-lc-wallet-row="'+esc(idx)+'"><label class="lcheck"><input type="checkbox" id="lcBwUse'+esc(idx)+'" data-lc-bundle-pick="'+esc(idx)+'" checked> <span><b>'+esc(w.label||("Wallet "+idx))+'</b> · '+Number(w.sol||0).toFixed(3)+' SOL</span></label><details class="launch-advanced" data-lc-wallet-config="'+esc(idx)+'" style="display:none"><summary>Wallet settings</summary><div><div class="field"><label>Buy amount (SOL)</label><input id="'+pfx+'Amount" inputmode="decimal" value="0.05"></div>'+lcExitStrategyHtml(pfx,"Exit preset")+'</div></details></div>';}).join("");
   }
   function lcSyncLaunchStrategies(){
     document.querySelectorAll('#v-launch [data-lc-strategy]').forEach(box=>{const pfx=box.dataset.lcStrategy,sel=$("#"+pfx+"Preset"),custom=$("#"+pfx+"Custom"),enabled=$("#"+pfx+"SlEnabled"),input=$("#"+pfx+"Sl"),label=$("#"+pfx+"SlLabel"),stopControl=$("#"+pfx+"StopControl"),stateText=$("#"+pfx+"SlState"),manual=!!(sel&&sel.value==="manual");if(custom)custom.style.display=sel&&sel.value==="custom"?"":"none";if(stopControl)stopControl.style.display=manual?"none":"";const on=!manual&&(!enabled||enabled.checked);if(input)input.disabled=!on;if(label)label.textContent=on?"Stop loss on":"Stop loss off";if(stateText)stateText.textContent=manual?"Manual control · this wallet buys at launch with no automatic selling.":on?"Stop loss and break-even protection are on.":"Stop loss off · no break-even stop. Take-profit targets still run.";});
@@ -4842,23 +4854,25 @@
     // A transient request failure must never make an already-loaded launch
     // bundle look deleted. Keep the last confirmed rows until a successful
     // response replaces them; a page refresh should not be needed to recover.
-    if(ok&&d&&Array.isArray(d.invites))state.launchInvites=d.invites;
+    if(ok&&d&&Array.isArray(d.invites)){state.launchInvites=d.invites;if(state.launchInviteLastId&&!state.launchInvites.some((invite)=>String(invite.id||"")===state.launchInviteLastId&&["WAITING","READY"].includes(String(invite.status||""))))clearLaunchInviteLastLink();}
     return state.launchInvites;
   }
   function lcParticipantInviteHtml(){
-    const rows=(state.launchInvites||[]).map(inv=>{
+    const invites=state.launchInvites||[],readyInvites=invites.filter(inv=>inv.status==="READY"),readyCount=Math.min(50,readyInvites.length),readySol=readyInvites.slice(0,50).reduce((sum,inv)=>sum+Math.max(0,Number(inv.amountSol)||0),0);
+    const rows=invites.map(inv=>{
       const ready=inv.status==="READY",entered=inv.status==="CONSUMED"&&/^ENTERED/.test(String(inv.entry&&inv.entry.status||"")),needs=inv.status==="CONSUMED"&&!entered,waiting=inv.status==="WAITING",reserved=inv.status==="RESERVED";
       const status=entered?"Entered":needs?"Needs attention":ready?"Ready":reserved?(inv.entry&&inv.entry.status==="RETRYING"?"Retrying safely":inv.entry&&inv.entry.status==="RECONCILING"?"Reconciling":"Launching"):waiting?"Waiting for approval":inv.status==="EXPIRED"?"Expired":"Unavailable";
       const pickId="lcParticipant_"+String(inv.id||"").replace(/[^A-Za-z0-9_-]/g,"_"),queue=Number(inv.queuePosition)>0?" / queue #"+Number(inv.queuePosition):"";
-      return '<div class="lc-bundle-wallet"><label class="lcheck"><input type="checkbox" id="'+esc(pickId)+'" data-lc-participant-pick="'+esc(inv.id)+'" '+(ready?"checked":"disabled")+'> <span><b>'+esc(inv.label||inv.participantName||"Participant")+'</b> · '+esc(status+queue)+(ready?' · ◉'+esc(Number(inv.amountSol||0).toFixed(3))+' · '+esc(inv.exitLabel||"Manual only"):"")+'</span></label>'+(ready||waiting?'<button class="wbtn ghost" type="button" data-lc-invite-revoke="'+esc(inv.id)+'" style="margin-top:6px">Remove</button>':"")+'</div>';
+      return '<div class="lc-bundle-wallet"><label class="lcheck"><input type="checkbox" id="'+esc(pickId)+'" data-lc-participant-pick="'+esc(inv.id)+'" '+(ready?"checked":"disabled")+'> <span><b>'+esc(inv.label||inv.participantName||"Participant")+'</b> · '+esc(status+queue)+(ready?' · '+esc(Number(inv.amountSol||0).toFixed(3))+' SOL · '+esc(inv.exitLabel||"Manual only"):"")+'</span></label>'+(ready||waiting?'<button class="wbtn ghost" type="button" data-lc-invite-revoke="'+esc(inv.id)+'" style="margin-top:6px">Remove</button>':"")+'</div>';
     }).join("");
     return '<div class="launch-section-title" style="margin-top:14px">External participant wallets</div>'+
       '<div class="launch-summary"><span class="mark">↗</span><div><b>Invite someone into the launch entry.</b><br><span class="mut">They sign in, choose and approve their own SlimeWire wallet, amount and exit control. You never receive their key or control their funds.</span></div></div>'+
+      '<div class="launch-summary"><span class="mark">'+esc(readyCount)+'</span><div><b>'+esc(readyCount)+' / 50 wallets ready'+(readySol>0?' · '+esc(readySol.toFixed(3))+' SOL approved':'')+'</b><br><span class="mut">Ready seats enter after the coin confirms, four at a time in queue order. Your dev buy and managed-wallet atomic bundle remain separate.</span></div></div>'+
       '<div class="field row2"><div><label>Participant label</label><input id="lcInviteLabel" maxlength="48" placeholder="Partner, teammate, community member"></div><div style="display:flex;align-items:end"><button class="wbtn" type="button" id="lcInviteCreate" style="width:100%">Create secure invite</button></div></div>'+
-      (state.launchInviteLastUrl?'<div class="feebox"><b>Copy this link now</b><div class="addr" style="word-break:break-all;margin:7px 0">'+esc(state.launchInviteLastUrl)+'</div><button class="wbtn" type="button" id="lcInviteCopy">Copy invite link</button><div class="mut" style="font-size:10px;margin-top:6px">For security, the full link is shown only when created. Make another if it is lost.</div></div>':"")+
+      (state.launchInviteLastUrl?'<div class="feebox"><b>Copy this secure seat link</b><div class="addr" style="word-break:break-all;margin:7px 0">'+esc(state.launchInviteLastUrl)+'</div><button class="wbtn" type="button" id="lcInviteCopy">Copy invite link</button><div class="mut" style="font-size:10px;margin-top:6px">This device keeps the latest link while that seat is waiting or ready. It disappears when the launch starts or the seat closes.</div></div>':"")+
       '<div id="lcInviteRows">'+(rows||'<div class="lcnote">No participant invites yet.</div>')+'</div>'+
       '<button class="wbtn ghost" type="button" id="lcInviteRefresh" style="width:100%;margin-top:8px">Refresh participant status</button>'+
-      '<div class="lcnote" style="margin-top:8px">Ready entries fire immediately after the coin is confirmed. Each entry has a one-time operation ID: safe pre-submit failures can retry, while unknown submitted outcomes are held for reconciliation instead of sending a second buy.</div>';
+      '<div class="lcnote" style="margin-top:8px">Up to 50 approved wallets can join. Each entry has a one-time operation ID: safe pre-submit failures can retry, while unknown submitted outcomes are held for reconciliation instead of sending a second buy.</div>';
   }
   function lcWireParticipantInvites(){
     const create=$("#lcInviteCreate");if(create)create.onclick=async()=>{
@@ -4866,7 +4880,7 @@
       create.disabled=true;create.textContent="Creating…";
       const {ok,d}=await jpost("/api/web/launch/bundle-invites",{label:String(($("#lcInviteLabel")||{}).value||"").trim()});
       create.disabled=false;create.textContent="Create secure invite";
-      if(ok&&d&&d.invite){state.launchInviteLastUrl=d.invite.inviteUrl||"";await loadLaunchBundleInvites();renderLaunch();toast("Invite ready — copy and send it");}
+      if(ok&&d&&d.invite){saveLaunchInviteLastLink(d.invite);await loadLaunchBundleInvites();renderLaunch();toast("Invite ready — copy and send it");}
       else toast(apiMessage(d,"Could not create invite."),true);
     };
     const cp=$("#lcInviteCopy");if(cp)cp.onclick=()=>copy(state.launchInviteLastUrl);
@@ -4942,28 +4956,41 @@
     const cancel=$("#lcJoinCancel");if(cancel)cancel.onclick=async()=>{if(!confirm("Cancel your launch entry approval? No buy will be made unless you approve again."))return;cancel.disabled=true;const {ok,d}=await jpost("/api/web/launch/bundle-invite/cancel",{token});if(ok){toast("Approval cancelled");renderLaunchBundleInvite();}else{toast(apiMessage(d,"Could not cancel approval."),true);cancel.disabled=false;}};
   }
   async function pollLaunchProgress(aid,btn){
-    const out=$("#lcOut");let tries=0;
+    aid=String(aid||"").slice(0,80);if(!aid)return;
+    const currentButton=()=>$("#lcGo")||btn,currentOut=()=>$("#lcOut"),setButton=(label,disabled)=>{const button=currentButton();if(button){button.disabled=disabled;button.textContent=label;}},setOutput=(html)=>{const out=currentOut();if(out)out.innerHTML=html;};
+    setButton("Resuming launch…",true);
+    if(state.launchProgressPolling===aid)return;
+    state.launchProgressPolling=aid;
+    if(state.launchActiveAttemptId!==aid||!state.launchActiveAttemptStartedAt){state.launchActiveAttemptId=aid;state.launchActiveAttemptStartedAt=state.launchActiveAttemptStartedAt||Date.now();persistLaunchDraftNow();}
+    let tries=0,unknown404s=0;
     const launchRewardMode=lcRewardMode(),manualCreatorFees=launchRewardMode==="creator"&&!!($("#lcCreatorFeesManual")&&$("#lcCreatorFeesManual").checked),cashbackLaunch=launchRewardMode==="cashback";
     const creatorWalletIndex=String(($("#lcDevWallet")||{}).value||state.activeWallet||"");
     const creatorWallet=(state.wallets||[]).find(w=>String(w.index)===creatorWalletIndex);
     const tick=async()=>{
+      if(state.launchActiveAttemptId!==aid){if(state.launchProgressPolling===aid)state.launchProgressPolling="";return;}
       tries++;
-      const {d}=await api("/api/web/launch/progress?launchAttemptId="+encodeURIComponent(aid)).catch(()=>({}));
+      const {status,d}=await api("/api/web/launch/progress?launchAttemptId="+encodeURIComponent(aid)).catch(()=>({status:0,d:null}));
+      unknown404s=status===404?unknown404s+1:0;
       const pr=(d&&d.progress)||{};
       if(pr.status==="COMPLETE"){
         const mint=(pr.launch&&(pr.launch.tokenMint||pr.launch.mint))||"";
         const entries=pr.launch&&pr.launch.participantEntries;
-        if(btn){btn.disabled=false;btn.textContent="Review & launch";}
         state.launchedMint=mint;
-        if(out)out.innerHTML='<div class="wbox" style="margin:0"><b style="color:var(--green)">✓ Launched!</b>'+(entries&&entries.requested?'<div class="ln">Participant entries: <b>'+esc(entries.completed||0)+'/'+esc(entries.requested)+'</b> entered'+(entries.failed?' · '+esc(entries.failed)+' need attention':'')+'</div>':'')+(mint?'<div class="addr mut" style="margin-top:6px;word-break:break-all">'+esc(mint)+' <button onclick="GG.copy(\''+esc(mint)+'\')">⧉</button></div><div style="display:flex;gap:9px;margin-top:10px;flex-wrap:wrap"><button class="wbtn" onclick="GG.open(\''+esc(mint)+'\')">Open &amp; trade</button><button class="wbtn ghost" onclick="GG.launchChat(\''+esc(mint)+'\')">💬 Chat &amp; Live</button>'+(manualCreatorFees&&creatorWallet?'<button class="wbtn ghost" onclick="GG.exportPumpCreatorWallet('+Number(creatorWallet.index)+',\''+esc(creatorWallet.publicKey||'')+'\')">Download Pump wallet backup</button><button class="wbtn ghost" onclick="GG.launchesModal()">Claim later in SlimeWire</button>':'')+'</div>':'')+(manualCreatorFees?'<div class="ln mut" style="font-size:11px;margin-top:8px">Creator fees will remain in the Pump vault until you claim them. The wallet backup is optional recovery access; keep it private.</div>':'')+'</div>';
+        const entryPending=entries?Math.max(0,Number(entries.retrying||entries.waitingFeeSharing||0)):0,entryCopy=entries&&entries.requested?'<div class="ln">Participant entries: <b>'+esc(entries.completed||0)+'/'+esc(entries.requested)+'</b> entered'+(entryPending?' · '+esc(entryPending)+' queued safely':'')+(entries.failed?' · '+esc(entries.failed)+' need attention':'')+'</div>':'';
+        setOutput('<div class="wbox" style="margin:0"><b style="color:var(--green)">✓ Launched!</b>'+entryCopy+(mint?'<div class="addr mut" style="margin-top:6px;word-break:break-all">'+esc(mint)+' <button onclick="GG.copy(\''+esc(mint)+'\')">⧉</button></div><div style="display:flex;gap:9px;margin-top:10px;flex-wrap:wrap"><button class="wbtn" onclick="GG.open(\''+esc(mint)+'\')">Open &amp; trade</button><button class="wbtn ghost" onclick="GG.launchChat(\''+esc(mint)+'\')">💬 Chat &amp; Live</button>'+(manualCreatorFees&&creatorWallet?'<button class="wbtn ghost" onclick="GG.exportPumpCreatorWallet('+Number(creatorWallet.index)+',\''+esc(creatorWallet.publicKey||'')+'\')">Download Pump wallet backup</button><button class="wbtn ghost" onclick="GG.launchesModal()">Claim later in SlimeWire</button>':'')+'</div>':'')+(manualCreatorFees?'<div class="ln mut" style="font-size:11px;margin-top:8px">Creator fees will remain in the Pump vault until you claim them. The wallet backup is optional recovery access; keep it private.</div>':'')+'</div>');
+        const out=currentOut();
         if(out&&cashbackLaunch){const box=out.querySelector(".wbox");if(box)box.insertAdjacentHTML("beforeend",'<div class="launch-summary" style="margin-top:9px;margin-bottom:0"><span class="mark">%</span><div><b><span class="cashback-badge">Cash back</span> permanently enabled</b><br><span class="mut">Eligible trader rewards build by volume. Wallet-wide claimable Cash back appears in Wallet.</span></div></div>');}
         if(out&&mint){const actions=out.querySelector(".wbox div[style*='display:flex']");if(actions)actions.insertAdjacentHTML("beforeend",'<button class="wbtn ghost" onclick="GG.dexProfileReview(\''+esc(mint)+'\')">Update DEX profile</button>');}
-        toast("Token launched!");refreshWallets();return;
+        clearLaunchInviteLastLink();clearSavedLaunchDraft();setButton("Launch complete",true);const clear=$("#lcClearDraft");if(clear)clear.disabled=false;toast("Token launched!");refreshWallets();return;
       }
-      if(pr.status==="FAILED"){if(btn){btn.disabled=false;btn.textContent="Review & launch";}if(out)out.innerHTML='<div class="mut" style="color:var(--red);font-size:12px">Launch failed: '+esc(pr.failureReason||"unknown error")+'</div>';return;}
-      if(out)out.innerHTML='<div class="mut" style="font-size:12px"><span class="spin"></span> '+esc(pr.stageText||"Launching… minting on pump.fun")+'</div>';
-      if(tries>70){if(btn){btn.disabled=false;btn.textContent="Review & launch";}if(out)out.innerHTML='<div class="mut" style="font-size:12px">Still working — check your Positions in a moment.</div>';return;}
-      setTimeout(tick,2500);
+      if(pr.status==="FAILED"){state.launchProgressPolling="";state.launchActiveAttemptId="";state.launchActiveAttemptStartedAt=0;persistLaunchDraftNow();setButton("Review & launch",false);const clear=$("#lcClearDraft");if(clear)clear.disabled=false;setOutput('<div class="mut" style="color:var(--red);font-size:12px">Launch failed: '+esc(pr.failureReason||"unknown error")+' · Your draft is still here to edit and retry.</div>');return;}
+      if(status===404&&unknown404s>=3&&Date.now()-state.launchActiveAttemptStartedAt>=30000){state.launchProgressPolling="";state.launchActiveAttemptId="";state.launchActiveAttemptStartedAt=0;persistLaunchDraftNow();setButton("Review & launch",false);const clear=$("#lcClearDraft");if(clear)clear.disabled=false;setOutput('<div class="mut" style="color:var(--red);font-size:12px">No submitted launch was found for the saved attempt. Your draft is unchanged and ready for a fresh review.</div>');return;}
+      setButton(status===401||status===403?"Reconnect to resume":"Launch in progress",true);
+      if(status===401||status===403)setOutput('<div class="mut" style="font-size:12px">Reconnect this SlimeWire profile to resume the saved launch. A second launch cannot start while this attempt is unresolved.</div>');
+      else if(status===404)setOutput('<div class="mut" style="font-size:12px"><span class="spin"></span> Recovering the saved launch record. This exact attempt stays locked so a second coin cannot be created.</div>');
+      else if(tries>240)setOutput('<div class="mut" style="font-size:12px"><span class="spin"></span> The coin or participant queue is still reconciling safely. This attempt remains locked and visible under Your launches.</div>');
+      else setOutput('<div class="mut" style="font-size:12px"><span class="spin"></span> '+esc(pr.stageText||"Launching… minting on pump.fun")+'</div>');
+      setTimeout(tick,tries>240?10000:2500);
     };
     tick();
   }
@@ -5033,7 +5060,7 @@
   // Persist the WHOLE launch form across navigations (go to Wallet / dev wallet and back) so nothing
   // typed or uploaded disappears. Snapshot on every edit; restore right after each render. Images live
   // in state.launchImg/Banner (file inputs can't be re-populated for security, so we re-show the preview).
-  function lcSnapshot(){const root=$("#v-launch");if(!root)return;const f=state.launchForm||(state.launchForm={});root.querySelectorAll("input,textarea,select").forEach(el=>{if(!el.id||el.type==="file"||el.id==="lcChatCa")return;f[el.id]=(el.type==="checkbox"||el.type==="radio")?el.checked:el.value;});}
+  function lcSnapshot(){const root=$("#v-launch");if(!root)return;const f=state.launchForm||(state.launchForm={});root.querySelectorAll("input,textarea,select").forEach(el=>{if(!el.id||el.type==="file"||el.id==="lcChatCa")return;f[el.id]=(el.type==="checkbox"||el.type==="radio")?el.checked:el.value;});persistLaunchDraftSoon();}
   function lcReadDevBuyAmount(){
     const input=$("#lcDevBuy"),saved=state.launchForm&&state.launchForm.lcDevBuy;
     const raw=String((input&&input.value)!=null?input.value:(saved||"")).trim().replace(",",".");
@@ -5100,16 +5127,16 @@
   async function renderLaunch(){
     if(state.launchInviteToken){await renderLaunchBundleInvite();return;}
     setActiveView("v-launch");subbarTool("🚀 Launch a Coin");if(state.token)await Promise.all([refreshWallets(),loadLaunchBundleInvites()]);if(state.route!=="launch")return;
-    const tab=["coin","social","nft","dev"].includes(state.launchTab)?state.launchTab:"coin";const mint=state.launchedMint||"";const rail=["pump","robinhood"].includes(state.launchRail)?state.launchRail:"pump";
+    const pumpOnly=state.launchPumpOnly===true;const tab=["coin","social","dev"].includes(state.launchTab)?state.launchTab:"coin";const mint=state.launchedMint||"";const rail=pumpOnly?"pump":(["pump","robinhood"].includes(state.launchRail)?state.launchRail:"pump");
     state.launchTab=tab;state.launchRail=rail;
     const tb=(id,lab)=>'<button data-ltab="'+id+'" class="'+(tab===id?"on":"")+'">'+lab+'</button>';
     const show=(id)=>tab===id?"":' style="display:none"';
-    $("#v-launch").innerHTML='<div class="wgrid"><div class="wbox launch-card" style="grid-column:1/-1"><div class="launch-head"><div><h3>Launch a coin</h3><p class="sub">Create it, choose your launch wallet, and go live. Creator fees route back to that wallet automatically.</p></div><button class="wbtn ghost" type="button" onclick="GG.launchesModal()">Your launches</button></div>'+
-      '<div class="tabs launch-tabs">'+tb("coin","Coin")+tb("social","Socials")+tb("nft","NFT Collection")+tb("dev","Dev &amp; Bundle")+'</div>'+
+    const railChoices='<button type="button" data-rail="pump"'+(rail==="pump"?' class="on"':'')+'><b>💊 Pump.fun</b><span>Solana · largest launch crowd</span></button>'+(pumpOnly?'':'<button type="button" data-rail="robinhood"'+(rail==="robinhood"?' class="on"':'')+'><b>🪶 Robinhood</b><span>Robinhood Chain · pay with SOL</span></button>');
+    $("#v-launch").innerHTML='<div class="wgrid"><div class="wbox launch-card" style="grid-column:1/-1"><div class="launch-head"><div><h3>'+(pumpOnly?'Launch on Pump.fun':'Launch a coin')+'</h3><p class="sub">Coin art, banner, socials, rewards, bundles and participant invites save on this device until launch.</p></div><div style="display:flex;gap:7px;flex-wrap:wrap"><button class="wbtn ghost" type="button" id="lcClearDraft"'+(state.launchActiveAttemptId?' disabled':'')+'>Clear draft</button><button class="wbtn ghost" type="button" onclick="GG.launchesModal()">Your launches</button></div></div>'+
+      '<div class="tabs launch-tabs">'+tb("coin","Coin")+tb("social","Socials")+tb("dev","Dev &amp; Bundle")+'</div>'+
       '<div data-lpanel="coin"'+show("coin")+'>'+
         '<div class="launch-section-title">Launch network</div><div class="field"><div class="railsel" id="lcRails">'+
-          '<button type="button" data-rail="pump"'+(rail==="pump"?' class="on"':'')+'><b>💊 Pump</b><span>Solana · largest launch crowd</span></button>'+
-          '<button type="button" data-rail="robinhood"'+(rail==="robinhood"?' class="on"':'')+'><b>🪶 Robinhood</b><span>Robinhood Chain · pay with SOL</span></button>'+
+          railChoices+
         '</div><div class="mut" style="font-size:11px;margin-top:7px"><b>You stay the creator.</b> Fees are assigned to your selected launch wallet automatically.</div><div id="lcRhSetup" style="margin-top:9px"></div></div>'+
         '<div class="launch-section-title">Media</div><div class="launch-media">'+
           '<label class="launch-upload"><b>Coin image</b><span>Square image shown in feeds and on the coin page.</span><input id="lcImg" type="file" accept="image/*"><div id="lcImgPrev" class="mut" style="font-size:10px;margin-top:6px">PNG, JPG, WEBP, GIF or HEIC</div></label>'+
@@ -5153,10 +5180,11 @@
       '<div class="launch-action"><button class="bigbuy" id="lcGo">Review &amp; launch</button></div><div id="lcOut" style="margin-top:12px"></div></div></div>';
     const bossHost=$("#v-launch .wbox"),bossTabs=$("#v-launch .tabs");
     if(false&&bossHost&&bossTabs){const h=document.createElement("div");h.innerHTML=launchBossFoldHtml();if(h.firstElementChild)bossHost.insertBefore(h.firstElementChild,bossTabs);}
+    const clearDraft=$("#lcClearDraft");if(clearDraft)clearDraft.onclick=()=>{if(state.launchActiveAttemptId){toast("This launch is still resolving. Its saved attempt cannot be cleared or submitted twice.",true);pollLaunchProgress(state.launchActiveAttemptId,$("#lcGo"));return;}if(!confirm("Clear this saved Pump launch draft?"))return;clearSavedLaunchDraft();renderLaunch();toast("Launch draft cleared");};
     // Tab switching toggles panel visibility WITHOUT re-rendering, so typed fields + uploaded images survive.
-    document.querySelectorAll("#v-launch [data-ltab]").forEach(b=>b.onclick=()=>{lcSnapshot();state.launchTab=b.dataset.ltab;document.querySelectorAll("#v-launch [data-ltab]").forEach(x=>x.classList.toggle("on",x===b));document.querySelectorAll("#v-launch [data-lpanel]").forEach(p=>p.style.display=(p.dataset.lpanel===b.dataset.ltab?"":"none"));if(b.dataset.ltab==="dev"){lcRestore();lcSyncLaunchStrategies();}if(b.dataset.ltab==="chat")lcWireChat();});
+    document.querySelectorAll("#v-launch [data-ltab]").forEach(b=>b.onclick=()=>{lcSnapshot();state.launchTab=b.dataset.ltab;persistLaunchDraftSoon();document.querySelectorAll("#v-launch [data-ltab]").forEach(x=>x.classList.toggle("on",x===b));document.querySelectorAll("#v-launch [data-lpanel]").forEach(p=>p.style.display=(p.dataset.lpanel===b.dataset.ltab?"":"none"));if(b.dataset.ltab==="dev"){lcRestore();lcSyncLaunchStrategies();}if(b.dataset.ltab==="chat")lcWireChat();});
     // Rail picker (no re-render — keeps typed fields/images). meteora is dark; the backend returns a clear "test mode" message.
-    document.querySelectorAll("#lcRails [data-rail]").forEach(b=>b.onclick=()=>{lcSnapshot();state.launchRail=b.dataset.rail;document.querySelectorAll("#lcRails [data-rail]").forEach(x=>x.classList.toggle("on",x===b));refreshMeteoraSetup();refreshRhSetup();});
+    document.querySelectorAll("#lcRails [data-rail]").forEach(b=>b.onclick=()=>{lcSnapshot();state.launchRail=state.launchPumpOnly?"pump":b.dataset.rail;persistLaunchDraftSoon();document.querySelectorAll("#lcRails [data-rail]").forEach(x=>x.classList.toggle("on",x===b));refreshMeteoraSetup();refreshRhSetup();});
     refreshMeteoraSetup();refreshRhSetup();
     // Auto-compress big photos client-side (like pump) instead of rejecting them: draw to a canvas,
     // scale down, re-encode as JPEG dropping quality until it's small enough. Falls back to the raw
@@ -5167,7 +5195,7 @@
       if(f.size>400000){const cz=await compressLaunchImage(f,big?1280:512,0.85);if(cz){dataUrl=cz;name=name.replace(/\.[^.]+$/,"")+".jpg";type="image/jpeg";}}
       if(!dataUrl){dataUrl=await new Promise(r=>{const rd=new FileReader();rd.onload=()=>r(String(rd.result));rd.onerror=()=>r(null);rd.readAsDataURL(f);});}
       if(!dataUrl){toast("Couldn't read that image — try another.",true);return;}
-      state[key]={dataUrl,name,type};state._launchKept=true;
+      state[key]={dataUrl,name,type};state._launchKept=true;persistLaunchDraftNow();
       const p=$("#"+prevId);if(p)p.innerHTML='<img src="'+dataUrl+'" style="height:'+(big?"40":"64")+'px;'+(big?"":"width:64px;")+'border-radius:10px;object-fit:cover;border:1px solid var(--border)">';};
     $("#lcImg").onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchImg","lcImgPrev",false);
     const lb=$("#lcBanner");if(lb)lb.onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchBanner","lcBannerPrev",true);
@@ -5185,6 +5213,7 @@
     const lroot=$("#v-launch");if(lroot){lroot.oninput=lcSnapshot;lroot.onchange=lcSnapshot;}
     lcRestore();syncNft();   // re-fill fields + image previews from state right after the rebuild
     $("#lcGo").onclick=async()=>{
+      if(state.launchActiveAttemptId){pollLaunchProgress(state.launchActiveAttemptId,$("#lcGo"));return;}
       const name=$("#lcName").value.trim(),sym=$("#lcSym").value.trim();
       if(!name||!sym){toast("Name and ticker are required (Coin tab).",true);state.launchTab="coin";renderLaunch();return;}
       // Automatic Robinhood rail: token + locked Sushi V3 market in one action.
@@ -5217,7 +5246,7 @@
         if(ok&&d&&d.ok){
           let bundleArmed=!!d.ownerBundleArmed;
           if(rhAutoBundle&&rhBundleWallets.length&&!bundleArmed){const armed=await jpost("/api/web/rh/auto-bundle",{tokenAddress:d.tokenAddress,symbol:sym,walletIndexes:rhBundleWallets,walletConfigs:rhBundleConfigs,payCurrency:"SOL",minSol:rhBundleMin,maxSol:rhBundleMax,launchWave:true});bundleArmed=!!(armed.ok&&armed.d&&armed.d.ok);}
-          state._launchKept=false;state.launchForm=null;state.launchImg=null;state.launchBanner=null;
+          state._launchKept=false;clearLaunchInviteLastLink();clearSavedLaunchDraft();
           $("#lcOut").innerHTML='<div class="feebox">🪶 <b>'+esc(name)+' ('+esc(sym)+') is LIVE on Robinhood Chain!</b>'+
             '<div class="ln">Token: <b style="word-break:break-all">'+esc(d.tokenAddress)+'</b></div>'+
             '<div class="ln">Supply '+esc(Number(d.supplyTokens||supply).toLocaleString())+' · '+(d.automaticMarket?'Sushi V3 market live · liquidity permanently locked':'legacy token deployed · open trading below')+'</div>'+
@@ -5249,7 +5278,7 @@
       // Creator fee is now a simple toggle: checked = MAX (1000 bps) to the dev wallet, unchecked = none.
       const creatorFeeBps="1000";
       const rewardMode=lcRewardMode();
-      const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps,pumpCashback:rewardMode==="cashback",creatorFeeClaimMode:($("#lcCreatorFeesManual")&&$("#lcCreatorFeesManual").checked&&rewardMode==="creator")?"manual":"auto",holderRewards:lcReadHolderRewards("lc"),rail:state.launchRail||"pump",nftCollection:{enabled:!!($("#lcNftEnabled")&&$("#lcNftEnabled").checked),name:String(($("#lcNftName")||{}).value||"").trim(),description:String(($("#lcNftDescription")||{}).value||"").trim(),useCoinArt:true,supplyMode:String(($("#lcNftSupplyMode")||{}).value||"expandable"),supplyCap:Math.max(1,Math.min(500,Number(($("#lcNftSupplyCap")||{}).value||500))),royaltyBps:Math.max(0,Math.min(1000,Number(($("#lcNftRoyalty")||{}).value||500)))}};
+      const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps,pumpCashback:rewardMode==="cashback",creatorFeeClaimMode:($("#lcCreatorFeesManual")&&$("#lcCreatorFeesManual").checked&&rewardMode==="creator")?"manual":"auto",holderRewards:lcReadHolderRewards("lc"),rail:state.launchRail||"pump",nftCollection:{enabled:false}};
       if(devW&&devW.publicKey)body.creatorFeeRecipient=devW.publicKey;
       // Promoter fee-split (up to 4 wallets + %) stored on the coin; paid out via "Pay promoters".
       if($("#lcPromo")&&$("#lcPromo").checked){const sp=[0,1,2,3].map(i=>({wallet:(($("#lcPmW"+i)||{}).value||"").trim(),pct:Number((($("#lcPmP"+i)||{}).value||"").trim())})).filter(r=>r.wallet&&r.pct>0);if(sp.length)body.creatorFeeSplit=sp;}
@@ -5273,14 +5302,19 @@
         const confirmed=await confirmModal('<h3>Confirm permanent Pump Cash back</h3><p class="sub mut" style="font-size:13px;line-height:1.5">This choice is set when the coin is created and <b>cannot be changed later</b>. Eligible traders earn by volume. The creator cannot manually claim the creator fees redirected to Cash back.</p>','Launch with Cash back','Go back');
         if(!confirmed){b.disabled=false;b.textContent="Review permanent Cash back launch";return;}
       }
+      // Persist the exact id BEFORE the request. If the iframe closes or the HTTP
+      // response is lost, reopening resumes this attempt instead of minting again.
+      lcSnapshot();state.launchActiveAttemptId=body.launchAttemptId;state.launchActiveAttemptStartedAt=Date.now();persistLaunchDraftNow();const clear=$("#lcClearDraft");if(clear)clear.disabled=true;
       const {ok,status,d}=await jpost("/api/web/launch/coin",body);
       // Re-enable the button + route to Wallet WITHOUT wiping the token (the old wipe orphaned a just-
       // restored wallet, and returning left the button stuck on "Launching…" forever).
-      if(status===401){b.disabled=false;b.textContent="Review & launch";toast("Couldn't authorize — open Wallet and reconnect.",true);go("wallet");return;}
+      if(status===401){state.launchActiveAttemptId="";state.launchActiveAttemptStartedAt=0;persistLaunchDraftNow();b.disabled=false;b.textContent="Review & launch";if(clear)clear.disabled=false;toast("Couldn't authorize — open Wallet and reconnect.",true);go("wallet");return;}
       const aid=(d&&d.launch&&d.launch.launchAttemptId)||body.launchAttemptId;
       if(ok&&d&&(d.ok||d.launch)){state._launchKept=true;pollLaunchProgress(aid,b);}
-      else{b.disabled=false;b.textContent="Review & launch";toast((d&&(d.message||d.error))||"Launch failed",true);}
+      else if(status===0){state._launchKept=true;toast("The response was interrupted. Checking this same saved launch safely…",true);pollLaunchProgress(body.launchAttemptId,b);}
+      else{state.launchActiveAttemptId="";state.launchActiveAttemptStartedAt=0;persistLaunchDraftNow();b.disabled=false;b.textContent="Review & launch";if(clear)clear.disabled=false;toast((d&&(d.message||d.error))||"Launch failed",true);}
     };
+    if(state.launchActiveAttemptId)pollLaunchProgress(state.launchActiveAttemptId,$("#lcGo"));
   }
   function subbarToolKol(){
     const sb=$("#subbar");sb.innerHTML="";

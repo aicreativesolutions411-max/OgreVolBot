@@ -204,6 +204,22 @@ body.wallet-only{background:#010201}
 @media(prefers-reduced-motion:no-preference){.wallet-only .wallet-account-switcher img{animation:slimewalletGlow 3.8s ease-in-out infinite}@keyframes slimewalletGlow{50%{box-shadow:0 0 30px rgba(127,255,47,.34)}}}
 @media(max-width:390px){.wallet-only .brand span,.wallet-only .brand b{font-size:15px}.wallet-only .brand img{width:42px;height:42px}.wallet-only .wallet-balance-hero{padding-top:22px}.wallet-only .wallet-balance-hero h1{font-size:40px}}
 
+/* Pump launcher entry: first action in SlimeWallet, before the active-wallet selector. */
+.wallet-only .wallet-launch-coin{position:relative;isolation:isolate;overflow:hidden;width:100%;max-width:430px;display:grid;grid-template-columns:50px minmax(0,1fr) auto;align-items:center;gap:13px;margin:0 auto 16px;padding:12px 13px;border:1px solid transparent;border-radius:23px;background:linear-gradient(145deg,rgba(28,47,24,.97),rgba(5,11,5,.98)) padding-box,linear-gradient(110deg,#baff86,rgba(117,255,39,.2) 45%,#75ff27) border-box;color:#fff;text-align:left;box-shadow:inset 0 1px rgba(255,255,255,.15),inset 0 -16px 30px rgba(0,0,0,.25),0 20px 50px rgba(0,0,0,.42),0 0 30px rgba(111,255,31,.13)}
+.wallet-only .wallet-launch-coin:before{content:"";position:absolute;z-index:-1;inset:-60% 38% -60% -18%;background:linear-gradient(105deg,transparent,rgba(192,255,151,.13),transparent);transform:rotate(14deg);pointer-events:none}
+.wallet-only .wallet-launch-coin-icon{position:relative;display:grid;width:50px;height:50px;place-items:center;border:1px solid rgba(198,255,162,.48);border-radius:17px;background:radial-gradient(circle at 34% 24%,#caff9f,#7df42f 48%,#245d0c 100%);box-shadow:inset 0 2px rgba(255,255,255,.55),inset 0 -8px 13px rgba(15,55,2,.31),0 0 22px rgba(121,255,39,.28)}
+.wallet-only .wallet-launch-coin-icon:before,.wallet-only .wallet-launch-coin-icon:after{content:"";position:absolute;border-radius:50%;background:#071106;box-shadow:0 0 0 2px rgba(8,20,5,.1)}
+.wallet-only .wallet-launch-coin-icon:before{width:18px;height:18px;clip-path:polygon(42% 0,100% 0,68% 40%,100% 40%,31% 100%,48% 55%,12% 55%)}
+.wallet-only .wallet-launch-coin-icon i{position:absolute;right:7px;top:7px;width:6px;height:6px;border-radius:50%;background:#e8ffd9;box-shadow:-20px 27px 0 -1px rgba(236,255,224,.72)}
+.wallet-only .wallet-launch-coin-copy small,.wallet-only .wallet-launch-coin-copy b,.wallet-only .wallet-launch-coin-copy em{display:block}
+.wallet-only .wallet-launch-coin-copy small{color:#a8ff72;font-size:7px;font-weight:950;letter-spacing:.16em}
+.wallet-only .wallet-launch-coin-copy b{margin-top:4px;font-size:15px;letter-spacing:-.015em}
+.wallet-only .wallet-launch-coin-copy em{margin-top:4px;overflow:hidden;color:#9cab97;font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap}
+.wallet-only .wallet-launch-coin-action{display:flex;align-items:center;gap:5px;padding:8px 9px;border:1px solid rgba(184,255,139,.2);border-radius:999px;background:rgba(131,255,54,.09);color:#c9ffa7;font-size:7px;font-weight:950;letter-spacing:.09em}
+.wallet-only .wallet-launch-coin-action i{font-size:16px;font-style:normal;line-height:1}
+.wallet-only .wallet-launch-coin:active{transform:translateY(2px) scale(.99);box-shadow:inset 0 1px rgba(255,255,255,.12),0 9px 25px rgba(0,0,0,.34),0 0 20px rgba(111,255,31,.1)}
+@media(max-width:360px){.wallet-only .wallet-launch-coin{grid-template-columns:44px minmax(0,1fr) auto;gap:9px;padding-inline:10px}.wallet-only .wallet-launch-coin-icon{width:44px;height:44px;border-radius:15px}.wallet-only .wallet-launch-coin-action{font-size:0;padding:8px}.wallet-only .wallet-launch-coin-action i{font-size:18px}}
+
 /* SlimeWallet chrome controls: floating bars and tactile hardware-style buttons. */
 .wallet-only .fun-header{top:8px;width:calc(100% - 24px);height:66px;margin:8px 12px 0;padding:9px 11px;border:1px solid rgba(177,255,128,.18);border-radius:22px;background:linear-gradient(145deg,rgba(15,23,14,.88),rgba(3,7,3,.94));box-shadow:inset 0 1px rgba(255,255,255,.09),inset 0 -1px rgba(0,0,0,.8),0 18px 50px rgba(0,0,0,.5),0 0 0 1px rgba(0,0,0,.5);backdrop-filter:blur(26px) saturate(1.35)}
 .wallet-only .fun-header:after{content:"";position:absolute;right:18%;bottom:-1px;left:18%;height:1px;background:linear-gradient(90deg,transparent,rgba(144,255,75,.6),transparent);pointer-events:none}

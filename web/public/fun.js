@@ -1734,6 +1734,7 @@
   }
   function renderWalletHero() {
     const wallet = activeWallet(), hero = $("[data-wallet-hero]");
+    const walletLaunchEntry = !IS_WALLET_ROUTE ? "" : `<button class="wallet-launch-coin" type="button" data-wallet-launch-coin><span class="wallet-launch-coin-icon" aria-hidden="true"><i></i></span><span class="wallet-launch-coin-copy"><small>PUMP.FUN LAUNCHPAD</small><b>Launch a coin</b><em>Coin art, banner, bundles &amp; rewards</em></span><span class="wallet-launch-coin-action">CREATE <i>›</i></span></button>`;
     const accountAccess = !IS_WALLET_ROUTE ? "" : state.sessionRestoring
       ? '<div class="wallet-account-status"><span>RESTORING</span><b>Checking this device…</b></div>'
       : state.sessionRestoreStatus === "unavailable" && wallet
@@ -1744,8 +1745,8 @@
     renderWalletPresetStrip();
     if (!wallet) {
       hero.innerHTML = IS_WALLET_ROUTE ? (state.token || state.sessionRestoring)
-        ? `<button class="wallet-account-switcher" type="button" data-manage-wallets><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>SLIMEWALLET</small><b>${state.sessionRestoring ? "Restoring account" : "Manage wallets"}</b></span><i>›</i></button>${accountAccess}<div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>$0.00</h1><p>${state.sessionRestoring ? "Checking this device · saved wallets load instantly" : "Account connected · add or restore a wallet"}</p></div><div class="wallet-hero-tools"><button type="button" data-create-wallet>＋ Create wallet</button><button type="button" data-restore-wallets>↥ Restore wallet</button></div>`
-        : `<button class="wallet-account-switcher" type="button" data-fun-account="login"><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>SLIMEWALLET</small><b>Log in</b></span><i>›</i></button>${accountAccess}<div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>$0.00</h1><p>Log in once to load every wallet</p></div><div class="wallet-hero-tools"><button type="button" data-fun-account="login">Log in</button><button type="button" data-fun-account="create">Create profile</button></div>`
+        ? `${walletLaunchEntry}<button class="wallet-account-switcher" type="button" data-manage-wallets><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>SLIMEWALLET</small><b>${state.sessionRestoring ? "Restoring account" : "Manage wallets"}</b></span><i>›</i></button>${accountAccess}<div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>$0.00</h1><p>${state.sessionRestoring ? "Checking this device · saved wallets load instantly" : "Account connected · add or restore a wallet"}</p></div><div class="wallet-hero-tools"><button type="button" data-create-wallet>＋ Create wallet</button><button type="button" data-restore-wallets>↥ Restore wallet</button></div>`
+        : `${walletLaunchEntry}<button class="wallet-account-switcher" type="button" data-fun-account="login"><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>SLIMEWALLET</small><b>Log in</b></span><i>›</i></button>${accountAccess}<div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>$0.00</h1><p>Log in once to load every wallet</p></div><div class="wallet-hero-tools"><button type="button" data-fun-account="login">Log in</button><button type="button" data-fun-account="create">Create profile</button></div>`
         : `<img class="wallet-pfp" src="${slimePfp("guest")}" alt=""><h1>Slime guest</h1><p>No wallet created yet</p><div class="wallet-total">Ready when you are</div>`;
       return;
     }
@@ -1759,7 +1760,7 @@
           : state.portfolioStatus === "stale" ? `Saved · ${freshnessAgeLabel(state.portfolioUpdatedAt)} · updating`
             : "Unavailable · retrying";
       const freshnessState = ["live", "refreshing"].includes(state.portfolioStatus) ? "live" : state.portfolioStatus;
-      hero.innerHTML = `<button class="wallet-account-switcher" type="button" data-manage-wallets><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>ACTIVE WALLET</small><b>${escapeHtml(wallet.label || "Main Slime")}</b></span><i>⌄</i></button>${accountAccess}<div class="wallet-hero-tools"><button type="button" data-manage-wallets>Manage / restore</button><button type="button" data-export-wallets>Back up all wallets</button></div><div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>${escapeHtml(totalLabel)}</h1><p data-freshness="${freshnessState}">${escapeHtml(freshness)}</p></div><div class="wallet-chain-cards"><button type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}">${nativeAssetIcon("sol")}<span><b>SOL</b><small>${sol.toFixed(4)} SOL</small></span><em>${state.solUsd > 0 ? escapeHtml(formatWalletUsd(sol * state.solUsd)) : "Copy"}</em></button><button type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress || "")}">${nativeAssetIcon("eth")}<span><b>ETH</b><small>${rhEth == null ? "Updating…" : `${rhEth.toFixed(6)} ETH`}</small></span><em>${rhEth != null && state.rhEthUsd > 0 ? escapeHtml(formatWalletUsd(rhEth * state.rhEthUsd)) : "Copy"}</em></button></div>`;
+      hero.innerHTML = `${walletLaunchEntry}<button class="wallet-account-switcher" type="button" data-manage-wallets><img src="${WALLET_BRAND_ASSET}" alt=""><span><small>ACTIVE WALLET</small><b>${escapeHtml(wallet.label || "Main Slime")}</b></span><i>⌄</i></button>${accountAccess}<div class="wallet-hero-tools"><button type="button" data-manage-wallets>Manage / restore</button><button type="button" data-export-wallets>Back up all wallets</button></div><div class="wallet-balance-hero"><span>PORTFOLIO VALUE</span><h1>${escapeHtml(totalLabel)}</h1><p data-freshness="${freshnessState}">${escapeHtml(freshness)}</p></div><div class="wallet-chain-cards"><button type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}">${nativeAssetIcon("sol")}<span><b>SOL</b><small>${sol.toFixed(4)} SOL</small></span><em>${state.solUsd > 0 ? escapeHtml(formatWalletUsd(sol * state.solUsd)) : "Copy"}</em></button><button type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress || "")}">${nativeAssetIcon("eth")}<span><b>ETH</b><small>${rhEth == null ? "Updating…" : `${rhEth.toFixed(6)} ETH`}</small></span><em>${rhEth != null && state.rhEthUsd > 0 ? escapeHtml(formatWalletUsd(rhEth * state.rhEthUsd)) : "Copy"}</em></button></div>`;
       return;
     }
     const rhAddress = wallet.rhAddress ? `<button class="wallet-hero-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.rhAddress)}" aria-label="Copy full Robinhood address"><b>RH ${escapeHtml(short(wallet.rhAddress))}</b><span>Tap to copy ETH address</span></button>` : "";
@@ -3042,7 +3043,7 @@
       ${toolCard("kol", "Trader copy", "Follow a public wallet", "copy")}
       ${toolCard("snipe", "Launch snipe", "Watch ticker or name", "sniper")}
       ${toolCard("snipe", "Wallet launch snipe", "Watch creator or deployer", "walletLaunch")}
-      ${toolCard("launch", "Launch", "Solana or Robinhood", "launch")}
+      ${toolCard("launch", "Launch", "Pump.fun coin", "launch")}
       ${toolCard("pnl", "Full portfolio", "PnL and receipts", "portfolio")}
       ${global ? toolCard("wallet", "Install SlimeWire Go", "Focused mobile layout", "install") : ""}
       ${creator && coin.chain === "robinhood" ? toolCard("health", "Creator liquidity", "Your launched coin", "liquidity") : ""}
@@ -4066,7 +4067,7 @@
       // A launch is a new action, not a navigation back into the last coin.
       // Reload the embedded launcher every time so Cash -> Fun and repeated
       // mobile launches always begin with an empty form and a fresh attempt id.
-      frame.src = `/?from=fun&embed=fun-launch&freshLaunch=1&v=nft-manager-2&t=${Date.now()}#launch`;
+      frame.src = `/?from=fun&embed=fun-launch&launchMode=pump&freshLaunch=1&v=pump-launch-1&t=${Date.now()}#launch`;
     }
     history.replaceState(null, "", "#launch");
   }
@@ -4251,6 +4252,7 @@
       }
       return;
     }
+    if (event.target.closest("[data-wallet-launch-coin]")) { state.launchReturnView = "wallet"; openFunLaunch(); return; }
     const walletRouteTab = event.target.closest("[data-wallet-route-tab]"); if (walletRouteTab) { closeSearch(); closeSheet(); state.profileTab = walletRouteTab.dataset.walletRouteTab || "positions"; $$('[data-profile]').forEach((button) => button.classList.toggle("active", button.dataset.profile === state.profileTab)); setView("wallet"); return; }
     if (event.target.closest("[data-wallet-route-back]")) { closeSearch(); closeSheet(); setView("wallet"); return; }
     if (event.target.closest("[data-multi-wallet-entry]")) { await openMultiWalletEntry(); return; }

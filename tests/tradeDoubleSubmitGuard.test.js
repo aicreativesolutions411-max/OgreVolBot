@@ -1372,10 +1372,13 @@ test("positive launch dev buy amount is authoritative across both web launchers 
   assert.match(server, /amountSol: devBuyAmountSol/);
 });
 
-test("launch UI is Pump-simple: Pump + Robinhood only, NFT-ready tabs, dormant tools stay off-page", () => {
+test("launch UI is Pump-simple, hides NFT creation, and keeps dormant tools off-page", () => {
   for (const src of [ggSource, indexSource]) {
     const render = functionBody(src, "renderLaunch");
-    assert.match(render, /tb\("coin","Coin"\)\+tb\("social","Socials"\)\+tb\("nft","NFT Collection"\)\+tb\("dev","Dev &amp; Bundle"\)/);
+    assert.match(render, /tb\("coin","Coin"\)\+tb\("social","Socials"\)\+tb\("dev","Dev &amp; Bundle"\)/);
+    assert.doesNotMatch(render, /tb\("nft","NFT Collection"\)/);
+    assert.match(render, /const pumpOnly=state\.launchPumpOnly===true/);
+    assert.match(render, /nftCollection:\{enabled:false\}/);
     assert.match(render, /data-rail="pump"/);
     assert.match(render, /data-rail="robinhood"/);
     assert.doesNotMatch(render, /data-rail="bonk"|data-rail="meteora"/);
@@ -1404,7 +1407,7 @@ test("launch dev + bundle presets support shared, per-wallet ladders, and manual
     assert.match(src, /id="lcBundle" checked[\s\S]{0,420}<\/div>'\+\s*'<label class="lcheck"><input type="checkbox" id="lcBundleWallets"/);
     assert.match(src, /lcBundleTimingNote/);
     assert.match(src, /Robinhood entries start together as soon as the launch pool is confirmed/);
-    assert.match(src, /function loadLaunchBundleInvites\(\)[\s\S]{0,450}if\(ok&&d&&Array\.isArray\(d\.invites\)\)state\.launchInvites=d\.invites/);
+    assert.match(src, /function loadLaunchBundleInvites\(\)[\s\S]{0,650}if\(ok&&d&&Array\.isArray\(d\.invites\)\)\{?state\.launchInvites=d\.invites/);
     assert.doesNotMatch(src, /state\.launchInvites=ok&&d&&Array\.isArray\(d\.invites\)\?d\.invites:\[\]/);
     assert.match(src, /\[data-ltab\][\s\S]{0,220}lcSnapshot\(\);state\.launchTab/);
     assert.match(src, /b\.dataset\.ltab==="dev"\)\{lcRestore\(\);lcSyncLaunchStrategies\(\);\}/);
@@ -5204,13 +5207,15 @@ test("launch participant invites are non-custodial, durable, idempotent, and res
   assert.match(notifyInvite, /invite\.launchNotifiedAt = now/);
   assert.match(notifyInvite, /sendWebPushToUser\(invite\.participantUserId/);
   assert.match(notifyInvite, /url: `\/t\?ca=\$\{encodeURIComponent\(tokenMint\)\}`/);
-  const fulfillInvites = functionBody(serverSource, "fulfillLaunchBundleInvites");
+  const fulfillCoordinator = functionBody(serverSource, "fulfillLaunchBundleInvites");
+  const fulfillInvites = functionBody(serverSource, "fulfillLaunchBundleInvitesCore");
   assert.ok(
-    fulfillInvites.indexOf("notifyLaunchBundleInviteParticipants") < fulfillInvites.indexOf("buyTokenForPlan"),
+    fulfillCoordinator.indexOf("notifyLaunchBundleInviteParticipants") >= 0
+      && fulfillCoordinator.indexOf("notifyLaunchBundleInviteParticipants") < fulfillCoordinator.indexOf("persistedLaunchBundleFeeSharingDisposition"),
     "launch push should fire when the mint is confirmed, without waiting for the participant buy"
   );
   assert.match(serverSource, /function launchWaveEntrySlippageBps/);
-  assert.match(fulfillInvites, /const launchWaveSize = store\.invites\.filter/);
+  assert.match(fulfillInvites, /const launchWaveSize = attemptRows\.filter/);
   assert.match(fulfillInvites, /launchWaveEntrySlippageBps\(/);
   assert.match(fulfillInvites, /Number\(invite\.entry\?\.attempts \|\| 0\) \+ attempts - 1/);
   assert.match(fulfillInvites, /runLaunchBundleInviteWaves\(pending/);
@@ -5234,7 +5239,7 @@ test("launch participant invites are non-custodial, durable, idempotent, and res
   assert.match(postLaunchBuys, /entrySlippageBps = launchWaveEntrySlippageBps/);
   assert.match(postLaunchBuys, /slippage: entrySlippagePct/);
 
-  const fulfillRhInvites = functionBody(serverSource, "fulfillRhLaunchBundleInvites");
+  const fulfillRhInvites = functionBody(serverSource, "fulfillRhLaunchBundleInvitesCore");
   assert.match(fulfillRhInvites, /runLaunchBundleInviteWaves\(pending/);
   assert.match(fulfillRhInvites, /runIdempotentMoneyOp\(\s*"launch-bundle-invite-rh"/);
   assert.match(fulfillRhInvites, /webRhTradeCore\(participantUserId/);

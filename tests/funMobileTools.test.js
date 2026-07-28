@@ -31,17 +31,64 @@ test("Fun mobile wallet exposes the durable Season flow", () => {
   assert.match(funSource, /tradeAttemptId: attemptId\("fun-season"\)/);
 });
 
-test("the launcher visible inside Fun exposes linked NFT collection settings", () => {
+test("the launcher visible inside Fun is Pump-only and hides NFT creation", () => {
   assert.equal(indexSource, ggSource, "classic launcher mirrors must remain identical");
-  for (const id of ["lcNftEnabled", "lcNftName", "lcNftDescription", "lcNftSupplyMode", "lcNftSupplyCap", "lcNftRoyalty"]) {
-    assert.match(ggSource, new RegExp(`id="${id}"`));
-  }
-  assert.match(ggSource, /tb\("nft","NFT Collection"\)/);
-  assert.match(ggSource, /nftCollection:\{enabled:/);
+  assert.match(funSource, /launchMode=pump/);
+  assert.match(ggSource, /launchPumpOnly:/);
+  assert.doesNotMatch(ggSource, /tb\("nft","NFT Collection"\)/);
+  assert.match(ggSource, /nftCollection:\{enabled:false\}/);
+  assert.match(ggSource, /slimewirePumpLaunchDraftV1/);
+  assert.match(ggSource, /persistLaunchDraftNow/);
   assert.match(serverSource, /normalizeLinkedNftCollection\(body\.nftCollection/);
 });
 
-test("Fun NFT tab manages coins that were already launched", () => {
+test("wallet Pump launches resume one persisted attempt and never unlock on a client timeout", () => {
+  assert.equal(indexSource, ggSource, "classic launcher mirrors must remain identical");
+  assert.match(ggSource, /\.launch-tabs\{display:grid;grid-template-columns:repeat\(3,1fr\)/);
+  assert.doesNotMatch(ggSource, /\.launch-tabs\{display:grid;grid-template-columns:repeat\(4,1fr\)/);
+  assert.match(ggSource, /activeAttemptId:state\.launchActiveAttemptId\|\|""/);
+  assert.match(ggSource, /activeAttemptStartedAt:state\.launchActiveAttemptStartedAt\|\|0/);
+
+  const submitStart = ggSource.indexOf('$("#lcGo").onclick=async()=>{');
+  const submitEnd = ggSource.indexOf("\n  function subbarToolKol", submitStart);
+  assert.ok(submitStart > 0 && submitEnd > submitStart);
+  const submit = ggSource.slice(submitStart, submitEnd);
+  const savedBeforePost = submit.indexOf("state.launchActiveAttemptId=body.launchAttemptId");
+  const launchPost = submit.indexOf('jpost("/api/web/launch/coin",body)');
+  assert.ok(savedBeforePost >= 0 && launchPost > savedBeforePost, "the recovery id must be durable before POST");
+  assert.match(submit, /if\(state\.launchActiveAttemptId\)\{pollLaunchProgress\(state\.launchActiveAttemptId,\$\("#lcGo"\)\);return;\}/);
+  assert.match(submit, /else if\(status===0\)[\s\S]{0,220}pollLaunchProgress\(body\.launchAttemptId,b\)/);
+  assert.match(ggSource, /id="lcClearDraft"'\+\(state\.launchActiveAttemptId\?' disabled':''\)/);
+  assert.match(ggSource, /if\(state\.launchActiveAttemptId\)\{toast\("This launch is still resolving\./);
+  assert.match(ggSource, /if\(state\.launchActiveAttemptId\)pollLaunchProgress\(state\.launchActiveAttemptId,\$\("#lcGo"\)\)/);
+
+  const pollStart = ggSource.indexOf("async function pollLaunchProgress(");
+  const pollEnd = ggSource.indexOf("\n  // SlimeWire (Meteora)", pollStart);
+  assert.ok(pollStart > 0 && pollEnd > pollStart);
+  const poll = ggSource.slice(pollStart, pollEnd);
+  assert.match(poll, /pr\.status==="COMPLETE"[\s\S]{0,2400}clearLaunchInviteLastLink\(\);clearSavedLaunchDraft\(\)/);
+  assert.match(poll, /pr\.status==="FAILED"[\s\S]{0,260}launchActiveAttemptId=""/);
+  assert.match(poll, /status===404&&unknown404s>=3&&Date\.now\(\)-state\.launchActiveAttemptStartedAt>=30000/);
+  const timeoutStart = poll.indexOf("else if(tries>240)");
+  const timeoutEnd = poll.indexOf("setTimeout(tick,tries>240?10000:2500)", timeoutStart);
+  assert.ok(timeoutStart > 0 && timeoutEnd > timeoutStart);
+  assert.doesNotMatch(poll.slice(timeoutStart, timeoutEnd), /disabled=false|launchActiveAttemptId=""|return;/);
+});
+
+test("the latest participant seat link is bound to an active invite and cleared after launch", () => {
+  assert.match(ggSource, /LAUNCH_INVITE_LINK_KEY="slimewireLaunchInviteLinkV1"/);
+  assert.match(ggSource, /saveLaunchInviteLastLink\(d\.invite\)/);
+  assert.match(ggSource, /\["WAITING","READY"\]\.includes\(String\(invite\.status\|\|""\)\)/);
+  assert.match(ggSource, /clearLaunchInviteLastLink\(\);clearSavedLaunchDraft\(\)/);
+  assert.doesNotMatch(ggSource, /localStorage\.setItem\("slimewireLaunchInviteUrl"/);
+  const walletRows = ggSource.slice(ggSource.indexOf("function lcBundleWalletRowsHtml"), ggSource.indexOf("function lcSyncLaunchStrategies"));
+  const participantRows = ggSource.slice(ggSource.indexOf("function lcParticipantInviteHtml"), ggSource.indexOf("function lcWireParticipantInvites"));
+  assert.match(walletRows, /toFixed\(3\)\+' SOL<\/span>/);
+  assert.match(participantRows, /toFixed\(3\)\)\+' SOL · '/);
+  assert.doesNotMatch(walletRows + participantRows, /[◎◉]/);
+});
+
+test("dormant NFT manager wiring remains available for existing launches", () => {
   for (const marker of ["lcNftExistingMint", "lcNftManagerLoad", "lcNftCreateLater", "lcNftLinkExisting", "lcNftItemMint"]) {
     assert.match(ggSource, new RegExp(marker));
   }
