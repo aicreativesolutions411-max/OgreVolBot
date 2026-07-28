@@ -3334,7 +3334,8 @@ test("flex detector ignores a bare tweet link so the X-post preview still fires"
 // ---- Scan card Security block never blank: free on-chain fill when RugCheck is down/unindexed ----
 test("scan Security fills from our own RPC when RugCheck returns null (no more n/a wall)", () => {
   const scan = functionBody(serverSource, "gatherSlimeScan");
-  assert.match(scan, /scanFastTimeout\(getGeckoTerminalTokenMetadata\(mint, \{ timeoutMs: 3_000 \}\)/); // market fallback for n/a LP/MC/1H stays, but it cannot stall TG/X replies
+  assert.match(scan, /const geckoMetaPromise = pairsPromise\.then/); // normalize one exact-pair read without doubling DexScreener rate-limit pressure
+  assert.match(scan, /fetchJupiterScanTokenReport\(mint/); // independent exact-mint rescue for MC/LP/volume/PFP/audit
   assert.match(scan, /scanCachedMarketMeta\(mint\)/); // local/sticky cache fills MC/LIQ/VOL/1H when public APIs blank
   assert.match(scan, /mergeTokenMarketMetadata/);
   assert.match(scan, /const chartRescue = await scanFastTimeout\(buildChartData\(mint, "5m"\), 7_000, null\)/);

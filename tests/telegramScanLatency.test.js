@@ -38,11 +38,12 @@ test("cold Telegram scans publish market facts before slow safety providers fini
   assert.match(look, /Loading live market data now; safety follows on this same card/);
   const preview = functionBody(serverSource, "buildSlimeScanMarketPreview");
   assert.match(preview, /cachedScan \? \{ \.\.\.cachedScan, rug: null, shield: null, dexPaid: null \}/);
-  assert.match(preview, /rug: null/);
-  assert.match(preview, /shield: null/);
+  assert.match(preview, /scanJupiterSecurity\(jupiterReport, mint\)/);
+  assert.match(preview, /rug: jupiterSecurity\.rug/);
+  assert.match(preview, /shield: jupiterSecurity\.shield/);
 
   const publishAt = gather.indexOf("publishSlimeScanPreview(mint,");
-  const finalSecurityAt = gather.indexOf("const [rugFilled, onchain]");
+  const finalSecurityAt = gather.indexOf("const [rugRead, onchain]");
   assert.ok(publishAt >= 0 && finalSecurityAt > publishAt, "market preview must publish before final RugCheck/on-chain security completion");
 });
 
@@ -85,8 +86,60 @@ test("progressive scan updates do not stampede the shared RPC queue", () => {
   assert.match(supply, /scanTokenSupplyInFlight\.get\(key\)/);
   assert.match(supply, /retries:\s*0,\s*priority:\s*true/);
   assert.match(settle, /slimeScanRetryMissingFields\(accumulated, mint\)/);
-  assert.match(serverSource, /const SLIME_SCAN_RETRY_FIELDS = new Set\(\["identity", "price", "market cap", "liquidity", "24h volume", "security"\]\)/);
+  assert.match(serverSource, /const SLIME_SCAN_RETRY_FIELDS = new Set\(\["identity", "price", "market cap", "liquidity", "24h volume", "security", "coin image"\]\)/);
   assert.match(classify, /retries:\s*0,\s*priority:\s*true/);
+});
+
+test("fresh exact-mint fallback fills identity, PFP, market facts, and audit before retries", () => {
+  const fetchJupiter = functionBody(serverSource, "fetchJupiterScanTokenReport");
+  const normalize = functionBody(serverSource, "scanJupiterTokenMetadata");
+  const security = functionBody(serverSource, "scanJupiterSecurity");
+  const gather = functionBody(serverSource, "gatherSlimeScan");
+  const settle = functionBody(serverSource, "settleTelegramSolScanCard");
+
+  assert.match(fetchJupiter, /lite-api\.jup\.ag/);
+  assert.match(fetchJupiter, /jupiterScanExactRow/);
+  assert.match(normalize, /imageUrl: firstString\(row\.icon/);
+  assert.match(normalize, /marketCap: firstMeaningfulNumber\(row\.mcap/);
+  assert.match(normalize, /volume: \{ m5: m5\.volume, h1: h1\.volume, h6: h6\.volume, h24: h24\.volume \}/);
+  assert.match(security, /mintAuthorityDisabled/);
+  assert.match(security, /topHoldersPercentage/);
+  assert.match(gather, /jupiterReportPromise/);
+  assert.match(gather, /meta = mergeTokenMarketMetadata\(meta, scanJupiterTokenMetadata\(jupiterReport\)\)/);
+  assert.match(settle, /scanImageUrlFromScan\(accumulated\)/);
+  assert.match(settle, /photoOnly: true/);
+  assert.match(settle, /telegram\("deleteMessage"/);
+});
+
+test("Jupiter scan normalization preserves real 24h flow and exact artwork", () => {
+  const firstString = (...values) => values.find((value) => String(value || "").trim()) || "";
+  const firstMeaningfulNumber = (...values) => values.map(Number).find((value) => Number.isFinite(value) && value > 0) || null;
+  const firstNumber = (...values) => values.map(Number).find((value) => Number.isFinite(value)) ?? null;
+  const normalizeSocialLink = (value) => String(value || "");
+  const windowFn = new Function("firstNumber", `return function jupiterScanWindow(row = {}, key = "stats24h") {${functionBody(serverSource, "jupiterScanWindow")}}`)(firstNumber);
+  const metaFn = new Function("firstString", "firstMeaningfulNumber", "normalizeSocialLink", "jupiterScanWindow", `return function scanJupiterTokenMetadata(row = null) {${functionBody(serverSource, "scanJupiterTokenMetadata")}}`)(firstString, firstMeaningfulNumber, normalizeSocialLink, windowFn);
+  const row = {
+    id: "57aJfPxk73pdZP9wcywGengaZKWEWYf76LPYWN3sNueA",
+    name: "The Baseball Squirrel",
+    symbol: "BNUT",
+    icon: "https://cdn.example/bnut.jpg",
+    mcap: 1_590,
+    usdPrice: 0.00000163,
+    liquidity: 1_623,
+    holderCount: 112,
+    totalSupply: 972_516_685,
+    firstPool: { createdAt: "2026-07-28T02:23:29Z" },
+    stats1h: { priceChange: -31.4, buyVolume: 66_169, sellVolume: 65_468, numBuys: 1_877, numSells: 2_354 },
+    stats24h: { priceChange: -31.4, buyVolume: 66_169, sellVolume: 65_468, numBuys: 1_877, numSells: 2_354 }
+  };
+  const meta = metaFn(row);
+  assert.equal(meta.symbol, "BNUT");
+  assert.equal(meta.imageUrl, "https://cdn.example/bnut.jpg");
+  assert.equal(meta.marketCap, 1_590);
+  assert.equal(meta.volume.h24, 131_637);
+  assert.equal(meta.txns.h1.buys, 1_877);
+  assert.equal(meta.holderCount, 112);
+  assert.ok(meta.pairCreatedAt > 0);
 });
 
 test("DexScreener pair resolution is hedged and single-flight", () => {
