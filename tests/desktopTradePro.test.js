@@ -205,7 +205,7 @@ test("Telegram Slime Chart links land on the exact terminal coin route", () => {
 test("Robinhood headers keep Dex market cap instead of relabeling FDV as MC", () => {
   assert.match(gg, /r\._dexMarketResolved=true/);
   assert.match(gg, /if\(!r\._dexMarketResolved\)/);
-  assert.match(fun, /const dexTask = \(chain === "robinhood" \|\| walletMode/);
+  assert.match(fun, /const dexTask = funDexBatch\(\[targetKey\], chain\)/);
   assert.match(fun, /applySelected\(\{ imageUrl: dexMarket\.img[\s\S]{0,160}\}, dexMarket\)/);
   assert.match(fun, /const incomingMarketCap = positiveMarketNumber\(snapshot\.marketCap, snapshot\.marketCapUsd, snapshot\.mc, snapshot\.fdv\)/);
 });

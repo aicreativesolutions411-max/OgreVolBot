@@ -587,7 +587,7 @@ test("Pump pool simulation failures are pre-submit and can try the next pool", (
 
   const exactSell = functionBody("sellTokenAmountFromWalletViaPumpPortal");
   assert.match(exactSell, /exactTokenAmount = Number\(exactTokenUiAmount\)/);
-  assert.match(exactSell, /amount: hasExactTokenAmount[\s\S]{0,80}\? exactTokenAmount/);
+  assert.match(exactSell, /amount: hasExactTokenAmount[\s\S]{0,80}\? exactTokenUiAmount/);
 });
 
 test("rolling volume forces sells and can replenish cleanup gas", () => {

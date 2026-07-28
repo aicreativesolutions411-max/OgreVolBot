@@ -1925,10 +1925,10 @@ test("Buy bot keeps transaction price and market cap aligned on both chains", ()
   assert.equal(cashCow.marketCapUsd, cashCow.priceUsd * cashCow.supply);
   const post = functionBody(serverSource, "postGroupBuy");
   assert.match(post, /resolveGroupBuyMarketSnapshot/);
-  assert.match(post, /eventPriceUsd: priceUsd \|\| livePumpPrice/);
+  assert.match(post, /eventPriceUsd: priceUsd/);
   assert.match(post, /eventMarketCapUsd: mcUsd/);
-  assert.match(post, /scanMarketCapUsd: livePumpMc \|\| scanMc/);
-  assert.doesNotMatch(post, /eventMarketCapUsd: livePumpMc \|\| mcUsd/);
+  assert.match(post, /scanMarketCapUsd: scanMc/);
+  assert.doesNotMatch(post, /eventMarketCapUsd: scanMc \|\| mcUsd/);
   assert.match(functionBody(serverSource, "postGroupBuyRh"), /resolveGroupBuyMarketSnapshot/);
   assert.match(post, /groupBuyCoherentMarketReference/);
 });
@@ -1962,7 +1962,8 @@ test("Buy bot derives Pump supply and websocket price without a guessed one-bill
   assert.match(socketTrade, /mcSol \* solUsd/);
   assert.doesNotMatch(socketTrade, /1_000_000_000/);
   const post = functionBody(serverSource, "postGroupBuy");
-  assert.match(post, /getPumpFunTokenMetadata\(mint, \{ force: true, cacheTtlMs: 0/);
+  assert.match(post, /groupBuySupplyCache\.get\(mint\)\?\.value/);
+  assert.doesNotMatch(post, /getPumpFunTokenMetadata\(mint, \{ force: true/);
   assert.match(post, /preferReportedSupply: onCurve/);
 });
 
@@ -1970,6 +1971,7 @@ test("Robinhood buy watcher is decimal-safe, lossless, concurrent, and near-live
   const meta = functionBody(noxaSource, "poolSwapMeta");
   const buys = functionBody(noxaSource, "fetchPoolBuys");
   const tick = functionBody(serverSource, "rhGroupBuyTick");
+  const perCoin = functionBody(serverSource, "pollRhGroupBuyAddress");
   assert.match(meta, /fn: "decimals"/);
   assert.match(meta, /fn: "totalSupply"/);
   assert.match(meta, /ERC20_BURN_ADDRESSES/);
@@ -1983,13 +1985,13 @@ test("Robinhood buy watcher is decimal-safe, lossless, concurrent, and near-live
   assert.match(buys, /for \(let from = start \+ 1; from <= latest; from \+= span\)/);
   assert.doesNotMatch(buys, /catch\s*\{\s*return \{ toBlock: latest, buys: \[\] \}/);
   assert.match(noxaSource, /export async function fetchRhBlockNumber/);
-  assert.match(serverSource, /const RH_GROUP_BUY_POLL_MS = 3_000/);
-  assert.match(tick, /rhGroupBuyTickRunning/);
-  assert.match(tick, /runWithConcurrency\(\[\.\.\.tracked\], 6/);
-  assert.match(tick, /fetchRhBlockNumber\(CONFIG\.rhChainRpcUrl\)/);
-  assert.match(tick, /queueRhGroupBuyDelivery/);
-  assert.match(tick, /spotPriceQuote: buy\.spotPriceQuote/);
-  assert.match(tick, /st\.lastBlock = res\.toBlock/);
+  assert.match(serverSource, /const RH_GROUP_BUY_POLL_MS = 1_500/);
+  assert.match(tick, /rhGroupBuyPollInFlight/);
+  assert.doesNotMatch(tick, /runWithConcurrency/);
+  assert.match(perCoin, /fetchRhBlockNumber\(CONFIG\.rhChainRpcUrl\)/);
+  assert.match(perCoin, /queueRhGroupBuyDelivery/);
+  assert.match(perCoin, /spotPriceQuote: buy\.spotPriceQuote/);
+  assert.match(perCoin, /st\.lastBlock = res\.toBlock/);
   const post = functionBody(serverSource, "postGroupBuyRh");
   assert.match(post, /supply: firstMeaningfulNumber\(supply, info\?\.supply\)/);
   assert.match(post, /eventPriceUsd/);
@@ -2028,6 +2030,8 @@ test("Buy Bot custom media is atomic, sticky, and retried on temporary Telegram 
   assert.match(setter, /mutateGroupBot\(\(store\) =>/);
   assert.match(setter, /e\[`\$\{field\}UpdatedAt`\] = Date\.now\(\)/);
   assert.match(functionBody(serverSource, "groupAlertMediaFor"), /entry\.customMedia/);
+  assert.match(sender, /groupBuyTelegramMediaCache\.get\(mediaCacheKey\)/);
+  assert.match(sender, /rememberGroupBuyTelegramMedia\(mediaCacheKey, r, isVid\)/);
   assert.match(sender, /mediaError && groupBuyAlertRetryMs\(mediaError\)/);
   assert.match(sender, /return \{ result: null, hasMedia: false, error: mediaError \}/);
 });
@@ -2118,6 +2122,7 @@ test("min buy zero keeps every observed Solana and Robinhood buy in an ordered T
   const collect = functionBody(serverSource, "collectGroupBuyTrades");
   const page = functionBody(serverSource, "fetchGroupBuyTradePage");
   const delivery = functionBody(serverSource, "queueGroupBuyTradeDelivery");
+  const perMintPoll = functionBody(serverSource, "pollGroupBuyTradesForMint");
   const rhPoll = functionBody(serverSource, "rhGroupBuyTick");
   const solPost = functionBody(serverSource, "postGroupBuy");
   const rhPost = functionBody(serverSource, "postGroupBuyRh");
@@ -2128,10 +2133,10 @@ test("min buy zero keeps every observed Solana and Robinhood buy in an ordered T
   assert.match(collect, /pagination\?\.nextCursor/);
   assert.match(collect, /while \(pageCount < GROUP_BUY_TRADE_MAX_PAGES\)/);
   assert.match(collect, /groupBuySeenTx\.set\(mint/); // persists even a successful empty baseline
-  assert.match(solPoll, /buys\.reverse\(\)/);
+  assert.match(perMintPoll, /buys\.reverse\(\)/);
   assert.doesNotMatch(solPoll, /posted >= 6|slice\(0, 6\)|mints\.slice\(0, 30\)/);
-  assert.match(solPoll, /runWithConcurrency\(mints, 8/);
-  assert.match(solPoll, /groupBuyTradePollRunning/);
+  assert.doesNotMatch(solPoll, /runWithConcurrency/);
+  assert.match(solPoll, /groupBuyTradePollInFlight/);
   assert.match(delivery, /drainGroupBuyTradeDeliveryQueue/);
   assert.doesNotMatch(rhPoll, /slice\(0, 6\)/);
   assert.match(solPost, /min > 0 && solAmount < min/);
@@ -2148,15 +2153,19 @@ test("Pump buy polling is fast, cursor-safe, and does not swallow a new coin's f
   const start = functionBody(serverSource, "startGroupBuyBot");
   const scan = functionBody(serverSource, "getGroupBuyScan");
   const post = functionBody(serverSource, "postGroupBuy");
-  assert.match(serverSource, /const GROUP_BUY_TRADE_POLL_MS = 1_500/);
+  const poll = functionBody(serverSource, "pollGroupBuyTrades");
+  assert.match(serverSource, /const GROUP_BUY_TRADE_POLL_MS = 750/);
   assert.match(serverSource, /const GROUP_BUY_TRADE_MAX_PAGES = 20/);
   assert.match(collect, /A successful empty first read is a real baseline/);
   assert.match(collect, /if \(firstPoll \|\| reachedSeen\) break/);
-  assert.match(collect, /new Set\(\[\.\.\.freshIds, \.\.\.seen\]/);
+  assert.match(collect, /const latest = groupBuySeenTx\.get\(mint\)/);
+  assert.match(collect, /new Set\(\[\.\.\.freshIds, \.\.\.latestSeen, \.\.\.seen\]/);
   assert.match(start, /setTimeout\(\(\) => \{ void pollGroupBuyTrades\(\); \}, 1_000\)/);
   assert.match(start, /GROUP_BUY_TRADE_POLL_MS/);
+  assert.match(poll, /pollGroupBuyTradesForMint\(mint\)[\s\S]*\.catch[\s\S]*\.finally/);
   assert.match(scan, /groupBuyScanInFlight/);
-  assert.match(post, /scanFastTimeout\(scanRequest, 1_500, null\)/);
+  assert.match(post, /scanFastTimeout\(scanRequest, 300, null\)/);
+  assert.match(post, /scanFastTimeout\(supplyRequest, 300, 0\)/);
   assert.match(post, /getGroupBuySupply\(mint, cachedScan\)/);
 });
 
@@ -3889,7 +3898,7 @@ test("SlimeWire plays REMOVED for now — no Top Plays toggle, both play pollers
 // ---- Copy-the-room's-best + Launch Room + Proof-of-call (the rest, all in the Trench menu) ----
 test("Copy-the-room's-best mirrors a followed trader's buy into the follower's OWN wallet — loop-proof, capped", () => {
   const m = functionBody(serverSource, "maybeCopyRoomBest");
-  assert.match(m, /!\/copy_room\/\.test\(String\(e\.source/);          // never mirror a mirror (loop-proof)
+  assert.match(m, /!\/copy_room\|tg_scan_copy\/\.test\(String\(e\.source/); // never mirror a mirror or an automated scan-copy (loop-proof)
   assert.match(m, /walletsForOwner\(walletStore, f\.followerId\)\[0\]/); // follower's OWN wallet
   assert.match(m, /runIdempotentMoneyOp\("copy-room"/);                  // no double-mirror
   assert.match(m, /COPY_MIN_SOL, Math\.min\(COPY_MAX_SOL/);              // capped
@@ -5214,4 +5223,44 @@ test("Solana holder rewards accumulate creator fees until an economical atomic p
   assert.match(claim, /holderRewardsPaidLamports/);
   assert.match(appSource, /data-launch-coin-holder-reward-min-payout/);
   assert.match(appSource, /fees stay in Pump's creator-fee vault/);
+});
+
+test("Copy Scanner follows a human per group and buys each resolved contract at most once", () => {
+  assert.match(serverSource, /\{ command: "copyscan", description: "Auto-buy a member's new scans" \}/);
+  const command = functionBody(serverSource, "handleScanCopyCommand");
+  assert.match(command, /\["copyscan", "copycaller", "scanmirror"\]/);
+  assert.match(command, /message\?\.reply_to_message\?\.from/);
+  assert.match(serverSource, /async function resolveScanCopyTarget/);
+  assert.match(serverSource, /groupMentionKnownMembers\(message\?\.chat\?\.id\)/);
+  assert.match(command, /walletsForOwner\(await readWalletStore\(\), userId\)/);
+  assert.match(command, /\/copyscan off/);
+  assert.match(command, /\/presets/);
+
+  const reserve = functionBody(serverSource, "reserveScanCopyAttempt");
+  assert.match(reserve, /withFileLock\(scanCopyPath\(\)/);
+  assert.match(reserve, /String\(follow\.targetUserId\) !== String\(targetUserId\)/);
+  assert.match(reserve, /if \(follow\.seen\[mintKey\]\) return \{ claimed: false, reason: "repeat" \}/);
+  assert.match(reserve, /scanCopyTodayCount\(follow, now\) >= dailyLimit/);
+  assert.match(reserve, /status: "pending"/);
+
+  const queue = functionBody(serverSource, "queueScanCopyFromResolvedScan");
+  assert.match(queue, /message\?\.from\?\.id/);
+  assert.match(queue, /String\(follow\.chatId\) === String\(chatId\)/);
+  assert.match(queue, /String\(follow\.targetUserId\) === String\(targetUserId\)/);
+  assert.match(queue, /reserveScanCopyAttempt/);
+  assert.match(queue, /executeScanCopyAttempt/);
+
+  const execute = functionBody(serverSource, "executeScanCopyAttempt");
+  assert.match(execute, /crypto\.createHash\("sha256"\)/);
+  assert.match(execute, /tgExecuteQuickBuyPreset/);
+  assert.match(execute, /idempotencyParts: \["scan-copy", chatId, follow\.targetUserId, scanCopyMintKey\(mint\)\]/);
+  assert.match(execute, /source: "tg_scan_copy"/);
+  assert.match(execute, /executeRobinhoodScanCopy/);
+  assert.match(execute, /finishScanCopyAttempt/);
+
+  const finish = functionBody(serverSource, "finishScanCopyAttempt");
+  assert.match(finish, /follow\.consecutiveFailures >= 3/);
+  assert.match(finish, /follow\.enabled = false/);
+  assert.match(serverSource, /queueScanCopyFromResolvedScan\(message, mint, "solana"/);
+  assert.match(serverSource, /queueScanCopyFromResolvedScan\(options\.message, address, "robinhood"/);
 });

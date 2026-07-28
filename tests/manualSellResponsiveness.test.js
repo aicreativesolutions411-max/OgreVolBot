@@ -79,7 +79,7 @@ test("backend manual sell uses critical attempt idempotency without changing sel
   assert.match(serverSource, /idemResultSet\(resultKey, \{ result \}, 120_000\)/);
   // Only a REAL submission is cached for replay — an all-failed bundle sell must not be cached as SUBMITTED.
   assert.match(serverSource, /if \(manualSellResultSubmitted\(result\)\) \{\s*await idemResultSet/);
-  assert.match(functionBody(serverSource, "webBundleSellCore"), /sellTokenFromWallet\(wallet, tokenMint, percent, slippageBps, \{ userId \}\)/);
+  assert.match(functionBody(serverSource, "webBundleSellCore"), /sellTokenFromWallet\(wallet, tokenMint, walletPercent, slippageBps, \{ userId \}\)/);
   // webTradeSellCore now sells via sellWithFeeRetry (adds a fee-top-up retry); the unchanged sell call lives there.
   assert.match(functionBody(serverSource, "sellWithFeeRetry"), /sellTokenFromWallet\(wallet, tokenMint, percent, slippageBps, \{ userId, priority: true \}\)/);
   assert.match(functionBody(serverSource, "webTradeSellCore"), /sellWithFeeRetry\(store, userId, wallet, tokenMint, percent, slippageBps\)/);
