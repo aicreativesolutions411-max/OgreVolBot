@@ -1992,10 +1992,13 @@ test("Robinhood buy watcher is decimal-safe, lossless, concurrent, and near-live
   assert.match(serverSource, /const RH_GROUP_BUY_POLL_MS = 1_500/);
   assert.match(tick, /rhGroupBuyPollInFlight/);
   assert.doesNotMatch(tick, /runWithConcurrency/);
-  assert.match(perCoin, /fetchRhBlockNumber\(CONFIG\.rhChainRpcUrl\)/);
-  assert.match(perCoin, /queueRhGroupBuyDelivery/);
+  assert.match(perCoin, /activeRhGroupBuyPools\(addr\)/);
+  assert.match(perCoin, /rhGroupBuyPoolCursor\(before, addr, pool\)/);
+  assert.match(perCoin, /Promise\.all\(pools\.map/);
+  assert.match(perCoin, /await queueRhGroupBuyDelivery/);
   assert.match(perCoin, /spotPriceQuote: buy\.spotPriceQuote/);
-  assert.match(perCoin, /st\.lastBlock = res\.toBlock/);
+  assert.match(perCoin, /enqueueRhGroupBuyBatch/);
+  assert.ok(perCoin.indexOf("await queueRhGroupBuyDelivery") < perCoin.indexOf("enqueueRhGroupBuyBatch"));
   const post = functionBody(serverSource, "postGroupBuyRh");
   assert.match(post, /supply: firstMeaningfulNumber\(supply, info\?\.supply\)/);
   assert.match(post, /eventPriceUsd/);
@@ -2124,6 +2127,7 @@ test("buy bot posts only real per-buy cards — no 'Buys rolling in' aggregate",
 test("min buy zero keeps every observed Solana and Robinhood buy in an ordered Telegram queue", () => {
   const solPoll = functionBody(serverSource, "pollGroupBuyTrades");
   const collect = functionBody(serverSource, "collectGroupBuyTrades");
+  const applyPage = functionBody(serverSource, "applyGroupBuyHttpPage");
   const page = functionBody(serverSource, "fetchGroupBuyTradePage");
   const delivery = functionBody(serverSource, "queueGroupBuyTradeDelivery");
   const perMintPoll = functionBody(serverSource, "pollGroupBuyTradesForMint");
@@ -2133,11 +2137,15 @@ test("min buy zero keeps every observed Solana and Robinhood buy in an ordered T
   const queue = functionBody(serverSource, "drainGroupBuyAlertQueue");
   assert.match(page, /GROUP_BUY_TRADE_PAGE_LIMIT/);
   assert.match(page, /searchParams\.set\("cursor", cursor\)/);
-  assert.match(page, /AbortSignal\.timeout\(5_000\)/);
-  assert.match(collect, /pagination\?\.nextCursor/);
-  assert.match(collect, /while \(pageCount < GROUP_BUY_TRADE_MAX_PAGES\)/);
-  assert.match(collect, /groupBuySeenTx\.set\(mint/); // persists even a successful empty baseline
+  assert.match(page, /timeoutMs: 5_000/);
+  assert.match(applyPage, /pagination\?\.nextCursor/);
+  assert.match(collect, /while \(pageCount < GROUP_BUY_TRADE_MAX_PAGES && !progress\.complete\)/);
+  assert.match(collect, /groupBuyHttpState\.get\(mint\)/);
+  assert.match(collect, /progress\.cursor/);
+  assert.match(collect, /incomplete: true/);
   assert.match(perMintPoll, /buys\.reverse\(\)/);
+  assert.match(perMintPoll, /await handoffGroupBuyTrade\(mint, trade\)/);
+  assert.match(perMintPoll, /await persistGroupBuySolState\(mint\)/);
   assert.doesNotMatch(solPoll, /posted >= 6|slice\(0, 6\)|mints\.slice\(0, 30\)/);
   assert.doesNotMatch(solPoll, /runWithConcurrency/);
   assert.match(solPoll, /groupBuyTradePollInFlight/);
@@ -2147,23 +2155,30 @@ test("min buy zero keeps every observed Solana and Robinhood buy in an ordered T
   assert.match(rhPost, /min > 0 && isEthQuote && paidAmount < min/);
   assert.match(solPost, /queueGroupBuyAlert/);
   assert.match(rhPost, /queueGroupBuyAlert/);
-  assert.match(functionBody(serverSource, "groupBuyAlertRetryMs"), /retry after/);
-  assert.match(queue, /sleep\(1_100\)/);
+  assert.match(functionBody(serverSource, "groupBuyAlertRetryMs"), /telegramRetryAfterMs/);
+  assert.match(queue, /groupBuyPacingDelayMs/);
+  assert.match(queue, /dueGroupBuyOutboxItem/);
   assert.match(rhPost, /tap Slime Chart below to open signed in/);
 });
 
 test("Pump buy polling is fast, cursor-safe, and does not swallow a new coin's first buy", () => {
   const collect = functionBody(serverSource, "collectGroupBuyTrades");
+  const applyPage = functionBody(serverSource, "applyGroupBuyHttpPage");
+  const socketTrade = functionBody(serverSource, "onGroupBuyTrade");
   const start = functionBody(serverSource, "startGroupBuyBot");
   const scan = functionBody(serverSource, "getGroupBuyScan");
   const post = functionBody(serverSource, "postGroupBuy");
   const poll = functionBody(serverSource, "pollGroupBuyTrades");
   assert.match(serverSource, /const GROUP_BUY_TRADE_POLL_MS = 750/);
   assert.match(serverSource, /const GROUP_BUY_TRADE_MAX_PAGES = 20/);
-  assert.match(collect, /A successful empty first read is a real baseline/);
-  assert.match(collect, /if \(firstPoll \|\| reachedSeen\) break/);
-  assert.match(collect, /const latest = groupBuySeenTx\.get\(mint\)/);
-  assert.match(collect, /new Set\(\[\.\.\.freshIds, \.\.\.latestSeen, \.\.\.seen\]/);
+  assert.match(applyPage, /progress\.activationCutoffAt/);
+  assert.match(applyPage, /progress\.reachedSeen \|\| !hasMore/);
+  assert.match(collect, /beginGroupBuyHttpProgress\(state, GROUP_BUY_INITIAL_LOOKBACK_MS\)/);
+  assert.match(collect, /applyGroupBuyHttpPage/);
+  assert.match(collect, /paginationYields/);
+  assert.doesNotMatch(socketTrade, /groupBuyHttpState/);
+  assert.match(serverSource, /createGroupBuyHostRateGate/);
+  assert.match(serverSource, /restoreGroupBuyReliabilityState/);
   assert.match(start, /setTimeout\(\(\) => \{ void pollGroupBuyTrades\(\); \}, 1_000\)/);
   assert.match(start, /GROUP_BUY_TRADE_POLL_MS/);
   assert.match(poll, /pollGroupBuyTradesForMint\(mint\)[\s\S]*\.catch[\s\S]*\.finally/);
