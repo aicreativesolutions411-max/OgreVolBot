@@ -4904,6 +4904,36 @@ test("linked NFT manual uploads stay live while the funded studio is safely feat
   }
 });
 
+test("Telegram /calls shows each member's last 15 channel calls with a per-user 15-minute cooldown", () => {
+  const register = functionBody(serverSource, "registerTelegramBotCommands");
+  const messageHandler = functionBody(serverSource, "handleMessage");
+  const cooldown = functionBody(serverSource, "claimTelegramPersonalCallsCooldown");
+  const handler = functionBody(serverSource, "handleTelegramPersonalCallsCommand");
+  const refresh = functionBody(serverSource, "refreshTelegramPersonalCalls");
+  const current = functionBody(serverSource, "telegramPersonalCallCurrentLabel");
+  const peak = functionBody(serverSource, "telegramPersonalCallPeakLabel");
+
+  assert.match(register, /command: "calls"/);
+  assert.match(messageHandler, /\["calls", "mycalls"\]/);
+  assert.match(serverSource, /PERSONAL_CALLS_COOLDOWN_MS = 15 \* 60_000/);
+  assert.match(cooldown, /personal-calls:\$\{String\(userId/);
+  assert.match(cooldown, /PERSONAL_CALLS_COOLDOWN_MS - \(nowMs - lastAt\)/);
+  assert.match(handler, /isPrivateChat\(message\?\.chat\)/);
+  assert.match(handler, /String\(call\.chatId\) === String\(chatId\)/);
+  assert.match(handler, /String\(call\.callerId\) === String\(userId\)/);
+  assert.match(handler, /\.slice\(0, 15\)/);
+  assert.match(handler, /refreshTelegramPersonalCalls\(calls\)/);
+  assert.match(handler, /scanFmtMoney\(call\.entryMc\)/);
+  assert.match(handler, /scanFmtAge\(call\.firstAt\)/);
+  assert.match(current, /callerIntel\.lastMultiple\(call\)/);
+  assert.match(peak, /callerIntel\.peakMultiple\(call\)/);
+  assert.match(refresh, /fetchDexScreenerTokenPairsBatch\(solMints/);
+  assert.match(refresh, /tokens\/v1\/robinhood/);
+  assert.match(refresh, /call\.lastMc = mc/);
+  assert.match(refresh, /call\.peakMc = Math\.max/);
+  assert.match(functionBody(serverSource, "groupBotHelpText"), /<code>\/calls<\/code>/);
+});
+
 test("Telegram /index posts a cached top-10 crypto market snapshot with in-place refresh", () => {
   const register = functionBody(serverSource, "registerTelegramBotCommands");
   const handler = functionBody(serverSource, "handleTelegramIndexCommand");
