@@ -68,6 +68,21 @@ test("distinct raid and queue commands are not swallowed by chat-wide cooldowns"
   assert.match(functionBody(serverSource, "handleMessage"), /handleTelegramRaidCommand\(chatId, message, raidCommand\.argument, userId\)/);
 });
 
+test("bare /cancel stops an active group raid without opening the DM trading menu", () => {
+  const groupHandler = functionBody(serverSource, "handleGroupBotCommand");
+  const router = functionBody(serverSource, "handleMessage");
+  assert.match(groupHandler, /const raidCancelCommand/);
+  assert.match(groupHandler, /const explicitRaid = Boolean\(raidCancelCommand\[1\]\)/);
+  assert.match(groupHandler, /raidQueueStatus\(chatId\)/);
+  assert.match(groupHandler, /!explicitRaid && !hasDraft && !status\?\.active/);
+  assert.match(groupHandler, /cancelActiveRaidForChat\(chatId\)/);
+  const cancelAt = router.indexOf("const hadSession = Boolean(sessions.get(chatId))");
+  const groupGateAt = router.indexOf("Nothing active to cancel in this group", cancelAt);
+  const dmMenuAt = router.indexOf("await showMenu(chatId, userId)", cancelAt);
+  assert.ok(cancelAt >= 0 && groupGateAt > cancelAt, "group /cancel guard is missing");
+  assert.ok(dmMenuAt > groupGateAt, "group /cancel must return before the private trading menu");
+});
+
 test("new-group copy matches behavior and names both supported chains", () => {
   const menu = functionBody(serverSource, "groupBotMenuText");
   const modules = functionBody(serverSource, "groupBotModuleView");
