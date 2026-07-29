@@ -30,6 +30,13 @@ test("wallet safety rejects a failed Jupiter simulation instead of bypassing it"
   assert.match(server, /Simulation failed before any funds moved/);
 });
 
+test("wallet preview follows the live Pump curve before Jupiter for ungraduated pump coins", () => {
+  assert.match(server, /const preferPumpPool = !token2022RouteRequired && isPumpBondingCurveBuy\(tokenMint, safety\.market\);\s*if \(preferPumpPool\) \{[\s\S]*?await previewPumpBuy\(\);[\s\S]*?await previewJupiterBuy\(\);/);
+  assert.match(server, /Match the actual execution engine/);
+  assert.match(server, /jupiterOrderPriceImpactPercent\(order\)/);
+  assert.match(server, /if \(token2022RouteRequired \|\| \/blocked to protect you\|simulation failed\|price impact\/i\.test\(reason\)\) throw jupiterError/);
+});
+
 test("wallet app lock is local, supports device unlock, and keeps recovery separate", () => {
   assert.match(wallet, /slimewalletAppLockV1/);
   assert.match(wallet, /PBKDF2/);

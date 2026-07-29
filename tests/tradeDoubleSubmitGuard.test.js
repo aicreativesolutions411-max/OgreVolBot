@@ -2972,9 +2972,16 @@ test("don't-get-cooked: Jito anti-sandwich path + catastrophic price-impact guar
   assert.match(functionBody(serverSource, "sendPumpTradeTx"), /re-broadcasting the SAME signed tx via RPC/);
   // price-impact cook-guard: buys only (SOL in), configurable cap, clear message
   assert.match(serverSource, /maxBuyPriceImpact = Math\.min\(0\.95, Math\.max\(0\.05, Number\.parseFloat\(process\.env\.MAX_BUY_PRICE_IMPACT_PCT/);
+  const normalizeImpact = new Function("order", functionBody(serverSource, "jupiterOrderPriceImpactFraction"));
+  assert.ok(Math.abs(normalizeImpact({ priceImpact: -5.2, priceImpactPct: "-0.99" }) - 0.052) < 1e-12, "Swap V2 percentage-points field is canonical");
+  assert.equal(normalizeImpact({ priceImpactPct: "-0.30" }), 0.30, "legacy ratio remains supported");
+  assert.ok(Math.abs(normalizeImpact({ priceImpact: "30.01" }) - 0.3001) < 1e-12, "percentage points cross the 30% guard correctly");
+  assert.equal(normalizeImpact({ priceImpact: "", priceImpactPct: "0.08" }), 0.08, "blank canonical field falls back to legacy");
+  assert.equal(normalizeImpact({ priceImpact: "not-a-number", priceImpactPct: "0.08" }), 0.08, "invalid canonical field falls back to legacy");
+  assert.equal(normalizeImpact({}), null, "missing provider impact is not fabricated");
   const ord = functionBody(serverSource, "createJupiterOrder");
   assert.match(ord, /if \(inputMint === SOL_MINT\)/);
-  assert.match(ord, /Math\.abs\(Number\(order\.priceImpactPct\)\)/);
+  assert.match(ord, /jupiterOrderPriceImpactFraction\(order\)/);
   assert.match(ord, /impact > CONFIG\.maxBuyPriceImpact/);
   assert.match(ord, /Blocked to protect you/);
 });
