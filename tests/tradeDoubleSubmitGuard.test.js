@@ -26,6 +26,7 @@ const polyTradingSource = fs.readFileSync(new URL("../src/lib/polymarketTrading.
 const polyHubSource = fs.readFileSync(new URL("../web/public/polymarket.html", import.meta.url), "utf8");
 const pumpCashbackSource = fs.readFileSync(new URL("../src/lib/pumpCashback.js", import.meta.url), "utf8");
 const pumpPortalStreamSource = fs.readFileSync(new URL("../src/lib/pumpPortalStream.js", import.meta.url), "utf8");
+const telegramChannelBridgeSource = fs.readFileSync(new URL("../src/lib/telegramChannelBridge.js", import.meta.url), "utf8");
 const pufcatSource = fs.readFileSync(new URL("../web/public/pufcat.html", import.meta.url), "utf8");
 
 test("Pufcat campaign page keeps live market, chart, trade, and community paths together", () => {
@@ -3019,6 +3020,35 @@ test("every Pump launch requires an exact lowercase pump-ending mint", () => {
   assert.doesNotMatch(bundledLaunch, /const mintKeypair = Keypair\.generate\(\)/);
   const localLaunch = functionBody(serverSource, "webLaunchPumpPortalLocal");
   assert.match(localLaunch, /basePayload\.rail === "pump" \? generatePumpLaunchMintKeypair/);
+});
+test("launch trailers are premium mobile renders with one bounded shared build per mint", () => {
+  assert.match(serverSource, /const LAUNCH_TRAILER_WIDTH = 720/);
+  assert.match(serverSource, /const LAUNCH_TRAILER_HEIGHT = 960/);
+  assert.match(serverSource, /const LAUNCH_TRAILER_DURATION_SECONDS = 8\.5/);
+  assert.match(serverSource, /const LAUNCH_TRAILER_CACHE_MAX = 12/);
+  assert.match(serverSource, /const LAUNCH_TRAILER_CACHE_TTL_MS = 10 \* 60 \* 1000/);
+  assert.match(serverSource, /let launchTrailerRenderQueue = Promise\.resolve\(\)/);
+  const render = functionBody(serverSource, "buildLaunchTrailerMp4");
+  assert.match(render, /launchTrailerAssetPath\("launch", "states", "forge\.mp4"\)/);
+  assert.match(render, /launchTrailerAssetPath\("launch", "states", "launch\.mp4"\)/);
+  assert.match(render, /launchTrailerAssetPath\("launch", "sfx", "forge\.mp3"\)/);
+  assert.match(render, /renderLaunchTrailerOverlays\(dir, d, mint, cp\)/);
+  assert.match(render, /"-pix_fmt", "yuv420p"/);
+  assert.match(render, /"-movflags", "\+faststart"/);
+  const best = functionBody(serverSource, "buildBestTrailer");
+  assert.match(best, /launchTrailerCache\.get\(key\)/);
+  assert.match(best, /launchTrailerCache\.delete\(key\)/);
+  assert.match(functionBody(serverSource, "buildBestTrailerUncached"), /withLaunchTrailerRenderSlot/);
+  assert.match(serverSource, /launchTrailerTextRows\(taglineRaw, 30\)/);
+  assert.match(serverSource, /const identityTickerSize = symRaw\.length/);
+  assert.match(functionBody(serverSource, "postLaunchTrailer"), /buildBestTrailer\(d, mint, cp\)/);
+  const announce = functionBody(serverSource, "announceLaunchCard");
+  assert.match(announce, /announcePhotoAsync/);
+  assert.match(announce, /if \(!channelAccepted && !acceptedGroupBridges\.length\) return/);
+  assert.match(announce, /buildBestTrailer\(draft, mint, null\)/);
+  assert.match(serverSource, /runWithConcurrency\(bridges, 2/);
+  assert.match(telegramChannelBridgeSource, /async function announcePhotoAsync/);
+  assert.match(telegramChannelBridgeSource, /async function sendVideoRawAsync/);
 });
 test("🏆⚡ Throne Bundle: atomic Jito waves of 4 by opt-in order, safe RPC fallback", () => {
   assert.match(serverSource, /async function fireCommunitySnipeThroneBundle/);

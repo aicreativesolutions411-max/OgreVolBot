@@ -130,6 +130,17 @@ export function createTelegramChannelBridge(options = {}) {
     return true;
   }
 
+  async function sendAnimationRawAsync(buffer, filename, caption, replyMarkup) {
+    if (!enabled || !buffer) return false;
+    try {
+      await sendAnimationReq(buffer, filename, caption, replyMarkup);
+      return true;
+    } catch (error) {
+      log(`tg-channel animation failed: ${error.message}`);
+      return false;
+    }
+  }
+
   async function sendVideoReq(buffer, filename, caption, replyMarkup) {
     const form = new FormData();
     form.append("chat_id", chatId);
@@ -156,6 +167,17 @@ export function createTelegramChannelBridge(options = {}) {
     return true;
   }
 
+  async function sendVideoRawAsync(buffer, filename, caption, replyMarkup) {
+    if (!enabled || !buffer) return false;
+    try {
+      await sendVideoReq(buffer, filename, caption, replyMarkup);
+      return true;
+    } catch (error) {
+      log(`tg-channel video failed: ${error.message}`);
+      return false;
+    }
+  }
+
   /**
    * Fire-and-forget channel PHOTO post (e.g. the launch fire-card). Same rate/dedupe
    * contract as announce(). Returns true if accepted (sent async), false if dropped.
@@ -175,7 +197,34 @@ export function createTelegramChannelBridge(options = {}) {
     return true;
   }
 
-  return { enabled, announce, announcePhoto, sendAnimationRaw, sendVideoRaw };
+  async function announcePhotoAsync(kind, key, buffer, filename, caption, replyMarkup) {
+    if (!enabled || !buffer) return false;
+    const safeKind = String(kind || "event");
+    const safeKey = String(key || filename || "").slice(0, 120);
+    if (!allow(safeKind, safeKey)) {
+      log(`tg-channel drop photo (${safeKind}): rate/dedupe limit`);
+      return false;
+    }
+    markSent(safeKind, safeKey);
+    try {
+      await sendPhotoReq(buffer, filename, caption, replyMarkup);
+      return true;
+    } catch (error) {
+      log(`tg-channel photo failed (${safeKind}): ${error.message}`);
+      return false;
+    }
+  }
+
+  return {
+    enabled,
+    announce,
+    announcePhoto,
+    announcePhotoAsync,
+    sendAnimationRaw,
+    sendAnimationRawAsync,
+    sendVideoRaw,
+    sendVideoRawAsync
+  };
 }
 
 export function escapeTelegramHtml(value = "") {
