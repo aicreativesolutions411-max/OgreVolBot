@@ -3222,7 +3222,7 @@ test("wallet tracker: cheap-poll + Helius-parse-on-activity, alert funnels to PO
   assert.match(serverSource, /async function pollTrackedWallets\(/);
   const poll = functionBody(serverSource, "pollTrackedWallets");
   assert.match(poll, /getSignaturesForAddress/);              // cheap activity detection
-  assert.match(poll, /api\.helius\.xyz\/v0\/transactions/);   // parse only fresh sigs
+  assert.match(poll, /fetchHeliusEnhancedTransactionsShared/); // parse fresh sigs through shared cache/batcher
   assert.match(poll, /firstPoll \|\| !fresh\.length/);         // baseline + only-on-activity
   assert.match(functionBody(serverSource, "sendWalletAlert"), /slimeScanKeyboard\(ev\.mint\)/); // POS buy funnel
   assert.doesNotMatch(functionBody(serverSource, "sendWalletAlert"), /buyToken|sellToken|sendTransaction/); // read-only
@@ -3234,6 +3234,40 @@ test("wallet tracker: cheap-poll + Helius-parse-on-activity, alert funnels to PO
   assert.match(serverSource, /startsWith\("wt:"\)/);          // routed in the dispatcher
   assert.match(serverSource, /callback_data: "wt:home"/);     // menu button under Scans & Signals
   assert.match(serverSource, /void pollTrackedWallets\(\)/);  // interval started
+});
+
+test("Helius enhanced parsing is shared, micro-batched, and success-cached outside trade execution", () => {
+  const shared = functionBody(serverSource, "fetchHeliusEnhancedTransactionsShared");
+  const flush = functionBody(serverSource, "flushSmartCallEnhancedTxQueue");
+  assert.match(shared, /smartCallEnhancedTxCached/);
+  assert.match(shared, /smartCallEnhancedTxInFlight/);
+  assert.match(shared, /smartCallEnhancedTxQueue\.add/);
+  assert.match(flush, /api\.helius\.xyz\/v0\/transactions/);
+  assert.match(flush, /offset \+= 100/);
+  assert.match(flush, /runWithConcurrency\(chunks, 3/);
+  assert.match(flush, /if \(tx\) smartCallEnhancedTxCache\.set/); // never negative-cache omissions/errors
+  assert.match(functionBody(serverSource, "smartCallParsedWalletBuys"), /fetchHeliusEnhancedTransactionsShared/);
+  assert.match(functionBody(serverSource, "pollTrackedWallets"), /fetchHeliusEnhancedTransactionsShared/);
+  assert.doesNotMatch(shared, /webTradeBuy|webTradeSell|sendTransaction/);
+  assert.match(serverSource, /heliusPaidStats: \{ \.\.\.heliusPaidStats \}/); // production visibility without keys
+});
+
+test("Helius DAS artwork is free-source-first, batch-deduped, and cache-respecting", () => {
+  const batch = functionBody(serverSource, "flushHeliusDasBatchQueue");
+  const fetchMetadata = functionBody(serverSource, "fetchHeliusDasTokenMetadata");
+  const avatar = functionBody(serverSource, "resolveTokenAvatarRecord");
+  const hydrate = functionBody(serverSource, "hydrateMarketRowFromPublicSources");
+  const livePairs = functionBody(serverSource, "buildWebLivePairs");
+  assert.match(batch, /method: "getAssetBatch"/);
+  assert.match(batch, /slice\(0, 100\)/);
+  assert.match(fetchMetadata, /heliusDasAssetInFlight/);
+  assert.match(fetchMetadata, /fetchHeliusDasAssetShared/);
+  assert.match(avatar, /freeAvatarWon/);
+  assert.match(avatar, /sleep\(750\)/);
+  assert.doesNotMatch(hydrate, /fetchHeliusDasTokenMetadata\([^)]*force:/);
+  assert.match(hydrate, /!Boolean\(baseRow\.authoritiesLoaded/);
+  assert.match(livePairs, /const enrichedRows = shouldBlockForImageEnrichment[\s\S]*: baseRows/);
+  assert.match(livePairs, /const safeRows = decorateWebLivePairAvatars/); // schedule only final visible rows
 });
 
 // ---- Cornix-style advanced exits: trailing stop + break-even-after-TP1 (engine already runs them) ----
@@ -4896,6 +4930,9 @@ test("airdrop and holder maps expose real cluster summaries + liquidity fallback
   assert.match(graph, /tokenLinkCount/);
   assert.match(graph, /holderFingerprint/);
   assert.match(graph, /summary\?\.complete/);
+  assert.match(graph, /isRh \|\| ttResult\?\.complete !== false/); // partial Solana history must not enter the 10m complete cache
+  assert.match(graph, /90_000/);                              // partial funder refresh is measured, not a 5s paid-history loop
+  assert.match(graph, /mapClusterInFlight/);                  // concurrent graph requests single-flight
   assert.match(graph, /fundersPending/);
   assert.match(graph, /maxSharedFunderChildren/);
   assert.match(graph, /isRh \? Math\.min\(30/);
@@ -4908,6 +4945,16 @@ test("airdrop and holder maps expose real cluster summaries + liquidity fallback
   assert.match(transferLinks, /fromUserAccount/);
   assert.match(transferLinks, /toUserAccount/);
   assert.match(transferLinks, /recentCutoff/);
+  assert.match(transferLinks, /mapHolderTransferCache/);
+  assert.match(transferLinks, /mapHolderTransferInFlight/);
+  assert.match(transferLinks, /complete \? MAP_HOLDER_TRANSFER_TTL_MS : 90_000/);
+  assert.match(transferLinks, /links: \[\.\.\.links\.values\(\)\], flow, events, complete/);
+  assert.match(serverSource, /MAP_HOLDER_TRANSFER_TTL_MS = 10 \* 60_000/);
+  const holderHistory = functionBody(serverSource, "mapHolderAddressHistory");
+  assert.match(holderHistory, /getSignaturesForAddress/);       // ordinary read stays on the Alchemy split
+  assert.match(holderHistory, /fetchHeliusEnhancedTransactionsShared/); // paid parsing is shared + batched
+  assert.match(holderHistory, /tokenTransfers:/);              // retain only fields the map consumes
+  assert.match(holderHistory, /mapHolderHistoryCache\.size > 400/);
   const rhTransferLinks = functionBody(serverSource, "rhHolderTokenTransferLinks");
   assert.match(rhTransferLinks, /total\?\.decimals/);
   assert.match(rhTransferLinks, /from === poolAddress \? "buy" : "receive"/);
@@ -4948,6 +4995,14 @@ test("airdrop and holder maps expose real cluster summaries + liquidity fallback
   assert.match(mapHtml, /gr\.edges/);
   assert.match(mapHtml, /kind==='direct'/);
   assert.match(mapHtml, /summary&&gr\.summary\.complete===false/);
+  assert.match(mapHtml, /GRAPH_FRESH_MS=10\*60\*1000/);
+  assert.match(mapHtml, /GRAPH_FIRST_RETRY_MS=90\*1000/);
+  assert.match(mapHtml, /graphCache=new Map/);
+  assert.match(mapHtml, /graphCache\.size>60/);
+  assert.match(mapHtml, /gr\.ok!==true/);
+  assert.match(mapHtml, /gr\.holderFingerprint!==expectedFingerprint/);
+  assert.match(mapHtml, /loadProgressiveGraph\(gurl,applyGraph,gurl\+'#'\+currentHolderFingerprint,currentHolderFingerprint\)/);
+  assert.doesNotMatch(mapHtml, /setTimeout\(\(\)=>fetchGraph\(attempt\+1\),6000\)/);
   assert.match(mapHtml, /not a final clean result/);
   assert.match(mapHtml, /recent cluster activity/);
   assert.match(mapHtml, /flowNetLabel/);

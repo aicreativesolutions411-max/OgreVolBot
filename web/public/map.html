@@ -121,6 +121,9 @@ const API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||'
 const COL={hold:{f:'#5be36a',r:'#0c7a2a'},sold:{f:'#e2564b',r:'#7a1010'},whale:{f:'#ffcf4d',r:'#8a6410'},new:{f:'#4dd6ff',r:'#0c5a7a'},funded:{f:'#8dff6a',r:'#1d8f32'},funder:{f:'#4dd6ff',r:'#15718f'},both:{f:'#ffcf4d',r:'#9a7115'}};
 const stage=document.getElementById('stage'),tip=document.getElementById('tip'),overlay=document.getElementById('overlay');
 let crumbs=[],refreshTimer=null,sim=null,zoomB=null,clusterHulls=null;
+const GRAPH_FRESH_MS=10*60*1000,GRAPH_FIRST_RETRY_MS=90*1000;
+const graphCache=new Map();
+let activeGraphUrl='';
 // 🕸️ Bubblemaps-style cluster palette — distinct hue per connected-wallet group.
 const CLC=['#ffcf4d','#4dd6ff','#ff7de3','#8bff5b','#ff9f4d','#b98cff','#4dffd0','#ff6b6b'];
 function short(a){return a&&a.length>10?a.slice(0,4)+'…'+a.slice(-4):a}
@@ -138,6 +141,29 @@ function cyTop(ms){let t=Infinity;ms.forEach(m=>{if(m.y!=null)t=Math.min(t,m.y-(
 // stop an arrow at the TARGET bubble's rim (not its centre) so the arrowhead sits visibly on the edge.
 function edgeX(s,t){const dx=(t.x||0)-(s.x||0),dy=(t.y||0)-(s.y||0),d=Math.hypot(dx,dy)||1;return (t.x||0)-dx/d*((t.r||10)+4)}
 function edgeY(s,t){const dx=(t.x||0)-(s.x||0),dy=(t.y||0)-(s.y||0),d=Math.hypot(dx,dy)||1;return (t.y||0)-dy/d*((t.r||10)+4)}
+
+// Keep the progressive graph fast without buying the same expensive history on every 30s map refresh.
+// Cached results draw immediately; a cold partial result gets one measured retry, then normal 10m refreshes.
+function loadProgressiveGraph(url,apply,cacheKey,expectedFingerprint){
+  const graphKey=cacheKey||url;
+  activeGraphUrl=graphKey;
+  let s=graphCache.get(graphKey);
+  if(!s){s={data:null,pending:null,nextAt:0,partialSeen:false,apply:null};graphCache.set(graphKey,s)}
+  else{graphCache.delete(graphKey);graphCache.set(graphKey,s)}
+  while(graphCache.size>60)graphCache.delete(graphCache.keys().next().value);
+  s.apply=apply;
+  if(s.data)apply(s.data);
+  if(s.pending||Date.now()<s.nextAt)return;
+  s.pending=fetch(url).then(r=>{if(!r.ok)throw new Error('graph '+r.status);return r.json()}).then(gr=>{
+    if(!gr||gr.ok!==true)throw new Error('graph response');
+    if(expectedFingerprint&&gr.holderFingerprint&&gr.holderFingerprint!==expectedFingerprint){s.data=null;s.nextAt=Date.now()+GRAPH_FIRST_RETRY_MS;return}
+    const partial=!!(gr&&(gr.timeout||(gr.summary&&gr.summary.complete===false)));
+    s.data=gr;
+    s.nextAt=Date.now()+(partial&&!s.partialSeen?GRAPH_FIRST_RETRY_MS:GRAPH_FRESH_MS);
+    s.partialSeen=partial||false;
+    if(activeGraphUrl===graphKey&&s.apply)s.apply(gr);
+  }).catch(()=>{s.nextAt=Date.now()+GRAPH_FIRST_RETRY_MS}).finally(()=>{s.pending=null});
+}
 
 // _silent = a background auto-refresh: never flash the spinner and never replace a working map with an error.
 async function loadTarget(kind,id,mode,push,label,_retry,_silent,chainHint){
@@ -187,6 +213,7 @@ function setStat(label,val){const el=ensureStat(label);const v=el&&el.querySelec
 function enrichCoinStats(mint){
   if(!mint)return;
   fetch('https://api.dexscreener.com/latest/dex/tokens/'+encodeURIComponent(mint)).then(r=>r.json()).then(j=>{
+    if(renderedCoinMint!==String(mint))return;
     const p=((j&&j.pairs)||[]).filter(x=>x.chainId==='solana').sort((a,b)=>((b.liquidity&&b.liquidity.usd)||0)-((a.liquidity&&a.liquidity.usd)||0))[0];
     if(!p)return;
     const liq=p.liquidity&&p.liquidity.usd, h1=p.priceChange&&p.priceChange.h1, mc=p.marketCap||p.fdv;
@@ -242,7 +269,14 @@ function drawToggleFoot(map){
 }
 
 function render(map){
-  overlay.className='hide'; drawCrumbs(); drawStats(map); drawToggleFoot(map); drawSide(map); if(map.kind==='token'&&map.mint)enrichCoinStats(map.mint);
+  for(const state of graphCache.values())state.apply=null;
+  activeGraphUrl='';
+  const nextCoinMint=map.kind==='token'&&map.mint?String(map.mint):'';
+  const currentHolderFingerprint=(map.nodes||[]).filter(n=>n.wallet).slice(0,40).map(n=>String(n.wallet||'').toLowerCase()).join('|');
+  const nextGraphKey=nextCoinMint?nextCoinMint+'#'+currentHolderFingerprint:'';
+  if(nextGraphKey!==renderedGraphKey){clustersData=null;clusterEdgesData=[];flowSummary=null;flowEventsData=[];flowShowAll=false;coinPriceUsd=0;renderedGraphKey=nextGraphKey}
+  renderedCoinMint=nextCoinMint;
+  overlay.className='hide'; drawCrumbs(); drawStats(map); drawToggleFoot(map); drawSide(map); if(nextCoinMint)enrichCoinStats(nextCoinMint);
   if(sim)sim.stop();
   clusterHulls=null; const oc=document.getElementById('clusters'); if(oc)oc.remove();   // reset cluster layer per render
   const old=stage.querySelector('svg'); if(old)old.remove();
@@ -306,10 +340,10 @@ function render(map){
       if(clusterHulls){hullG.selectAll('path.hull').attr('d',d=>hullPath(d.members));hullG.selectAll('g.clbl').attr('transform',d=>'translate('+cx(d.members)+','+cyTop(d.members)+')')}
     });
   // 🕸️ progressive cluster overlay (bubblemaps-style, but CLICKABLE to dive deeper). Bubbles render instantly;
-  // the fund-flow clusters + hulls + %-labels + legend fade in after. Retries ONCE on a cold-coin timeout
-  // (funder resolution warms server-side between calls), so clusters reliably appear.
+  // cached fund-flow clusters + hulls + %-labels + legend fade in after.
   function applyGraph(gr){
     if(!gr||!gr.ok)return false;
+    if(gr.holderFingerprint&&gr.holderFingerprint!==currentHolderFingerprint)return false;
     const byi=new Map(nodes.map(n=>[n.i,n]));
     const clusters=(gr.clusters||[]).map((c,k)=>({...c,color:CLC[k%CLC.length],letter:String.fromCharCode(65+k),members:(c.members||[]).map(i=>byi.get(i)).filter(Boolean),hubNode:byi.get(c.hub),funderNode:(c.funderIdx!=null?byi.get(c.funderIdx):null)})).filter(c=>c.members.length>=2);
     if(!clusters.length){ if(gr.summary&&gr.summary.complete===false)renderClusterPending(gr.summary.fundersPending);else if(!gr.timeout)renderClusterEmpty(); return false; }
@@ -349,12 +383,11 @@ function render(map){
   }
   if(map.kind==='token'&&map.mint){
     const gurl=API_BASE+'/api/map/graph?ca='+map.mint;
-    const fetchGraph=(attempt)=>fetch(gurl).then(r=>r.json()).then(gr=>{applyGraph(gr);if(attempt<2&&gr&&(gr.timeout||(gr.summary&&gr.summary.complete===false)))setTimeout(()=>fetchGraph(attempt+1),6000);}).catch(()=>{});
-    fetchGraph(0);
+    loadProgressiveGraph(gurl,applyGraph,gurl+'#'+currentHolderFingerprint,currentHolderFingerprint);
   }
 }
 // Cluster legend in the side panel — color swatch · combined % · wallet count. CLICK a row → dive-deeper modal.
-let clustersData=null,clusterEdgesData=[],flowSummary=null,flowEventsData=[],flowOpen=false,flowShowAll=false,coinPriceUsd=0;
+let clustersData=null,clusterEdgesData=[],flowSummary=null,flowEventsData=[],flowOpen=false,flowShowAll=false,coinPriceUsd=0,renderedGraphKey='',renderedCoinMint='';
 // Loading vs unloading badge: net recent token flow across a cluster's wallets. 🟢 = accumulating (buying/
 // getting ready), 🔴 = distributing (farming/selling off), 🟡 = mixed. Blank when there's no recent flow.
 function flowBadge(c){var d=c&&c.flow&&c.flow.dir;if(d==='loading')return ' <span style="color:#37d67a;font-weight:700;font-size:11px">🟢 ACCUMULATING</span>';if(d==='unloading')return ' <span style="color:#ff5a5a;font-weight:700;font-size:11px">🔴 OFFLOADING</span>';if(d==='mixed')return ' <span style="color:#e0b23c;font-size:11px">🟡 mixed</span>';return '';}
