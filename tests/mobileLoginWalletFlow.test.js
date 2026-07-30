@@ -147,3 +147,23 @@ test("wallet modal remains readable and clickable on mobile", () => {
   assert.match(overridesSource, /\.modal-wallet-provider-buttons \.wallet-provider-choice img\s*\{[\s\S]*width: 28px !important/);
   assert.match(overridesSource, /\.modal-wallet-provider-buttons \.wallet-provider-choice small\s*\{[\s\S]*overflow-wrap: anywhere !important/);
 });
+
+test("standalone SlimeWallet batches Phantom backups behind a direct save tap", () => {
+  const start = appSource.indexOf("function mobileBackupSaveRequired");
+  const end = appSource.indexOf("async function connectXAccount", start);
+  const mobileSave = appSource.slice(start, end);
+  assert.ok(start >= 0 && end > start, "standalone wallet backup helper should remain extractable");
+  assert.match(mobileSave, /iPhone\|iPad\|iPod\|Phantom\|Solflare/);
+  assert.match(mobileSave, /navigator\.platform === "MacIntel"/);
+  assert.match(mobileSave, /pendingMobileBackupFiles\.push\(file\)/);
+  assert.match(mobileSave, /data-save-mobile-backup/);
+  assert.match(mobileSave, /Save to Files/);
+  assert.match(mobileSave, /navigator\.share\(\{ title: "Save SlimeWire wallet backup", files: \[shareFile\] \}\)/);
+  assert.match(mobileSave, /return copyMobileBackupData\(file, button\)/);
+  assert.ok(
+    mobileSave.indexOf("if (mobileBackupSaveRequired())") < mobileSave.indexOf("URL.createObjectURL(blob)"),
+    "Phantom must leave through the save sheet before a blob URL can be created"
+  );
+  assert.match(appSource, /data-download[\s\S]{0,220}userInitiated: true/);
+  assert.match(htmlSource, /app\.js\?v=20260729-phantom-backup/);
+});

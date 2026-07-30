@@ -7488,15 +7488,27 @@ function importWalletSection() {
 }
 
 function downloadsHtml() {
-  if (!state.downloads) return "";
+  const entries = Object.entries(state.downloads || {}).filter(([, file]) => file?.filename && file?.text);
+  if (!entries.length) return "";
+  const mobileSave = mobileBackupSaveRequired();
+  const buttons = entries.map(([key, file]) => {
+    const source = `${key} ${file.filename}`.toLowerCase();
+    const label = source.includes("evm") || source.includes("robinhood")
+      ? "Robinhood / EVM Backup"
+      : source.includes("recover") || source.includes("phantom") || source.includes("solflare")
+        ? "Solflare / Phantom Backup"
+        : "SlimeWire Backup";
+    return `<button type="button" data-download="${escapeHtml(key)}">${mobileSave ? "Save / share" : "Download"} ${label}</button>`;
+  }).join("");
   return `
     <section class="download-card">
       <div>
         <h3>Wallet Backups Ready</h3>
-        <p>Both files were sent automatically. The recovery file contains the Base58 keys and exact steps for loading each wallet in Phantom or Solflare.</p>
+        <p>${mobileSave
+          ? "Phantom and iPhone browsers need one direct tap to save each private file. Tap Save / share, then choose Save to Files."
+          : "Your files downloaded automatically and remain available here. The recovery file contains the exact steps for loading each wallet in Phantom or Solflare."}</p>
       </div>
-      <button data-download="encryptedBackup">Download Bot Backup</button>
-      <button data-download="recoveryKeys">Solflare / Phantom Backup</button>
+      ${buttons}
       <div class="external-wallet-load-actions">
         <a href="https://phantom.app/download" target="_blank" rel="noreferrer">Open Phantom to load</a>
         <a href="https://solflare.com/download" target="_blank" rel="noreferrer">Open Solflare to load</a>
@@ -13699,16 +13711,176 @@ async function readRestoreFile(input) {
   }
 }
 
-function downloadText(filename, text) {
-  const blob = new Blob([text], { type: "text/plain" });
+let pendingMobileBackupFiles = [];
+let mobileBackupBatchTimer = 0;
+
+function mobileBackupSaveRequired() {
+  const agent = String(navigator.userAgent || "");
+  const touchIpad = navigator.platform === "MacIntel" && Number(navigator.maxTouchPoints || 0) > 1;
+  return /iPhone|iPad|iPod|Phantom|Solflare/i.test(agent) || touchIpad;
+}
+
+function normalizedMobileBackup(filename, text) {
+  return {
+    filename: String(filename || "slimewire-wallet-backup.txt")
+      .replace(/[\\/:*?"<>|]+/g, "-")
+      .slice(0, 120) || "slimewire-wallet-backup.txt",
+    text: String(text || "")
+  };
+}
+
+function setMobileBackupStatus(message, error = false) {
+  const status = document.querySelector("[data-mobile-backup-status]");
+  if (!status) return;
+  status.textContent = message;
+  status.style.color = error ? "#ff8b9a" : "#9cff76";
+}
+
+function showMobileBackupManual(file) {
+  const manual = document.querySelector("[data-mobile-backup-manual]");
+  const textarea = manual?.querySelector("textarea");
+  const filename = manual?.querySelector("[data-mobile-backup-manual-name]");
+  if (!manual || !textarea) return;
+  manual.hidden = false;
+  textarea.value = file.text;
+  if (filename) filename.textContent = file.filename;
+  textarea.focus();
+  textarea.select();
+}
+
+async function copyMobileBackupData(file, button) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(file.text);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = file.text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.cssText = "position:fixed;opacity:0;pointer-events:none";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand?.("copy");
+      textarea.remove();
+      if (!copied) throw new Error("Clipboard unavailable");
+    }
+    if (button) button.textContent = "Copied privately";
+    setMobileBackupStatus(`${file.filename} copied. Paste it only into a private file you control.`);
+    return true;
+  } catch {
+    showMobileBackupManual(file);
+    setMobileBackupStatus("Automatic save is unavailable. Copy the private backup shown below into a file you control.", true);
+    return false;
+  }
+}
+
+async function saveMobileBackupData(file, button) {
+  let shareFile = null;
+  try {
+    shareFile = new File([file.text], file.filename, { type: "text/plain;charset=utf-8" });
+  } catch {}
+  let canShareFile = Boolean(shareFile && navigator.share);
+  if (canShareFile && navigator.canShare) {
+    try {
+      canShareFile = navigator.canShare({ files: [shareFile] });
+    } catch {
+      canShareFile = false;
+    }
+  }
+  if (canShareFile) {
+    try {
+      await navigator.share({ title: "Save SlimeWire wallet backup", files: [shareFile] });
+      if (button) button.textContent = "Saved / shared";
+      setMobileBackupStatus("Backup handed to your phone. Choose Save to Files and keep it private.");
+      return true;
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        setMobileBackupStatus("Save cancelled. Your backup is still ready here.");
+        return false;
+      }
+    }
+  }
+  return copyMobileBackupData(file, button);
+}
+
+async function saveMobileBackupFile(index, button) {
+  const file = pendingMobileBackupFiles[Number(index)];
+  if (!file) {
+    setMobileBackupStatus("Open the wallet backup again.", true);
+    return false;
+  }
+  return saveMobileBackupData(file, button);
+}
+
+async function copyMobileBackupFile(index, button) {
+  const file = pendingMobileBackupFiles[Number(index)];
+  if (!file) {
+    setMobileBackupStatus("Open the wallet backup again.", true);
+    return false;
+  }
+  return copyMobileBackupData(file, button);
+}
+
+function showMobileBackupFiles() {
+  mobileBackupBatchTimer = 0;
+  document.querySelector("[data-mobile-backup-save-sheet]")?.remove();
+  const sheet = document.createElement("div");
+  sheet.setAttribute("data-mobile-backup-save-sheet", "");
+  sheet.style.cssText = "position:fixed;inset:0;z-index:100000;background:rgba(1,7,2,.92);display:flex;align-items:flex-end;justify-content:center;padding:12px;font-family:Inter,system-ui,sans-serif";
+  const rows = pendingMobileBackupFiles.map((file, index) => `
+    <div style="border:1px solid rgba(113,255,70,.24);border-radius:14px;padding:12px;background:#0b150d;margin-top:10px">
+      <b style="display:block;overflow-wrap:anywhere;color:#efffe9">${escapeHtml(file.filename)}</b>
+      <small style="display:block;color:#9fb39d;margin:5px 0 10px">Save this private recovery file somewhere only you control.</small>
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px">
+        <button type="button" data-save-mobile-backup="${index}" style="min-height:46px;border:0;border-radius:12px;background:#66ff32;color:#071006;font-weight:900;padding:10px 14px">Save / share file</button>
+        <button type="button" data-copy-mobile-backup="${index}" style="min-height:46px;border:1px solid rgba(113,255,70,.28);border-radius:12px;background:#132016;color:#dfffd5;font-weight:800;padding:10px 14px">Copy</button>
+      </div>
+    </div>`).join("");
+  sheet.innerHTML = `
+    <section role="dialog" aria-modal="true" aria-label="Wallet backups ready" style="width:min(560px,100%);max-height:90vh;overflow:auto;border:1px solid rgba(113,255,70,.32);border-radius:22px;background:#071009;color:#efffe9;padding:18px;box-shadow:0 24px 80px rgba(0,0,0,.6)">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+        <div><h2 style="margin:0 0 6px;font-size:21px">Wallet backups ready</h2><p style="margin:0;color:#a9bda6;line-height:1.5">Phantom and iPhone browsers need one direct tap before saving a private file. Choose <b>Save / share file</b>, then <b>Save to Files</b>.</p></div>
+        <button type="button" data-close-mobile-backup aria-label="Close" style="width:40px;height:40px;flex:0 0 40px;border:1px solid rgba(255,255,255,.14);border-radius:12px;background:#111b13;color:#fff;font-size:22px">×</button>
+      </div>
+      ${rows}
+      <p data-mobile-backup-status style="min-height:18px;margin:12px 0 0;color:#9cff76;font-size:12px"></p>
+      <div data-mobile-backup-manual hidden style="margin-top:12px">
+        <b>Manual private copy · <span data-mobile-backup-manual-name></span></b>
+        <textarea readonly spellcheck="false" style="width:100%;min-height:180px;margin-top:8px;border:1px solid rgba(113,255,70,.24);border-radius:12px;background:#020603;color:#dfffd5;padding:10px;font:11px/1.45 ui-monospace,monospace"></textarea>
+      </div>
+      <p style="margin:12px 0 0;color:#ff9aa7;font-size:12px;line-height:1.45">Never paste these files into chat or send them to support. Anyone with a recovery key can control that wallet.</p>
+    </section>`;
+  document.body.appendChild(sheet);
+  sheet.querySelector("[data-close-mobile-backup]")?.addEventListener("click", () => sheet.remove());
+  sheet.querySelectorAll("[data-save-mobile-backup]").forEach((button) => {
+    button.addEventListener("click", () => saveMobileBackupFile(button.dataset.saveMobileBackup, button));
+  });
+  sheet.querySelectorAll("[data-copy-mobile-backup]").forEach((button) => {
+    button.addEventListener("click", () => copyMobileBackupFile(button.dataset.copyMobileBackup, button));
+  });
+}
+
+function downloadText(filename, text, options = {}) {
+  const file = normalizedMobileBackup(filename, text);
+  if (!file.text) return false;
+  if (mobileBackupSaveRequired()) {
+    if (options.userInitiated) return saveMobileBackupData(file, options.button);
+    if (!mobileBackupBatchTimer) pendingMobileBackupFiles = [];
+    if (!pendingMobileBackupFiles.some((item) => item.filename === file.filename && item.text === file.text)) {
+      pendingMobileBackupFiles.push(file);
+    }
+    if (!mobileBackupBatchTimer) mobileBackupBatchTimer = setTimeout(showMobileBackupFiles, 0);
+    return true;
+  }
+  const blob = new Blob([file.text], { type: "text/plain" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = filename;
+  link.download = file.filename;
   document.body.appendChild(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  return true;
 }
 
 async function connectXAccount() {
@@ -26192,7 +26364,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-wallet-sweep-action]")) await runWalletSweepAction(target.dataset.walletSweepAction || "");
   if (target.matches("[data-download]")) {
     const file = state.downloads?.[target.dataset.download];
-    if (file) downloadText(file.filename, file.text);
+    if (file) await downloadText(file.filename, file.text, { userInitiated: true, button: target });
   }
   if (target.matches("[data-trade-buy-quick]")) {
     await executeWebBuy(target.dataset.tradeBuyQuick);
