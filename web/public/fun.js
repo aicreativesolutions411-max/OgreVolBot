@@ -4097,7 +4097,7 @@
   const FUN_TOOL_ROUTES = {
     copy: { route: "copy", title: "Trader copy", note: "Follow a public wallet · stays inside SlimeWire Go" },
     sniper: { route: "sniper", title: "Launch snipe", note: "Watch a ticker or name · runs server-side" },
-    walletLaunch: { route: "walletLaunch", title: "Wallet launch snipe", note: "Watch a creator or deployer · runs server-side" }
+    walletLaunch: { route: "walletLaunch", title: "Copy coin launches", note: "One wallet or a bundle · runs until you stop it" }
   };
   function openFunTool(action, override = null) {
     const config = override || FUN_TOOL_ROUTES[action];
@@ -4324,6 +4324,7 @@
       return;
     }
     if (event.target.closest("[data-wallet-launch-coin]")) { state.launchReturnView = "wallet"; openFunLaunch(); return; }
+    if (event.target.closest("[data-copy-launches-entry]")) { openFunTool("walletLaunch"); return; }
     const walletRouteTab = event.target.closest("[data-wallet-route-tab]"); if (walletRouteTab) { closeSearch(); closeSheet(); state.profileTab = walletRouteTab.dataset.walletRouteTab || "positions"; $$('[data-profile]').forEach((button) => button.classList.toggle("active", button.dataset.profile === state.profileTab)); setView("wallet"); return; }
     if (event.target.closest("[data-wallet-route-back]")) { closeSearch(); closeSheet(); setView("wallet"); return; }
     if (event.target.closest("[data-multi-wallet-entry]")) { await openMultiWalletEntry(); return; }

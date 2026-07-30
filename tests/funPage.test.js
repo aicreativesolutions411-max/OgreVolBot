@@ -48,7 +48,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "88", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "89", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -76,7 +76,7 @@ test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH tr
   assert.match(html, /wallet-install-head[^>]+data-install-fun hidden[^>]+><span>Install<\/span>/);
   assert.match(js, /if \(routeParams\.get\("install"\) === "1"\) setTimeout\(showFunInstallGuide, 350\)/);
   assert.match(funWorker, /IS_WALLET_WORKER/);
-  assert.match(funWorker, /slimewallet-v28/);
+  assert.match(funWorker, /slimewallet-v29/);
   assert.match(JSON.stringify(walletManifest.icons), /slimewallet-icon-512\.png/);
   assert.match(js, /WALLET_BRAND_ASSET = "\/assets\/slimewire\/slimewallet-icon-192\.png"/);
   assert.match(css, /slimewallet-vault-bg\.webp/);
@@ -231,7 +231,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: IS_WALLET_ROUTE \? "\/wallet\/" : "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v85/);
+  assert.match(funWorker, /slimewire-fun-v86/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -299,7 +299,7 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
   assert.match(html, /fun\.css\?v=66/);
-  assert.match(funWorker, /slimewire-fun-v85/);
+  assert.match(funWorker, /slimewire-fun-v86/);
   assert.match(funWorker, /fun\.css\?v=66/);
   assert.match(css, /\.wallet-bottom-nav\[hidden\]\{display:none!important\}/);
   assert.match(js, /walletNav\.hidden = hideWalletNav/);
@@ -311,8 +311,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=88/);
-  assert.match(funWorker, /fun\.js\?v=88/);
+  assert.match(html, /fun\.js\?v=89/);
+  assert.match(funWorker, /fun\.js\?v=89/);
 });
 
 test("Fun volume switches pasted contracts to their authoritative chain", () => {
@@ -378,7 +378,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /"slimewire-fun-v85"/);
+  assert.match(funWorker, /"slimewire-fun-v86"/);
   assert.doesNotMatch(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(js, /loadFunScript\("\/slimewire-funding\.js\?v=8"\)/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
@@ -664,7 +664,7 @@ test("Phantom and iPhone wallet backups use a save sheet instead of navigating t
     mobileSave.indexOf("if (mobileBackupSaveRequired())") < mobileSave.indexOf("URL.createObjectURL(blob)"),
     "mobile wallet browsers must exit into the save sheet before blob downloads are created"
   );
-  assert.match(html, /\/fun\.js\?v=88/, "the fixed wallet script must bypass Phantom's long-lived asset cache");
+  assert.match(html, /\/fun\.js\?v=89/, "the fixed wallet script must bypass Phantom's long-lived asset cache");
 });
 
 test("the root terminal also batches Phantom wallet backups behind a direct save tap", () => {
@@ -1199,6 +1199,14 @@ test("Wallet, Go, and Cash expose the same multi-wallet trade flow", () => {
   assert.match(html, /Bundle \/ multi-wallet/);
   assert.match(cashHtml, /id="cashWalletMultiTradeBtn"[^>]*>Bundle \/ multi-wallet</);
   assert.match(cash, /cashWalletMultiTradeBtn[^\n]+openCashMultiTrade/);
+});
+
+test("SlimeWallet surfaces launch copying beside bundle tools without adding another tab", () => {
+  assert.match(html, /class="wallet-multi-strip wallet-copy-launch-strip"[^>]+data-copy-launches-entry/);
+  assert.match(html, /Copy coin launches/);
+  assert.match(html, /Auto-buy only new coins launched by a wallet/);
+  assert.match(js, /data-copy-launches-entry[\s\S]*openFunTool\("walletLaunch"\)/);
+  assert.match(js, /walletLaunch: \{ route: "walletLaunch", title: "Copy coin launches"/);
 });
 
 test("mobile wallet addresses are visible and tap-to-copy from the hero, manager, positions, and Receive", () => {
