@@ -648,6 +648,41 @@ test("/fun backs up every wallet, auto-backs up new wallets, and keeps backup-al
   assert.match(css, /\.wallet-backup-button\{/);
 });
 
+test("Phantom and iPhone wallet backups use a save sheet instead of navigating to a blob URL", () => {
+  const mobileSave = js.slice(
+    js.indexOf("function mobileBackupSaveRequired"),
+    js.indexOf("async function downloadFunAccountBackup")
+  );
+  assert.match(mobileSave, /iPhone\|iPad\|iPod/);
+  assert.match(mobileSave, /Phantom\|Solflare/);
+  assert.match(mobileSave, /if \(mobileBackupSaveRequired\(\)\) \{[\s\S]{0,120}openMobileBackupSave\(prepared\)/);
+  assert.match(mobileSave, /data-save-mobile-backup/);
+  assert.match(mobileSave, /Save to Files/);
+  assert.match(mobileSave, /navigator\.share\(\{ title: "Save SlimeWire wallet backup", files: \[file\] \}\)/);
+  assert.match(mobileSave, /await copyMobileBackupFile\(index, button\)/);
+  assert.ok(
+    mobileSave.indexOf("if (mobileBackupSaveRequired())") < mobileSave.indexOf("URL.createObjectURL(blob)"),
+    "mobile wallet browsers must exit into the save sheet before blob downloads are created"
+  );
+});
+
+test("the root terminal also batches Phantom wallet backups behind a direct save tap", () => {
+  for (const source of [desktopHtml, desktopAliasHtml]) {
+    const start = source.indexOf("function mobileBackupSaveRequired");
+    const end = source.indexOf("// ---------- API + auth ----------", start);
+    const mobileSave = source.slice(start, end);
+    assert.ok(start >= 0 && end > start, "root wallet backup helper should remain extractable");
+    assert.match(mobileSave, /iPhone\|iPad\|iPod\|Phantom\|Solflare/);
+    assert.match(mobileSave, /pendingMobileBackupFiles\.push\(file\)/);
+    assert.match(mobileSave, /Save \/ share file/);
+    assert.match(mobileSave, /navigator\.share\(\{title:"Save SlimeWire wallet backup",files:\[file\]\}\)/);
+    assert.ok(
+      mobileSave.indexOf("if(mobileBackupSaveRequired())") < mobileSave.indexOf("URL.createObjectURL(b)"),
+      "Phantom must be diverted before the root terminal creates a blob URL"
+    );
+  }
+});
+
 test("wallet creation automatically sends both backup formats with outside-wallet load guidance", () => {
   const createWallet = js.slice(js.indexOf("async function createWallet()"), js.indexOf("function walletPositionAssets"));
   const ensureDesktopAccount = terminalApp.slice(terminalApp.indexOf("async function ensureWebAccount"), terminalApp.indexOf("async function createWebAccount"));

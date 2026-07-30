@@ -577,6 +577,22 @@
   </div>
 </div>
 
+<!-- MOBILE WALLET BACKUP SAVE -->
+<div id="mobilebackup" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <button class="sheet-close" data-close="mobilebackup" type="button" aria-label="Close">×</button>
+    <div class="sheet-title">Wallet backups ready</div>
+    <p class="sheet-copy">Phantom and iPhone browsers need one extra tap. Choose <b>Save / share file</b>, then use <b>Save to Files</b>, AirDrop, or another private destination.</p>
+    <div id="mobileBackupList" class="cash-wallet-list"></div>
+    <div id="mobileBackupManual" class="wallet-import-box" hidden>
+      <b>Manual copy · <span id="mobileBackupManualName"></span></b>
+      <p>Copy this into a private text file. Never send it through chat or support.</p>
+      <textarea id="mobileBackupManualText" class="field recovery-text" rows="7" readonly spellcheck="false"></textarea>
+    </div>
+    <p class="fineprint">SlimeWire will not navigate Phantom to a blank blob page. Anyone with a recovery file can control that wallet.</p>
+  </div>
+</div>
+
 <div id="toast" class="toast" hidden></div>
 <script src="/config.js"></script>
 <script src="/slimewire-funding.js?v=8"></script>

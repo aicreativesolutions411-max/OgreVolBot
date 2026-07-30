@@ -463,28 +463,94 @@
     return { ok: true, source: state.token === COOKIE_SESSION ? "shared-cookie" : "saved-token", user: state.account, accountRef: confirmation.accountRef, accountChanged: Boolean(result.accountChanged || confirmation.mismatch) };
   }
 
-  function downloadText(filename, text) {
-    if (!text) return;
-    try {
-      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename || "slimecash-backup.txt";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 3000);
-    } catch { toast("Backup is ready, but the download was blocked. Tap Back up account in Profile.", true); }
+  let pendingMobileBackupFiles = [];
+  function mobileBackupSaveRequired() {
+    const ua = String(navigator.userAgent || "");
+    const touchIpad = navigator.platform === "MacIntel" && Number(navigator.maxTouchPoints || 0) > 1;
+    return /iPhone|iPad|iPod/i.test(ua) || touchIpad || /Phantom|Solflare/i.test(ua);
   }
-
-  function downloadWalletFiles(downloads, options = {}) {
+  function normalizedBackupFile(filename, text) {
+    return {
+      filename: String(filename || "slimecash-backup.txt").replace(/[\\/:*?"<>|]+/g, "-").slice(0, 120) || "slimecash-backup.txt",
+      text: String(text || "")
+    };
+  }
+  function backupDownloadEntries(downloads, options = {}) {
     const includeEncrypted = options.includeEncrypted !== false;
     const includeSolana = options.includeSolana !== false;
     const includeEvm = options.includeEvm !== false;
-    if (includeEncrypted && downloads?.encryptedBackup?.text) downloadText(downloads.encryptedBackup.filename, downloads.encryptedBackup.text);
-    if (includeSolana && downloads?.recoveryKeys?.text) downloadText(downloads.recoveryKeys.filename, downloads.recoveryKeys.text);
-    if (includeEvm && downloads?.evmRecoveryKeys?.text) downloadText(downloads.evmRecoveryKeys.filename, downloads.evmRecoveryKeys.text);
+    return [
+      includeEncrypted ? downloads?.encryptedBackup : null,
+      includeSolana ? downloads?.recoveryKeys : null,
+      includeEvm ? downloads?.evmRecoveryKeys : null
+    ].filter((file) => file?.text);
+  }
+  function openMobileBackupSave(files) {
+    pendingMobileBackupFiles = files.map((file) => normalizedBackupFile(file.filename, file.text)).filter((file) => file.text);
+    $("mobileBackupList").innerHTML = pendingMobileBackupFiles.map((file, index) => `<div class="wallet-import-box"><b>${escapeHtml(file.filename)}</b><p>Save this private recovery file somewhere only you control.</p><div class="cash-wallet-actions"><button class="btn primary" type="button" data-save-mobile-backup="${index}">Save / share file</button><button class="btn ghost" type="button" data-copy-mobile-backup="${index}">Copy instead</button></div></div>`).join("");
+    openSheet("mobilebackup");
+  }
+  function startBackupDownloads(files = []) {
+    const prepared = files.map((file) => normalizedBackupFile(file?.filename, file?.text)).filter((file) => file.text);
+    if (!prepared.length) return 0;
+    if (mobileBackupSaveRequired()) {
+      openMobileBackupSave(prepared);
+      return prepared.length;
+    }
+    try {
+      for (const file of prepared) {
+        const blob = new Blob([file.text], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = file.filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 3000);
+      }
+      return prepared.length;
+    } catch { toast("Backup is ready, but the download was blocked. Tap Back up account in Profile.", true); return 0; }
+  }
+  function downloadText(filename, text) { return startBackupDownloads([{ filename, text }]); }
+  function downloadWalletFiles(downloads, options = {}) {
+    return startBackupDownloads(backupDownloadEntries(downloads, options));
+  }
+  async function saveMobileBackupFile(index, button) {
+    const backup = pendingMobileBackupFiles[Number(index)];
+    if (!backup) { toast("That backup is no longer prepared. Open Back up again.", true); return; }
+    let file = null;
+    try { file = new File([backup.text], backup.filename, { type: "text/plain;charset=utf-8" }); } catch { /* Copy fallback below. */ }
+    let canShare = Boolean(file && typeof navigator.share === "function");
+    if (canShare && typeof navigator.canShare === "function") {
+      try { canShare = navigator.canShare({ files: [file] }); } catch { canShare = false; }
+    }
+    if (canShare) {
+      try {
+        await navigator.share({ title: "Save SlimeWire wallet backup", files: [file] });
+        if (button) button.textContent = "Saved / shared";
+        toast("Backup handed to your phone. Choose Save to Files if it is still open.");
+        return;
+      } catch (error) {
+        if (error?.name === "AbortError") { toast("Save cancelled. Your backup is still ready here."); return; }
+      }
+    }
+    await copyMobileBackupFile(index, button);
+  }
+  async function copyMobileBackupFile(index, button) {
+    const backup = pendingMobileBackupFiles[Number(index)];
+    if (!backup) { toast("That backup is no longer prepared. Open Back up again.", true); return; }
+    try {
+      await navigator.clipboard.writeText(backup.text);
+      if (button) button.textContent = "Copied privately";
+      toast(`${backup.filename} copied. Paste it only into a private file you control.`);
+    } catch {
+      $("mobileBackupManualName").textContent = backup.filename;
+      $("mobileBackupManualText").value = backup.text;
+      $("mobileBackupManual").hidden = false;
+      $("mobileBackupManualText").focus();
+      $("mobileBackupManualText").select();
+    }
   }
 
   async function backupCashAccount({ includeWallets = false, quiet = false } = {}) {
@@ -494,14 +560,16 @@
       if (!quiet) toast(account.data.error || "Could not prepare the account backup.", true);
       return false;
     }
-    downloadText(account.data.accountBackup.filename, account.data.accountBackup.text);
-
+    const files = [account.data.accountBackup];
     if (includeWallets) {
       const wallets = await post("/api/web/wallets/export", {});
-      if (wallets.ok) downloadWalletFiles(wallets.data.backup?.downloads);
+      if (wallets.ok) files.push(...backupDownloadEntries(wallets.data.backup?.downloads));
       else if (!quiet) toast(wallets.data.error || "Account saved, but wallet backup failed.", true);
     }
-    if (!quiet) toast(includeWallets ? "Account + wallet backups downloaded" : "Account recovery backup downloaded");
+    const prepared = startBackupDownloads(files);
+    if (!quiet) toast(mobileBackupSaveRequired()
+      ? `${prepared} private backup file${prepared === 1 ? "" : "s"} ready — tap Save / share file`
+      : includeWallets ? "Account + wallet backups downloaded" : "Account recovery backup downloaded");
     return true;
   }
 
@@ -3208,6 +3276,10 @@
   document.addEventListener("click", (event) => {
     const close = event.target.closest("[data-close]");
     if (close) closeSheet(close.dataset.close);
+    const saveMobileBackup = event.target.closest("[data-save-mobile-backup]");
+    if (saveMobileBackup) { void saveMobileBackupFile(saveMobileBackup.dataset.saveMobileBackup, saveMobileBackup); return; }
+    const copyMobileBackup = event.target.closest("[data-copy-mobile-backup]");
+    if (copyMobileBackup) { void copyMobileBackupFile(copyMobileBackup.dataset.copyMobileBackup, copyMobileBackup); return; }
     const pill = event.target.closest(".guide-pill");
     if (pill?.dataset.sendAsset) selectSendAsset(pill.dataset.sendAsset);
     if (pill?.dataset.depositAsset) selectDepositAsset(pill.dataset.depositAsset);

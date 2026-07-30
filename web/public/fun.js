@@ -2775,7 +2775,7 @@
         const createdWallet = await post("/api/web/wallets/create", { label: "SlimeWire Go", count: 1 });
         if (!createdWallet.ok || !createdWallet.data?.ok || !createdWallet.data?.wallets?.length) throw new Error(apiMessage(createdWallet.data, "Could not create the trading wallet."));
         const downloads = createdWallet.data.downloads || {};
-        for (const item of [downloads.encryptedBackup, downloads.recoveryKeys, downloads.evmRecoveryKeys].filter(Boolean)) downloadText(item.filename, item.text);
+        downloadWalletFiles(downloads);
         const createdRow = createdWallet.data.wallets[0];
         state.activeWallet = Number(createdRow.index);
         localStorage.setItem(ACTIVE_WALLET_KEY, String(createdRow.index));
@@ -3183,11 +3183,79 @@
     }
     renderHomeReadiness(); renderWalletHero(); renderWalletPositions(); if (state.view === "quick") renderQuickRoute(); toast("Wallet created. Solana and Robinhood/EVM backups downloaded—store them safely."); return true;
   }
-  function downloadText(filename, text) { const blob = new Blob([text], { type: "text/plain" }), url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = filename || "slimewire-backup.txt"; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000); }
+  let pendingMobileBackupFiles = [];
+  function mobileBackupSaveRequired() {
+    const ua = String(navigator.userAgent || "");
+    const touchIpad = navigator.platform === "MacIntel" && Number(navigator.maxTouchPoints || 0) > 1;
+    return /iPhone|iPad|iPod/i.test(ua) || touchIpad || /Phantom|Solflare/i.test(ua);
+  }
+  function normalizedBackupFile(filename, text) {
+    return {
+      filename: String(filename || "slimewire-backup.txt").replace(/[\\/:*?"<>|]+/g, "-").slice(0, 120) || "slimewire-backup.txt",
+      text: String(text || "")
+    };
+  }
+  function openMobileBackupSave(files) {
+    pendingMobileBackupFiles = files.map((file) => normalizedBackupFile(file.filename, file.text)).filter((file) => file.text);
+    const rows = pendingMobileBackupFiles.map((file, index) => `<div class="read-card"><h3>${escapeHtml(file.filename)}</h3><p>Save this private recovery file somewhere only you control.</p><div class="wallet-consolidate-actions"><button class="primary" type="button" data-save-mobile-backup="${index}">Save / share file</button><button type="button" data-copy-mobile-backup="${index}">Copy instead</button></div></div>`).join("");
+    openSheet(`<div data-mobile-backup-save><div class="sheet-title"><img src="${WALLET_BRAND_ASSET}" alt=""><div><h2>Wallet backups ready</h2><p>Phantom and iPhone browsers need one extra tap to save private files safely.</p></div></div><div class="read-card"><h3>Tap Save / share file</h3><p>Then choose <b>Save to Files</b>, AirDrop, or another private destination. SlimeWire will not open a blank <code>blob:</code> page.</p></div>${rows}<button class="sheet-secondary" type="button" data-manage-wallets>Back to wallet manager</button><p class="fineprint">Never paste these files into chat or send them to support. Anyone with a recovery key can control that wallet.</p></div>`);
+  }
+  function startBackupDownloads(files = []) {
+    const prepared = files.map((file) => normalizedBackupFile(file?.filename, file?.text)).filter((file) => file.text);
+    if (!prepared.length) return 0;
+    if (mobileBackupSaveRequired()) {
+      openMobileBackupSave(prepared);
+      return prepared.length;
+    }
+    for (const file of prepared) {
+      const blob = new Blob([file.text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = file.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+    }
+    return prepared.length;
+  }
+  function downloadText(filename, text) { return startBackupDownloads([{ filename, text }]); }
   function downloadWalletFiles(downloads = {}) {
     const files = [downloads.encryptedBackup, downloads.recoveryKeys, downloads.evmRecoveryKeys].filter((entry) => entry?.text);
-    for (const item of files) downloadText(item.filename, item.text);
-    return files.length;
+    return startBackupDownloads(files);
+  }
+  async function saveMobileBackupFile(index, button) {
+    const backup = pendingMobileBackupFiles[Number(index)];
+    if (!backup) { toast("That backup is no longer prepared. Open Wallet backups again.", true); return; }
+    let file = null;
+    try { file = new File([backup.text], backup.filename, { type: "text/plain;charset=utf-8" }); } catch { /* Copy fallback below. */ }
+    let canShare = Boolean(file && typeof navigator.share === "function");
+    if (canShare && typeof navigator.canShare === "function") {
+      try { canShare = navigator.canShare({ files: [file] }); } catch { canShare = false; }
+    }
+    if (canShare) {
+      try {
+        await navigator.share({ title: "Save SlimeWire wallet backup", files: [file] });
+        if (button) { button.textContent = "Saved / shared"; button.classList.add("saved"); }
+        toast("Backup handed to your phone. Choose Save to Files if it is still open.");
+        return;
+      } catch (error) {
+        if (error?.name === "AbortError") { toast("Save cancelled. Your backup is still ready here."); return; }
+      }
+    }
+    await copyMobileBackupFile(index, button);
+  }
+  async function copyMobileBackupFile(index, button) {
+    const backup = pendingMobileBackupFiles[Number(index)];
+    if (!backup) { toast("That backup is no longer prepared. Open Wallet backups again.", true); return; }
+    try {
+      await writeClipboardText(backup.text);
+      if (button) { button.textContent = "Copied privately"; button.classList.add("saved"); }
+      toast(`${backup.filename} copied. Paste it only into a private file you control.`);
+    } catch {
+      openSheet(`<div class="sheet-title"><img src="${WALLET_BRAND_ASSET}" alt=""><div><h2>Copy wallet backup</h2><p>Select all, copy, and save it as ${escapeHtml(backup.filename)}.</p></div></div><textarea class="wallet-backup-manual-copy" readonly spellcheck="false">${escapeHtml(backup.text)}</textarea><button class="sheet-secondary" type="button" data-manage-wallets>Back to wallet manager</button><p class="fineprint">Keep this private. Anyone with this text can control the wallet.</p>`);
+    }
   }
   async function downloadFunAccountBackup() {
     const result = await post("/api/web/cash/account-backup", {});
@@ -3419,11 +3487,14 @@
           for (const wallet of state.wallets) markWalletBackedUp(wallet);
         }
         renderHomeReadiness();
-        const message = options.evmOnly && count === 1
-          ? "Robinhood/EVM recovery key downloaded. Keep it private."
-          : options.recoveryOnly && count === 1
-            ? "Solflare/Phantom backup downloaded. Open the file for load steps and keep it private."
-            : (count >= 3 ? "All wallet backup files downloaded." : (result.data.backup?.message || "Wallet backup downloaded."));
+        const mobileSave = mobileBackupSaveRequired();
+        const message = mobileSave
+          ? `${count === 1 ? "Backup file" : `${count} backup files`} ready. Tap Save / share file, then Save to Files.`
+          : options.evmOnly && count === 1
+            ? "Robinhood/EVM recovery key downloaded. Keep it private."
+            : options.recoveryOnly && count === 1
+              ? "Solflare/Phantom backup downloaded. Open the file for load steps and keep it private."
+              : (count >= 3 ? "All wallet backup files downloaded." : (result.data.backup?.message || "Wallet backup downloaded."));
         if (status) status.textContent = message;
         toast(message);
       } else {
@@ -4304,6 +4375,8 @@
     const seasonStart = event.target.closest("[data-season-start]"); if (seasonStart) { await startFunSeason(seasonStart); return; }
     const backupWallet = event.target.closest("[data-backup-wallet]"); if (backupWallet) { await exportWallets(backupWallet, { recoveryOnly: true, walletPublicKey: backupWallet.dataset.walletKey || activeWallet()?.publicKey || "", walletIndex: backupWallet.dataset.walletIndex || activeWallet()?.index || "" }); return; }
     const pumpWalletBackup = event.target.closest("[data-pump-wallet-backup]"); if (pumpWalletBackup) { if (confirm("Download this Pump creator wallet backup? Anyone with the recovery file can move funds or claim fees, so keep it private.")) await exportWallets(pumpWalletBackup, { recoveryOnly: true, walletPublicKey: pumpWalletBackup.dataset.walletKey || "", walletIndex: pumpWalletBackup.dataset.walletIndex || "" }); return; }
+    const saveMobileBackup = event.target.closest("[data-save-mobile-backup]"); if (saveMobileBackup) { await saveMobileBackupFile(saveMobileBackup.dataset.saveMobileBackup, saveMobileBackup); return; }
+    const copyMobileBackup = event.target.closest("[data-copy-mobile-backup]"); if (copyMobileBackup) { await copyMobileBackupFile(copyMobileBackup.dataset.copyMobileBackup, copyMobileBackup); return; }
     if (event.target.closest("[data-send-sol]")) { await openSendSolSheet(); return; }
     if (event.target.closest("[data-send-sol-all]")) { selectFunSendAll(); return; }
     const sendSolChip = event.target.closest("[data-send-sol-chip]"); if (sendSolChip) { const input = $("[data-send-sol-amount]"); if (input) { input.value = sendSolChip.dataset.sendSolChip; delete input.dataset.sendAll; } $$('[data-send-sol-all]').forEach((button) => button.classList.remove("active")); return; }

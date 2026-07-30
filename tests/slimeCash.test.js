@@ -136,6 +136,23 @@ test("SlimeCash automatically downloads account and wallet recovery material", (
   assert.doesNotMatch(cash, /copyText\(state\.token\)/);
 });
 
+test("SlimeCash saves backups safely inside Phantom and iPhone browsers", () => {
+  const mobileSave = cash.slice(
+    cash.indexOf("function mobileBackupSaveRequired"),
+    cash.indexOf("async function backupCashAccount")
+  );
+  assert.match(html, /id="mobilebackup"/);
+  assert.match(html, /Save \/ share file/);
+  assert.match(mobileSave, /iPhone\|iPad\|iPod/);
+  assert.match(mobileSave, /Phantom\|Solflare/);
+  assert.match(mobileSave, /if \(mobileBackupSaveRequired\(\)\) \{[\s\S]{0,120}openMobileBackupSave\(prepared\)/);
+  assert.match(mobileSave, /navigator\.share\(\{ title: "Save SlimeWire wallet backup", files: \[file\] \}\)/);
+  assert.ok(
+    mobileSave.indexOf("if (mobileBackupSaveRequired())") < mobileSave.indexOf("URL.createObjectURL(blob)"),
+    "embedded iPhone wallets must open the save sheet before desktop blob downloads"
+  );
+});
+
 test("SlimeCash lets unnamed accounts export either all wallets or one exact wallet", () => {
   assert.match(html, /No username is required for backup/);
   assert.match(html, /id="backupCashWalletsBtn"[^>]*>Back up all wallets</);
