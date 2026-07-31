@@ -16,6 +16,7 @@ const terminalApp = fs.readFileSync(new URL("../web/public/app.js", import.meta.
 const desktopHtml = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
 const desktopAliasHtml = fs.readFileSync(new URL("../web/public/gg.html", import.meta.url), "utf8");
 const chartLab = fs.readFileSync(new URL("../web/public/chart-lab.html", import.meta.url), "utf8");
+const left4solHtml = fs.readFileSync(new URL("../web/public/left4sol.html", import.meta.url), "utf8");
 const publicHeaders = fs.readFileSync(new URL("../web/public/_headers", import.meta.url), "utf8");
 
 function walletMarketHelpers() {
@@ -52,18 +53,27 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
-test("/left4sol keeps the public SlimeWire game link while redirecting to itch.io", () => {
-  const destination = "https://left4cooked.itch.io/left4cooked";
+test("/left4sol loads the itch game immediately inside a full-screen SlimeWire page", () => {
+  const player = "https://html-classic.itch.zone/html/18456748-1846134/index.html?v=1785516296";
   const routeStart = server.indexOf('requestUrl.pathname === "/left4sol"');
   assert.ok(routeStart >= 0, "the Node origin should recognize the branded game route");
   const route = server.slice(routeStart - 120, routeStart + 520);
   assert.match(route, /request\.method === "GET" \|\| request\.method === "HEAD"/);
   assert.match(route, /requestUrl\.pathname\.startsWith\("\/left4sol\/"\)/);
-  assert.ok(route.includes(`Location: "${destination}"`));
-  assert.match(route, /"Cache-Control": "no-store, max-age=0"/);
-  assert.match(redirects, /^\/left4sol\s+https:\/\/left4cooked\.itch\.io\/left4cooked\s+302$/m);
-  assert.match(redirects, /^\/left4sol\/\s+https:\/\/left4cooked\.itch\.io\/left4cooked\s+302$/m);
-  assert.match(redirects, /^\/left4sol\/\*\s+https:\/\/left4cooked\.itch\.io\/left4cooked\s+302$/m);
+  assert.match(route, /serveStaticHtmlPage\(response, "left4sol\.html", "no-store, max-age=0"/);
+  assert.doesNotMatch(route, /Location:/);
+  assert.match(redirects, /^\/left4sol\s+\/left4sol\.html\s+200$/m);
+  assert.match(redirects, /^\/left4sol\/\s+\/left4sol\.html\s+200$/m);
+  assert.match(redirects, /^\/left4sol\/\*\s+\/left4sol\.html\s+200$/m);
+  assert.ok(left4solHtml.includes(`src="${player}"`));
+  assert.match(left4solHtml, /viewport-fit=cover/);
+  assert.match(left4solHtml, /min-height:\s*100dvh/);
+  assert.match(left4solHtml, /allow="autoplay; fullscreen; gamepad; accelerometer; gyroscope"/);
+  assert.match(left4solHtml, /allowfullscreen/);
+  assert.doesNotMatch(left4solHtml, /left4cooked\.itch\.io\/left4cooked/);
+  for (const route of ["/left4sol", "/left4sol/", "/left4sol/*", "/left4sol.html"]) {
+    assert.match(publicHeaders, new RegExp(`^${route.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\n  Cache-Control: no-store`, "m"));
+  }
 });
 
 test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH trading", () => {
