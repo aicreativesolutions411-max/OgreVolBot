@@ -47,6 +47,9 @@
     rhEthUsd: 0,
     rhBalancePromise: null,
     walletBalancePromise: null,
+    walletBalanceTimer: null,
+    walletPortfolioCacheSignature: "",
+    walletPortfolioCacheSavedAt: 0,
     portfolioPromise: null,
     portfolioPromiseForced: false,
     portfolioForceRequested: false,
@@ -405,6 +408,8 @@
     state.portfolioForceRequested = false;
     state.rhBalancePromise = null;
     state.walletBalancePromise = null;
+    state.walletPortfolioCacheSignature = "";
+    state.walletPortfolioCacheSavedAt = 0;
     state.positionValuePromise = null;
     state.positionValueForceRequested = false;
     state.positionLoadVersion += 1;
@@ -614,7 +619,7 @@
   async function ensureAutomation() { if (!state.token) return; await post("/api/web/profile/automation", { action: "enable" }); }
   function readWalletPortfolioCache() {
     const cached = readLocal(WALLET_PORTFOLIO_CACHE_KEY, null);
-    if (!cached?.data || !cached.ownerId || Date.now() - Number(cached.savedAt || 0) > 30 * 60_000) {
+    if (!cached?.data || !cached.ownerId || Date.now() - Number(cached.savedAt || 0) > 24 * 60 * 60_000) {
       localStorage.removeItem(WALLET_PORTFOLIO_CACHE_KEY);
       return null;
     }
@@ -633,26 +638,53 @@
       return null;
     }
   }
+  function walletPortfolioCacheSignature(value) {
+    const blocked = /(?:secret|privatekey|keypair|seed|mnemonic|password|spendpin|authorization|authtoken|sessiontoken|accesstoken|refreshtoken|bearertoken|recovery|credential|apikey|jwt|cookie|headers)/i;
+    let serialized = "";
+    try { serialized = JSON.stringify(value, (key, item) => blocked.test(String(key).replace(/[^a-z0-9]/gi, "")) ? undefined : item); }
+    catch { return ""; }
+    let hash = 2166136261;
+    for (let index = 0; index < serialized.length; index += 1) {
+      hash ^= serialized.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `${serialized.length}:${(hash >>> 0).toString(36)}`;
+  }
   function saveWalletPortfolioCache(data = {}) {
     const ownerId = state.confirmedUserId;
     if (!IS_WALLET_ROUTE || !state.token || !ownerId || ownerId !== confirmedAccountId() || !Array.isArray(data.balances)) return;
-    // Only public wallet state is cached. Authentication material, recovery keys,
-    // private keys, seed phrases, spend PINs and request headers never enter it.
-    const safeData = cacheSafePortfolioValue({
+    const cacheValue = {
       ok: Boolean(data.ok), fast: Boolean(data.fast), solUsd: Number(data.solUsd) || 0,
       balances: data.balances,
       positions: Array.isArray(data.positions) ? data.positions : [],
       rhBalances: data.rhBalances && typeof data.rhBalances === "object" ? data.rhBalances : {}
-    });
+    };
+    const signature = walletPortfolioCacheSignature(cacheValue);
+    const now = Date.now();
+    if (!signature || (signature === state.walletPortfolioCacheSignature && now - state.walletPortfolioCacheSavedAt < 60000)) return;
+    // Only public wallet state is cached. Authentication material, recovery keys,
+    // private keys, seed phrases, spend PINs and request headers never enter it.
+    const safeData = cacheSafePortfolioValue(cacheValue);
     if (!safeData) return;
-    saveLocal(WALLET_PORTFOLIO_CACHE_KEY, { version: 2, ownerId, savedAt: Date.now(), data: safeData });
+    saveLocal(WALLET_PORTFOLIO_CACHE_KEY, { version: 2, ownerId, savedAt: now, data: safeData });
+    state.walletPortfolioCacheSignature = signature;
+    state.walletPortfolioCacheSavedAt = now;
   }
   function applyPortfolioSnapshot(data = {}, options = {}) {
     if (options.accountScope && !accountScopeMatches(options.accountScope)) return null;
     const previousByIndex = new Map(state.wallets.map((wallet) => [Number(wallet.index), wallet]));
-    state.wallets = (data.balances || []).filter((wallet) => !wallet.volumeBot).map((wallet) => (
-      data.fast ? { ...(previousByIndex.get(Number(wallet.index)) || {}), ...wallet } : wallet
-    ));
+    state.wallets = (data.balances || []).filter((wallet) => !wallet.volumeBot).map((wallet) => {
+      if (!data.fast) return wallet;
+      const previous = previousByIndex.get(Number(wallet.index)) || {};
+      const validSol = wallet.sol != null && wallet.lamports != null && !wallet.error;
+      const merged = { ...previous, ...wallet, cashAssets: { ...(previous.cashAssets || {}), ...(wallet.cashAssets || {}) } };
+      if (!validSol) {
+        if (previous.sol != null) merged.sol = previous.sol;
+        if (previous.lamports != null) merged.lamports = previous.lamports;
+        if (previous.cashAssets?.SOL) merged.cashAssets.SOL = previous.cashAssets.SOL;
+      }
+      return merged;
+    });
     state.solUsd = Math.max(0, Number(data.solUsd) || state.solUsd || 0);
     const rh = data.rhBalances || {};
     state.rhEthUsd = Math.max(0, Number(rh.ethUsd) || state.rhEthUsd || 0);
@@ -669,7 +701,12 @@
     paintWalletPill();
     renderCashHandoff();
     renderHomeReadiness();
-    if (options.saveCache !== false) saveWalletPortfolioCache(data);
+    if (options.saveCache !== false) saveWalletPortfolioCache({
+      ...data,
+      balances: state.wallets,
+      positions: state.positions,
+      rhBalances: currentRhBalanceSnapshot()
+    });
     return data;
   }
   async function loadPortfolioSnapshot(options = {}) {
@@ -720,12 +757,12 @@
       }))
     };
   }
-  async function loadWalletBalancePreview() {
+  async function loadWalletBalancePreview(options = {}) {
     if (!state.token || !state.confirmedUserId) return null;
     if (state.walletBalancePromise) return state.walletBalancePromise;
     const accountScope = authenticatedAccountScope();
     const refresh = (async () => {
-      const result = await request("/api/web/balances?fast=true", { timeout: 5_000 });
+      const result = await request(`/api/web/balances?fast=true${options.force ? "&force=true" : ""}`, { timeout: 5_000 });
       if (!result.ok || !result.data?.ok || !accountScopeMatches(accountScope)) return null;
       const snapshot = {
         ...result.data,
@@ -740,6 +777,16 @@
     state.walletBalancePromise = refresh;
     try { return await refresh; }
     finally { if (state.walletBalancePromise === refresh) state.walletBalancePromise = null; }
+  }
+  function scheduleWalletBalanceRefresh(delay = 5_000) {
+    clearTimeout(state.walletBalanceTimer);
+    state.walletBalanceTimer = setTimeout(async () => {
+      state.walletBalanceTimer = null;
+      if (!document.hidden && state.token && state.confirmedUserId) {
+        await loadWalletBalancePreview({ force: true });
+      }
+      if (!document.hidden) scheduleWalletBalanceRefresh();
+    }, Math.max(1_000, Number(delay) || 5_000));
   }
   async function hydrateFunRhBalances(render = true) {
     if (!state.token || !state.confirmedUserId) return false;
@@ -4565,9 +4612,15 @@
     event.preventDefault(); const amount = String(event.target.value || "").trim(); if (Number(amount) > 0) openTradeSheet("buy", { amount });
   });
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) clearTimeout(state.feedTimer);
+    if (document.hidden) {
+      clearTimeout(state.feedTimer);
+      clearTimeout(state.walletBalanceTimer);
+      state.walletBalanceTimer = null;
+    }
     else {
       resumePendingFunFunding();
+      if (state.token && state.confirmedUserId) void loadWalletBalancePreview({ force: true });
+      scheduleWalletBalanceRefresh();
       if (state.view === "home") { void loadFeed(true, { silent: true }); scheduleFeedRefresh(); }
     }
   });
@@ -4695,6 +4748,7 @@
     else if (!state.confirmedUserId) await loadMe();
     state.sessionRestoring = false;
     if (!state.token) clearPrivateWalletState();
+    scheduleWalletBalanceRefresh();
     paintWalletPill();
     renderWalletHero();
     if (state.view === "wallet") void loadWalletView();

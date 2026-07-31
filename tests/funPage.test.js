@@ -48,7 +48,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "89", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "90", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -76,7 +76,7 @@ test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH tr
   assert.match(html, /wallet-install-head[^>]+data-install-fun hidden[^>]+><span>Install<\/span>/);
   assert.match(js, /if \(routeParams\.get\("install"\) === "1"\) setTimeout\(showFunInstallGuide, 350\)/);
   assert.match(funWorker, /IS_WALLET_WORKER/);
-  assert.match(funWorker, /slimewallet-v29/);
+  assert.match(funWorker, /slimewallet-v30/);
   assert.match(JSON.stringify(walletManifest.icons), /slimewallet-icon-512\.png/);
   assert.match(js, /WALLET_BRAND_ASSET = "\/assets\/slimewire\/slimewallet-icon-192\.png"/);
   assert.match(css, /slimewallet-vault-bg\.webp/);
@@ -143,14 +143,19 @@ test("SlimeWallet Swap picker exposes every wallet coin, recent CA, and resilien
 });
 
 test("SlimeWallet paints balances before the full positions and Robinhood portfolio", () => {
-  assert.match(js, /async function loadWalletBalancePreview\(\)/);
-  assert.match(js, /request\("\/api\/web\/balances\?fast=true", \{ timeout: 5_000 \}\)/);
+  assert.match(js, /async function loadWalletBalancePreview\(options = \{\}\)/);
+  assert.match(js, /api\/web\/balances\?fast=true\$\{options\.force \? "&force=true" : ""\}/);
   assert.match(js, /const initialRefresh = state\.token \? loadWalletBalancePreview\(\) : null/);
   const walletLoad = js.slice(js.indexOf("async function loadWalletView"), js.indexOf("function walletFreshnessText"));
   assert.ok(walletLoad.indexOf("renderWalletHero();") < walletLoad.indexOf("if (initialRefresh) await initialRefresh"));
   assert.match(js, /void loadPortfolioSnapshot\(\)\.then/);
   assert.match(js, /data-export-wallets>Back up all wallets/);
   assert.match(css, /\.wallet-backup-hero/);
+  const scheduler = js.slice(js.indexOf("function scheduleWalletBalanceRefresh"), js.indexOf("async function hydrateFunRhBalances"));
+  assert.match(scheduler, /!document\.hidden && state\.token && state\.confirmedUserId/);
+  assert.match(scheduler, /loadWalletBalancePreview\(\{ force: true \}\)/);
+  assert.match(scheduler, /5_000/);
+  assert.match(js, /if \(document\.hidden\) \{[\s\S]{0,180}clearTimeout\(state\.walletBalanceTimer\)/);
 });
 
 test("SlimeWallet and Go load exact wallet-wide Pump rewards after spendable balances", () => {
@@ -231,7 +236,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: IS_WALLET_ROUTE \? "\/wallet\/" : "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v86/);
+  assert.match(funWorker, /slimewire-fun-v87/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -299,7 +304,7 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
   assert.match(html, /fun\.css\?v=66/);
-  assert.match(funWorker, /slimewire-fun-v86/);
+  assert.match(funWorker, /slimewire-fun-v87/);
   assert.match(funWorker, /fun\.css\?v=66/);
   assert.match(css, /\.wallet-bottom-nav\[hidden\]\{display:none!important\}/);
   assert.match(js, /walletNav\.hidden = hideWalletNav/);
@@ -311,8 +316,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=89/);
-  assert.match(funWorker, /fun\.js\?v=89/);
+  assert.match(html, /fun\.js\?v=90/);
+  assert.match(funWorker, /fun\.js\?v=90/);
 });
 
 test("Fun volume switches pasted contracts to their authoritative chain", () => {
@@ -378,7 +383,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /"slimewire-fun-v86"/);
+  assert.match(funWorker, /"slimewire-fun-v87"/);
   assert.doesNotMatch(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(js, /loadFunScript\("\/slimewire-funding\.js\?v=8"\)/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
@@ -457,7 +462,7 @@ test("market-backed positions recover honest wallet PnL without converting missi
   assert.match(recovery, /computeRecoveredSolPositionCost/);
   assert.match(webRows, /costBasisSol: recoveredCostBasisLamports/);
   assert.match(webRows, /recoveredOpenPnl !== null \? "onchain-rpc"/);
-  assert.match(webRows, /recoveredWebPositionPnlByMint\(limited\.slice\(0, 10\)/);
+  assert.match(webRows, /recoveredWebPositionPnlByMint\(\s*limited\.slice\(0, 10\)/);
   assert.match(terminalApp, /position\?\.pnlSource === "onchain-wallet"/);
   assert.match(terminalApp, /position\?\.pnlSource === "onchain-rpc"/);
   assert.match(terminalApp, /position\.openPnlUsd/);
@@ -501,17 +506,14 @@ test("Fun chart exposes server-side market-cap buy, ladder, and stop-loss orders
   assert.match(server, /pathname === "\/api\/web\/market-orders"/);
 });
 
-test("position cache warmer fills the connected-wallet scoped v2 fast and full keys from one snapshot", () => {
-  const route = server.slice(server.indexOf('pathname === "/api/web/positions"'), server.indexOf('pathname === "/api/web/pnl"'));
+test("speculative position and PnL cache warming remains disabled", () => {
   const warmer = server.slice(server.indexOf("async function warmWorkerDisplayCaches"), server.indexOf("function normalizeWorkerList"));
-  assert.match(route, /webPositionConnectedScope\(profile\)/);
+  assert.match(server, /const workerTickWarmDisplayCaches = false/);
+  assert.match(server, /const workerDisplayCacheUserLimit = 0/);
   assert.match(warmer, /webPositionConnectedScope\(profile\)/);
   assert.match(warmer, /cachedWebSummary\("web:positions:v2:" \+ connectedScope/);
   assert.match(warmer, /cachedWebSummary\("web:positions:v2:fast:" \+ connectedScope/);
-  assert.doesNotMatch(warmer, /cachedWebSummary\("web:positions",/);
-  assert.match(warmer, /let positionsValuePromise = null/);
-  assert.match(warmer, /positionsValuePromise = webPositionSummary\(userId, \{ force, fast: false \}\)/);
-  assert.match(warmer, /Promise\.all\(\[[\s\S]*buildPositionsValue[\s\S]*buildPositionsValue/);
+  assert.match(warmer, /positionsValuePromise = webPositionSummary\(userId, \{ force, fast: true \}\)/);
 });
 
 test("forced web summary refresh waits out an older in-flight build before rebuilding", async () => {
@@ -664,7 +666,7 @@ test("Phantom and iPhone wallet backups use a save sheet instead of navigating t
     mobileSave.indexOf("if (mobileBackupSaveRequired())") < mobileSave.indexOf("URL.createObjectURL(blob)"),
     "mobile wallet browsers must exit into the save sheet before blob downloads are created"
   );
-  assert.match(html, /\/fun\.js\?v=89/, "the fixed wallet script must bypass Phantom's long-lived asset cache");
+  assert.match(html, /\/fun\.js\?v=90/, "the fixed wallet script must bypass Phantom's long-lived asset cache");
 });
 
 test("the root terminal also batches Phantom wallet backups behind a direct save tap", () => {

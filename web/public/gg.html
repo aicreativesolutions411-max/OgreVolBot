@@ -763,16 +763,30 @@
   const API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||"https://app.slimewire.org";
   const TOKEN_KEY="ogreWebToken"; // shared with the main SlimeWire app (same origin)
   const ACTIVE_WALLET_KEY="slimecashActiveWalletIndex"; // shared with SlimeCash + /fun
+  const WALLET_PREVIEW_KEY="slimewireTerminalWalletPreviewV1";
   const SCOUT_QUEUE_KEY="ggSwampScoutQueue";
   const ALERT_RULE_KEY="ggSwampAlertRules";
   const LAUNCH_DRAFT_KEY="slimewirePumpLaunchDraftV1";
   const LAUNCH_INVITE_LINK_KEY="slimewireLaunchInviteLinkV1";
   function readSavedLaunchDraft(){try{const saved=JSON.parse(localStorage.getItem(LAUNCH_DRAFT_KEY)||"null");return saved&&typeof saved==="object"?saved:{};}catch(e){return {};}}
   function readSavedLaunchInviteLink(){try{const saved=JSON.parse(localStorage.getItem(LAUNCH_INVITE_LINK_KEY)||"null");return saved&&typeof saved==="object"?saved:{};}catch(e){return {};}}
+  function walletPreviewRow(wallet){
+    if(!wallet||!wallet.publicKey)return null;
+    const rawSol=wallet.sol??wallet.cashAssets?.SOL?.uiAmount,sol=rawSol==null?null:Number(rawSol),rawLamports=wallet.lamports??wallet.cashAssets?.SOL?.rawAmount,lamports=rawLamports==null?"":String(rawLamports),cashAssets={};
+    if(lamports||Number.isFinite(sol))cashAssets.SOL={rawAmount:lamports,uiAmount:String(Number.isFinite(sol)?sol:0),decimals:9};
+    return{index:Number(wallet.index),label:String(wallet.label||""),publicKey:String(wallet.publicKey),shortPublicKey:String(wallet.shortPublicKey||""),sessionWallet:Boolean(wallet.sessionWallet),sessionStatus:String(wallet.sessionStatus||""),sol:Number.isFinite(sol)?sol:null,lamports,cashAssets,rhAddress:String(wallet.rhAddress||""),rhEth:wallet.rhEth==null?null:Number(wallet.rhEth),rhAvailable:wallet.rhAvailable!==false,rhExplorer:String(wallet.rhExplorer||"")};
+  }
+  function walletPreviewSessionRef(token){let hash=2166136261;for(const char of String(token||"")){hash^=char.charCodeAt(0);hash=Math.imul(hash,16777619);}return String(token||"").length+":"+((hash>>>0).toString(36));}
+  function readWalletPreview(token){try{const saved=JSON.parse(localStorage.getItem(WALLET_PREVIEW_KEY)||"null");if(!saved||saved.sessionRef!==walletPreviewSessionRef(token)||!Array.isArray(saved.wallets)||Date.now()-Number(saved.savedAt||0)>24*60*60*1000)return[];return saved.wallets.map(walletPreviewRow).filter(Boolean);}catch(e){return[];}}
+  let walletPreviewLastSignature="",walletPreviewLastSavedAt=0;
+  function saveWalletPreview(){try{if(!state.token){localStorage.removeItem(WALLET_PREVIEW_KEY);walletPreviewLastSignature="";walletPreviewLastSavedAt=0;return;}const wallets=(state.wallets||[]).map(walletPreviewRow).filter(Boolean),sessionRef=walletPreviewSessionRef(state.token),signature=JSON.stringify({sessionRef,wallets}),now=Date.now();if(signature===walletPreviewLastSignature&&now-walletPreviewLastSavedAt<60000)return;if(wallets.length){localStorage.setItem(WALLET_PREVIEW_KEY,JSON.stringify({version:1,sessionRef,savedAt:now,wallets}));walletPreviewLastSignature=signature;walletPreviewLastSavedAt=now;}else{localStorage.removeItem(WALLET_PREVIEW_KEY);walletPreviewLastSignature="";walletPreviewLastSavedAt=0;}}catch(e){}}
+  const initialToken=localStorage.getItem(TOKEN_KEY)||"";
+  const initialWalletPreview=initialToken?readWalletPreview(initialToken):[];
   const savedLaunchDraft=readSavedLaunchDraft();
   const savedLaunchInviteLink=readSavedLaunchInviteLink();
   const state={route:"trending",mint:null,trendTab:"best",trenchTab:"board",volTf:"h1",marketChain:localStorage.getItem("ggMarketChain")||"all",rows:[],pollT:null,
-    token:localStorage.getItem(TOKEN_KEY)||"",user:null,wallets:[],activeWallet:Number(localStorage.getItem(ACTIVE_WALLET_KEY))||null,
+    token:initialToken,user:null,wallets:initialWalletPreview,activeWallet:Number(localStorage.getItem(ACTIVE_WALLET_KEY))||null,
+    _walletsFromPreview:initialWalletPreview.length>0,
     presets:{trade:[],bundle:[]},activeTradePreset:localStorage.getItem("ggTradePreset")||"",searchTerm:"",pendingSell:null,portfolioTab:"positions",lcNftMint:"",lcNftOverview:null,lcNftItemImage:null,
     launchPumpOnly:(new URLSearchParams(location.search).get("launchMode")||"").toLowerCase()==="pump",launchForm:savedLaunchDraft.form||null,launchImg:savedLaunchDraft.image||null,launchBanner:savedLaunchDraft.banner||null,launchTab:savedLaunchDraft.tab||"coin",launchRail:savedLaunchDraft.rail||"pump",launchActiveAttemptId:String(savedLaunchDraft.activeAttemptId||"").slice(0,80),launchActiveAttemptStartedAt:Number(savedLaunchDraft.activeAttemptStartedAt)||0,launchProgressPolling:"",launchInviteToken:(new URLSearchParams(location.search).get("bundleInvite")||"").trim(),launchInvites:[],launchInviteLastId:String(savedLaunchInviteLink.id||""),launchInviteLastUrl:String(savedLaunchInviteLink.url||""),launchCoins:[],pumpRewards:null,pumpRewardsCheckedAt:0,pumpRewardsError:"",
     watch:new Set(),watchRows:[],
@@ -809,7 +823,7 @@
     return r;
   }
   function jpost(path,body,timeoutMs){const opts={method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})};try{if(timeoutMs&&typeof AbortSignal!=="undefined"&&AbortSignal.timeout)opts.signal=AbortSignal.timeout(timeoutMs);}catch(e){}return api(path,opts);}
-  function setToken(t){state.token=t||"";if(t)localStorage.setItem(TOKEN_KEY,t);else localStorage.removeItem(TOKEN_KEY);}
+  function setToken(t){const next=t||"";if(next!==state.token){localStorage.removeItem(WALLET_PREVIEW_KEY);walletPreviewLastSignature="";walletPreviewLastSavedAt=0;state._walletsFromPreview=false;}state.token=next;if(next)localStorage.setItem(TOKEN_KEY,next);else localStorage.removeItem(TOKEN_KEY);}
   function apiMessage(d,fallback){return (d&&(d.message||d.error))||fallback||"Something went wrong.";}
 
   // Referral capture: a /r/CODE link redirects here as /?ref=CODE — remember it and attribute on signup.
@@ -835,31 +849,40 @@
   async function refreshWallets(options={}){
     if(!state.token)return;
     const fast=Boolean(options.fast);
-    const {ok,status,d}=await api("/api/web/balances"+(fast?"?fast=true":""));
+    if(fast&&state._fastWalletRefreshPromise)return state._fastWalletRefreshPromise;
+    const query=[];if(fast)query.push("fast=true");if(options.force)query.push("force=true");
+    const request=api("/api/web/balances"+(query.length?"?"+query.join("&"):""));
+    if(fast)state._fastWalletRefreshPromise=request;
+    let result;
+    try{result=await request;}finally{if(fast&&state._fastWalletRefreshPromise===request)state._fastWalletRefreshPromise=null;}
+    const {ok,status,d}=result;
     // Never wipe the session while we hold wallets — a transient 401 read otherwise orphaned them
     // ("buy after restore says reconnect"). Only downgrade a session that has nothing to lose.
-    if(status===401){if(!(state.wallets||[]).length){setToken("");state.user=null;updateWalletPill();}return;}
+    if(status===401){if(state._walletsFromPreview||!(state.wallets||[]).length){setToken("");state.user=null;state.wallets=[];state.activeWallet=null;state._walletsFromPreview=false;updateWalletPill();}return;}
     if(ok&&d&&d.ok){
       const incoming=d.balances||[];
       if(fast&&state.wallets.length){
         const previous=new Map(state.wallets.map(wallet=>[Number(wallet.index),wallet]));
-        state.wallets=incoming.map(wallet=>{const old=previous.get(Number(wallet.index))||{};const merged=Object.assign({},old,wallet);if(old.tokens&&!wallet.tokens)merged.tokens=old.tokens;if(old.cashAssets)merged.cashAssets=Object.assign({},old.cashAssets,wallet.cashAssets||{});return merged;});
+        state.wallets=incoming.map(wallet=>{const old=previous.get(Number(wallet.index))||{},validSol=wallet.sol!=null&&wallet.lamports!=null&&!wallet.error,merged=Object.assign({},old,wallet);if(!validSol){if(old.sol!=null)merged.sol=old.sol;if(old.lamports!=null)merged.lamports=old.lamports;}if(old.tokens&&!wallet.tokens)merged.tokens=old.tokens;if(old.cashAssets)merged.cashAssets=Object.assign({},old.cashAssets,wallet.cashAssets||{});if(!validSol&&old.cashAssets?.SOL)merged.cashAssets=Object.assign({},merged.cashAssets||{},{SOL:old.cashAssets.SOL});return merged;});
       }else state.wallets=incoming;
+      state._walletsFromPreview=false;
       if(state.wallets.length&&(state.activeWallet==null||!state.wallets.some(w=>w.index===state.activeWallet)))state.activeWallet=state.wallets[0].index;
       if(state.activeWallet)localStorage.setItem(ACTIVE_WALLET_KEY,String(state.activeWallet));
       updateWalletPill();
-      refreshRhBalances();
+      saveWalletPreview();
+      if(!fast||Date.now()-Number(state._rhBalancesCheckedAt||0)>=30000)refreshRhBalances();
     }
   }
   async function refreshRhBalances(){
     if(!state.token||state._rhBalancesLoading)return;
+    state._rhBalancesCheckedAt=Date.now();
     state._rhBalancesLoading=true;
     try{
       const {ok,d}=await api("/api/web/rh/balances");
       if(!(ok&&d&&d.ok))return;
       const byIndex=new Map((d.wallets||[]).map(r=>[Number(r.walletIndex),r]));
       state.wallets=(state.wallets||[]).map(w=>{const r=byIndex.get(Number(w.index));return r?Object.assign({},w,{rhAddress:r.address||"",rhEth:r.available?Number(r.eth||0):null,rhAvailable:!!r.available,rhExplorer:r.explorer||""}):w;});
-      updateWalletPill();syncTradeWalletSwitchers();
+      updateWalletPill();syncTradeWalletSwitchers();saveWalletPreview();
       if(state.route==="wallet")paintWallet();
     }finally{state._rhBalancesLoading=false;}
   }
@@ -5594,13 +5617,13 @@
   render();updateWalletPill();loadSol();setInterval(loadSol,60000);
   if(window.__pendingBuyLink){const pb=window.__pendingBuyLink;window.__pendingBuyLink=null;
     setTimeout(async()=>{try{if(await ensureTradeReady())openQuickBuyModal(pb.mint,pb.amount||undefined);}catch(e){}},450);}
-  if(state.token){refreshWallets();loadPresets();loadWatch();loadMe();}
-  // Keep the wallet balance fresh while you use the app — poll every 30s when the tab is visible
-  // (the balances endpoint is server-cached, so this stays cheap), and pause when backgrounded.
-  setInterval(()=>{if(state.token&&!document.hidden)refreshWallets({fast:true});},30000);
+  if(state.token){refreshWallets({fast:true,force:true});loadPresets();loadWatch();loadMe();}
+  // Keep the visible SOL balance close to live with one batched read. Token,
+  // position, PnL and history hydration stays user-triggered; hidden tabs pause.
+  setInterval(()=>{if(state.token&&!document.hidden)refreshWallets({fast:true,force:true});},5000);
   // Return to the tab → refresh balance + whatever you're looking at INSTANTLY, so nothing looks stale.
   document.addEventListener("visibilitychange",()=>{if(document.hidden)return;
-    if(state.token)refreshWallets({fast:true});
+    if(state.token)refreshWallets({fast:true,force:true});
     if(state.route==="portfolio"&&state.portfolioTab==="positions")renderPortfolio();
     else if(state.route==="trade"&&state.mint){loadTradePnl(state.mint,{fast:true});loadTradeStats(state.mint);}
     else if(state.route==="trending"){if(state.pollT){clearTimeout(state.pollT);state.pollT=null;}renderTrending();}

@@ -200,8 +200,8 @@ test("SlimeCash loads Pump rewards after Cash Balance without mixing them into s
 
 test("SlimeCash service worker prefers the current deploy and retains offline fallback", () => {
   const build = html.match(/slimecash-build" content="(\d+)"/)?.[1];
-  assert.equal(build, "38", "SlimeCash should publish the current app build");
-  assert.match(sw, /const CACHE = "slimecash-v40"/);
+  assert.equal(build, "39", "SlimeCash should publish the current app build");
+  assert.match(sw, /const CACHE = "slimecash-v41"/);
   assert.match(html, new RegExp(`cash\\.js\\?v=${build}`));
   assert.match(html, new RegExp(`cash\\.css\\?v=${build}`));
   assert.match(sw, /const fetched = fetch/);
@@ -210,6 +210,15 @@ test("SlimeCash service worker prefers the current deploy and retains offline fa
 });
 
 test("SlimeCash paints SOL and USD without waiting for Robinhood ETH", () => {
+  const fastRefresh = cash.slice(cash.indexOf("async function refreshFastBalance"), cash.indexOf("async function refreshBalance"));
+  assert.match(fastRefresh, /\/api\/web\/balances\?fast=true&force=true/);
+  assert.match(fastRefresh, /state\.balanceRefreshPromise/);
+  assert.match(fastRefresh, /partial: true/);
+  const applySnapshot = cash.slice(cash.indexOf("function applyCashBalanceSnapshot"), cash.indexOf("async function refreshFastBalance"));
+  assert.match(applySnapshot, /cashAssets: \{ \.\.\.\(previous\.cashAssets \|\| \{\}\), \.\.\.\(wallet\.cashAssets \|\| \{\}\) \}/);
+  assert.match(applySnapshot, /!validSol[\s\S]*previous\.cashAssets\?\.SOL[\s\S]*merged\.cashAssets\.SOL/);
+  assert.match(cash, /function clearCashSnapshotState\(\)[\s\S]{0,1400}state\.balancePreviewPromise = null/);
+  assert.match(cash, /document\.visibilityState === "visible"[\s\S]{0,100}refreshFastBalance\(\)[\s\S]{0,80}, 5000/);
   const refresh = cash.slice(cash.indexOf("async function refreshBalance"), cash.indexOf("function totalUsd"));
   assert.match(refresh, /get\("\/api\/web\/balances\?fast=true", \{ timeoutMs: 5_000 \}\)/);
   assert.match(refresh, /Promise\.race\(\[[\s\S]{0,180}1_800/);
@@ -436,8 +445,8 @@ test("SlimeCash uses a separate PWA identity and a synchronized shell", () => {
   assert.equal(manifest.id, "/slimecash-app");
   assert.equal(manifest.start_url, "/cash/?src=slimecash-pwa");
   assert.equal(manifest.scope, "/cash/");
-  assert.match(html, /slimecash-build" content="38"/);
-  assert.match(sw, /slimecash-v40/);
+  assert.match(html, /slimecash-build" content="39"/);
+  assert.match(sw, /slimecash-v41/);
   assert.match(sw, /\/slimewire-funding\.js\?v=8/);
   assert.match(cash, /serviceWorker\.register\("\/cash\/sw\.js", \{ updateViaCache: "none" \}\)/);
   assert.match(sw, /key\.startsWith\("slimecash-"\) && key !== CACHE/);

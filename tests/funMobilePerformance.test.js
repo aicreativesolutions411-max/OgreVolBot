@@ -38,6 +38,7 @@ test("shared-session restore paints cached wallet data only after matching a con
   const confirm = functionBody(funSource, "confirmAuthenticatedUser");
   const save = functionBody(funSource, "saveWalletPortfolioCache");
   const safe = functionBody(funSource, "cacheSafePortfolioValue");
+  assert.match(functionBody(funSource, "readWalletPortfolioCache"), /24 \* 60 \* 60_000/);
   assert.match(restore, /state\.stagedPortfolioCache\?\.ownerId === restoredUserId/);
   assert.match(restore, /setToken\(COOKIE_SESSION, \{ preserveLocalState: cacheMatches \}\)/);
   assert.match(confirm, /cached\.ownerId !== nextUserId[\s\S]*clearPrivateWalletState/);
@@ -45,6 +46,9 @@ test("shared-session restore paints cached wallet data only after matching a con
   assert.match(save, /ownerId = state\.confirmedUserId/);
   assert.match(save, /ownerId !== confirmedAccountId\(\)/);
   assert.match(save, /version: 2, ownerId/);
+  assert.match(save, /walletPortfolioCacheSignature\(cacheValue\)/);
+  assert.match(save, /signature === state\.walletPortfolioCacheSignature[\s\S]*60000/);
+  assert.match(functionBody(funSource, "clearPrivateWalletState"), /state\.walletPortfolioCacheSignature = ""[\s\S]*state\.walletPortfolioCacheSavedAt = 0/);
   assert.match(safe, /secret\|privatekey\|keypair\|seed\|mnemonic\|password/);
   assert.match(functionBody(funSource, "cookieSessionIdentity"), /\/api\/web\/me/);
   const request = functionBody(funSource, "request");
@@ -59,6 +63,14 @@ test("shared-session restore paints cached wallet data only after matching a con
   assert.match(functionBody(funSource, "accountScopeMatches"), /scope\.userId === state\.confirmedUserId[\s\S]*scope\.token === state\.token[\s\S]*scope\.generation/);
   assert.match(functionBody(funSource, "loadPortfolioSnapshot"), /accountScopeMatches\(accountScope\)[\s\S]*applyPortfolioSnapshot\(result\.data, \{ accountScope \}\)/);
   assert.match(functionBody(funSource, "loadWalletBalancePreview"), /accountScopeMatches\(accountScope\)[\s\S]*applyPortfolioSnapshot\(snapshot, \{ status: "refreshing", accountScope \}\)/);
+  assert.match(functionBody(funSource, "loadWalletBalancePreview"), /fast=true\$\{options\.force \? "&force=true" : ""\}/);
+  const applySnapshot = functionBody(funSource, "applyPortfolioSnapshot");
+  assert.match(applySnapshot, /cashAssets: \{ \.\.\.\(previous\.cashAssets \|\| \{\}\), \.\.\.\(wallet\.cashAssets \|\| \{\}\) \}/);
+  assert.match(applySnapshot, /!validSol[\s\S]*previous\.cashAssets\?\.SOL[\s\S]*merged\.cashAssets\.SOL/);
+  const balanceSchedule = functionBody(funSource, "scheduleWalletBalanceRefresh");
+  assert.match(balanceSchedule, /!document\.hidden/);
+  assert.match(balanceSchedule, /loadWalletBalancePreview\(\{ force: true \}\)/);
+  assert.match(balanceSchedule, /5_000/);
   assert.match(functionBody(funSource, "loadFunRhPositions"), /accountScopeMatches\(accountScope\)/);
   assert.match(functionBody(funSource, "loadWalletView"), /state\.sessionRestoring[\s\S]*saved balances appear immediately/i);
   assert.match(functionBody(funSource, "renderWalletHero"), /portfolioStatus[\s\S]*Saved ·/);

@@ -26,7 +26,23 @@ test("classic terminal pauses expensive passive wallet and chart reads in hidden
   assert.match(terminalSource, /pnlPollT=setTimeout\(\(\)=>\{if\(!document\.hidden&&state\.route==="trade"[\s\S]{0,120}loadTradePnl\(mint,\{fast:true\}\)/);
   assert.match(terminalSource, /async function loadTradeStats\(mint\)[\s\S]{0,400}if\(document\.hidden\)return;/);
   assert.match(terminalSource, /statPollT=setTimeout\(\(\)=>\{if\(!document\.hidden&&state\.route==="trade"/);
-  assert.match(terminalSource, /setInterval\(\(\)=>\{if\(state\.token&&!document\.hidden\)refreshWallets\(\{fast:true\}\);\},30000\)/);
+  assert.match(terminalSource, /setInterval\(\(\)=>\{if\(state\.token&&!document\.hidden\)refreshWallets\(\{fast:true,force:true\}\);\},5000\)/);
+  assert.match(terminalSource, /if\(state\.token\)\{refreshWallets\(\{fast:true,force:true\}\)/);
+  assert.match(terminalSource, /visibilitychange[\s\S]{0,220}refreshWallets\(\{fast:true,force:true\}\)/);
+  assert.match(terminalSource, /const WALLET_PREVIEW_KEY="slimewireTerminalWalletPreviewV1"/);
+  assert.match(terminalSource, /saved\.sessionRef!==walletPreviewSessionRef\(token\)/);
+  assert.match(terminalSource, /_walletsFromPreview:initialWalletPreview\.length>0/);
+  assert.match(terminalSource, /function walletPreviewRow\(wallet\)/);
+  const walletPreview = terminalSource.slice(
+    terminalSource.indexOf("function walletPreviewRow"),
+    terminalSource.indexOf("function walletPreviewSessionRef")
+  );
+  assert.doesNotMatch(walletPreview, /private|secret|mnemonic|seed|keypair/i);
+  const refreshWallets = functionBody(terminalSource, "refreshWallets");
+  assert.match(refreshWallets, /status===401[\s\S]*state\._walletsFromPreview[\s\S]*state\.wallets=\[\]/);
+  assert.match(refreshWallets, /validSol=wallet\.sol!=null&&wallet\.lamports!=null&&!wallet\.error/);
+  assert.match(refreshWallets, /old\.cashAssets\?\.SOL[\s\S]*SOL:old\.cashAssets\.SOL/);
+  assert.match(refreshWallets, /if\(!fast\|\|Date\.now\(\)-Number\(state\._rhBalancesCheckedAt\|\|0\)>=30000\)refreshRhBalances\(\)/);
   assert.match(terminalSource, /visibilitychange[\s\S]{0,500}loadTradePnl\(state\.mint,\{fast:true\}\);loadTradeStats\(state\.mint\)/);
   assert.match(terminalSource, /portfolioPollT=setTimeout\(\(\)=>\{if\(state\.route==="portfolio"[\s\S]{0,180},30000\)/);
   assert.match(terminalSource, /positions\?force=true/);

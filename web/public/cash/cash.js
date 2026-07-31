@@ -68,7 +68,11 @@
     positionsLoading: false,
     balanceRefreshing: false,
     balanceRefreshPromise: null,
+    balancePreviewPromise: null,
     balanceUpdatedAt: "",
+    balanceFullUpdatedAt: "",
+    balanceCacheSignature: "",
+    balanceCacheSavedAt: 0,
     balanceKnown: false,
     balanceSource: "",
     balanceError: "",
@@ -348,6 +352,10 @@
     state.pendingRequestId = "";
     state.balanceKnown = false;
     state.balanceUpdatedAt = "";
+    state.balanceFullUpdatedAt = "";
+    state.balancePreviewPromise = null;
+    state.balanceCacheSignature = "";
+    state.balanceCacheSavedAt = 0;
     state.balanceSource = "";
     state.balanceError = "";
     state.activity = [];
@@ -1182,13 +1190,18 @@
       const accountRef = String(state.confirmedAccountRef || "");
       const key = scopedCashStorageKey(BALANCE_CACHE_PREFIX, accountRef);
       if (!accountRef || !key) return;
-      localStorage.setItem(key, JSON.stringify({
-        savedAt: Date.now(),
+      const snapshot = {
         accountRef,
         balances: compactCashBalanceRows(balanceData.balances || []),
         solUsd: Number(balanceData.solUsd || 0),
         rhBalances: compactCashRhSnapshot(rhData)
-      }));
+      };
+      const signature = JSON.stringify(snapshot);
+      const now = Date.now();
+      if (signature === state.balanceCacheSignature && now - state.balanceCacheSavedAt < 60000) return;
+      localStorage.setItem(key, JSON.stringify({ savedAt: now, ...snapshot }));
+      state.balanceCacheSignature = signature;
+      state.balanceCacheSavedAt = now;
     } catch { /* cache is an optional speed layer */ }
   }
 
@@ -1201,7 +1214,14 @@
     state.rhEthUsd = Number(rhData.ethUsd || state.rhEthUsd || 0);
     const rhByIndex = new Map((rhData.wallets || []).map((row) => [Number(row.walletIndex), row]));
     state.wallets = (snapshotWallets.length ? snapshotWallets : state.wallets).map((wallet) => {
-      const merged = partial ? { ...(previousByIndex.get(Number(wallet.index)) || {}), ...wallet } : wallet;
+      const previous = previousByIndex.get(Number(wallet.index)) || {};
+      const validSol = wallet.sol != null && wallet.lamports != null && !wallet.error;
+      const merged = partial ? { ...previous, ...wallet, cashAssets: { ...(previous.cashAssets || {}), ...(wallet.cashAssets || {}) } } : wallet;
+      if (partial && !validSol) {
+        if (previous.sol != null) merged.sol = previous.sol;
+        if (previous.lamports != null) merged.lamports = previous.lamports;
+        if (previous.cashAssets?.SOL) merged.cashAssets.SOL = previous.cashAssets.SOL;
+      }
       const row = rhByIndex.get(Number(wallet.index));
       return row ? { ...merged, rhAddress: row.address || "", rhEth: row.available ? Number(row.eth || 0) : null, rhAvailable: Boolean(row.available), rhExplorer: row.explorer || "" } : merged;
     });
@@ -1225,6 +1245,28 @@
     renderBalance();
     renderCashWallets();
     return true;
+  }
+
+  async function refreshFastBalance() {
+    const accountRef = String(state.confirmedAccountRef || "");
+    if (!state.token || !accountRef || !state.wallet || state.balanceRefreshPromise) return null;
+    if (state.balancePreviewPromise) return state.balancePreviewPromise;
+    const refresh = (async () => {
+      const result = await get("/api/web/balances?fast=true&force=true", { timeoutMs: 5_000 });
+      if (state.confirmedAccountRef !== accountRef || !result.ok || !result.data?.ok) return null;
+      const cached = readCashBalanceCache(accountRef);
+      applyCashBalanceSnapshot(result.data, cached?.rhBalances || {}, {
+        partial: true,
+        refreshing: false,
+        updatedAt: result.data.lastUpdatedAt || new Date().toISOString(),
+        source: "live"
+      });
+      saveCashBalanceCache({ ...result.data, balances: state.wallets, solUsd: state.solUsd }, cached?.rhBalances || {});
+      return result.data;
+    })();
+    state.balancePreviewPromise = refresh;
+    try { return await refresh; }
+    finally { if (state.balancePreviewPromise === refresh) state.balancePreviewPromise = null; }
   }
 
   async function refreshBalance({ silent = false } = {}) {
@@ -1274,7 +1316,10 @@
       renderBalance();
       return;
     }
-    if (balanceResult.ok) saveCashBalanceCache(balanceResult.data, earlyRhData);
+    if (balanceResult.ok) {
+      state.balanceFullUpdatedAt = balanceData.lastUpdatedAt || new Date().toISOString();
+      saveCashBalanceCache(balanceResult.data, earlyRhData);
+    }
     if (previousUsdc !== null && state.usdcRaw > previousUsdc) {
       const gainedUsdc = (state.usdcRaw - previousUsdc) / 1e6;
       addActivity({ type: "in", title: "USDC arrived", sub: "Digital dollars landed on Solana", amountUsd: gainedUsdc, at: Date.now() });
@@ -3160,7 +3205,8 @@
     paintOnlineState();
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState !== "visible" || !state.token || !state.wallet) return;
-      if (Date.now() - Date.parse(state.balanceUpdatedAt || 0) > 45_000) {
+      void refreshFastBalance();
+      if (Date.now() - Date.parse(state.balanceFullUpdatedAt || state.balanceUpdatedAt || 0) > 45_000) {
         const liveBalanceRefresh = refreshBalance({ silent: true });
         void Promise.resolve(liveBalanceRefresh).finally(() => loadCashPumpRewards({ force: true }));
       }
@@ -3270,6 +3316,9 @@
       void refreshSolPrice();
       if (state.token && state.wallet) void refreshBalance({ silent: true });
     }, 60000);
+    setInterval(() => {
+      if (document.visibilityState === "visible" && state.token && state.wallet) void refreshFastBalance();
+    }, 5000);
   }
 
   /* ---------------- events ---------------- */
