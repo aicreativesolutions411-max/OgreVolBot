@@ -52,6 +52,20 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
+test("/left4sol keeps the public SlimeWire game link while redirecting to itch.io", () => {
+  const destination = "https://left4cooked.itch.io/left4cooked";
+  const routeStart = server.indexOf('requestUrl.pathname === "/left4sol"');
+  assert.ok(routeStart >= 0, "the Node origin should recognize the branded game route");
+  const route = server.slice(routeStart - 120, routeStart + 520);
+  assert.match(route, /request\.method === "GET" \|\| request\.method === "HEAD"/);
+  assert.match(route, /requestUrl\.pathname\.startsWith\("\/left4sol\/"\)/);
+  assert.ok(route.includes(`Location: "${destination}"`));
+  assert.match(route, /"Cache-Control": "no-store, max-age=0"/);
+  assert.match(redirects, /^\/left4sol\s+https:\/\/left4cooked\.itch\.io\/left4cooked\s+302$/m);
+  assert.match(redirects, /^\/left4sol\/\s+https:\/\/left4cooked\.itch\.io\/left4cooked\s+302$/m);
+  assert.match(redirects, /^\/left4sol\/\*\s+https:\/\/left4cooked\.itch\.io\/left4cooked\s+302$/m);
+});
+
 test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH trading", () => {
   assert.match(server, /requestUrl\.pathname === "\/wallet"[\s\S]{0,180}Location: "\/wallet\/\?install=1"/);
   assert.match(server, /requestUrl\.pathname === "\/wallet\/"[\s\S]{0,260}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
