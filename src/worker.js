@@ -86,8 +86,11 @@ function loadWorkerConfig() {
     runDcaPlans: taskSet === "trade" && parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true"),
     warmFeeds: taskSet === "data" && parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true"),
     warmRhPairs: taskSet === "data" && parseBoolean(process.env.WORKER_TICK_WARM_RH_PAIRS || "true"),
-    warmDisplayCaches: taskSet === "data" && parseBoolean(process.env.WORKER_TICK_WARM_DISPLAY_CACHES || "true"),
-    displayCacheUserLimit: clampInteger(process.env.WORKER_DISPLAY_CACHE_USER_LIMIT, 8, 0, 50),
+    // Display-cache warming was speculative and spent RPC credits on inactive
+    // sessions. Pages still load/refresh normally and trades refresh their own
+    // affected wallet immediately.
+    warmDisplayCaches: false,
+    displayCacheUserLimit: 0,
     buckets,
     sorts,
     forceFeeds: parseBoolean(process.env.WORKER_TICK_FORCE_FEEDS || "true")

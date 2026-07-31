@@ -418,7 +418,7 @@ services:
       - key: WORKER_TICK_WARM_DISPLAY_CACHES
         value: false
       - key: WORKER_DISPLAY_CACHE_USER_LIMIT
-        value: 8
+        value: 0
       - key: WORKER_TICK_BUCKETS
         value: live,under1h,under3h,under1d
       - key: WORKER_TICK_SORTS
@@ -495,10 +495,10 @@ services:
       - key: WORKER_TICK_WARM_RH_PAIRS
         value: true
       - key: WORKER_TICK_WARM_DISPLAY_CACHES
-        value: true
+        value: false
       - key: WORKER_FAST_TP_SL_ENABLED
         value: false
       - key: WORKER_DISPLAY_CACHE_USER_LIMIT
-        value: 10
+        value: 0
       - key: WORKER_TICK_FORCE_FEEDS
         value: false

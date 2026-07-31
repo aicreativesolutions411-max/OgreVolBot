@@ -832,14 +832,19 @@
     if(ok&&d&&d.ok&&d.token){setToken(d.token);state.user=d.user||null;return true;}
     return false;
   }
-  async function refreshWallets(){
+  async function refreshWallets(options={}){
     if(!state.token)return;
-    const {ok,status,d}=await api("/api/web/balances");
+    const fast=Boolean(options.fast);
+    const {ok,status,d}=await api("/api/web/balances"+(fast?"?fast=true":""));
     // Never wipe the session while we hold wallets — a transient 401 read otherwise orphaned them
     // ("buy after restore says reconnect"). Only downgrade a session that has nothing to lose.
     if(status===401){if(!(state.wallets||[]).length){setToken("");state.user=null;updateWalletPill();}return;}
     if(ok&&d&&d.ok){
-      state.wallets=d.balances||[];
+      const incoming=d.balances||[];
+      if(fast&&state.wallets.length){
+        const previous=new Map(state.wallets.map(wallet=>[Number(wallet.index),wallet]));
+        state.wallets=incoming.map(wallet=>{const old=previous.get(Number(wallet.index))||{};const merged=Object.assign({},old,wallet);if(old.tokens&&!wallet.tokens)merged.tokens=old.tokens;if(old.cashAssets)merged.cashAssets=Object.assign({},old.cashAssets,wallet.cashAssets||{});return merged;});
+      }else state.wallets=incoming;
       if(state.wallets.length&&(state.activeWallet==null||!state.wallets.some(w=>w.index===state.activeWallet)))state.activeWallet=state.wallets[0].index;
       if(state.activeWallet)localStorage.setItem(ACTIVE_WALLET_KEY,String(state.activeWallet));
       updateWalletPill();
@@ -3235,7 +3240,7 @@
     const pane=$('[data-pane="pos"]');if(!pane)return;
     if(!state.token){pane.innerHTML='<div class="panemsg"><div style="font-size:30px">👛</div><div>Set up a wallet to track your position here.</div><div class="cta" onclick="GG.go(\'wallet\')">Set up a wallet</div></div>';return;}
     pane.innerHTML='<div class="loading" style="padding:24px"><span class="spin"></span></div>';
-    const {ok,d}=await api("/api/web/positions");
+    const {ok,d}=await api("/api/web/positions?mint="+encodeURIComponent(mint));
     if(state.route!=="trade"||state.mint!==mint||state.tradeTab!=="pos")return;
     const mine=((d&&d.positions)||[]).filter(p=>p.tokenMint===mint);
     if(!ok||!mine.length){pane.innerHTML='<div class="panemsg"><div style="font-size:30px">🫧</div><div>No position in this token yet.<br>Buy on the right and it shows up here.</div></div>';return;}
@@ -3254,7 +3259,7 @@
     const inv=$("#pnlInv"),rem=$("#pnlRem"),val=$("#pnlVal");if(!inv||!rem||!val)return;
     if(!p){inv.textContent="—";rem.textContent="—";val.textContent="—";val.className="mut";return;}
     const spent=Number(p.spentSol);
-    let value=Number(p.estimatedValueSol),pnl=Number(p.openPnlSol),pct=p.openPnlPercent;
+    let value=p.estimatedValueSol!=null&&p.estimatedValueSol!==""?Number(p.estimatedValueSol):NaN,pnl=p.openPnlSol!=null&&p.openPnlSol!==""?Number(p.openPnlSol):NaN,pct=p.openPnlPercent;
     // INSTANT mark-to-market: when we have the chart's LIVE price for this coin + the raw holdings, value
     // the bag off the live price (refreshes ~6s with the chart) instead of the slower backend snapshot —
     // so the PnL bar tracks MC in real time ("MC 9k, wallet shows 6k" lag fix).
@@ -3276,15 +3281,21 @@
     else{val.textContent="—";val.className="mut";}
   }
   let pnlPollT=null;
-  async function loadTradePnl(mint){
+  async function loadTradePnl(mint,options={}){
     if(pnlPollT){clearTimeout(pnlPollT);pnlPollT=null;}
     if(!state.token||!mint){paintTradePnl(null);return;}
-    const {ok,d}=await api("/api/web/positions").catch(()=>({}));
+    // Position history is one of the more expensive background reads. Never spend it while the app is
+    // hidden; visibilitychange below refreshes immediately when the trader comes back.
+    if(document.hidden)return;
+    const fast=Boolean(options.fast);
+    const {ok,d}=await api("/api/web/positions?mint="+encodeURIComponent(mint)+(fast?"&fast=true":"")).catch(()=>({}));
     if(state.route!=="trade"||state.mint!==mint)return;
     const p=(ok&&d&&Array.isArray(d.positions))?d.positions.find(x=>x.tokenMint===mint):null;
     state.lastTradePos=p||null;  // cached so the 6s live-price tick can re-mark it without a backend round-trip
     paintTradePnl(p||null);
-    pnlPollT=setTimeout(()=>{if(state.route==="trade"&&state.mint===mint)loadTradePnl(mint);},12000);
+    // The chart still marks this cached bag against its live 6s market price. Refresh the full holdings /
+    // cost-basis snapshot less often, using the normal server-cached (non-force) endpoint.
+    pnlPollT=setTimeout(()=>{if(!document.hidden&&state.route==="trade"&&state.mint===mint)loadTradePnl(mint,{fast:true});},30000);
   }
   async function renderTrade(){
     setActiveView("v-trade");
@@ -3379,6 +3390,9 @@
   async function loadTradeStats(mint){
     if(statPollT){clearTimeout(statPollT);statPollT=null;}
     if(state.route!=="trade"||state.mint!==mint)return;
+    // Chart identity/route discovery is useful only while this chart is visible. Resume instantly on
+    // visibilitychange instead of keeping server/provider reads alive in a background tab.
+    if(document.hidden)return;
     try{
       const identityPromise=api("/api/web/token-search?q="+encodeURIComponent(mint)).catch(()=>({}));
       const j=await fetch("https://api.dexscreener.com/latest/dex/tokens/"+encodeURIComponent(mint)).then(x=>x.ok?x.json():null).catch(()=>null);
@@ -3430,7 +3444,7 @@
         }
       }
     }catch(e){}
-    statPollT=setTimeout(()=>{if(state.route==="trade"&&state.mint===mint)loadTradeStats(mint);},6000);
+    statPollT=setTimeout(()=>{if(!document.hidden&&state.route==="trade"&&state.mint===mint)loadTradeStats(mint);},6000);
   }
   function fillPerf(r){const p=$("#perf");if(!p)return;p.innerHTML=[["5M",r.m5],["1H",r.h1],["6H",r.h6],["24H",r.h24]].map(([lab,v])=>{const n=pctNum(v);const cls=n==null?"mut":(n>=0?"up":"down");const t=n==null?"—":(n>=0?"+":"")+n.toFixed(1)+"%";return'<div><span>'+lab+'</span><b class="'+cls+'">'+t+'</b></div>';}).join("");}
   function updateWselLine(){
@@ -3944,9 +3958,10 @@
     if(ok&&d&&d.ok){state.posCache=d.positions||[];try{localStorage.setItem("ggPosCache",JSON.stringify(state.posCache));}catch(e){}if(state.route==="portfolio"&&state.portfolioTab==="positions")paintPositions($("#v-portfolio"),state.posCache);}
   }
   function afterTradeRefresh(){
-    refreshWallets();refreshPositionsCache();
-    if(state.route==="trade"&&state.mint)loadTradePnl(state.mint);
-    setTimeout(()=>{if(!state.token)return;refreshWallets();refreshPositionsCache();if(state.route==="trade"&&state.mint)loadTradePnl(state.mint);},2600);
+    refreshWallets();
+    if(state.route==="portfolio"&&state.portfolioTab==="positions")refreshPositionsCache();
+    else if(state.route==="trade"&&state.mint)loadTradePnl(state.mint);
+    setTimeout(()=>{if(!state.token)return;refreshWallets();if(state.route==="portfolio"&&state.portfolioTab==="positions")refreshPositionsCache();else if(state.route==="trade"&&state.mint)loadTradePnl(state.mint,{fast:true});},2600);
   }
   // Manual "↻" refresh on the positions/PnL views — forces a fresh (cache-bypassing) balance +
   // position-value pull so the user can re-check holdings/PnL on demand instead of waiting on the poll.
@@ -3986,8 +4001,8 @@
     if(!ok||!d||!d.ok){if(!state.posCache)view.innerHTML='<div class="empty"><div class="big">⚠</div><div><b>Could not load positions</b><br><span class="mut">'+esc((d&&d.error)||"Try again in a moment.")+'</span></div></div>';return;}
     state.posCache=d.positions||[];paintPositions(view,state.posCache);
     try{localStorage.setItem("ggPosCache",JSON.stringify(state.posCache));}catch(e){}
-    // Keep open positions + values/PnL live while you watch — refresh every 10s when the tab is visible.
-    portfolioPollT=setTimeout(()=>{if(state.route==="portfolio"&&state.portfolioTab==="positions"&&!document.hidden)renderPortfolio();},10000);
+    // Keep open positions + values/PnL live at a calm cadence. Trades and manual refresh repaint immediately.
+    portfolioPollT=setTimeout(()=>{if(state.route==="portfolio"&&state.portfolioTab==="positions"&&!document.hidden)renderPortfolio();},30000);
   }
   async function renderWalletNfts(view){
     const wallets=Array.isArray(state.wallets)?state.wallets:[],wallet=wallets[Math.max(0,Number(state.activeWallet||1)-1)]||wallets[0];
@@ -4321,7 +4336,7 @@
             ? '<p class="wnote" style="margin:0 0 8px;color:var(--green2)">✓ Login set'+(u.username?' — <b>'+esc(u.username)+'</b>':'')+'. You can sign in on any device.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="wbtn ghost" id="setLoginBtn">Update username / password</button><button class="wbtn ghost" id="signOutBtn">Sign out on this device</button></div>'
             : '<p class="wnote" style="margin:0 0 8px;color:#ffcf6b">⚠ No login yet — if this browser clears, only your backup file can recover this account. Set a username + password to log in anywhere.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="wbtn" id="setLoginBtn">🔐 Secure my account (set login)</button><button class="wbtn ghost" id="signOutBtn">Sign out on this device</button></div>')+
           '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">Alerts</div>'+
-          (alertsOn?'<p class="wnote" style="margin:0 0 6px;color:var(--green2)">🔔 Alerts are ON — Smart Calls, X returns, migrations, DEX-paid events and trade alerts can reach this device.</p>':'<button class="wbtn" id="enAlerts">🔔 Enable push alerts</button><p class="wnote" style="margin:8px 0 0">Get high-signal market and trade alerts — even with the app closed.</p>')+
+          (alertsOn?'<p class="wnote" style="margin:0 0 6px;color:var(--green2)">🔔 Alerts are ON — trade, TP/SL and wallet-tracker alerts can reach this device.</p>':'<button class="wbtn" id="enAlerts">🔔 Enable push alerts</button><p class="wnote" style="margin:8px 0 0">Get high-signal market and trade alerts — even with the app closed.</p>')+
           '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">Your X handle</div>'+
           '<div class="field"><div style="display:flex;gap:8px"><input id="xHandle" value="'+esc(xh)+'" placeholder="@yourhandle" maxlength="30" style="flex:1"><button class="wbtn ghost" id="saveX" style="flex:0 0 auto">Save</button></div></div>'+
           '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">Referral</div>'+
@@ -5580,14 +5595,14 @@
   if(window.__pendingBuyLink){const pb=window.__pendingBuyLink;window.__pendingBuyLink=null;
     setTimeout(async()=>{try{if(await ensureTradeReady())openQuickBuyModal(pb.mint,pb.amount||undefined);}catch(e){}},450);}
   if(state.token){refreshWallets();loadPresets();loadWatch();loadMe();}
-  // Keep the wallet balance fresh while you use the app — poll every 12s when the tab is visible
+  // Keep the wallet balance fresh while you use the app — poll every 30s when the tab is visible
   // (the balances endpoint is server-cached, so this stays cheap), and pause when backgrounded.
-  setInterval(()=>{if(state.token&&!document.hidden)refreshWallets();},12000);
+  setInterval(()=>{if(state.token&&!document.hidden)refreshWallets({fast:true});},30000);
   // Return to the tab → refresh balance + whatever you're looking at INSTANTLY, so nothing looks stale.
   document.addEventListener("visibilitychange",()=>{if(document.hidden)return;
-    if(state.token)refreshWallets();
+    if(state.token)refreshWallets({fast:true});
     if(state.route==="portfolio"&&state.portfolioTab==="positions")renderPortfolio();
-    else if(state.route==="trade"&&state.mint)loadTradePnl(state.mint);
+    else if(state.route==="trade"&&state.mint){loadTradePnl(state.mint,{fast:true});loadTradeStats(state.mint);}
     else if(state.route==="trending"){if(state.pollT){clearTimeout(state.pollT);state.pollT=null;}renderTrending();}
   });
 })();

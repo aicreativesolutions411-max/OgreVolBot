@@ -206,7 +206,7 @@ export async function excludePoolOwnerRows(rows, { rpcRead, probeLimit = 25, ext
 // 40-byte dataSlice ourselves, defer base58 encoding until AFTER sort+slice (only the top ~165, never all N),
 // and allow only ONE heavy read at a time. Returns [] on any failure (caller then uses the top-20 fallback).
 let _manyHoldersInFlight = 0;
-export async function computeManyHolders({ mint, rpcRead, rpcUrl = "", limit = 150, poolAddr = "", maxBytes = 3_000_000 } = {}) {
+export async function computeManyHolders({ mint, rpcRead, rpcUrl = "", limit = 150, poolAddr = "", maxBytes = 3_000_000, onRpcAttempt = null } = {}) {
   if (!mint || !rpcUrl) return [];
   let mintPk; try { mintPk = new PublicKey(mint); } catch { return []; }
   // Supply first (light, cheap) — no point streaming the big list if we can't compute percentages.
@@ -221,6 +221,7 @@ export async function computeManyHolders({ mint, rpcRead, rpcUrl = "", limit = 1
   const ctl = new AbortController();
   const timer = setTimeout(() => { try { ctl.abort(); } catch { /* noop */ } }, 8_000);
   let body = null;
+  let attemptRecorded = false;
   try {
     const res = await fetch(rpcUrl, {
       method: "POST",
@@ -235,6 +236,11 @@ export async function computeManyHolders({ mint, rpcRead, rpcUrl = "", limit = 1
         }],
       }),
     });
+    try {
+      const error = res.ok ? null : Object.assign(new Error(`RPC HTTP ${res.status}`), { status: res.status });
+      if (typeof onRpcAttempt === "function") onRpcAttempt({ method: "getProgramAccounts", error, status: res.status });
+      attemptRecorded = true;
+    } catch { /* telemetry must never affect holder reads */ }
     if (!res.ok || !res.body) return [];
     const reader = res.body.getReader();
     const chunks = [];
@@ -251,7 +257,12 @@ export async function computeManyHolders({ mint, rpcRead, rpcUrl = "", limit = 1
       chunks.push(value);
     }
     body = Buffer.concat(chunks);
-  } catch { return []; }
+  } catch (error) {
+    if (!attemptRecorded) {
+      try { if (typeof onRpcAttempt === "function") onRpcAttempt({ method: "getProgramAccounts", error }); } catch { /* noop */ }
+    }
+    return [];
+  }
   finally { clearTimeout(timer); _manyHoldersInFlight--; }
 
   let accts;

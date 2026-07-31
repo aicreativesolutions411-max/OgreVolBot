@@ -133,9 +133,11 @@ test("live pair feeds use shared KV cache and stale rows while background refres
   assert.match(body, /kv-stale-hit-background-refresh/);
 });
 
-test("backend worker warms display caches and keeps TP/SL DB-backed", () => {
+test("backend worker retires speculative display warming and keeps TP/SL DB-backed", () => {
   assert.match(serverSource, /async function warmWorkerDisplayCaches/);
   assert.match(serverSource, /result\.displayCaches = await runWorkerTask\("displayCaches"/);
+  assert.match(serverSource, /const workerTickWarmDisplayCaches = false/);
+  assert.match(serverSource, /const workerDisplayCacheUserLimit = 0/);
   assert.match(serverSource, /webInternalTpSlRunnersEnabled/);
   assert.match(serverSource, /normalizeServiceRole/);
   assert.match(serverSource, /serviceRole === "web"/);
@@ -156,6 +158,8 @@ test("backend worker warms display caches and keeps TP/SL DB-backed", () => {
   assert.match(workerSource, /runTimedTradePlans: CONFIG\.runTradePlans && !CONFIG\.fastTpSlEnabled/);
   assert.match(workerSource, /warmDisplayCaches: CONFIG\.warmDisplayCaches/);
   assert.match(workerSource, /displayCacheUserLimit: CONFIG\.displayCacheUserLimit/);
+  assert.match(workerSource, /warmDisplayCaches: false/);
+  assert.match(workerSource, /displayCacheUserLimit: 0/);
   assert.match(workerSource, /SERVICE_ROLE=web or WORKER_DISABLED=true/);
   assert.match(workerSource, /Display cache: \$/);
   assert.match(workerSource, /tradePlanTick/);

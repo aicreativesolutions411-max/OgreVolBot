@@ -5,6 +5,7 @@ import fs from "node:fs";
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
 const chartLabSource = fs.readFileSync(new URL("../web/public/chart-lab.html", import.meta.url), "utf8");
 const terminalSource = fs.readFileSync(new URL("../web/public/gg.html", import.meta.url), "utf8");
+const terminalIndexSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
 const tokenPageSource = fs.readFileSync(new URL("../web/public/t.html", import.meta.url), "utf8");
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const packageSource = fs.readFileSync(new URL("../package.json", import.meta.url), "utf8");
@@ -16,6 +17,30 @@ function functionBody(source, name) {
   const next = source.indexOf("\nfunction ", start + marker.length);
   return source.slice(start, next === -1 ? undefined : next);
 }
+
+test("classic terminal pauses expensive passive wallet and chart reads in hidden tabs", () => {
+  assert.equal(terminalIndexSource, terminalSource, "index.html and gg.html must keep the same polling behavior");
+  assert.match(terminalSource, /async function loadTradePnl\(mint,options=\{\}\)[\s\S]{0,500}if\(document\.hidden\)return;[\s\S]{0,900}pnlPollT=setTimeout\([\s\S]{0,250},30000\)/);
+  assert.match(terminalSource, /async function loadTradePnl\(mint,options=\{\}\)[\s\S]{0,900}positions\?mint="\+encodeURIComponent\(mint\)\+\(fast\?"&fast=true":""\)/);
+  assert.match(terminalSource, /async function loadPosPane\(mint\)[\s\S]{0,500}positions\?mint="\+encodeURIComponent\(mint\)/);
+  assert.match(terminalSource, /pnlPollT=setTimeout\(\(\)=>\{if\(!document\.hidden&&state\.route==="trade"[\s\S]{0,120}loadTradePnl\(mint,\{fast:true\}\)/);
+  assert.match(terminalSource, /async function loadTradeStats\(mint\)[\s\S]{0,400}if\(document\.hidden\)return;/);
+  assert.match(terminalSource, /statPollT=setTimeout\(\(\)=>\{if\(!document\.hidden&&state\.route==="trade"/);
+  assert.match(terminalSource, /setInterval\(\(\)=>\{if\(state\.token&&!document\.hidden\)refreshWallets\(\{fast:true\}\);\},30000\)/);
+  assert.match(terminalSource, /visibilitychange[\s\S]{0,500}loadTradePnl\(state\.mint,\{fast:true\}\);loadTradeStats\(state\.mint\)/);
+  assert.match(terminalSource, /portfolioPollT=setTimeout\(\(\)=>\{if\(state\.route==="portfolio"[\s\S]{0,180},30000\)/);
+  assert.match(terminalSource, /positions\?force=true/);
+  assert.match(terminalSource, /p\.estimatedValueSol!=null&&p\.estimatedValueSol!==""\?Number\(p\.estimatedValueSol\):NaN/);
+  assert.doesNotMatch(terminalSource, /function afterTradeRefresh\(\)[\s\S]{0,500}refreshWallets\(\);refreshPositionsCache\(\)/);
+
+  const estimate = functionBody(serverSource, "estimatePositionValue");
+  assert.match(estimate, /!options\.force && cached !== undefined/);
+  assert.match(estimate, /!options\.force && unavailable !== undefined/);
+  assert.match(serverSource, /estimatePositionValue\(position, \{ force: Boolean\(options\.force\) \}\)/);
+  assert.match(serverSource, /RECOVERED_POSITION_TX_CACHE_MAX = 256/);
+  assert.match(serverSource, /RECOVERED_POSITION_TX_IN_FLIGHT_MAX = 64/);
+  assert.match(functionBody(serverSource, "recoverWebPositionPnlFromRpc"), /cached !== undefined && !options\.force/);
+});
 
 test("chart route renders shell from route token and starts bootstrap without blocking", () => {
   const applyRoute = functionBody(appSource, "applyChartRouteFromLocation");

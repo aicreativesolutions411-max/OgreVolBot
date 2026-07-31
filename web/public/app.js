@@ -6657,8 +6657,8 @@ function pushAlertsSection() {
     : permission === "denied"
       ? "Notifications are blocked for this site. Enable them in your browser settings, then try again."
       : enabled
-        ? "Push alerts are ON for this device. Smart Calls, X returns, migrations, DEX-paid events, TP/SL fires, and KOL copies can reach you with the site closed."
-        : "Turn on push alerts for Smart Calls, X-return milestones, migrations, DEX-paid events, and trade alerts - no need to keep the tab open.";
+        ? "Push alerts are ON for this device. Trade, TP/SL, wallet-tracker, and KOL-copy alerts can reach you with the site closed."
+        : "Turn on push alerts for trade, TP/SL, wallet-tracker, and KOL-copy alerts - no need to keep the tab open.";
   return `
     <article class="profile-card">
       <div>

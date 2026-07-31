@@ -3547,15 +3547,15 @@ test("Alpha Radar poller watches network-backed coins, alerts only on a held mul
   assert.doesNotMatch(bc, /buyToken|sellToken|sendTransaction/);     // ALERT only, never trades
   assert.match(serverSource, /setInterval\(\(\) => \{ void pollAlphaRadar\(\); \}, 60_000\)/);
 });
-test("/alpharadar toggles per-group (admin) + DM opt-in", () => {
+test("/alpharadar remains a DM opt-in and retires the old group Smart Call switch", () => {
   const cmd = functionBody(serverSource, "handleAlphaRadarCommand");
   assert.match(cmd, /setAlphaRadarDmSub\(userId, on\)/);            // DM subscription
-  assert.match(cmd, /roseAdminIdentity\(chatId\)/);                  // group admin gate
-  assert.match(cmd, /setGroupBotFeature\(chatId, "alphaRadar", on\)/);
+  assert.match(cmd, /if \(!dm\)/);
+  assert.match(cmd, /Group Smart Calls have been retired/);
+  assert.doesNotMatch(cmd, /setGroupBotFeature\(chatId, "alphaRadar", on\)/);
   assert.match(serverSource, /parseCommandWithArgument\(text, \["alpharadar", "alpha_radar", "alphascan"\]\)/);
-  // Legacy Alpha Radar remains DM-only; opted-in groups are migrated to Smart Calls.
+  // Personal Alpha Radar remains DM-only and does no work when nobody opted in.
   assert.doesNotMatch(functionBody(serverSource, "alphaRadarTargets"), /groupBotFeatureOn/);
-  assert.match(functionBody(serverSource, "smartCallTargets"), /groupBotFeatureOn\(entry, "alphaRadar"\)/);
 });
 
 // ---- Scan Back reliability + Alpha Radar replaces the short-term plays for opted-in groups ----
@@ -3567,9 +3567,11 @@ test("Back to card restores stashed text instantly (no slow re-fetch that felt b
   // rebuild only when there's no fresh stash
   assert.match(cb, /else \{\s*\n\s*await rebuildScanCardInPlace/);
 });
-test("groups on Alpha Radar get network-backed runners INSTEAD of the short-term SlimeWire plays", () => {
-  assert.match(serverSource, /if \(groupBotFeatureOn\(e, "alphaRadar"\)\) alphaRadarGroups\.add\(String\(cid\)\)/);
-  assert.match(serverSource, /if \(alphaRadarGroups\.has\(String\(chatId\)\)\) continue;/); // skip the alpha-drop for them
+test("retired Smart Call settings never suppress the normal SlimeWire plays feed", () => {
+  const tick = functionBody(serverSource, "runAlphaDropTick");
+  assert.doesNotMatch(tick, /alphaRadarGroups/);
+  assert.match(tick, /for \(const \[chatId\] of dueGroups\)/);
+  assert.match(tick, /groupBridgeFor\(chatId\)\.announce\("alpha-drop"/);
 });
 
 // ---- Community Snipe: non-custodial group launch snipe (own wallets, no pool, no obfuscation) ----
@@ -3670,17 +3672,16 @@ test("skin-in-the-game callers: a call only verifies if the (opted-in) caller ac
 });
 
 // ---- Signals hub + Exit Radar: sell signals nobody gives, one clean opt-in menu ----
-test("/signals is one opt-in menu (personal radars + group Smart Calls)", () => {
+test("/signals keeps personal DM radars and retires group Smart Calls", () => {
   const menu = functionBody(serverSource, "signalsMenu");
   assert.match(menu, /callback_data: "sig:exit"/);
   assert.match(menu, /callback_data: "sig:alpha"/);
-  assert.match(menu, /callback_data: "sig:galpha"/);        // group alpha toggle (admin)
-  assert.match(menu, /callback_data: "sig:roster"/);        // visible active top-30 roster
-  assert.match(menu, /Smart Calls/);
+  assert.match(menu, /Group Smart Calls retired/);
   assert.match(serverSource, /parseCommandWithArgument\(text, \["signals", "alerts", "radar"\]\)/);
   assert.match(serverSource, /startsWith\("sig:"\)/);
-  // group toggle is admin-gated
-  assert.match(functionBody(serverSource, "handleSignalsCallback"), /isTgChatAdmin\(chatId, userId\)/);
+  const callback = functionBody(serverSource, "handleSignalsCallback");
+  assert.match(callback, /if \(!isDm\)/);
+  assert.match(callback, /Group Smart Calls were retired/);
 });
 test("Smart Calls keeps today's top 30 plus retained proven winners and only retires weak callers after a real sample", () => {
   assert.match(serverSource, /const SMART_CALL_ROSTER_SIZE = 30/);
@@ -3902,7 +3903,7 @@ test("Smart Calls detects only new wallet/post calls and no-ops when no group op
   assert.match(posts, /extractMintsFromText/);
   assert.match(posts, /recordSmartCall/);
 });
-test("Smart Call messages carry website Chart/Quick Buy and verified milestone receipts", () => {
+test("Smart Call runtime is retired without changing the shared Pump stream", () => {
   const record = functionBody(serverSource, "recordSmartCall");
   assert.match(record, /if \(call\)/);                        // one first alert per mint
   assert.ok(record.indexOf("call = state.calls[mint]") < record.lastIndexOf("scanFastTimeout(smartCallCandidateSafety")); // reserve mint before provider await
@@ -3935,12 +3936,10 @@ test("Smart Call messages carry website Chart/Quick Buy and verified milestone r
   assert.match(migrationEvent, /pumpMigrationObservedAt/);
   assert.match(migrationEvent, /call\.lastCheckAt = 0/);
   assert.match(migrationEvent, /smartCallReceiptTick/);
-  assert.match(serverSource, /onMigration: \(entry\) =>/);
+  assert.doesNotMatch(serverSource.slice(0, 2_000), /onMigration: \(entry\) =>/);
   assert.match(pumpPortalStreamSource, /config\.onMigration\(\{ mint, at: now\(\), event \}\)/);
-  assert.match(serverSource, /setTimeout\(\(\) => \{ void smartCallWalletTick\(\); \}, 3_000\)/);
-  assert.match(serverSource, /setInterval\(\(\) => \{ void smartCallWalletTick\(\); \}, 10_000\)/);
-  assert.match(serverSource, /setInterval\(\(\) => \{ void smartCallPostTick\(\); \}, 30_000\)/);
-  assert.match(serverSource, /setInterval\(\(\) => \{ void smartCallReceiptTick\(\); \}, 5 \* 60_000\)/);
+  const boot = functionBody(serverSource, "startGroupBuyBot");
+  assert.doesNotMatch(boot, /smartCallWalletTick|smartCallPostTick|smartCallReceiptTick|readSmartCalls/);
 });
 test("Exit Radar pings take-profit on your OWN open bags when a coin tops — advisory, never auto-sells", () => {
   const poll = functionBody(serverSource, "pollExitRadar");
@@ -3958,7 +3957,8 @@ test("Trench super-menu folds all trench features into the existing organized se
   assert.match(functionBody(serverSource, "groupBotMenuMarkup"), /callback_data: "gb:m:trench"/);
   assert.match(functionBody(serverSource, "groupBotModuleView"), /if \(module === "trench"\) return trenchMenuView\(\)/);
   const trench = functionBody(serverSource, "trenchMenuView");
-  for (const cb of ["gb:go:snipe", "gb:go:room", "gb:go:signals", "gb:go:lb"]) assert.ok(trench.includes(cb), `trench menu → ${cb}`);
+  for (const cb of ["gb:go:snipe", "gb:go:room", "gb:go:lb"]) assert.ok(trench.includes(cb), `trench menu → ${cb}`);
+  assert.doesNotMatch(trench, /gb:go:signals|Smart Calls/);
   assert.doesNotMatch(trench, /gb:go:narrative|gb:go:grad/);
   // Trench + its launchers are member-facing: routed BEFORE the settings admin-gate
   const cb = functionBody(serverSource, "handleGroupBotCallback");
@@ -3972,10 +3972,10 @@ test("Trench super-menu folds all trench features into the existing organized se
   assert.match(trench, /callback_data: "pe:open"/);                 // ⚡ set buy preset in chat
   assert.match(trench, /text: "⚙️ Group Settings \(admins\)", callback_data: "gb:home"/);
   assert.match(trench, /🐸 <b>SlimeWire — the room's toolkit<\/b>/);
-  // Scan card menu reaches community tools and Smart Calls without the unused Narrative entry.
+  // Scan card menu reaches community tools without retired Smart Calls or unused Narrative entries.
   const sm = functionBody(serverSource, "scanMenuKeyboard");
   assert.match(sm, /callback_data: "gb:m:trench"/);
-  assert.match(sm, /callback_data: "gb:go:signals"/);
+  assert.doesNotMatch(sm, /callback_data: "gb:go:signals"/);
   assert.doesNotMatch(sm, /gb:go:narrative|gb:go:grad/);
 });
 test("Narrative Radar: metas are tappable → LIVE coins only (dedup by ticker, drop dust, top MCs)", () => {
@@ -4755,7 +4755,7 @@ test("X growth engine: broadcast-gated proactive posts + receipts + KOL responde
   assert.match(socialCalls, /sourceEligible/);
   assert.match(functionBody(serverSource, "xPostKolConvergence"), /SlimeWire-proven wallet just bought/); // individual measured/backtested wallet
   assert.match(functionBody(serverSource, "xPostKolConvergence"), /independent tracked callers are loading/); // multi-wallet convergence call
-  assert.match(serverSource, /setInterval\(\(\) => \{ void xKolTradeTick\(\); \}, 10_000\)/);          // scheduled near-live
+  assert.doesNotMatch(functionBody(serverSource, "startGroupBuyBot"), /xKolTradeTick/);                 // high-CU wallet watcher retired
   // global anti-spam gate on PROACTIVE posts (replies to tags stay ungated)
   assert.match(serverSource, /function xBroadcastGateOk\(\)/);
   assert.match(functionBody(serverSource, "xAutoCallTick"), /if \(!xBroadcastGateOk\(\)\) return/);
