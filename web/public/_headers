@@ -8,29 +8,6 @@
 /config.js
   Cache-Control: no-store
 
-# Branded full-screen Left4Sol player. Keep the shell fresh when its itch build changes,
-# and permit only the hosted game frame needed by this page.
-/left4sol
-  Cache-Control: no-store, max-age=0, must-revalidate
-  Referrer-Policy: no-referrer
-  Content-Security-Policy: default-src 'none'; frame-src https://html-classic.itch.zone; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'
-  X-Content-Type-Options: nosniff
-/left4sol/
-  Cache-Control: no-store, max-age=0, must-revalidate
-  Referrer-Policy: no-referrer
-  Content-Security-Policy: default-src 'none'; frame-src https://html-classic.itch.zone; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'
-  X-Content-Type-Options: nosniff
-/left4sol/*
-  Cache-Control: no-store, max-age=0, must-revalidate
-  Referrer-Policy: no-referrer
-  Content-Security-Policy: default-src 'none'; frame-src https://html-classic.itch.zone; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'
-  X-Content-Type-Options: nosniff
-/left4sol.html
-  Cache-Control: no-store, max-age=0, must-revalidate
-  Referrer-Policy: no-referrer
-  Content-Security-Policy: default-src 'none'; frame-src https://html-classic.itch.zone; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'
-  X-Content-Type-Options: nosniff
-
 # X DM Trade Pad routes carry a private bootstrap token and scoped trading
 # session. Never let a browser, CDN, or intermediary cache either document.
 /x-dm-menu
