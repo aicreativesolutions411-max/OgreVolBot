@@ -62,9 +62,7 @@ test("/left4sol loads the itch game immediately inside a full-screen SlimeWire p
   assert.match(route, /requestUrl\.pathname\.startsWith\("\/left4sol\/"\)/);
   assert.match(route, /serveStaticHtmlPage\(response, "left4sol\.html", "no-store, max-age=0"/);
   assert.doesNotMatch(route, /Location:/);
-  assert.match(redirects, /^\/left4sol\s+\/left4sol\.html\s+200$/m);
-  assert.match(redirects, /^\/left4sol\/\s+\/left4sol\.html\s+200$/m);
-  assert.match(redirects, /^\/left4sol\/\*\s+\/left4sol\.html\s+200$/m);
+  assert.doesNotMatch(redirects, /^\/left4sol(?:\/\*)?\s+/m, "the real HTML file should use the host's native pretty URL without a rewrite loop");
   assert.ok(left4solHtml.includes(`src="${player}"`));
   assert.match(left4solHtml, /viewport-fit=cover/);
   assert.match(left4solHtml, /min-height:\s*100dvh/);
