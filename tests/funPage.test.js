@@ -17,6 +17,7 @@ const desktopHtml = fs.readFileSync(new URL("../web/public/index.html", import.m
 const desktopAliasHtml = fs.readFileSync(new URL("../web/public/gg.html", import.meta.url), "utf8");
 const chartLab = fs.readFileSync(new URL("../web/public/chart-lab.html", import.meta.url), "utf8");
 const publicHeaders = fs.readFileSync(new URL("../web/public/_headers", import.meta.url), "utf8");
+const left4solHtml = fs.readFileSync(new URL("../web/public/left4sol.html", import.meta.url), "utf8");
 
 function walletMarketHelpers() {
   const start = js.indexOf("function marketNumber(...values)");
@@ -52,19 +53,25 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
-test("/left4sol skips the itch project chrome and redirects straight to the HTML5 game", () => {
+test("/left4sol hands desktop and mobile directly to the raw full-viewport game without an itch referrer", () => {
   const player = "https://html-classic.itch.zone/html/18456748-1846134/index.html?v=1785516296";
   const routeStart = server.indexOf('requestUrl.pathname === "/left4sol"');
   assert.ok(routeStart >= 0, "the Node origin should recognize the branded game route");
   const route = server.slice(routeStart - 120, routeStart + 520);
   assert.match(route, /request\.method === "GET" \|\| request\.method === "HEAD"/);
   assert.match(route, /requestUrl\.pathname\.startsWith\("\/left4sol\/"\)/);
-  assert.ok(route.includes(`Location: "${player}"`));
+  assert.match(route, /serveStaticHtmlPage\(response, "left4sol\.html", "no-store, max-age=0", \{/);
   assert.match(route, /"Cache-Control": "no-store, max-age=0"/);
-  assert.match(redirects, /^\/left4sol\s+https:\/\/html-classic\.itch\.zone\/html\/18456748-1846134\/index\.html\?v=1785516296\s+302$/m);
-  assert.match(redirects, /^\/left4sol\/\s+https:\/\/html-classic\.itch\.zone\/html\/18456748-1846134\/index\.html\?v=1785516296\s+302$/m);
-  assert.match(redirects, /^\/left4sol\/\*\s+https:\/\/html-classic\.itch\.zone\/html\/18456748-1846134\/index\.html\?v=1785516296\s+302$/m);
-  assert.doesNotMatch(route, /left4cooked\.itch\.io\/left4cooked/);
+  assert.match(route, /"Referrer-Policy": "no-referrer"/);
+  assert.match(redirects, /^\/left4sol\s+\/left4sol\.html\s+200$/m);
+  assert.match(redirects, /^\/left4sol\/\s+\/left4sol\.html\s+200$/m);
+  assert.match(redirects, /^\/left4sol\/\*\s+\/left4sol\.html\s+200$/m);
+  assert.match(left4solHtml, new RegExp(player.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(left4solHtml, /<meta name="referrer" content="no-referrer">/);
+  assert.match(left4solHtml, /location\.replace\(gameUrl\)/);
+  assert.doesNotMatch(left4solHtml, /<iframe/i);
+  assert.match(left4solHtml, /rel="noreferrer"/);
+  assert.match(publicHeaders, /\/left4sol[\s\S]{0,160}Referrer-Policy: no-referrer/);
 });
 
 test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH trading", () => {
@@ -1269,20 +1276,27 @@ test("wallet manager batch-funds exact allocations and can sell or consolidate s
 });
 
 test("wallet manager shows SOL, priced coin positions, and total value for every wallet", () => {
+  assert.match(js, /function walletPositionHolding\(position = \{\}, wallet = \{\}\)/);
   assert.match(js, /function walletPositionAssets\(wallet = \{\}\)/);
-  assert.match(js, /Array\.isArray\(wallet\.tokens\)/);
-  assert.match(js, /totalValueSol \* Math\.min\(1, quantity \/ totalQuantity\)/);
+  assert.match(js, /Array\.isArray\(position\.walletPositions\)/);
+  assert.match(js, /totalValueSol \* share/);
+  assert.match(js, /allocationPct:[\s\S]*asset\.valueSol \/ totalSol \* 100/);
   for (const marker of ["wallet-value-strip", "Coin positions", "No coin positions in this wallet", "SOL", "COINS", "TOTAL"]) {
     assert.match(js + css, new RegExp(marker));
   }
   assert.match(js, /await loadValuedPositions\(state\.positionLoadVersion\)/);
 });
 
-test("positions are grouped by wallet with scoped 25, 50, 100, and custom sells", () => {
-  for (const marker of ["fun-wallet-position-group", "data-fun-position-sell", "data-fun-position-custom", "data-fun-custom-sell-percent"]) {
+test("positions are grouped by wallet with scoped 25, 50, 75, 100, and custom sells on both chains", () => {
+  for (const marker of ["walletRouteSolanaPositionGroup", "walletRouteRobinhoodGroups", "fun-wallet-position-group", "data-fun-position-sell", "data-fun-position-custom", "data-fun-custom-sell-percent", "CURRENT ALLOCATION", "BAG SHARE", "No token positions", "Send SOL"]) {
     assert.match(js + css, new RegExp(marker));
   }
+  assert.match(js, /\[25, 50, 75, 100\]\.map/);
+  assert.match(js, /data-fun-position-wallet-index=/);
+  assert.match(js, /data-fun-position-chain="robinhood"/);
   assert.match(js, /walletPublicKeys: \[walletPublicKey\]/);
+  assert.match(js, /request\("\/api\/web\/rh\/wallets"/);
+  assert.match(js, /post\("\/api\/web\/rh\/bundle\/sell"/);
   assert.match(js, /Other wallets stay untouched/);
   assert.match(terminalApp, /function walletPositionGroups\(\)/);
   assert.match(terminalApp, /data-position-sell-wallet=/);
@@ -1291,7 +1305,7 @@ test("positions are grouped by wallet with scoped 25, 50, 100, and custom sells"
   assert.match(server, /walletPublicKey: holding\.walletPublicKey/);
 });
 
-test("wallet holdings show real PnL and send Solana or Robinhood tokens without selling", () => {
+test("wallet holdings can send Solana or Robinhood tokens and SOL from the exact selected wallet", () => {
   assert.match(server, /pathname === "\/api\/web\/wallets\/send-token"/);
   assert.match(server, /runIdempotentMoneyOp\(\s*"web-send-token"/);
   assert.match(server, /createTransferCheckedInstruction\(/);
@@ -1299,8 +1313,18 @@ test("wallet holdings show real PnL and send Solana or Robinhood tokens without 
   assert.match(server, /runIdempotentMoneyOp\(\s*"web-rh-send-token"/);
   assert.match(rhChain, /export async function rhTransferErc20/);
   assert.match(js, /data-fun-send-token=/);
+  assert.match(js, /data-fun-send-wallet-index=/);
   assert.match(js, /data-review-token-send/);
-  assert.match(js, /position-holding-pnl/);
+  assert.match(js, /\[25, 50, 75, 100\]\.map\(\(percent\) => `<button[^`]+data-set-send-token-percent/);
+  assert.match(js, /data-send-sol-wallet-index=/);
+  assert.match(js, /data-send-sol-wallet-public-key=/);
+  assert.match(js, /sourcePublicKey: pending\.sourcePublicKey/);
+  assert.match(js, /post\("\/api\/web\/cash\/send"/);
+  assert.match(js, /data-send-sol-pin/);
+  assert.match(js, /noRetry: true/);
+  assert.match(server, /async function cashSendAllSolPlan[\s\S]{0,700}assertFrozenManagedWallet\([\s\S]{0,250}firstString\(body\.sourcePublicKey, body\.fromWalletPublicKey, body\.walletPublicKey\)/);
+  assert.match(server, /async function webCashSendSolCore[\s\S]{0,700}assertFrozenManagedWallet\([\s\S]{0,250}firstString\(body\.sourcePublicKey, body\.fromWalletPublicKey, body\.walletPublicKey\)/);
+  assert.match(server, /async function webCashSend[\s\S]{0,1000}enforceCashSpendSecurity\(userId, sendBody, existingStore\)/);
   assert.match(js, /loadFunRhPositions/);
   assert.match(terminalApp, /data-position-send-token=/);
   assert.match(terminalApp, /function tokenSendDialog/);

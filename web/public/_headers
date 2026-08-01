@@ -8,6 +8,15 @@
 /config.js
   Cache-Control: no-store
 
+# The branded route hands off without a referrer so itch serves the raw
+# full-viewport Unity build instead of its project page or hotlink warning.
+/left4sol
+  Cache-Control: no-store, max-age=0
+  Referrer-Policy: no-referrer
+/left4sol.html
+  Cache-Control: no-store, max-age=0
+  Referrer-Policy: no-referrer
+
 # X DM Trade Pad routes carry a private bootstrap token and scoped trading
 # session. Never let a browser, CDN, or intermediary cache either document.
 /x-dm-menu

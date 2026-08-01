@@ -73,6 +73,10 @@
     coinCalls: [],
     positions: [],
     rhWalletPosition: null,
+    rhWalletPositions: new Map(),
+    rhWalletPositionsStatus: "idle",
+    rhWalletPositionsLoadedAt: 0,
+    rhWalletPositionsPromise: null,
     positionValuePromise: null,
     positionValueForceRequested: false,
     positionLoadVersion: 0,
@@ -422,6 +426,10 @@
     state.wallets = [];
     state.positions = [];
     state.rhWalletPosition = null;
+    state.rhWalletPositions = new Map();
+    state.rhWalletPositionsStatus = "idle";
+    state.rhWalletPositionsLoadedAt = 0;
+    state.rhWalletPositionsPromise = null;
     state.activeWallet = null;
     state.portfolioStatus = "unavailable";
     state.portfolioUpdatedAt = 0;
@@ -1742,6 +1750,11 @@
         if (version === state.positionLoadVersion && state.profileTab === "positions") void loadValuedPositions(version, { force: false });
       }, 900);
       void loadFunRhPositions();
+      if (IS_WALLET_ROUTE) {
+        window.setTimeout(() => {
+          if (version === state.positionLoadVersion && state.profileTab === "positions") void loadFunRhWalletPositions();
+        }, 1_200);
+      }
     }
     else if (state.profileTab === "activity") loadWalletActivity();
     else if (state.profileTab === "created") loadCreatedCoins();
@@ -2214,22 +2227,114 @@
       toast(result.ok ? "Trade alerts enabled on this device" : "Could not enable alerts", !result.ok);
     } finally { button.disabled = false; }
   }
+  function walletHoldingPercentLabel(value) {
+    const percent = positionNumber(value);
+    if (percent == null || percent < 0) return "Updating";
+    if (percent > 0 && percent < 0.1) return "<0.1%";
+    return `${percent.toFixed(percent >= 10 ? 1 : 2)}%`;
+  }
+
+  function walletRouteSellButtons(asset = {}, wallet = {}, chain = "solana") {
+    const tokenMint = String(asset.tokenMint || asset.address || "").trim();
+    const symbol = String(asset.symbol || short(tokenMint));
+    const chainAttrs = chain === "robinhood" ? ' data-fun-position-chain="robinhood"' : "";
+    const common = `data-fun-position-wallet="${escapeHtml(wallet.publicKey || "")}" data-fun-position-wallet-index="${escapeHtml(String(wallet.index || ""))}" data-fun-position-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}" data-fun-position-symbol="${escapeHtml(symbol)}"${chainAttrs}`;
+    return `<div class="fun-position-sell-grid wallet-route-sell-presets">
+      ${[25, 50, 75, 100].map((percent) => `<button type="button" class="${percent === 100 ? "danger" : ""}" data-fun-position-sell="${escapeHtml(tokenMint)}" data-fun-position-percent="${percent}" ${common}>${percent}%</button>`).join("")}
+    </div><div class="wallet-route-position-secondary">
+      <button type="button" data-fun-position-custom="${escapeHtml(tokenMint)}" ${common}>Custom sell</button>
+      <button type="button" data-fun-send-token="${escapeHtml(tokenMint)}" ${chain === "robinhood" ? 'data-fun-send-chain="robinhood"' : ""} data-fun-send-wallet-index="${escapeHtml(String(wallet.index || ""))}" data-fun-send-wallet="${escapeHtml(wallet.publicKey || "")}" data-fun-send-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}" data-fun-send-symbol="${escapeHtml(symbol)}" data-fun-send-balance="${escapeHtml(String(asset.quantity ?? asset.uiAmount ?? 0))}">Send tokens</button>
+    </div>`;
+  }
+
+  function walletRouteSolanaPositionGroup(wallet = {}, summary = walletAssetSummary(wallet)) {
+    const coinValue = summary.coinsSol > 0
+      ? `${formatPositionSol(summary.coinsSol)} SOL`
+      : (summary.hasPendingValue ? "Pricing..." : "0 SOL");
+    const rows = summary.assets.length ? summary.assets.map((asset) => `<article class="fun-wallet-position-row wallet-route-position-row">
+      <button class="fun-position-coin" type="button" data-open-coin="${escapeHtml(asset.tokenMint)}" data-chain-kind="sol">
+        <img ${coinImageAttrs(asset)} alt="">
+        <span><b>${escapeHtml(asset.symbol || short(asset.tokenMint))}</b><small>${escapeHtml(formatTokenQuantity(asset.quantity))} tokens</small></span>
+        <strong><span>${asset.valueSol == null ? "Pricing..." : `${escapeHtml(formatPositionSol(asset.valueSol))} SOL`}</span><small>Current value</small></strong>
+      </button>
+      <div class="wallet-position-metrics"><span><small>BAG SHARE</small><b>${escapeHtml(walletHoldingPercentLabel(asset.bagSharePct))}</b></span><span><small>CURRENT ALLOCATION</small><b>${escapeHtml(walletHoldingPercentLabel(asset.allocationPct))}</b></span></div>
+      ${walletRouteSellButtons(asset, wallet, "solana")}
+    </article>`).join("") : '<div class="wallet-route-position-empty"><b>No token positions</b><span>SOL is available to send from this wallet.</span></div>';
+    return `<section class="fun-wallet-position-group wallet-route-position-group"><header><span><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}</b><button class="fun-wallet-group-address" type="button" data-copy-wallet-address="${escapeHtml(wallet.publicKey)}">${escapeHtml(short(wallet.publicKey))} · Copy</button></span><div class="wallet-position-header-actions"><span class="wallet-position-header-balance"><strong>${escapeHtml(formatPositionSol(summary.liquidSol))} SOL</strong><small>${escapeHtml(coinValue)} in coins</small></span><button type="button" data-send-sol data-send-sol-wallet-index="${escapeHtml(String(wallet.index))}" data-send-sol-wallet-public-key="${escapeHtml(wallet.publicKey)}">Send SOL</button></div></header>${rows}</section>`;
+  }
+
+  function currentRhWalletPositionRows() {
+    const rows = new Map();
+    for (const row of state.rhWalletPositions instanceof Map ? state.rhWalletPositions.values() : []) {
+      const walletPublicKey = String(row?.wallet || "").trim();
+      if (walletPublicKey) rows.set(walletPublicKey, row);
+    }
+    const active = activeWallet();
+    const detailed = state.rhWalletPosition;
+    if (active && detailed && Number(detailed.walletIndex) === Number(active.index)) {
+      const current = rows.get(String(active.publicKey || "")) || {};
+      const detailByAddress = new Map((detailed.tokens || []).map((token) => [String(token.address || "").toLowerCase(), token]));
+      const mergedTokens = [...(current.tokens || [])].map((token) => ({ ...token, ...(detailByAddress.get(String(token.address || "").toLowerCase()) || {}) }));
+      for (const token of detailed.tokens || []) {
+        if (!mergedTokens.some((row) => String(row.address || "").toLowerCase() === String(token.address || "").toLowerCase())) mergedTokens.push(token);
+      }
+      rows.set(String(active.publicKey || ""), { ...current, ...detailed, wallet: active.publicKey, label: active.label, tokens: mergedTokens });
+    }
+    return rows;
+  }
+
+  function walletRouteRobinhoodGroups() {
+    const byWallet = currentRhWalletPositionRows();
+    const groups = state.wallets.map((wallet) => {
+      const row = byWallet.get(String(wallet.publicKey || ""));
+      const tokens = (row?.tokens || []).filter((token) => Number(token.uiAmount || 0) > 0 && !tokenIsHidden(token.address));
+      return row && tokens.length ? { wallet, row, tokens } : null;
+    }).filter(Boolean);
+    const totalByToken = new Map();
+    if (state.rhWalletPositionsStatus === "ready") {
+      for (const group of groups) for (const token of group.tokens) {
+        const key = String(token.address || "").toLowerCase();
+        totalByToken.set(key, (totalByToken.get(key) || 0) + Math.max(0, Number(token.uiAmount) || 0));
+      }
+    }
+    return groups.map(({ wallet, row, tokens }) => {
+      const tokenRows = tokens.map((token) => {
+        const quantity = Math.max(0, Number(token.uiAmount) || 0);
+        const total = totalByToken.get(String(token.address || "").toLowerCase()) || 0;
+        const asset = { ...token, tokenMint: token.address, quantity, bagSharePct: total > 0 ? quantity / total * 100 : null };
+        return `<article class="fun-wallet-position-row wallet-route-position-row">
+          <button class="fun-position-coin" type="button" data-open-coin="${escapeHtml(token.address)}" data-chain-kind="robinhood">
+            <img ${coinImageAttrs({ ...token, chain: "robinhood", tokenMint: token.address, imageUrl: token.iconUrl })} alt="">
+            <span><b>${escapeHtml(token.symbol || short(token.address))}</b><small>${escapeHtml(formatTokenQuantity(quantity))} tokens · RH</small></span>
+            <strong><span>${token.valueUsd == null ? "Live at review" : escapeHtml(formatWalletUsd(token.valueUsd))}</span><small>Current value</small></strong>
+          </button>
+          <div class="wallet-position-metrics one"><span><small>BAG SHARE</small><b>${escapeHtml(walletHoldingPercentLabel(asset.bagSharePct))}</b></span></div>
+          ${walletRouteSellButtons(asset, wallet, "robinhood")}
+        </article>`;
+      }).join("");
+      return `<section class="fun-wallet-position-group wallet-route-position-group robinhood"><header><span><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)} · Robinhood</b><button class="fun-wallet-group-address" type="button" data-copy-wallet-address="${escapeHtml(row.address || wallet.rhAddress || "")}">${escapeHtml(short(row.address || wallet.rhAddress || ""))} · Copy</button></span><div class="wallet-position-header-actions"><strong>${escapeHtml(String(row.eth || wallet.rhEth || "0"))} ETH</strong></div></header>${tokenRows}</section>`;
+    }).join("");
+  }
+
   function renderWalletPositions() {
     const panel = $("[data-profile-panel]");
     if (IS_WALLET_ROUTE) {
       const wallet = activeWallet(), summary = wallet ? walletAssetSummary(wallet) : null;
       if (!wallet || !summary) { panel.innerHTML = emptyState("Your wallet starts here", "Create or restore a wallet, then fund it with SOL."); return; }
       const solUsd = state.solUsd > 0 ? summary.liquidSol * state.solUsd : null;
-      const tokenRows = summary.assets.map((asset) => {
-        const pnl = positionOpenPnl(asset) == null ? null : positionPercent(asset.openPnlPercent), pnlClass = pnl == null ? "" : pnl >= 0 ? "up" : "down";
-        return `<button class="wallet-route-asset-row" type="button" data-open-coin="${escapeHtml(asset.tokenMint)}" data-chain-kind="sol"><img ${coinImageAttrs(asset)} alt=""><span><b>${escapeHtml(asset.symbol || short(asset.tokenMint))}</b><small>${escapeHtml(formatTokenQuantity(asset.quantity))} tokens</small></span><strong>${asset.valueSol == null ? "Pricing…" : `${escapeHtml(formatPositionSol(asset.valueSol))} SOL`}<small class="${pnlClass}">${pnl == null ? "PnL —" : escapeHtml(formatPct(pnl))}</small></strong><i>›</i></button>`;
-      }).join("");
-      const rh = state.rhWalletPosition;
-      const rhRows = rh && Number(rh.walletIndex) === Number(wallet.index) ? (rh.tokens || []).filter((token) => Number(token.uiAmount || 0) > 0 && !tokenIsHidden(token.address)).map((token) => {
-        const pnl = positionNumber(token.pnlPercent), pnlClass = pnl == null ? "" : pnl >= 0 ? "up" : "down";
-        return `<button class="wallet-route-asset-row" type="button" data-open-coin="${escapeHtml(token.address)}" data-chain-kind="robinhood"><img ${coinImageAttrs({ ...token, chain: "robinhood", tokenMint: token.address, imageUrl: token.iconUrl })} alt=""><span><b>${escapeHtml(token.symbol || short(token.address))}</b><small>${escapeHtml(formatTokenQuantity(token.uiAmount))} tokens · RH</small></span><strong>${token.valueUsd == null ? "Pricing…" : escapeHtml(formatWalletUsd(token.valueUsd))}<small class="${pnlClass}">${pnl == null ? "PnL —" : escapeHtml(formatPct(pnl))}</small></strong><i>›</i></button>`;
-      }).join("") : "";
-      panel.innerHTML = `<div class="wallet-assets-head"><h2>Assets</h2><button type="button" data-manage-wallets>Manage wallets</button></div><section class="wallet-route-assets"><button class="wallet-route-asset-row native" type="button" data-receive>${nativeAssetIcon("sol")}<span><b>SOL</b><small>Solana</small></span><strong>${escapeHtml(formatPositionSol(summary.liquidSol))} SOL<small>${solUsd == null ? "Tap to receive" : escapeHtml(formatWalletUsd(solUsd))}</small></strong><em>›</em></button>${wallet.rhAddress ? `<button class="wallet-route-asset-row native" type="button" data-rh-wallet-tools="${wallet.index}">${nativeAssetIcon("eth")}<span><b>ETH</b><small>Robinhood Chain</small></span><strong>${wallet.rhEth == null ? "Loading…" : `${escapeHtml(Number(wallet.rhEth).toFixed(6))} ETH`}<small>${wallet.rhEth != null && state.rhEthUsd > 0 ? escapeHtml(formatWalletUsd(Number(wallet.rhEth) * state.rhEthUsd)) : "Manage ETH"}</small></strong><em>›</em></button>` : ""}${tokenRows}${rhRows}</section><div class="wallet-extra-actions"><button type="button" data-season-open>Season wallet</button><button type="button" data-manage-wallets>Backups &amp; settings</button></div>`;
+      const solanaGroups = state.wallets.map((item) => walletRouteSolanaPositionGroup(item)).filter(Boolean).join("");
+      const robinhoodGroups = walletRouteRobinhoodGroups();
+      const rhStatus = state.rhWalletPositionsStatus === "loading"
+        ? '<div class="wallet-position-loading">Loading Robinhood wallet positions...</div>'
+        : state.rhWalletPositionsStatus === "error"
+          ? '<button class="wallet-position-load" type="button" data-load-rh-wallet-positions>Retry Robinhood positions</button>'
+          : state.rhWalletPositionsStatus === "idle"
+            ? '<button class="wallet-position-load" type="button" data-load-rh-wallet-positions>Load Robinhood positions</button>'
+            : "";
+      const noPositions = !solanaGroups && !robinhoodGroups && state.rhWalletPositionsStatus === "ready"
+        ? '<div class="wallet-position-loading">No coin positions in your saved wallets.</div>'
+        : "";
+      panel.innerHTML = `<div class="wallet-assets-head"><h2>Active wallet</h2><button type="button" data-manage-wallets>Manage wallets</button></div><section class="wallet-route-assets"><button class="wallet-route-asset-row native" type="button" data-receive>${nativeAssetIcon("sol")}<span><b>SOL</b><small>Solana</small></span><strong>${escapeHtml(formatPositionSol(summary.liquidSol))} SOL<small>${solUsd == null ? "Tap to receive" : escapeHtml(formatWalletUsd(solUsd))}</small></strong><em>›</em></button>${wallet.rhAddress ? `<button class="wallet-route-asset-row native" type="button" data-rh-wallet-tools="${wallet.index}">${nativeAssetIcon("eth")}<span><b>ETH</b><small>Robinhood Chain</small></span><strong>${wallet.rhEth == null ? "Loading…" : `${escapeHtml(Number(wallet.rhEth).toFixed(6))} ETH`}<small>${wallet.rhEth != null && state.rhEthUsd > 0 ? escapeHtml(formatWalletUsd(Number(wallet.rhEth) * state.rhEthUsd)) : "Manage ETH"}</small></strong><em>›</em></button>` : ""}</section><div class="wallet-positions-heading"><div><span>ALL SAVED WALLETS</span><h2>Coin positions</h2></div><small>Bag share is your share of that coin. Current allocation uses fully priced Solana assets only.</small></div><div class="wallet-route-position-groups">${solanaGroups}${robinhoodGroups}${rhStatus}${noPositions}</div><div class="wallet-extra-actions"><button type="button" data-season-open>Season wallet</button><button type="button" data-manage-wallets>Backups &amp; settings</button></div>`;
       return;
     }
     const groups = state.wallets.map((wallet) => ({ wallet, summary: walletAssetSummary(wallet) })).filter((group) => group.summary.assets.length);
@@ -2285,19 +2390,51 @@
     return state.rhWalletPosition;
   }
 
+  async function loadFunRhWalletPositions(force = false) {
+    if (!state.token || !state.confirmedUserId || !state.wallets.length) return state.rhWalletPositions;
+    const fresh = state.rhWalletPositionsStatus === "ready" && Date.now() - state.rhWalletPositionsLoadedAt < 60_000;
+    if (!force && fresh) return state.rhWalletPositions;
+    if (state.rhWalletPositionsPromise) return state.rhWalletPositionsPromise;
+    const accountScope = authenticatedAccountScope();
+    state.rhWalletPositionsStatus = "loading";
+    if (state.view === "wallet" && state.profileTab === "positions") renderWalletPositions();
+    const refresh = (async () => {
+      const result = await request("/api/web/rh/wallets", { timeout: 18_000 });
+      if (!accountScopeMatches(accountScope)) return state.rhWalletPositions;
+      if (!result.ok || !result.data?.ok) {
+        state.rhWalletPositionsStatus = "error";
+        return state.rhWalletPositions;
+      }
+      state.rhWalletPositions = new Map((result.data.wallets || []).map((row) => [Number(row.walletIndex), row]));
+      state.rhWalletPositionsLoadedAt = Date.now();
+      state.rhWalletPositionsStatus = "ready";
+      return state.rhWalletPositions;
+    })();
+    state.rhWalletPositionsPromise = refresh;
+    try { return await refresh; }
+    finally {
+      if (state.rhWalletPositionsPromise === refresh) state.rhWalletPositionsPromise = null;
+      if (accountScopeMatches(accountScope) && state.view === "wallet" && state.profileTab === "positions") renderWalletPositions();
+    }
+  }
+
   function openFunWalletPositionCustom(button) {
     const mint = String(button.dataset.funPositionCustom || "");
     const walletPublicKey = String(button.dataset.funPositionWallet || "");
+    const walletIndex = Number(button.dataset.funPositionWalletIndex || 0);
     const walletLabel = String(button.dataset.funPositionWalletLabel || "Wallet");
     const symbol = String(button.dataset.funPositionSymbol || short(mint));
-    openSheet(`<div class="sheet-title"><img src="${escapeHtml(mascot(mint))}" alt=""><div><h2>Custom sell</h2><p>${escapeHtml(symbol)} · ${escapeHtml(walletLabel)}</p></div></div><div class="field"><label>Percent to sell from this wallet</label><input data-fun-custom-sell-percent inputmode="numeric" type="number" min="1" max="100" step="1" value="100"><div class="amount-chips">${[10, 25, 50, 75, 100].map((percent) => `<button type="button" data-fun-custom-percent="${percent}">${percent}%</button>`).join("")}</div></div><button class="submit-trade sell" type="button" data-fun-position-sell="${escapeHtml(mint)}" data-fun-position-percent="custom" data-fun-position-wallet="${escapeHtml(walletPublicKey)}" data-fun-position-wallet-label="${escapeHtml(walletLabel)}">Review custom sell</button><p class="fineprint">Only this wallet is sold. Your other wallets holding ${escapeHtml(symbol)} stay untouched.</p>`);
+    const chain = button.dataset.funPositionChain === "robinhood" ? "robinhood" : "solana";
+    openSheet(`<div class="sheet-title"><img src="${escapeHtml(mascot(mint))}" alt=""><div><h2>Custom sell</h2><p>${escapeHtml(symbol)} · ${escapeHtml(walletLabel)}</p></div></div><div class="field"><label>Percent to sell from this wallet</label><input data-fun-custom-sell-percent inputmode="numeric" type="number" min="1" max="100" step="1" value="100"><div class="amount-chips">${[10, 25, 50, 75, 100].map((percent) => `<button type="button" data-fun-custom-percent="${percent}">${percent}%</button>`).join("")}</div></div><button class="submit-trade sell" type="button" data-fun-position-sell="${escapeHtml(mint)}" data-fun-position-percent="custom" data-fun-position-wallet="${escapeHtml(walletPublicKey)}" data-fun-position-wallet-index="${escapeHtml(String(walletIndex || ""))}" data-fun-position-wallet-label="${escapeHtml(walletLabel)}" ${chain === "robinhood" ? 'data-fun-position-chain="robinhood"' : ""}>Review custom sell</button><p class="fineprint">Only this wallet is sold. Your other wallets holding ${escapeHtml(symbol)} stay untouched.</p>`);
   }
 
   async function sellFunWalletPosition(button) {
     if (!(await ensureTradeReady())) return;
     const tokenMint = String(button.dataset.funPositionSell || "").trim();
     const walletPublicKey = String(button.dataset.funPositionWallet || "").trim();
+    const walletIndex = Number(button.dataset.funPositionWalletIndex || state.wallets.find((entry) => String(entry.publicKey || "") === walletPublicKey)?.index || 0);
     const walletLabel = String(button.dataset.funPositionWalletLabel || "Wallet").trim();
+    const chain = button.dataset.funPositionChain === "robinhood" ? "robinhood" : "solana";
     const rawPercent = button.dataset.funPositionPercent === "custom" ? $("[data-fun-custom-sell-percent]")?.value : button.dataset.funPositionPercent;
     const percent = Number.parseInt(String(rawPercent || ""), 10);
     if (!tokenMint || !walletPublicKey || !Number.isInteger(percent) || percent < 1 || percent > 100) { toast("Choose a sell percent from 1 to 100.", true); return; }
@@ -2305,12 +2442,24 @@
     button.disabled = true;
     const oldText = button.textContent;
     button.textContent = "Selling…";
-    const result = await post("/api/web/bundle/sell", { tokenMint, walletIndexes: [], walletPublicKeys: [walletPublicKey], percent, slippageBps: "400", manualSellAttemptId: attemptId("fun-wallet-sell") });
-    if (result.ok && result.data?.ok && Number(result.data.bundle?.successCount || 0) > 0) {
+    const result = chain === "robinhood"
+      ? await post("/api/web/rh/bundle/sell", { tokenAddress: tokenMint, walletIndexes: [], walletPublicKeys: [walletPublicKey], percent, tradeAttemptId: attemptId("fun-wallet-rh-sell") }, { timeout: 90_000 })
+      : await post("/api/web/bundle/sell", { tokenMint, walletIndexes: [], walletPublicKeys: [walletPublicKey], percent, slippageBps: "400", manualSellAttemptId: attemptId("fun-wallet-sell") });
+    const successCount = chain === "robinhood"
+      ? (result.data?.rows || []).filter((row) => row.ok).length
+      : Number(result.data?.bundle?.successCount || 0);
+    if (result.ok && result.data?.ok && successCount > 0) {
+      if (chain === "robinhood") {
+        const coin = { tokenMint, address: tokenMint, chain: "robinhood", symbol: button.dataset.funPositionSymbol || short(tokenMint) };
+        toast(`Sell submitted from ${walletLabel}`);
+        openSheet(bundleTradeReceiptHtml(bundleTradeReceiptData(result.data, coin, "robinhood")));
+        await Promise.all([loadFunRhWalletPositions(true), Number(activeWallet()?.index) === walletIndex ? loadFunRhPositions(true) : Promise.resolve(null)]);
+        renderWalletPositions();
+        return;
+      }
       const row = result.data.bundle.results?.find((entry) => entry.ok) || {};
       const position = state.positions.find((entry) => String(entry.tokenMint || "").toLowerCase() === tokenMint.toLowerCase()) || {};
       const receiptCoin = { ...position, tokenMint, symbol: position.symbol || short(tokenMint) };
-      const walletIndex = state.wallets.find((entry) => String(entry.publicKey || "") === walletPublicKey)?.index || 0;
       const receipt = tradeReceiptData(
         { ...row, status: result.data.bundle.status, recordError: result.data.bundle.recordError },
         { chain: "solana", side: "sell", body: { walletPublicKey }, coin: { key: tokenMint, symbol: receiptCoin.symbol } },
@@ -2322,7 +2471,9 @@
       await loadPortfolioSnapshot({ force: true });
       renderWalletPositions();
     } else {
-      const failure = result.data?.bundle?.results?.find((row) => !row.ok)?.message;
+      const failure = chain === "robinhood"
+        ? result.data?.rows?.find((row) => !row.ok)?.error
+        : result.data?.bundle?.results?.find((row) => !row.ok)?.message;
       toast(failure || result.data?.message || result.data?.error || "Sell failed", true);
       button.disabled = false;
       button.textContent = oldText;
@@ -2352,7 +2503,7 @@
       percent: 100, amount: tokenSendDisplayAmount(balance, 100), destination: "", sendAttemptId: ""
     };
     openSheet(`<div class="sheet-title"><img src="${escapeHtml(coinImage({ tokenMint }))}" alt=""><div><h2>Send ${escapeHtml(symbol)}</h2><p>${escapeHtml(walletLabel)} · ${escapeHtml(formatTokenQuantity(balance))} available</p></div></div>
-      <div class="field"><label>Amount</label><input data-send-token-amount inputmode="decimal" value="${escapeHtml(state.pendingTokenSend.amount)}" data-send-token-percent="100"><div class="amount-chips">${[25, 50, 100].map((percent) => `<button type="button" class="${percent === 100 ? "active" : ""}" data-set-send-token-percent="${percent}">${percent}%</button>`).join("")}</div></div>
+      <div class="field"><label>Amount</label><input data-send-token-amount inputmode="decimal" value="${escapeHtml(state.pendingTokenSend.amount)}" data-send-token-percent="100"><div class="amount-chips">${[25, 50, 75, 100].map((percent) => `<button type="button" class="${percent === 100 ? "active" : ""}" data-set-send-token-percent="${percent}">${percent}%</button>`).join("")}</div></div>
       <div class="field"><label>Destination ${chain === "robinhood" ? "Robinhood Chain" : "Solana"} wallet</label><input data-send-token-destination autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${chain === "robinhood" ? "0x…" : "Paste wallet address"}"></div>
       <button class="submit-trade" type="button" data-review-token-send>Review send</button>
       <p class="fineprint">This transfers ${escapeHtml(symbol)} as tokens. It does not sell or swap them. On-chain transfers cannot be reversed.</p>`);
@@ -2408,7 +2559,11 @@
     }
     const sent = result.data.transfer?.amount || pending.amount;
     state.pendingTokenSend = null;
-    await Promise.all([loadPortfolioSnapshot({ force: true }), isRh ? loadFunRhPositions(true) : Promise.resolve(null)]);
+    await Promise.all([
+      loadPortfolioSnapshot({ force: true }),
+      isRh ? loadFunRhPositions(true) : Promise.resolve(null),
+      isRh && IS_WALLET_ROUTE ? loadFunRhWalletPositions(true) : Promise.resolve(null)
+    ]);
     renderWalletHero();
     renderWalletPositions();
     closeSheet();
@@ -3310,32 +3465,47 @@
     downloadText(result.data.accountBackup.filename, result.data.accountBackup.text);
     return true;
   }
+  function walletPositionHolding(position = {}, wallet = {}) {
+    const walletPublicKey = String(wallet.publicKey || "").trim();
+    if (!walletPublicKey) return null;
+    const holding = (Array.isArray(position.walletPositions) ? position.walletPositions : []).find((row) => (
+      String(row?.walletPublicKey || "").trim() === walletPublicKey
+    ));
+    if (!holding) return null;
+    const quantity = positionNumber(holding.uiAmountNum ?? holding.uiAmount);
+    return quantity != null && quantity > 0 ? { ...holding, quantity } : null;
+  }
   function walletPositionAssets(wallet = {}) {
-    const quantities = new Map();
-    for (const token of Array.isArray(wallet.tokens) ? wallet.tokens : []) {
-      const mint = String(token?.mint || token?.tokenMint || "").trim();
-      const quantity = positionNumber(token?.uiAmount);
-      if (!mint || quantity == null || quantity <= 0) continue;
-      quantities.set(mint.toLowerCase(), (quantities.get(mint.toLowerCase()) || 0) + quantity);
-    }
     return displayablePositions(state.positions).map((position) => {
       const mint = String(position.tokenMint || "").trim();
-      const quantity = quantities.get(mint.toLowerCase()) || 0;
-      if (!mint || quantity <= 0) return null;
+      const holding = walletPositionHolding(position, wallet);
+      const quantity = positionNumber(holding?.quantity);
+      if (!mint || quantity == null || quantity <= 0) return null;
       const totalQuantity = positionQuantity(position);
       const totalValueSol = positionEstimatedSol(position);
-      const valueSol = totalValueSol != null && totalQuantity != null && totalQuantity > 0
-        ? totalValueSol * Math.min(1, quantity / totalQuantity)
+      const share = totalQuantity != null && totalQuantity > 0
+        ? Math.min(1, quantity / totalQuantity)
         : null;
-      return { ...position, quantity, valueSol };
+      const valueSol = totalValueSol != null && totalQuantity != null && totalQuantity > 0
+        ? totalValueSol * share
+        : null;
+      return { ...position, holding, quantity, valueSol, bagSharePct: share == null ? null : share * 100 };
     }).filter(Boolean);
   }
   function walletAssetSummary(wallet = {}) {
-    const assets = walletPositionAssets(wallet).filter((asset) => !tokenIsHidden(asset.tokenMint));
+    const baseAssets = walletPositionAssets(wallet).filter((asset) => !tokenIsHidden(asset.tokenMint));
     const liquidSol = Math.max(0, Number(wallet.sol) || 0);
-    const coinsSol = assets.reduce((sum, asset) => sum + (asset.valueSol == null ? 0 : asset.valueSol), 0);
-    const hasPendingValue = assets.some((asset) => asset.valueSol == null);
+    const coinsSol = baseAssets.reduce((sum, asset) => sum + (asset.valueSol == null ? 0 : asset.valueSol), 0);
+    const hasPendingValue = baseAssets.some((asset) => asset.valueSol == null);
     const totalSol = liquidSol + coinsSol;
+    // Allocation is current value within this wallet's fully priced Solana side.
+    // If even one coin is still unpriced, omit it instead of presenting a false percentage.
+    const assets = baseAssets.map((asset) => ({
+      ...asset,
+      allocationPct: !hasPendingValue && asset.valueSol != null && totalSol > 0
+        ? Math.max(0, Math.min(100, asset.valueSol / totalSol * 100))
+        : null
+    }));
     const rhEthUsd = Math.max(0, Number(wallet.rhEth) || 0) * Math.max(0, Number(state.rhEthUsd) || 0);
     const solValueUsd = state.solUsd > 0 ? totalSol * state.solUsd : null;
     return { assets, liquidSol, coinsSol, hasPendingValue, totalSol, rhEthUsd, totalUsd: solValueUsd == null ? (rhEthUsd > 0 ? rhEthUsd : null) : solValueUsd + rhEthUsd };
@@ -4195,20 +4365,38 @@
     if (state.token) Promise.all([loadPortfolioSnapshot({ force: true }), loadCreatedCoinsSilently()]).catch(() => {});
   }
 
-  async function openSendSolSheet() {
+  async function openSendSolSheet(walletIndexValue = "", walletPublicKeyValue = "") {
     if (!(await ensureAccount())) { toast("Could not open your account.", true); return; }
     await loadWallets(true);
-    const wallet = activeWallet();
+    const requestedIndex = Number(walletIndexValue || 0);
+    const requestedPublicKey = String(walletPublicKeyValue || "").trim();
+    const scopedWallet = requestedIndex > 0
+      ? state.wallets.find((item) => Number(item.index) === requestedIndex && (!requestedPublicKey || String(item.publicKey || "") === requestedPublicKey))
+      : null;
+    if ((requestedIndex > 0 || requestedPublicKey) && !scopedWallet) {
+      toast("That wallet changed. Refresh positions and try again.", true);
+      return;
+    }
+    const wallet = scopedWallet || activeWallet();
     if (!wallet) { openFundingSheet(); toast("Create or restore a wallet first.", true); return; }
+    const scoped = Boolean(scopedWallet);
     state.pendingSolSend = null;
     const walletOptions = state.wallets.map((item) => `<option value="${item.index}" ${item.index === wallet.index ? "selected" : ""}>${escapeHtml(item.label || `Wallet ${item.index}`)} · ${Number(item.sol || 0).toFixed(5)} SOL</option>`).join("");
+    const sourceField = scoped
+      ? `<div class="send-sol-source"><span>${nativeAssetIcon("sol")}</span><div><small>FROM THIS WALLET</small><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}</b><em>${escapeHtml(short(wallet.publicKey))} · ${escapeHtml(Number(wallet.sol || 0).toFixed(5))} SOL</em></div></div><input type="hidden" data-send-sol-wallet value="${escapeHtml(String(wallet.index))}"><input type="hidden" data-send-sol-source-key value="${escapeHtml(wallet.publicKey)}">`
+      : `<div class="field"><label>From</label><select data-send-sol-wallet>${walletOptions}</select></div>`;
+    const allButton = '<button type="button" data-send-sol-all>All</button>';
+    const pinField = '<div class="field"><label>Spend PIN · only if enabled</label><input data-send-sol-pin type="password" inputmode="numeric" autocomplete="off" placeholder="Optional"></div>';
+    const sendNote = scoped
+      ? `This send is locked to ${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}. Review confirms the exact source address, Spend PIN, daily limit, and network costs before anything moves.`
+      : "All drains the transferable balance after the exact network and app fees are calculated by the server.";
     openSheet(`<div class="sheet-title"><img src="${slimePfp(wallet.publicKey)}" alt=""><div><h2>Send SOL</h2><p>From a SlimeWire managed wallet</p></div></div>
-      <div class="field"><label>From</label><select data-send-sol-wallet>${walletOptions}</select></div>
+      ${sourceField}
       <div class="field"><label>Destination</label><input data-send-sol-destination autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Solana wallet address"></div>
-      <div class="field"><label>Amount · SOL</label><input data-send-sol-amount inputmode="decimal" placeholder="0.1"><div class="amount-chips"><button type="button" data-send-sol-chip="0.1">0.1</button><button type="button" data-send-sol-chip="0.5">0.5</button><button type="button" data-send-sol-chip="1">1</button><button type="button" data-send-sol-all>All</button></div></div>
-      <div class="field"><label>Spend PIN · only if enabled</label><input data-send-sol-pin type="password" inputmode="numeric" autocomplete="off" placeholder="Optional"></div>
+      <div class="field"><label>Amount · SOL</label><input data-send-sol-amount inputmode="decimal" placeholder="0.1"><div class="amount-chips"><button type="button" data-send-sol-chip="0.1">0.1</button><button type="button" data-send-sol-chip="0.5">0.5</button><button type="button" data-send-sol-chip="1">1</button>${allButton}</div></div>
+      ${pinField}
       <button class="submit-trade" type="button" data-review-sol-send>Review send</button>
-      <p class="fineprint" data-send-sol-status>All drains the transferable balance after the exact network and app fees are calculated by the server.</p>`);
+      <p class="fineprint" data-send-sol-status>${sendNote}</p>`);
   }
 
   function selectFunSendAll() {
@@ -4229,16 +4417,20 @@
     const sendAll = amountInput?.dataset.sendAll === "true";
     const walletIndex = Number($("[data-send-sol-wallet]")?.value || state.activeWallet);
     const spendPin = String($("[data-send-sol-pin]")?.value || "").trim();
+    const sourceKeyField = $("[data-send-sol-source-key]");
+    const scoped = Boolean(sourceKeyField);
     if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(destination)) { toast("Enter a valid Solana destination.", true); return; }
     if (!sendAll && !(Number(amountSol) > 0)) { toast("Enter a SOL amount or choose All.", true); return; }
     const wallet = state.wallets.find((item) => Number(item.index) === walletIndex);
     if (!wallet) { toast("Choose a wallet.", true); return; }
-    state.pendingSolSend = { destination, amountSol, sendAll, walletIndex, spendPin, sendAttemptId: attemptId("fun-send-sol") };
+    const sourcePublicKey = String(sourceKeyField?.value || wallet.publicKey || "").trim();
+    if (!sourcePublicKey || sourcePublicKey !== String(wallet.publicKey || "")) { toast("The source wallet changed. Refresh and try again.", true); return; }
+    state.pendingSolSend = { destination, amountSol, sendAll, walletIndex, sourcePublicKey, scoped, spendPin, sendAttemptId: attemptId("fun-send-sol") };
     if (button) { button.disabled = true; button.textContent = "Simulating…"; }
-    const result = await post("/api/web/transaction/preview", { kind: "send", chain: "solana", walletIndex, destination, amountSol, sendAll }, { timeout: 20_000 });
+    const result = await post("/api/web/transaction/preview", { kind: "send", chain: "solana", walletIndex, walletPublicKey: sourcePublicKey, destination, amountSol, sendAll }, { timeout: 20_000 });
     if (button) { button.disabled = false; button.textContent = "Review send"; }
     if (!result.ok || !result.data?.ok || !result.data?.preview) { toast(apiMessage(result.data, "This send did not pass simulation."), true); return; }
-    state.pendingTradePreview = { kind: "send", chain: "solana", side: "send", body: { destination, amountSol, sendAll, walletIndex }, preview: result.data.preview };
+    state.pendingTradePreview = { kind: "send", chain: "solana", side: "send", body: { destination, amountSol, sendAll, walletIndex, walletPublicKey: sourcePublicKey }, preview: result.data.preview };
     openSheet(transactionPreviewHtml(result.data.preview));
   }
 
@@ -4249,12 +4441,13 @@
     button.textContent = "Sending…";
     const result = await post("/api/web/cash/send", {
       fromWalletIndex: pending.walletIndex,
+      sourcePublicKey: pending.sourcePublicKey,
       destination: pending.destination,
       asset: "SOL",
       ...(pending.sendAll ? { sendAll: true } : { amountSol: pending.amountSol }),
       ...(pending.spendPin ? { spendPin: pending.spendPin } : {}),
       sendAttemptId: pending.sendAttemptId
-    }, { timeout: 75_000 });
+    }, { timeout: 75_000, noRetry: true });
     if (!result.ok || !result.data?.ok) {
       button.disabled = false;
       button.textContent = "Send SOL";
@@ -4425,7 +4618,7 @@
     const pumpWalletBackup = event.target.closest("[data-pump-wallet-backup]"); if (pumpWalletBackup) { if (confirm("Download this Pump creator wallet backup? Anyone with the recovery file can move funds or claim fees, so keep it private.")) await exportWallets(pumpWalletBackup, { recoveryOnly: true, walletPublicKey: pumpWalletBackup.dataset.walletKey || "", walletIndex: pumpWalletBackup.dataset.walletIndex || "" }); return; }
     const saveMobileBackup = event.target.closest("[data-save-mobile-backup]"); if (saveMobileBackup) { await saveMobileBackupFile(saveMobileBackup.dataset.saveMobileBackup, saveMobileBackup); return; }
     const copyMobileBackup = event.target.closest("[data-copy-mobile-backup]"); if (copyMobileBackup) { await copyMobileBackupFile(copyMobileBackup.dataset.copyMobileBackup, copyMobileBackup); return; }
-    if (event.target.closest("[data-send-sol]")) { await openSendSolSheet(); return; }
+    const sendSol = event.target.closest("[data-send-sol]"); if (sendSol) { await openSendSolSheet(sendSol.dataset.sendSolWalletIndex || "", sendSol.dataset.sendSolWalletPublicKey || ""); return; }
     if (event.target.closest("[data-send-sol-all]")) { selectFunSendAll(); return; }
     const sendSolChip = event.target.closest("[data-send-sol-chip]"); if (sendSolChip) { const input = $("[data-send-sol-amount]"); if (input) { input.value = sendSolChip.dataset.sendSolChip; delete input.dataset.sendAll; } $$('[data-send-sol-all]').forEach((button) => button.classList.remove("active")); return; }
     if (event.target.closest("[data-review-sol-send]")) { await reviewFunSolSend(event.target.closest("[data-review-sol-send]")); return; }
@@ -4447,6 +4640,7 @@
     const sendTokenPercent = event.target.closest("[data-set-send-token-percent]"); if (sendTokenPercent) { const input = $("[data-send-token-amount]"); const pending = state.pendingTokenSend; if (input && pending) { const percent = Number(sendTokenPercent.dataset.setSendTokenPercent || 0); input.value = tokenSendDisplayAmount(pending.balance, percent); input.dataset.sendTokenPercent = String(percent); pending.percent = percent; $$('[data-set-send-token-percent]').forEach((item) => item.classList.toggle("active", item === sendTokenPercent)); } return; }
     if (event.target.closest("[data-review-token-send]")) { reviewFunTokenSend(); return; }
     const confirmTokenSend = event.target.closest("[data-confirm-token-send]"); if (confirmTokenSend) { await confirmFunTokenSend(confirmTokenSend); return; }
+    const loadRhWalletPositions = event.target.closest("[data-load-rh-wallet-positions]"); if (loadRhWalletPositions) { await loadFunRhWalletPositions(true); return; }
     if (event.target.closest("[data-refresh-pump-rewards]")) { await loadPumpRewardsForActiveWallet({ force: true }); return; }
     const claimReward = event.target.closest("[data-claim-pump-reward]"); if (claimReward) { await claimPumpReward(claimReward); return; }
     const claimCreatorFees = event.target.closest("[data-claim-creator-fees]"); if (claimCreatorFees) { await claimFunCreatorFees(claimCreatorFees); return; }
@@ -4487,7 +4681,7 @@
       const pending = state.pendingTradePreview;
       if (pending?.kind === "send") {
         const send = state.pendingSolSend;
-        await openSendSolSheet();
+        await openSendSolSheet(send?.scoped ? send.walletIndex : "", send?.scoped ? send.sourcePublicKey : "");
         if (send) {
           const wallet = $("[data-send-sol-wallet]"), destination = $("[data-send-sol-destination]"), amount = $("[data-send-sol-amount]"), pin = $("[data-send-sol-pin]");
           if (wallet) wallet.value = String(send.walletIndex);

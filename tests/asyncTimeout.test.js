@@ -34,5 +34,6 @@ test("portfolio snapshot and recovered PnL reads use the shared timeout helper",
   assert.match(serverSource, /import \{ withTimeout as withAsyncTimeout \} from "\.\/lib\/asyncTimeout\.js";/);
   assert.match(serverSource, /withAsyncTimeout\(webRhBalanceRows\(userId\), 1_800,/);
   assert.match(serverSource, /async \(tokenAccount\) => withAsyncTimeout\(/);
-  assert.match(serverSource, /const tx = await withAsyncTimeout\(/);
+  assert.match(serverSource, /const request = withAsyncTimeout\(\s*rpcRead\("position pnl transaction"/);
+  assert.match(serverSource, /const tx = await recoveredPositionParsedTransaction\(row\);/);
 });
