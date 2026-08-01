@@ -64,6 +64,8 @@ test("/left4sol hands desktop and mobile directly to the raw full-viewport game 
   assert.match(route, /Location: "https:\/\/itch\.io\/embed-upload\/18456748"/);
   assert.match(route, /"Cache-Control": "no-store, max-age=0"/);
   assert.match(route, /"Referrer-Policy": "no-referrer"/);
+  assert.match(redirects, /^\/left4sol\s+https:\/\/itch\.io\/embed-upload\/18456748\s+302$/m);
+  assert.match(redirects, /^\/left4sol\/\*\s+https:\/\/itch\.io\/embed-upload\/18456748\s+302$/m);
   assert.doesNotMatch(redirects, /^\/left4sol(?:\/|\/\*)?\s+\/left4sol\.html\s+200$/m,
     "Cloudflare pretty URLs already resolve left4sol.html; an explicit rewrite creates a canonical redirect loop");
   assert.match(left4solHtml, new RegExp(player.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
