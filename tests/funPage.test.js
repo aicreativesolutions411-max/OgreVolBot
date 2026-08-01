@@ -54,13 +54,14 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
 });
 
 test("/left4sol hands desktop and mobile directly to the raw full-viewport game without an itch referrer", () => {
-  const player = "https://html-classic.itch.zone/html/18456748-1846134/index.html?v=1785516296";
+  const player = "https://itch.io/embed-upload/18456748";
   const routeStart = server.indexOf('requestUrl.pathname === "/left4sol"');
   assert.ok(routeStart >= 0, "the Node origin should recognize the branded game route");
   const route = server.slice(routeStart - 120, routeStart + 520);
   assert.match(route, /request\.method === "GET" \|\| request\.method === "HEAD"/);
   assert.match(route, /requestUrl\.pathname\.startsWith\("\/left4sol\/"\)/);
-  assert.match(route, /serveStaticHtmlPage\(response, "left4sol\.html", "no-store, max-age=0", \{/);
+  assert.match(route, /response\.writeHead\(302, \{/);
+  assert.match(route, /Location: "https:\/\/itch\.io\/embed-upload\/18456748"/);
   assert.match(route, /"Cache-Control": "no-store, max-age=0"/);
   assert.match(route, /"Referrer-Policy": "no-referrer"/);
   assert.doesNotMatch(redirects, /^\/left4sol(?:\/|\/\*)?\s+\/left4sol\.html\s+200$/m,
