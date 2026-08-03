@@ -3,9 +3,12 @@ services:
     name: solana-telegram-wallet-ops-bot
     env: node
     plan: standard
-    # Deploy completed release batches with scripts/render-release.ps1.
-    # Per-commit auto deploys previously rebuilt this monolith up to three times.
-    autoDeploy: false
+    # Web auto-deploys on push (2026-08-03): the left4sol game portal and site
+    # fixes were repeatedly stranded on main waiting for a manual deploy click.
+    # The two workers below stay autoDeploy:false, which keeps the old
+    # "one push = three rebuilds" problem away — deploy those with
+    # scripts/render-release.ps1 as before.
+    autoDeploy: true
     buildCommand: node scripts/render-build.mjs
     startCommand: npm run render-start
     healthCheckPath: /healthz
