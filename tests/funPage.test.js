@@ -57,15 +57,15 @@ test("/left4sol hands desktop and mobile directly to the raw full-viewport game 
   const player = "https://itch.io/embed-upload/18456748";
   const routeStart = server.indexOf('requestUrl.pathname === "/left4sol"');
   assert.ok(routeStart >= 0, "the Node origin should recognize the branded game route");
-  const route = server.slice(routeStart - 120, routeStart + 520);
+  const route = server.slice(routeStart - 120, routeStart + 1100);
   assert.match(route, /request\.method === "GET" \|\| request\.method === "HEAD"/);
   assert.match(route, /requestUrl\.pathname\.startsWith\("\/left4sol\/"\)/);
   assert.match(route, /response\.writeHead\(302, \{/);
-  assert.match(route, /Location: "https:\/\/itch\.io\/embed-upload\/18456748"/);
+  assert.match(route, /Location: raw \|\| "https:\/\/itch\.io\/embed-upload\/18456748"/);
   assert.match(route, /"Cache-Control": "no-store, max-age=0"/);
   assert.match(route, /"Referrer-Policy": "no-referrer"/);
-  assert.match(redirects, /^\/left4sol\s+https:\/\/itch\.io\/embed-upload\/18456748\s+302$/m);
-  assert.match(redirects, /^\/left4sol\/\*\s+https:\/\/itch\.io\/embed-upload\/18456748\s+302$/m);
+  assert.match(redirects, /^\/left4sol\s+https:\/\/app\.slimewire\.org\/left4sol\s+302$/m);
+  assert.match(redirects, /^\/left4sol\/\*\s+https:\/\/app\.slimewire\.org\/left4sol\s+302$/m);
   assert.doesNotMatch(redirects, /^\/left4sol(?:\/|\/\*)?\s+\/left4sol\.html\s+200$/m,
     "Cloudflare pretty URLs already resolve left4sol.html; an explicit rewrite creates a canonical redirect loop");
   assert.match(left4solHtml, new RegExp(player.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));

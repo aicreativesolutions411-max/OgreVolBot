@@ -20,8 +20,8 @@
 /c/*            /community.html        200
 /rewards/*      /partner-rewards.html  200
 /launch-coin    /#launch               302
-/left4sol       https://itch.io/embed-upload/18456748  302
-/left4sol/*     https://itch.io/embed-upload/18456748  302
+/left4sol       https://app.slimewire.org/left4sol  302
+/left4sol/*     https://app.slimewire.org/left4sol  302
 /quick          /fun.html              200
 /quick/*        /fun.html              200
 # SlimeWallet installs from the branded app origin so it keeps its own PWA
