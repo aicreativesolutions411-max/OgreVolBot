@@ -1499,8 +1499,18 @@ test("PumpPortal bundle-build rejection falls back through the same mint instead
   assert.match(atomic, /jito_bundle_build_rejected_fallback/);
   assert.match(atomic, /findConfirmedJitoBundleCandidate\([\s\S]*submittedBundleCandidates/);
   assert.match(atomic, /fallbackReason: bundleBuildFailure \? "provider-build-rejected" : "bundle-not-landed"/);
-  assert.match(atomic, /webLaunchPumpPortalLocal\(userId, body, basePayload, \{ mintKeypair, metadata \}\)/,
+  assert.match(atomic, /webLaunchPumpPortalLocal\(userId, body, basePayload, \{[\s\S]*metadataValidation,[\s\S]*bundlePreflighted: true[\s\S]*\}\)/,
     "provider fallback must reuse the reserved mint and uploaded metadata");
+  assert.match(atomic, /pumpLaunchJitoBuildCircuitUntil = Math\.max/,
+    "deterministic provider rejections should temporarily bypass the same slow failing builder");
+  const uploadIndex = atomic.indexOf("await uploadPumpLaunchMetadata");
+  const metadataReadyIndex = atomic.indexOf("await validatePumpPortalMetadataUri");
+  const bundleBuildIndex = atomic.indexOf("await requestPumpPortalBundleTxs");
+  assert.ok(uploadIndex >= 0 && metadataReadyIndex > uploadIndex && bundleBuildIndex > metadataReadyIndex,
+    "fresh IPFS metadata must be publicly readable before the atomic provider tries to build against it");
+  const gatewayOrder = functionBody(serverSource, "metadataUriGatewayCandidates");
+  assert.ok(gatewayOrder.indexOf("gateway.pinata.cloud") < gatewayOrder.indexOf("/^ipfs"),
+    "fresh Pinata uploads should check Pinata's gateway before waiting on a slower public mirror");
 });
 
 test("Jito candidates reconcile durably after submit-response loss or restart", () => {
@@ -1587,6 +1597,43 @@ test("separate Solana fee legs are unique and expose per-leg completion", () => 
     "confirmation must run after the send/failover block, never inside its retry catch");
   assert.match(send, /markTradeSubmissionAmbiguous/);
   assert.match(send, /partialHashes = \[signedSignature\]/);
+});
+
+test("priority web trades keep Jito privacy but fall back quickly with the same signature", () => {
+  const send = functionBody(serverSource, "sendPumpTradeTx");
+  assert.match(send, /const priorityFastLane = Boolean\(opts\.priority\)/);
+  assert.match(send, /priorityFastLane \? 3_000 : 8_000/);
+  assert.match(send, /Math\.min\(configuredConfirmMs, 2_500\)/);
+  assert.match(send, /return sendVersionedTransaction\(tx, label, opts\)/);
+  assert.match(functionBody(serverSource, "sellTokenAmountFromWalletViaPumpPortal"), /tipSol: CONFIG\.tradeJitoExitTipSol,[\s\S]*priority/,
+    "manual web sells must opt into the same short priority confirmation lane as buys");
+});
+
+test("web trade bookkeeping and independent fee legs no longer serialize confirmations", () => {
+  const fee = functionBody(serverSource, "collectSolFee");
+  assert.match(fee, /const ownerTask = \(async \(\) =>/);
+  assert.match(fee, /const cashCowTask = \(async \(\) =>/);
+  assert.match(fee, /const referralTask = \(async \(\) =>/);
+  assert.match(fee, /Promise\.allSettled\(\[ownerTask, cashCowTask, referralTask\]\)/);
+  assert.match(fee, /Promise\.all\(referralSplits\.map/);
+
+  const buy = functionBody(serverSource, "webTradeBuyCore");
+  assert.match(buy, /Promise\.all\(\[recordTask, autoExitTask\]\)/);
+  assert.match(buy, /void audit\("web_trade_buy"/);
+  const sell = functionBody(serverSource, "webTradeSellCore");
+  assert.match(sell, /Promise\.allSettled\(\[/);
+  assert.match(sell, /void recordManualSellTimingEvent/);
+});
+
+test("exhausted paid market-data credits stay off the live trade hot path", () => {
+  const request = functionBody(serverSource, "solanaTrackerJson");
+  const report = functionBody(serverSource, "fetchSolanaTrackerTokenReport");
+  assert.match(request, /Date\.now\(\) < solanaTrackerCreditCooldownUntil/);
+  assert.match(request, /if \(cached\?\.value\) return cached\.value/);
+  assert.match(request, /solanaTrackerCreditCooldownUntil = Date\.now\(\) \+ 15 \* 60_000/);
+  assert.match(request, /error\.solanaTrackerCreditCooldown = true/);
+  assert.match(report, /if \(!e\?\.solanaTrackerCreditCooldown\)/,
+    "background scans should not flood logs while the provider is known to be out of credits");
 });
 
 test("Fun profile clearly exposes naming, creation, and login recovery", () => {
@@ -3093,7 +3140,7 @@ test("launch Jito bundle AUTO-RETRIES with escalating tips before falling back",
   assert.match(lb, /if \(!landed\) \{/);
   // Fallback reuses the already-generated mint + metadata, so a late Jito
   // landing cannot create a second token contract.
-  assert.match(lb, /webLaunchPumpPortalLocal\(userId, body, basePayload, \{ mintKeypair, metadata \}\)/);
+  assert.match(lb, /webLaunchPumpPortalLocal\(userId, body, basePayload, \{[\s\S]*metadataValidation,[\s\S]*bundlePreflighted: true[\s\S]*\}\)/);
 });
 test("smooth nav: DM sub-views carry a Main Menu button (no re-/start)", () => {
   for (const fn of ["showTelegramLinksMenu", "showTelegramPortfolioMenu", "showTelegramOgreToolsMenu", "showWalletMenu"]) {

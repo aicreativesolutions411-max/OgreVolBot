@@ -132,6 +132,39 @@ test("deferred dev and managed-wallet buys persist an exact resumable plan befor
   assert.match(wrapper, /LockService\.withLock/);
 });
 
+test("ordinary Pump dev and bundle buys use the same durable recovery intent", () => {
+  const intent = functionBody(server, "buildPumpPostLaunchBuyIntent");
+  assert.doesNotMatch(intent, /!policy\.enabled|normalizeHolderRewardPolicy/);
+  assert.match(intent, /String\(basePayload\.rail \|\| "pump"\)\.toLowerCase\(\) !== "pump"/);
+  assert.match(intent, /if \(!entries\.length\) return null/);
+  assert.match(intent, /launchWaveEntrySlippageBps\(basePayload\.slippageBps, entries\.length\)/);
+
+  const local = functionBody(server, "webLaunchPumpPortalLocal");
+  const persistIndex = local.indexOf("postLaunchBuyIntent");
+  const mintIndex = local.indexOf("await service.launch");
+  assert.ok(persistIndex >= 0 && mintIndex > persistIndex);
+  assert.match(local, /preflightPumpPostLaunchBuyIntentWallets/);
+  assert.match(local, /executePumpPostLaunchBuyIntent/);
+
+  const execute = functionBody(server, "executePumpPostLaunchBuyIntentCore");
+  assert.match(execute, /launchWaveEntrySlippageBps\(/);
+  assert.match(execute, /trustedLaunchMint: true, priority: true/);
+  assert.match(execute, /totalAttempts < 9/);
+});
+
+test("local bundle wallets are verified before a mint can leave", () => {
+  const preflight = functionBody(server, "preflightPumpPostLaunchBuyIntentWallets");
+  assert.match(preflight, /assertServerTradeWalletReady/);
+  assert.match(preflight, /decryptWallet/);
+  assert.match(preflight, /getSolBalanceCached[\s\S]*force: true, priority: true/);
+  assert.match(preflight, /recommendedBuyFundingLamports/);
+  assert.match(preflight, /nothing was spent/);
+
+  const local = functionBody(server, "webLaunchPumpPortalLocal");
+  assert.match(local, /validateMetadataUri: options\.metadataValidation[\s\S]*options\.metadataValidation[\s\S]*validatePumpPortalMetadataUri/,
+    "the same-mint fallback must reuse the metadata proof instead of waiting on IPFS twice");
+});
+
 test("deferred buy recovery never age-terminalizes a launch that may still be live", () => {
   const execute = functionBody(server, "executePumpPostLaunchBuyIntentCore");
   const noMint = execute.slice(execute.indexOf("if (!tokenMint)"), execute.indexOf("const disposition"));
