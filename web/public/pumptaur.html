@@ -44,9 +44,9 @@
   <footer class="footer"><span>PUMPTAUR is a community token. Verify the contract and make your own decisions.</span><nav><a href="/">SlimeWire</a><a href="/risk-disclosure">Risk</a><a href="https://t.me/SlimeWiredBot" target="_blank" rel="noopener">Telegram bot</a></nav></footer><div class="toast" data-toast role="status"></div>
   <script>
   (()=>{"use strict";
-    // Leave this blank until the official CA is posted. The page can also be
-    // previewed live immediately with /pumptaur?ca=YOUR_VERIFIED_SOLANA_CA.
-    const DEFAULT_CA="";
+    // Official PUMPTAUR Solana contract. A valid ?ca= URL parameter can still
+    // be used for controlled previews, but the public page always opens here.
+    const DEFAULT_CA="5FNhSf3Hwjpg676Mjy2KSRNFg9apC7Njsq83ehTVpump";
     const candidate=new URLSearchParams(location.search).get("ca")||DEFAULT_CA;
     const CA=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(candidate)?candidate:"";
     const API=String(window.OGRE_PORTAL_CONFIG?.apiBase||"https://app.slimewire.org").replace(/\/+$/,""),$=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)];
