@@ -2225,7 +2225,7 @@ test("Pump buy polling is fast, cursor-safe, and does not swallow a new coin's f
   const scan = functionBody(serverSource, "getGroupBuyScan");
   const post = functionBody(serverSource, "postGroupBuy");
   const poll = functionBody(serverSource, "pollGroupBuyTrades");
-  assert.match(serverSource, /const GROUP_BUY_TRADE_POLL_MS = 750/);
+  assert.match(serverSource, /const GROUP_BUY_TRADE_POLL_MS = 500/);
   assert.match(serverSource, /const GROUP_BUY_TRADE_MAX_PAGES = 20/);
   assert.match(applyPage, /progress\.activationCutoffAt/);
   assert.match(applyPage, /progress\.reachedSeen \|\| !hasMore/);
@@ -2239,8 +2239,9 @@ test("Pump buy polling is fast, cursor-safe, and does not swallow a new coin's f
   assert.match(start, /GROUP_BUY_TRADE_POLL_MS/);
   assert.match(poll, /pollGroupBuyTradesForMint\(mint\)[\s\S]*\.catch[\s\S]*\.finally/);
   assert.match(scan, /groupBuyScanInFlight/);
-  assert.match(post, /scanFastTimeout\(scanRequest, 300, null\)/);
-  assert.match(post, /scanFastTimeout\(supplyRequest, 300, 0\)/);
+  assert.match(serverSource, /const GROUP_BUY_FAST_ENRICHMENT_MS = 120/);
+  assert.match(post, /scanFastTimeout\(scanRequest, GROUP_BUY_FAST_ENRICHMENT_MS, null\)/);
+  assert.match(post, /scanFastTimeout\(supplyRequest, GROUP_BUY_FAST_ENRICHMENT_MS, 0\)/);
   assert.match(post, /getGroupBuySupply\(mint, cachedScan\)/);
 });
 
