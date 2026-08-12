@@ -234,7 +234,7 @@ test("Dev Info row pill, drawer, and endpoints are cache-first", () => {
   assert.match(serverSource, /dev_info_cache/);
   assert.match(serverSource, /dev_wallet_candidates/);
   assert.match(serverSource, /token_metadata/);
-  assert.match(serverSource, /pair_snapshots/);
+  assert.match(serverSource, /pair_market_history/);
   assert.match(functionBody("computeDevInfoFromLocalData", serverSource), /readPostgresMarketRowForMint/);
   assert.match(functionBody("computeDevInfoFromLocalData", serverSource), /inferPostgresDevWalletCandidateFromTransactions/);
   assert.match(functionBody("computeDevInfoFromLocalData", serverSource), /devInfoReferenceLinks/);

@@ -98,6 +98,12 @@ services:
         value: 100
       - key: POSTGRES_HYDRATION_DEV_WALLET_LAUNCH_LIMIT
         value: 25
+      - key: POSTGRES_MARKET_HISTORY_RETENTION_DAYS
+        value: 90
+      - key: POSTGRES_DISCOVERY_CACHE_RETENTION_DAYS
+        value: 30
+      - key: POSTGRES_MAINTENANCE_BATCH_SIZE
+        value: 25000
       - key: DEV_INFO_SOURCE_HYDRATION_ENABLED
         value: true
       - key: DEV_INFO_SOURCE_SIGNATURE_LIMIT

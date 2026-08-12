@@ -29,7 +29,7 @@ test("developer dossier combines creator launches, tracked outcomes, and market 
   assert.match(source, /from dev_wallet_events/);
   assert.match(source, /from processed_transactions/);
   assert.match(source, /readPostgresDevLaunchMarketHistory/);
-  assert.match(source, /from pair_snapshots/);
+  assert.match(source, /pair_market_history/);
   assert.match(source, /recordsRecovered: launches\.length/);
   assert.match(source, /Prior coin records available/);
   assert.match(source, /Active markets now/);
