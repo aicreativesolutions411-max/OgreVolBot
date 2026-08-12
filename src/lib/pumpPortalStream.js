@@ -1,4 +1,5 @@
-// PumpPortal real-time data stream (free websocket).
+// PumpPortal real-time data stream. Creations/migrations are free; token-trade
+// subscriptions are optional and require an authenticated funded provider key.
 //
 // One server-side connection to wss://pumpportal.fun/api/data gives us:
 //   - subscribeNewToken      -> every pump.fun token creation, sub-second
@@ -29,7 +30,9 @@ const DEFAULTS = {
   watchTtlMs: 10 * 60 * 1000, // explicit chart watches expire after 10 min idle
   heartbeatMs: 45_000, // creations flow constantly; silence means dead socket
   reconnectMinMs: 1_000,
-  reconnectMaxMs: 30_000
+  reconnectMaxMs: 30_000,
+  tradeStreamEnabled: false,
+  autoSubscribeCreationTrades: false,
 };
 
 export function createPumpPortalStream(options = {}) {
@@ -45,15 +48,31 @@ export function createPumpPortalStream(options = {}) {
   let heartbeatTimer = null;
   let lastMessageAt = 0;
   let connectCount = 0;
+  let connectionEpoch = 0;
+  let tradeStreamAuthorization = config.tradeStreamEnabled ? "pending" : "disabled";
+  let currentSubscriptionErrors = 0;
 
   const creations = []; // newest first: [{ mint, at, event, lastTrade, migrated }]
   const creationByMint = new Map();
   const tradesByMint = new Map(); // mint -> [{ at, side, solAmount, tokenAmount, priceSol, marketCapSol }]
-  const tradeSubs = new Map(); // mint -> { subscribedAt, reason: "creation" | "watch", watchUntil }
-  const counters = { creations: 0, trades: 0, migrations: 0, parseErrors: 0 };
+  // Subscription ownership is additive: a Buy Bot mint can simultaneously be an active chart watch.
+  // Never let a temporary watch TTL erase a persistent group subscription.
+  const tradeSubs = new Map(); // mint -> { subscribedAt, groupTracked, creationUntil, watchUntil }
+  const sentTradeSubs = new Set(); // exact provider-side subscription target for this connection
+  const counters = { creations: 0, trades: 0, migrations: 0, parseErrors: 0, subscriptionErrors: 0 };
+  let lastProviderError = "";
 
   function now() {
     return Date.now();
+  }
+
+  function safeProviderText(value) {
+    return String(value || "")
+      .replace(/([?&]api-key=)[^&\s]+/ig, "$1[redacted]")
+      .replace(/(api[-_ ]?key\s*[:=]\s*)["']?[^\s,"'}]+/ig, "$1[redacted]")
+      .replace(/(authorization\s*[:=]\s*(?:bearer\s+)?)["']?[^\s,"'}]+/ig, "$1[redacted]")
+      .replace(/(bearer\s+)[a-z0-9._~+\/-]+/ig, "$1[redacted]")
+      .slice(0, 240);
   }
 
   function safeSend(payload) {
@@ -67,23 +86,50 @@ export function createPumpPortalStream(options = {}) {
   }
 
   function subscribeTrades(mints) {
+    if (!config.tradeStreamEnabled) return false;
     const keys = mints.filter(Boolean);
-    if (keys.length) safeSend({ method: "subscribeTokenTrade", keys });
+    return keys.length ? safeSend({ method: "subscribeTokenTrade", keys }) : false;
   }
 
   function unsubscribeTrades(mints) {
+    if (!config.tradeStreamEnabled) return false;
     const keys = mints.filter(Boolean);
-    if (keys.length) safeSend({ method: "unsubscribeTokenTrade", keys });
+    return keys.length ? safeSend({ method: "unsubscribeTokenTrade", keys }) : false;
+  }
+
+  function desiredTradeTargets() {
+    const cutoff = now();
+    return [...tradeSubs.entries()]
+      .filter(([, sub]) => sub.groupTracked || sub.watchUntil > cutoff || sub.creationUntil > cutoff)
+      .sort((a, b) => {
+        const aRank = a[1].watchUntil > cutoff ? 2 : a[1].groupTracked ? 1 : 0;
+        const bRank = b[1].watchUntil > cutoff ? 2 : b[1].groupTracked ? 1 : 0;
+        return bRank - aRank || b[1].subscribedAt - a[1].subscribedAt;
+      })
+      .slice(0, Math.max(1, Number(config.maxTradeSubs) || 1))
+      .map(([mint]) => mint);
+  }
+
+  function reconcileTradeSubscriptions({ connectionOpened = false } = {}) {
+    if (!config.tradeStreamEnabled || !connected || tradeStreamAuthorization === "rejected") {
+      sentTradeSubs.clear();
+      return;
+    }
+    const desired = new Set(desiredTradeTargets());
+    if (connectionOpened) sentTradeSubs.clear();
+    const remove = [...sentTradeSubs].filter((mint) => !desired.has(mint));
+    const add = [...desired].filter((mint) => !sentTradeSubs.has(mint));
+    if (remove.length && unsubscribeTrades(remove)) for (const mint of remove) sentTradeSubs.delete(mint);
+    if (add.length && subscribeTrades(add)) for (const mint of add) sentTradeSubs.add(mint);
   }
 
   function pruneTradeSubs() {
     const cutoff = now();
     const expired = [];
     for (const [mint, sub] of tradeSubs) {
-      const creationExpired = sub.reason === "creation" && cutoff - sub.subscribedAt > config.tradeSubMaxAgeMs;
-      const watchExpired = sub.reason === "watch" && cutoff > (sub.watchUntil || 0);
-      if (creationExpired && !(sub.watchUntil > cutoff)) expired.push(mint);
-      else if (watchExpired && sub.reason === "watch") expired.push(mint);
+      if (sub.creationUntil > 0 && cutoff >= sub.creationUntil) sub.creationUntil = 0;
+      if (sub.watchUntil > 0 && cutoff >= sub.watchUntil) sub.watchUntil = 0;
+      if (!sub.groupTracked && !(sub.creationUntil > cutoff) && !(sub.watchUntil > cutoff)) expired.push(mint);
     }
     // Oldest-first overflow trim so the subscription set stays bounded.
     if (tradeSubs.size - expired.length > config.maxTradeSubs) {
@@ -93,7 +139,7 @@ export function createPumpPortalStream(options = {}) {
       let overflow = tradeSubs.size - expired.length - config.maxTradeSubs;
       for (const [mint, sub] of candidates) {
         if (overflow <= 0) break;
-        if (sub.watchUntil > cutoff) continue; // never drop an active chart watch
+        if (sub.groupTracked || sub.watchUntil > cutoff) continue; // never drop a Buy Bot or active chart watch
         expired.push(mint);
         overflow -= 1;
       }
@@ -103,21 +149,25 @@ export function createPumpPortalStream(options = {}) {
       tradeSubs.delete(mint);
       tradesByMint.delete(mint);
     }
-    unsubscribeTrades(expired);
+    reconcileTradeSubscriptions();
   }
 
   function ensureTradeSub(mint, reason, watchTtlMs = 0) {
     if (!mint) return;
+    const at = now();
     const existing = tradeSubs.get(mint);
-    const watchUntil = watchTtlMs > 0 ? now() + watchTtlMs : existing?.watchUntil || 0;
-    if (existing) {
-      if (watchUntil > (existing.watchUntil || 0)) existing.watchUntil = watchUntil;
-      if (reason === "watch") existing.reason = "watch";
-      return;
-    }
-    tradeSubs.set(mint, { subscribedAt: now(), reason, watchUntil });
-    subscribeTrades([mint]);
+    const sub = existing || {
+      subscribedAt: at,
+      groupTracked: false,
+      creationUntil: 0,
+      watchUntil: 0,
+    };
+    if (reason === "group") sub.groupTracked = true;
+    if (reason === "creation") sub.creationUntil = Math.max(sub.creationUntil || 0, at + config.tradeSubMaxAgeMs);
+    if (reason === "watch") sub.watchUntil = Math.max(sub.watchUntil || 0, at + Math.max(0, Number(watchTtlMs) || 0));
+    tradeSubs.set(mint, sub);
     pruneTradeSubs();
+    reconcileTradeSubscriptions();
   }
 
   function pruneCreations() {
@@ -142,7 +192,7 @@ export function createPumpPortalStream(options = {}) {
     creationByMint.set(mint, entry);
     counters.creations += 1;
     pruneCreations();
-    ensureTradeSub(mint, "creation");
+    if (config.autoSubscribeCreationTrades) ensureTradeSub(mint, "creation");
     if (typeof config.onCreation === "function") {
       try {
         config.onCreation(entry);
@@ -152,7 +202,7 @@ export function createPumpPortalStream(options = {}) {
 
   function handleTrade(event) {
     const mint = String(event.mint || "").trim();
-    if (!mint) return;
+    if (!mint || !sentTradeSubs.has(mint)) return false;
     const solAmount = Number(event.solAmount) || 0;
     const tokenAmount = Number(event.tokenAmount) || 0;
     const trade = {
@@ -169,7 +219,6 @@ export function createPumpPortalStream(options = {}) {
     if (!list) {
       // Only track trades for mints we deliberately subscribed; stray events
       // for unsubscribed mints (race after unsubscribe) are dropped.
-      if (!tradeSubs.has(mint)) return;
       list = [];
       tradesByMint.set(mint, list);
     }
@@ -180,9 +229,10 @@ export function createPumpPortalStream(options = {}) {
     if (creation) creation.lastTrade = trade;
     if (typeof config.onTrade === "function") {
       try {
-        config.onTrade(mint, trade);
+        config.onTrade(mint, trade, event);
       } catch {}
     }
+    return true;
   }
 
   function handleMigration(event) {
@@ -208,9 +258,34 @@ export function createPumpPortalStream(options = {}) {
       return;
     }
     if (!data || typeof data !== "object") return;
+    const message = typeof data.message === "string" ? data.message.trim() : "";
+    const messageIsError = /(?:error|failed|forbidden|unauthori[sz]ed|invalid api|requires?|only available|must be funded|not funded|denied)/i.test(message);
+    if (data.error || data.errors || messageIsError) {
+      counters.subscriptionErrors += 1;
+      currentSubscriptionErrors += 1;
+      let providerError = data.error || data.errors || message || "PumpPortal subscription rejected";
+      if (typeof providerError !== "string") {
+        try { providerError = JSON.stringify(providerError); } catch { providerError = String(providerError); }
+      }
+      lastProviderError = safeProviderText(providerError);
+      const tradeAuthError = config.tradeStreamEnabled && /(?:subscribeTokenTrade|token.?trade|account.?trade|api.?key|funded wallet|funded.*SOL|unauthori[sz]ed|forbidden)/i.test(String(providerError));
+      if (tradeAuthError) {
+        tradeStreamAuthorization = "rejected";
+        sentTradeSubs.clear();
+      }
+      if (typeof config.onProviderError === "function") {
+        try { config.onProviderError(lastProviderError); } catch {}
+      }
+      return;
+    }
+    if (config.tradeStreamEnabled && message && /success(?:fully)?\s+subscrib|subscrib(?:ed|ption).*success/i.test(message) && /trad/i.test(message)) {
+      tradeStreamAuthorization = "authorized";
+    }
     const txType = String(data.txType || "").toLowerCase();
     if (txType === "create") handleCreation(data);
-    else if (txType === "buy" || txType === "sell") handleTrade(data);
+    else if (txType === "buy" || txType === "sell") {
+      if (handleTrade(data) && config.tradeStreamEnabled) tradeStreamAuthorization = "authorized";
+    }
     else if (txType === "migrate" || txType === "migration") handleMigration(data);
     // anything else (subscription acks, errors) is informational only
   }
@@ -254,7 +329,9 @@ export function createPumpPortalStream(options = {}) {
 
   async function connect() {
     if (!started) return;
+    const epoch = connectionEpoch;
     const Ctor = await resolveWebSocketCtor();
+    if (!started || epoch !== connectionEpoch) return;
     if (!Ctor) {
       log("PumpPortal stream disabled: no WebSocket implementation available (need Node >=22 or the 'ws' package).");
       started = false;
@@ -263,30 +340,41 @@ export function createPumpPortalStream(options = {}) {
     try {
       socket = new Ctor(config.url);
     } catch (error) {
-      log(`PumpPortal stream connect error: ${error.message}`);
+      log(`PumpPortal stream connect error: ${safeProviderText(error?.message || error)}`);
       scheduleReconnect();
       return;
     }
 
-    socket.onopen = () => {
+    const activeSocket = socket;
+    activeSocket.onopen = () => {
+      if (!started || epoch !== connectionEpoch || socket !== activeSocket) {
+        try { activeSocket.close(); } catch {}
+        return;
+      }
       connected = true;
       connectCount += 1;
       reconnectDelayMs = config.reconnectMinMs;
       lastMessageAt = now();
+      currentSubscriptionErrors = 0;
+      lastProviderError = "";
+      tradeStreamAuthorization = config.tradeStreamEnabled ? "pending" : "disabled";
       safeSend({ method: "subscribeNewToken" });
       safeSend({ method: "subscribeMigration" });
-      const resubscribe = [...tradeSubs.keys()];
-      if (resubscribe.length) subscribeTrades(resubscribe);
+      reconcileTradeSubscriptions({ connectionOpened: true });
       startHeartbeat();
       log(`PumpPortal stream connected (#${connectCount}).`);
     };
-    socket.onmessage = (messageEvent) => handleMessage(messageEvent.data);
-    socket.onerror = () => {
+    activeSocket.onmessage = (messageEvent) => {
+      if (socket === activeSocket && epoch === connectionEpoch) handleMessage(messageEvent.data);
+    };
+    activeSocket.onerror = () => {
       // onclose always follows; reconnect is handled there.
     };
-    socket.onclose = () => {
+    activeSocket.onclose = () => {
+      if (socket !== activeSocket || epoch !== connectionEpoch) return;
       connected = false;
       stopHeartbeat();
+      sentTradeSubs.clear();
       socket = null;
       if (started) scheduleReconnect();
     };
@@ -376,10 +464,12 @@ export function createPumpPortalStream(options = {}) {
     start() {
       if (started) return;
       started = true;
+      connectionEpoch += 1;
       void connect();
     },
     stop() {
       started = false;
+      connectionEpoch += 1;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
@@ -390,12 +480,28 @@ export function createPumpPortalStream(options = {}) {
       } catch {}
       socket = null;
       connected = false;
+      sentTradeSubs.clear();
     },
     isConnected() {
       return connected;
     },
     watchMint(mint, ttlMs = config.watchTtlMs) {
       ensureTradeSub(String(mint || "").trim(), "watch", ttlMs);
+    },
+    syncTrackedMints(mints = []) {
+      const wanted = new Set((Array.isArray(mints) ? mints : []).map((mint) => String(mint || "").trim()).filter(Boolean));
+      for (const [mint, sub] of tradeSubs) {
+        if (sub.groupTracked && !wanted.has(mint)) sub.groupTracked = false;
+      }
+      for (const mint of wanted) ensureTradeSub(mint, "group");
+      pruneTradeSubs();
+      reconcileTradeSubscriptions();
+      return {
+        wanted: wanted.size,
+        active: config.tradeStreamEnabled ? sentTradeSubs.size : 0,
+        desired: tradeSubs.size,
+        enabled: Boolean(config.tradeStreamEnabled),
+      };
     },
     getTrades(mint, { limit = 120 } = {}) {
       const list = tradesByMint.get(String(mint || "").trim()) || [];
@@ -409,10 +515,16 @@ export function createPumpPortalStream(options = {}) {
     stats() {
       return {
         connected,
+        tradeStreamEnabled: Boolean(config.tradeStreamEnabled),
+        tradeStreamAuthorized: tradeStreamAuthorization === "authorized",
+        tradeStreamAuthorization,
+        currentSubscriptionErrors,
+        lastProviderError: lastProviderError || null,
         connectCount,
         lastMessageAgoMs: lastMessageAt ? now() - lastMessageAt : null,
         creationsBuffered: creations.length,
-        tradeSubscriptions: tradeSubs.size,
+        tradeSubscriptions: config.tradeStreamEnabled ? sentTradeSubs.size : 0,
+        desiredTradeSubscriptions: tradeSubs.size,
         mintsWithTrades: tradesByMint.size,
         counters: { ...counters }
       };

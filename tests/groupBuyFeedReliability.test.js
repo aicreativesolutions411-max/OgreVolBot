@@ -164,7 +164,7 @@ test("the shared Pump host gate lets live buy pages jump ahead of queued backgro
   });
   const first = gate.schedule(async () => { starts.push("background-1"); });
   const second = gate.schedule(async () => { starts.push("background-2"); });
-  const live = gate.schedule(async () => { starts.push("live-buy"); }, { priority: 100 });
+  const live = gate.schedule(async () => { starts.push("live-buy"); }, { priority: 120 });
   await Promise.all([first, second, live]);
   assert.deepEqual(starts, ["background-1", "live-buy", "background-2"]);
 });
@@ -223,7 +223,7 @@ test("a bounded host gate admits a live buy by evicting older queued background 
   const retained = gate.schedule(async () => { starts.push("retained-background"); });
   const equalOverflow = gate.schedule(async () => { starts.push("equal-overflow"); });
   const equalOverflowRejected = assert.rejects(equalOverflow);
-  const live = gate.schedule(async () => { starts.push("live-buy"); }, { priority: 100 });
+  const live = gate.schedule(async () => { starts.push("live-buy"); }, { priority: 120 });
   const evictedRejected = assert.rejects(evicted);
 
   await Promise.all([running, retained, live, equalOverflowRejected, evictedRejected]);
@@ -273,6 +273,27 @@ test("a retry never evicts another mint's queued live-buy page", async () => {
     return true;
   })]);
   assert.deepEqual(starts, ["running", "live-a", "live-b"]);
+});
+
+test("a priority-120 market wake can evict lower-priority recovery work", async () => {
+  let now = 0;
+  const starts = [];
+  const gate = helpers.createGroupBuyHostRateGate({
+    minIntervalMs: 10,
+    maxQueue: 2,
+    maxWaitMs: 1_000,
+    nowFn: () => now,
+    sleepFn: async (milliseconds) => { now += milliseconds; },
+  });
+  const running = gate.schedule(async () => { starts.push("running"); });
+  const evictedRecovery = gate.schedule(async () => { starts.push("recovery-a"); }, { priority: 100 });
+  const retainedRecovery = gate.schedule(async () => { starts.push("recovery-b"); }, { priority: 100 });
+  const liveWake = gate.schedule(async () => { starts.push("live-wake"); }, { priority: 120 });
+  await Promise.all([running, retainedRecovery, liveWake, assert.rejects(evictedRecovery, (error) => {
+    assert.equal(error?.code, "GROUP_BUY_GATE_EVICTED");
+    return true;
+  })]);
+  assert.deepEqual(starts, ["running", "live-wake", "recovery-b"]);
 });
 
 test("websocket delivery cannot initialize or advance the HTTP baseline", () => {
@@ -339,7 +360,7 @@ test("zero or identity-less websocket events do not poison recovery by HTTP", ()
   assert.doesNotMatch(serverSource, /(?<!pumpSwapApi)fetch(?:Json)?\(`https:\/\/swap-api\.pump\.fun/);
   const fetchPage = functionBody("fetchGroupBuyTradePage");
   assert.match(fetchPage, /retryGroupBuyFeedOperation/);
-  assert.match(fetchPage, /priority: attempt > 1 \? 110 : 100/);
+  assert.match(fetchPage, /priority: Math\.max\(Number\(priority\) \|\| 100, attempt > 1 \? 110 : 0\)/);
   assert.match(fetchPage, /maxAttempts: GROUP_BUY_TRADE_FETCH_ATTEMPTS/);
   assert.match(fetchPage, /pumpSwapApiHostGate\.cooldown/);
   assert.doesNotMatch(functionBody("scheduleGroupBuyTradeBackoff"), /\.cooldown\(/);
@@ -587,12 +608,139 @@ test("a same-mint buy burst can pay the cold enrichment ceiling only once", () =
   );
 });
 
+test("DexScreener wakes the detailed buy feed in one bounded batch lane", () => {
+  const wakePoll = functionBody("pollGroupBuyBots");
+
+  assert.match(
+    serverSource,
+    /const GROUP_BUY_WAKE_POLL_MS = 1_500;/,
+    "the aggregate wake feed must run often enough to detect a normal buy inside ten seconds"
+  );
+  assert.doesNotMatch(
+    wakePoll,
+    /mints\.slice\(0,\s*30\)/,
+    "the wake pass must not silently ignore every tracked mint after the first DexScreener page"
+  );
+  assert.match(
+    wakePoll,
+    /for \(let offset = 0; offset < mints\.length; offset \+= 30\)/,
+    "all tracked mints must be covered through DexScreener's 30-token request pages"
+  );
+  assert.match(
+    wakePoll,
+    /const pageMints = mints\.slice\(offset, offset \+ 30\)[\s\S]*?fetchDexScreenerTokenPairsBatch\(pageMints/,
+    "each wake request must batch tokens instead of issuing one request per mint"
+  );
+  assert.match(
+    wakePoll,
+    /aggregateDexPairActivity\(mint, pairs\)/,
+    "m5 buy activity must include every pool for the token, not only its deepest pool"
+  );
+  assert.match(
+    wakePoll,
+    /txns\?\.m5\?\.buys/,
+    "the wake signal must use the aggregate five-minute buy count"
+  );
+  assert.match(
+    wakePoll,
+    /delta > 0[\s\S]*?queueGroupBuyTradePoll\(mint,\s*\{[\s\S]*?force:\s*true/,
+    "an increased aggregate count must wake the cursor-safe per-buy HTTP reader immediately"
+  );
+  assert.doesNotMatch(
+    wakePoll,
+    /delta > 0[\s\S]*?await postGroupBuy\(/,
+    "aggregate activity is only a wake signal and must never fabricate a zero-amount buy card"
+  );
+});
+
+test("recovery polling is rotating and bounded instead of queueing every mint every 500ms", () => {
+  const recoveryPoll = functionBody("pollGroupBuyTrades");
+
+  assert.match(serverSource, /const GROUP_BUY_RECOVERY_POLL_MS = 10_000;/);
+  assert.match(serverSource, /const GROUP_BUY_RECOVERY_BATCH = 6;/);
+  assert.match(
+    recoveryPoll,
+    /GROUP_BUY_RECOVERY_BATCH/,
+    "each recovery turn must explicitly honor the bounded mint budget"
+  );
+  assert.match(
+    recoveryPoll,
+    /queueGroupBuyTradePoll\(mint/,
+    "recovery and wake paths must share the same in-flight/pending scheduler"
+  );
+  assert.doesNotMatch(
+    recoveryPoll,
+    /for \(const mint of mints\)/,
+    "a recovery tick must not enqueue the full active mint list"
+  );
+  assert.match(
+    serverSource,
+    /setInterval\(\(\) => \{ void pollGroupBuyBots\(\); \}, GROUP_BUY_WAKE_POLL_MS\)/,
+    "the cheap aggregate wake should own the fast interval"
+  );
+  assert.match(
+    serverSource,
+    /setInterval\(\(\) => \{ void pollGroupBuyTrades\(\); \}, GROUP_BUY_RECOVERY_POLL_MS\)/,
+    "detailed recovery should run on its slower bounded interval"
+  );
+  assert.doesNotMatch(
+    serverSource,
+    /setInterval\(\(\) => \{ void pollGroupBuyTrades\(\); \}, GROUP_BUY_TRADE_POLL_MS\)/,
+    "the old all-mint 500ms detailed poll must stay retired"
+  );
+});
+
+test("a wake received during an in-flight mint poll is replayed once after completion", () => {
+  const scheduler = functionBody("queueGroupBuyTradePoll");
+
+  assert.match(serverSource, /const groupBuyTradeWakePending = new Map\(\);/);
+  assert.match(
+    scheduler,
+    /groupBuyTradePollInFlight\.has\(mint\)[\s\S]*?groupBuyTradeWakePending\.set\(mint,/,
+    "a busy mint must remember a wake instead of dropping it"
+  );
+  assert.match(
+    scheduler,
+    /\.finally\([\s\S]*?groupBuyTradePollInFlight\.delete\(mint\)/,
+    "the scheduler must always release its per-mint in-flight claim"
+  );
+  assert.match(
+    scheduler,
+    /groupBuyTradeWakePending\.(?:get|has)\(mint\)[\s\S]*?groupBuyTradeWakePending\.delete\(mint\)[\s\S]*?queueGroupBuyTradePoll\(mint/,
+    "a pending wake must be consumed and replayed immediately after the active poll"
+  );
+});
+
+test("a live wake keeps its higher priority through the exact Pump trade request", () => {
+  const scheduler = functionBody("queueGroupBuyTradePoll");
+  const pollMint = functionBody("pollGroupBuyTradesForMint");
+  const collector = sourceBetween("async function collectGroupBuyTrades", "function normalizeGroupBuyTrade");
+  const fetchPage = sourceBetween("async function fetchGroupBuyTradePage", "async function collectGroupBuyTrades");
+  assert.match(scheduler, /pollGroupBuyTradesForMint\(mint, \{ priority \}\)/);
+  assert.match(pollMint, /collectGroupBuyTrades\(mint, \{\s*priority,/);
+  assert.match(collector, /fetchGroupBuyTradePage\(mint, progress\.cursor, \{ priority \}\)/);
+  assert.match(fetchPage, /priority: Math\.max\(Number\(priority\) \|\| 100/);
+});
+
+test("an activity wake schedules one delayed exact confirmation without fabricating an alert", () => {
+  const scheduler = functionBody("queueGroupBuyTradePoll");
+  assert.match(serverSource, /const groupBuyTradeWakeConfirmTimers = new Map\(\);/);
+  assert.match(scheduler, /if \(!confirmOnce \|\| groupBuyTradeBackoff\.has\(mint\)\) return;/);
+  assert.match(scheduler, /setTimeout\(\(\) => \{[\s\S]*?wakeConfirmations \+= 1;[\s\S]*?confirmOnce: false[\s\S]*?\}, 2_500\)/);
+  assert.doesNotMatch(scheduler, /postGroupBuy\(/, "the confirmation may only run the exact trade reader");
+});
+
 test("healthz exposes buy-feed freshness, retry, and durable delivery backlog signals", () => {
   assert.match(serverSource, /buyBot:\s*groupBuyHealthSnapshot\(\)/);
   const health = functionBody("groupBuyHealthSnapshot");
   for (const field of [
     "cursorGaps",
     "retries",
+    "wakePolls",
+    "wakeHits",
+    "wakeConfirmations",
+    "websocketTradeAuthorization",
+    "websocketSubscriptionErrors",
     "lastSuccessAgoMs",
     "httpGateQueued",
     "httpGateCooldownRemainingMs",

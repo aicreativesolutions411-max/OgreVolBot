@@ -637,7 +637,7 @@ test("Wallet Launch Snipe is launch-only and supports Solana creators plus Robin
     serverSource.indexOf("// --- Live Autopilot")
   );
   assert.match(pumpStreamBlock, /onCreation:[\s\S]*maybeWalletLaunchSnipe\(entry\)/);
-  assert.match(pumpStreamBlock, /onTrade:\s*\([^)]*\)\s*=>\s*\{ recordEarlyBuyer/);
+  assert.match(pumpStreamBlock, /onTrade:\s*\([^)]*\)\s*=>\s*\{\s*recordEarlyBuyer/);
   assert.doesNotMatch(pumpStreamBlock.match(/onTrade:[^\n]+/)?.[0] || "", /maybeWalletLaunchSnipe/);
   assert.match(functionBody(serverSource, "normalizeWalletLaunchChain"), /robinhood/);
   assert.match(functionBody(serverSource, "webCreateWalletLaunchSnipe"), /amountEth/);
@@ -2225,7 +2225,9 @@ test("Pump buy polling is fast, cursor-safe, and does not swallow a new coin's f
   const scan = functionBody(serverSource, "getGroupBuyScan");
   const post = functionBody(serverSource, "postGroupBuy");
   const poll = functionBody(serverSource, "pollGroupBuyTrades");
-  assert.match(serverSource, /const GROUP_BUY_TRADE_POLL_MS = 500/);
+  assert.match(serverSource, /const GROUP_BUY_WAKE_POLL_MS = 1_500/);
+  assert.match(serverSource, /const GROUP_BUY_RECOVERY_POLL_MS = 10_000/);
+  assert.match(serverSource, /const GROUP_BUY_RECOVERY_BATCH = 6/);
   assert.match(serverSource, /const GROUP_BUY_TRADE_MAX_PAGES = 20/);
   assert.match(applyPage, /progress\.activationCutoffAt/);
   assert.match(applyPage, /progress\.reachedSeen \|\| !hasMore/);
@@ -2236,13 +2238,19 @@ test("Pump buy polling is fast, cursor-safe, and does not swallow a new coin's f
   assert.match(serverSource, /createGroupBuyHostRateGate/);
   assert.match(serverSource, /restoreGroupBuyReliabilityState/);
   assert.match(start, /setTimeout\(\(\) => \{ void pollGroupBuyTrades\(\); \}, 1_000\)/);
-  assert.match(start, /GROUP_BUY_TRADE_POLL_MS/);
-  assert.match(poll, /pollGroupBuyTradesForMint\(mint\)[\s\S]*\.catch[\s\S]*\.finally/);
+  assert.match(start, /GROUP_BUY_WAKE_POLL_MS/);
+  assert.match(start, /GROUP_BUY_RECOVERY_POLL_MS/);
+  assert.doesNotMatch(start, /GROUP_BUY_TRADE_POLL_MS/);
+  assert.match(serverSource, /queueGroupBuyTradePoll\(mint, \{ priority: 100 \}\)/);
   assert.match(scan, /groupBuyScanInFlight/);
   assert.match(serverSource, /const GROUP_BUY_FAST_ENRICHMENT_MS = 120/);
   assert.match(post, /groupBuyFastTimeout\(scanRequest, GROUP_BUY_FAST_ENRICHMENT_MS, null\)/);
   assert.match(post, /groupBuyFastTimeout\(supplyRequest, GROUP_BUY_FAST_ENRICHMENT_MS, 0\)/);
   assert.match(post, /getGroupBuySupply\(mint, cachedScan\)/);
+  assert.equal([...serverSource.matchAll(/createPumpPortalStream\s*\(/g)].length, 1, "PumpPortal must use one multiplexed socket");
+  assert.doesNotMatch(serverSource, /function buyWsConnect\s*\(/);
+  assert.match(serverSource, /autoSubscribeCreationTrades:\s*false/);
+  assert.match(serverSource, /pumpPortalApiKey:\s*String\(process\.env\.PUMPPORTAL_API_KEY/);
 });
 
 test("scan catches real pasted CAs in text without sentence false-positives", () => {
