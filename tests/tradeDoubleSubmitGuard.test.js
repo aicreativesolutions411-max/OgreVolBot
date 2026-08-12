@@ -2240,8 +2240,8 @@ test("Pump buy polling is fast, cursor-safe, and does not swallow a new coin's f
   assert.match(poll, /pollGroupBuyTradesForMint\(mint\)[\s\S]*\.catch[\s\S]*\.finally/);
   assert.match(scan, /groupBuyScanInFlight/);
   assert.match(serverSource, /const GROUP_BUY_FAST_ENRICHMENT_MS = 120/);
-  assert.match(post, /scanFastTimeout\(scanRequest, GROUP_BUY_FAST_ENRICHMENT_MS, null\)/);
-  assert.match(post, /scanFastTimeout\(supplyRequest, GROUP_BUY_FAST_ENRICHMENT_MS, 0\)/);
+  assert.match(post, /groupBuyFastTimeout\(scanRequest, GROUP_BUY_FAST_ENRICHMENT_MS, null\)/);
+  assert.match(post, /groupBuyFastTimeout\(supplyRequest, GROUP_BUY_FAST_ENRICHMENT_MS, 0\)/);
   assert.match(post, /getGroupBuySupply\(mint, cachedScan\)/);
 });
 

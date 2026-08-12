@@ -223,7 +223,8 @@ export function nextGroupBuyOutboxAt(storeValue, chatId) {
   const store = normalizeGroupBuyDeliveryStore(storeValue);
   const rows = Object.values(store.outbox)
     .filter((item) => String(item?.chatId) === String(chatId))
-    .sort((a, b) => finiteInteger(a.createdAt) - finiteInteger(b.createdAt) || String(a.id).localeCompare(String(b.id)));
+    .sort((a, b) => finiteInteger(a.createdAt) - finiteInteger(b.createdAt)
+      || String(a.id).localeCompare(String(b.id)));
   if (!rows.length) return null;
   return finiteInteger(rows[0].nextAttemptAt);
 }

@@ -73,23 +73,29 @@ test("the shared delivery store preserves Solana cursor snapshots across outbox 
   assert.deepEqual(restarted.sol.tokens.MintA, snapshot);
 });
 
-test("transient Retry-After and network failures remain durable and strict FIFO", () => {
+test("a delayed retry preserves per-chat alert chronology", () => {
   const first = alertItem("first", 1_000);
   const second = alertItem("second", 1_001);
+  const third = alertItem("third", 1_002);
   let state = enqueueGroupBuyOutbox(null, first, 1_000).store;
   state = enqueueGroupBuyOutbox(state, second, 1_001).store;
+  state = enqueueGroupBuyOutbox(state, third, 1_002).store;
   state = markGroupBuyFailed(state, first.id, {
     message: "Too Many Requests",
     providerData: { parameters: { retry_after: 30 } },
   }, { now: 2_000 }).store;
 
   assert.equal(state.outbox[first.id].nextAttemptAt, 32_000);
-  assert.equal(dueGroupBuyOutboxItem(state, CHAT, 2_001), null, "a newer due item cannot leapfrog the oldest retry");
-  assert.equal(dueGroupBuyOutboxItem(state, CHAT, 32_000)?.id, first.id);
+  assert.equal(dueGroupBuyOutboxItem(state, CHAT, 2_001), null,
+    "later alerts cannot overtake the oldest alert while its retry is delayed");
+
+  assert.equal(dueGroupBuyOutboxItem(state, CHAT, 32_000)?.id, first.id,
+    "the oldest alert resumes first once its retry becomes due");
 
   state = markGroupBuyFailed(state, first.id, new Error("read ECONNRESET socket hang up"), { now: 32_000 }).store;
   assert.ok(state.outbox[first.id].nextAttemptAt > 32_000);
-  assert.equal(Object.keys(state.outbox).length, 2);
+  assert.equal(Object.keys(state.outbox).length, 3);
+  assert.equal(dueGroupBuyOutboxItem(state, CHAT, 32_001), null);
 });
 
 test("permanent payload failures terminate without blocking the chat", () => {

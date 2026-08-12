@@ -169,6 +169,24 @@ test("the shared Pump host gate lets live buy pages jump ahead of queued backgro
   assert.deepEqual(starts, ["background-1", "live-buy", "background-2"]);
 });
 
+test("41 live-priority requests spaced at 200ms start the 41st before ten seconds", async () => {
+  let now = 0;
+  const starts = [];
+  const gate = helpers.createGroupBuyHostRateGate({
+    minIntervalMs: 200,
+    nowFn: () => now,
+    sleepFn: async (milliseconds) => { now += milliseconds; },
+  });
+
+  await Promise.all(Array.from({ length: 41 }, () => gate.schedule(async () => {
+    starts.push(now);
+  }, { priority: 100 })));
+
+  assert.equal(starts.length, 41);
+  assert.equal(starts[40], 40 * 200);
+  assert.ok(starts[40] < 10_000, `41st live request started at ${starts[40]}ms`);
+});
+
 test("priority preference is bounded so charts and fee jobs cannot starve", async () => {
   let now = 0;
   const starts = [];
@@ -187,6 +205,74 @@ test("priority preference is bounded so charts and fee jobs cannot starve", asyn
   ];
   await Promise.all(jobs);
   assert.ok(starts.indexOf("background") <= 8, `background started too late: ${starts.join(",")}`);
+});
+
+test("a bounded host gate admits a live buy by evicting older queued background work", async () => {
+  let now = 0;
+  const starts = [];
+  const gate = helpers.createGroupBuyHostRateGate({
+    minIntervalMs: 10,
+    maxQueue: 2,
+    maxWaitMs: 1_000,
+    nowFn: () => now,
+    sleepFn: async (milliseconds) => { now += milliseconds; },
+  });
+
+  const running = gate.schedule(async () => { starts.push("running"); });
+  const evicted = gate.schedule(async () => { starts.push("evicted-background"); });
+  const retained = gate.schedule(async () => { starts.push("retained-background"); });
+  const equalOverflow = gate.schedule(async () => { starts.push("equal-overflow"); });
+  const equalOverflowRejected = assert.rejects(equalOverflow);
+  const live = gate.schedule(async () => { starts.push("live-buy"); }, { priority: 100 });
+  const evictedRejected = assert.rejects(evicted);
+
+  await Promise.all([running, retained, live, equalOverflowRejected, evictedRejected]);
+  assert.deepEqual(starts, ["running", "live-buy", "retained-background"]);
+  assert.equal(gate.snapshot().queued, 0);
+});
+
+test("queued host-gate work expires before its operation can run", async () => {
+  let now = 0;
+  let staleRan = false;
+  const gate = helpers.createGroupBuyHostRateGate({
+    minIntervalMs: 10,
+    maxQueue: 2,
+    maxWaitMs: 5,
+    nowFn: () => now,
+    sleepFn: async (milliseconds) => { now += milliseconds; },
+  });
+
+  const first = gate.schedule(async () => {});
+  const stale = gate.schedule(async () => { staleRan = true; });
+  await first;
+  await assert.rejects(stale, (error) => {
+    assert.equal(error?.code, "GROUP_BUY_GATE_EXPIRED");
+    return true;
+  });
+  assert.equal(staleRan, false);
+});
+
+test("a retry never evicts another mint's queued live-buy page", async () => {
+  let now = 0;
+  const starts = [];
+  const gate = helpers.createGroupBuyHostRateGate({
+    minIntervalMs: 10,
+    maxQueue: 2,
+    maxWaitMs: 1_000,
+    nowFn: () => now,
+    sleepFn: async (milliseconds) => { now += milliseconds; },
+  });
+
+  const running = gate.schedule(async () => { starts.push("running"); });
+  const liveA = gate.schedule(async () => { starts.push("live-a"); }, { priority: 100 });
+  const liveB = gate.schedule(async () => { starts.push("live-b"); }, { priority: 100 });
+  const retry = gate.schedule(async () => { starts.push("retry"); }, { priority: 110 });
+
+  await Promise.all([running, liveA, liveB, assert.rejects(retry, (error) => {
+    assert.equal(error?.code, "GROUP_BUY_GATE_FULL");
+    return true;
+  })]);
+  assert.deepEqual(starts, ["running", "live-a", "live-b"]);
 });
 
 test("websocket delivery cannot initialize or advance the HTTP baseline", () => {
@@ -245,7 +331,7 @@ test("zero or identity-less websocket events do not poison recovery by HTTP", ()
   assert.match(postGroupBuySource, /firstString\(\s*eventKey,\s*eventAlias,/s);
   assert.doesNotMatch(postGroupBuySource, /await resolveGroupTokenImage/);
   assert.match(postGroupBuySource, /void resolveGroupTokenImage\(mint\)/);
-  assert.match(serverSource, /queueGroupBuyAlert\([^;]+\{ eventKey: alertEventKey, targetGeneration \},\s*\);/s);
+  assert.match(serverSource, /queueGroupBuyAlert\([^;]+\{ eventKey: alertEventKey, targetGeneration, detectedAt:/s);
   assert.match(functionBody("pollGroupBuyTradesForMint"), /await handoffGroupBuyTrade\(mint, trade\)/);
   assert.match(functionBody("pollGroupBuyTradesForMint"), /if \(!commit\(\)\) throw/);
   assert.match(functionBody("pollGroupBuyTradesForMint"), /await persistGroupBuySolState\(mint\)/);
@@ -256,6 +342,7 @@ test("zero or identity-less websocket events do not poison recovery by HTTP", ()
   assert.match(fetchPage, /priority: attempt > 1 \? 110 : 100/);
   assert.match(fetchPage, /maxAttempts: GROUP_BUY_TRADE_FETCH_ATTEMPTS/);
   assert.match(fetchPage, /pumpSwapApiHostGate\.cooldown/);
+  assert.doesNotMatch(functionBody("scheduleGroupBuyTradeBackoff"), /\.cooldown\(/);
 });
 
 test("one websocket alias merges with one HTTP slot without collapsing identical instructions", () => {
@@ -382,6 +469,124 @@ test("pagination resumes after page errors or budgets and never finalizes a curs
   assert.deepEqual([...resumedState.seen].slice(0, 3), ["id:newest", "id:middle", "id:older"]);
 });
 
+test("only a true newest page is fast-handed off before pagination continues", async () => {
+  const collectorSource = `async function collectGroupBuyTrades${sourceBetween(
+    "async function collectGroupBuyTrades",
+    "function normalizeGroupBuyTrade"
+  )}`;
+  assert.match(
+    collectorSource,
+    /const newestPage = progress\.pageCountTotal === 0 && !progress\.cursor;/,
+    "newest-page detection must include both the total-page count and empty cursor"
+  );
+
+  const makeCollector = ({ state, fetchPage, events }) => {
+    const groupBuyHttpState = new Map([["mint", state]]);
+    const groupBuyTradeDiag = { pages: 0, rows: 0, lastSuccessAt: 0, paginationYields: 0 };
+    const dependencies = {
+      groupBuyHttpState,
+      createGroupBuyHttpState: helpers.createGroupBuyHttpState,
+      beginGroupBuyHttpProgress: helpers.beginGroupBuyHttpProgress,
+      GROUP_BUY_INITIAL_LOOKBACK_MS: 30_000,
+      GROUP_BUY_TRADE_MAX_PAGES: 20,
+      fetchGroupBuyTradePage: async (_mint, cursor) => {
+        events.push(`fetch:${cursor || "newest"}`);
+        return fetchPage(cursor);
+      },
+      groupBuyTradeDiag,
+      applyGroupBuyHttpPage: helpers.applyGroupBuyHttpPage,
+      groupBuyTradeIdentity: identity,
+      groupBuyTradeAlias: alias,
+      groupBuyTradeTimestampMs: () => 0,
+      GROUP_BUY_TRADE_SEEN_LIMIT: 100,
+      commitGroupBuyHttpProgress: helpers.commitGroupBuyHttpProgress,
+    };
+    const factory = Function(
+      ...Object.keys(dependencies),
+      `"use strict"; ${collectorSource}; return collectGroupBuyTrades;`
+    );
+    return factory(...Object.values(dependencies));
+  };
+
+  const newestState = helpers.createGroupBuyHttpState();
+  newestState.initialized = true;
+  const newestEvents = [];
+  const collectNewest = makeCollector({
+    state: newestState,
+    events: newestEvents,
+    fetchPage: (cursor) => cursor
+      ? { trades: [{ id: "older", tx: "older" }], pagination: { hasMore: false } }
+      : { trades: [{ id: "newest-buy", tx: "newest" }], pagination: { hasMore: true, nextCursor: "page-2" } },
+  });
+  await collectNewest("mint", {
+    onFreshPage: async (trades) => newestEvents.push(`handoff:${trades.map((trade) => trade.id).join(",")}`),
+  });
+  assert.deepEqual(newestEvents, ["fetch:newest", "handoff:newest-buy", "fetch:page-2"]);
+
+  const resumedState = helpers.createGroupBuyHttpState();
+  resumedState.initialized = true;
+  const resumedProgress = helpers.beginGroupBuyHttpProgress(resumedState);
+  helpers.applyGroupBuyHttpPage(resumedProgress, {
+    trades: [{ id: "page-1", tx: "page-1" }],
+    pagination: { hasMore: true, nextCursor: "page-2" },
+  }, identity, alias);
+  assert.equal(resumedProgress.pageCountTotal, 1);
+  assert.equal(resumedProgress.cursor, "page-2");
+
+  const resumedEvents = [];
+  const collectResumed = makeCollector({
+    state: resumedState,
+    events: resumedEvents,
+    fetchPage: (cursor) => cursor === "page-2"
+      ? { trades: [{ id: "page-2", tx: "page-2" }], pagination: { hasMore: true, nextCursor: "page-3" } }
+      : { trades: [{ id: "page-3", tx: "page-3" }], pagination: { hasMore: false } },
+  });
+  await collectResumed("mint", {
+    onFreshPage: async (trades) => resumedEvents.push(`handoff:${trades.map((trade) => trade.id).join(",")}`),
+  });
+  assert.deepEqual(resumedEvents, ["fetch:page-2", "fetch:page-3"]);
+});
+
+test("a same-mint buy burst can pay the cold enrichment ceiling only once", () => {
+  const postGroupBuy = sourceBetween(
+    "async function postGroupBuy",
+    "async function warmRhGroupBuyEthUsd"
+  );
+  const pollGroupBuyTrades = functionBody("pollGroupBuyTradesForMint");
+
+  assert.match(serverSource, /const groupBuyColdEnrichmentAttemptAt = new Map\(\);/);
+  assert.match(
+    postGroupBuy,
+    /const coldWaitAllowed = !cachedScan\s*&& now - Number\(groupBuyColdEnrichmentAttemptAt\.get\(mint\) \|\| 0\) >= 5_000;/,
+    "the cold-wait lease must be scoped by mint"
+  );
+  assert.match(
+    postGroupBuy,
+    /if \(coldWaitAllowed\) \{\s*groupBuyColdEnrichmentAttemptAt\.set\(mint, now\);/,
+    "the first buy must claim the lease before awaiting enrichment"
+  );
+  assert.match(
+    postGroupBuy,
+    /coldWaitAllowed \? groupBuyFastTimeout\(scanRequest, GROUP_BUY_FAST_ENRICHMENT_MS, null\) : Promise\.resolve\(null\)/,
+    "later buys must bypass the scan timeout"
+  );
+  assert.match(
+    postGroupBuy,
+    /coldWaitAllowed \? groupBuyFastTimeout\(supplyRequest, GROUP_BUY_FAST_ENRICHMENT_MS, 0\) : Promise\.resolve\(0\)/,
+    "later buys must bypass the supply timeout"
+  );
+  assert.match(
+    pollGroupBuyTrades,
+    /const buys = liveFresh\s*\.filter\([\s\S]*?\)\s*\.reverse\(\);\s*const results = await Promise\.all/,
+    "newest-page rows must be claimed oldest-first before concurrent handoff"
+  );
+  assert.match(
+    pollGroupBuyTrades,
+    /const results = await Promise\.all\(buys\.map\(\(trade\) => handoffGroupBuyTrade\(mint, trade\)\)\);/,
+    "newest-page buys must enter the per-mint delivery queue concurrently"
+  );
+});
+
 test("healthz exposes buy-feed freshness, retry, and durable delivery backlog signals", () => {
   assert.match(serverSource, /buyBot:\s*groupBuyHealthSnapshot\(\)/);
   const health = functionBody("groupBuyHealthSnapshot");
@@ -394,6 +599,8 @@ test("healthz exposes buy-feed freshness, retry, and durable delivery backlog si
     "deliveryPendingAlerts",
     "deliveryOldestPendingAgeMs",
     "deliveryBuysDelivered",
+    "deliveryBuysOver10s",
+    "deliveryLastBuyLatencyMs",
     "deliveryLastErrorAgoMs",
   ]) {
     assert.match(health, new RegExp(`\\b${field}\\b`), `${field} must remain observable`);
