@@ -653,11 +653,11 @@ test("DexScreener wakes the detailed buy feed in one bounded batch lane", () => 
   );
 });
 
-test("recovery polling is rotating and bounded instead of queueing every mint every 500ms", () => {
+test("recovery polling is sparse and rotating so live buys retain provider capacity", () => {
   const recoveryPoll = functionBody("pollGroupBuyTrades");
 
-  assert.match(serverSource, /const GROUP_BUY_RECOVERY_POLL_MS = 10_000;/);
-  assert.match(serverSource, /const GROUP_BUY_RECOVERY_BATCH = 6;/);
+  assert.match(serverSource, /const GROUP_BUY_RECOVERY_POLL_MS = 30_000;/);
+  assert.match(serverSource, /const GROUP_BUY_RECOVERY_BATCH = 1;/);
   assert.match(
     recoveryPoll,
     /GROUP_BUY_RECOVERY_BATCH/,
@@ -688,6 +688,23 @@ test("recovery polling is rotating and bounded instead of queueing every mint ev
     /setInterval\(\(\) => \{ void pollGroupBuyTrades\(\); \}, GROUP_BUY_TRADE_POLL_MS\)/,
     "the old all-mint 500ms detailed poll must stay retired"
   );
+});
+
+test("the provider's last quota slot is reserved for priority-120 live buy reads", () => {
+  const pumpFetch = sourceBetween("async function pumpSwapApiFetch", "async function pumpSwapApiJson");
+  assert.match(serverSource, /let pumpSwapApiBackgroundPauseUntil = 0;/);
+  assert.match(pumpFetch, /normalizedPriority < 120 && Date\.now\(\) < pumpSwapApiBackgroundPauseUntil/);
+  assert.match(
+    pumpFetch,
+    /remaining <= 1[\s\S]*?pumpSwapApiBackgroundPauseUntil = Math\.max/,
+    "a low remaining quota must park recovery/chart traffic",
+  );
+  assert.doesNotMatch(
+    pumpFetch,
+    /remaining <= 1[\s\S]{0,180}?pumpSwapApiHostGate\.cooldown/,
+    "low remaining quota must not freeze a priority-120 live read",
+  );
+  assert.match(pumpFetch, /normalizedPriority >= 120[\s\S]*?cooldown\(Math\.min\(5_000, delayMs\)\)/);
 });
 
 test("a wake received during an in-flight mint poll is replayed once after completion", () => {
@@ -744,6 +761,7 @@ test("healthz exposes buy-feed freshness, retry, and durable delivery backlog si
     "lastSuccessAgoMs",
     "httpGateQueued",
     "httpGateCooldownRemainingMs",
+    "httpBackgroundPauseRemainingMs",
     "deliveryPendingAlerts",
     "deliveryOldestPendingAgeMs",
     "deliveryBuysDelivered",

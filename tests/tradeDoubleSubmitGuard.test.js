@@ -2226,8 +2226,8 @@ test("Pump buy polling is fast, cursor-safe, and does not swallow a new coin's f
   const post = functionBody(serverSource, "postGroupBuy");
   const poll = functionBody(serverSource, "pollGroupBuyTrades");
   assert.match(serverSource, /const GROUP_BUY_WAKE_POLL_MS = 1_500/);
-  assert.match(serverSource, /const GROUP_BUY_RECOVERY_POLL_MS = 10_000/);
-  assert.match(serverSource, /const GROUP_BUY_RECOVERY_BATCH = 6/);
+  assert.match(serverSource, /const GROUP_BUY_RECOVERY_POLL_MS = 30_000/);
+  assert.match(serverSource, /const GROUP_BUY_RECOVERY_BATCH = 1/);
   assert.match(serverSource, /const GROUP_BUY_TRADE_MAX_PAGES = 20/);
   assert.match(applyPage, /progress\.activationCutoffAt/);
   assert.match(applyPage, /progress\.reachedSeen \|\| !hasMore/);
