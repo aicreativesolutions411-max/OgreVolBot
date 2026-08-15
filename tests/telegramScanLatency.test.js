@@ -37,7 +37,7 @@ test("cold Telegram scans publish market facts before slow safety providers fini
   assert.match(look, /const firstResponseBudgetMs = Math\.min\(750, Math\.max\(250,/);
   assert.match(look, /Loading live market data now; safety follows on this same card/);
   const preview = functionBody(serverSource, "buildSlimeScanMarketPreview");
-  assert.match(preview, /cachedScan \? \{ \.\.\.cachedScan, rug: null, shield: null, dexPaid: null \}/);
+  assert.match(preview, /cachedScan \? \{ \.\.\.cachedScan, rug: null, shield: null, dexPaid: null, dexPromotion: null \}/);
   assert.match(preview, /scanJupiterSecurity\(jupiterReport, mint\)/);
   assert.match(preview, /rug: jupiterSecurity\.rug/);
   assert.match(preview, /shield: jupiterSecurity\.shield/);

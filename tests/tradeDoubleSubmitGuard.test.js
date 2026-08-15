@@ -868,6 +868,60 @@ test("Telegram Buy is CA-first and scan/buy cards recover explicit 24h volume", 
   assert.match(functionBody(serverSource, "postGroupBuyRh"), /24h Vol/);
 });
 
+test("Telegram scans show exact DexScreener paid products and active boost status", () => {
+  const normalize = functionBody(serverSource, "normalizeDexPromotionOrders");
+  assert.match(normalize, /status === "approved"/);
+  assert.match(normalize, /\["processing", "on-hold"\]/);
+  assert.match(normalize, /Array\.isArray\(data\?\.orders\)/); // supports the current {orders, boosts} envelope
+  assert.match(normalize, /Array\.isArray\(data\?\.boosts\)/);
+  assert.match(normalize, /approvedTypes/);
+  assert.match(normalize, /pendingTypes/);
+  assert.match(normalize, /totalBoostPurchased/);
+  const runNormalize = new Function("data", normalize);
+  assert.deepEqual(runNormalize({
+    orders: [
+      { type: "tokenAd", status: "approved", paymentTimestamp: 100 },
+      { type: "trendingBarAd", status: "processing", paymentTimestamp: 200 }
+    ],
+    boosts: [
+      { amount: 50, paymentTimestamp: 300 },
+      { amount: 500, paymentTimestamp: 400 }
+    ]
+  }), {
+    paid: true,
+    approvedTypes: ["tokenAd"],
+    pendingTypes: ["trendingBarAd"],
+    boostAmounts: [50, 500],
+    totalBoostPurchased: 550,
+    latestPaymentAt: 400,
+    activeBoosts: null,
+    goldenTicker: false
+  });
+
+  const fetchPromotion = functionBody(serverSource, "fetchDexPromotionStatus");
+  assert.match(fetchPromotion, /orders\/v1\/solana/);
+  assert.match(fetchPromotion, /dexPromotionCache/); // stay within DexScreener's 60 rpm orders limit
+  assert.match(fetchPromotion, /dexPromotionInFlight/); // simultaneous scans share one lookup
+
+  const boost = functionBody(serverSource, "dexActiveBoostsForToken");
+  assert.match(boost, /baseToken/); // never attribute a quote token's boost to the scanned CA
+  assert.match(boost, /pair\.boosts\.active/);
+  assert.match(functionBody(serverSource, "dexPromotionWithBoosts"), /activeBoosts >= 500/);
+
+  const gather = functionBody(serverSource, "gatherSlimeScan");
+  assert.match(gather, /fetchDexPromotionStatus\(mint\)/);
+  assert.match(gather, /dexPromotionWithBoosts\(dexPromotionRead, mint, pairs\)/);
+  const card = functionBody(serverSource, "formatSlimeScanCard");
+  assert.match(card, /DEX Visibility/);
+  assert.match(card, /Enhanced Token Info/);
+  assert.match(card, /Community Takeover/);
+  assert.match(card, /Token Ad \/ Banner/);
+  assert.match(card, /Trending Bar Ad/);
+  assert.match(card, /Golden Ticker/);
+  assert.match(card, /activeBoosts\.toLocaleString/);
+  assert.match(card, /dexBoostPacks/);
+});
+
 test("RH trading fees stay fixed while the optional referral share comes from the total", () => {
   const trade = functionBody(serverSource, "webRhTradeCore");
   assert.match(trade, /const feeBps = BigInt\(CONFIG\.baseTradeFeeBps\)/);
