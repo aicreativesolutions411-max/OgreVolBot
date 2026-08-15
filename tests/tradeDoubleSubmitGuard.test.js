@@ -874,7 +874,7 @@ test("Telegram Buy is CA-first and scan/buy cards recover explicit 24h volume", 
   assert.match(functionBody(serverSource, "postGroupBuyRh"), /24h Vol/);
 });
 
-test("Telegram scans show exact DexScreener paid products and active boost status", () => {
+test("Telegram scans separate paid Dex profiles from currently active boosts", () => {
   const normalize = functionBody(serverSource, "normalizeDexPromotionOrders");
   assert.match(normalize, /status === "approved"/);
   assert.match(normalize, /\["processing", "on-hold"\]/);
@@ -894,7 +894,8 @@ test("Telegram scans show exact DexScreener paid products and active boost statu
       { amount: 500, paymentTimestamp: 400 }
     ]
   }), {
-    paid: true,
+    paid: false,
+    paidProfileTypes: [],
     approvedTypes: ["tokenAd"],
     pendingTypes: ["trendingBarAd"],
     boostAmounts: [50, 500],
@@ -903,11 +904,22 @@ test("Telegram scans show exact DexScreener paid products and active boost statu
     activeBoosts: null,
     goldenTicker: false
   });
+  assert.equal(runNormalize({
+    orders: [{ type: "tokenProfile", status: "approved", paymentTimestamp: 500 }],
+    boosts: []
+  }).paid, true); // approved profile/banner identity is DEX Paid
 
   const fetchPromotion = functionBody(serverSource, "fetchDexPromotionStatus");
   assert.match(fetchPromotion, /orders\/v1\/solana/);
   assert.match(fetchPromotion, /dexPromotionCache/); // stay within DexScreener's 60 rpm orders limit
   assert.match(fetchPromotion, /dexPromotionInFlight/); // simultaneous scans share one lookup
+  assert.match(fetchPromotion, /bounded retry|if \(!data\)/); // one transient timeout cannot leave the final card unknown
+  assert.match(fetchPromotion, /cached\?\.value\?\.paid === true/); // negative status refreshes quickly after a new purchase
+
+  const fetchActiveBoosts = functionBody(serverSource, "fetchDexActiveBoosts");
+  assert.match(fetchActiveBoosts, /token-pairs\/v1\/solana/); // exact-CA live source, not the historical order list
+  assert.match(fetchActiveBoosts, /dexActiveBoostCache/);
+  assert.match(fetchActiveBoosts, /dexActiveBoostInFlight/);
 
   const boost = functionBody(serverSource, "dexActiveBoostsForToken");
   assert.match(boost, /baseToken/); // never attribute a quote token's boost to the scanned CA
@@ -916,16 +928,19 @@ test("Telegram scans show exact DexScreener paid products and active boost statu
 
   const gather = functionBody(serverSource, "gatherSlimeScan");
   assert.match(gather, /fetchDexPromotionStatus\(mint\)/);
-  assert.match(gather, /dexPromotionWithBoosts\(dexPromotionRead, mint, pairs\)/);
+  assert.match(gather, /fetchDexActiveBoosts\(mint\)/);
+  assert.match(gather, /dexPromotionWithBoosts\(dexPromotionRead, mint, pairs, exactActiveBoosts\)/);
+  const settle = functionBody(serverSource, "settleTelegramSolScanCard");
+  assert.match(settle, /fetchDexPromotionStatus\(mint\)/);
+  assert.match(settle, /fetchDexActiveBoosts\(mint\)/); // repeat scans refresh visibility behind the instant card
+  assert.match(settle, /No ticker, market, safety, or RPC fan-out is repeated here/);
   const card = functionBody(serverSource, "formatSlimeScanCard");
   assert.match(card, /DEX Visibility/);
-  assert.match(card, /Enhanced Token Info/);
-  assert.match(card, /Community Takeover/);
-  assert.match(card, /Token Ad \/ Banner/);
-  assert.match(card, /Trending Bar Ad/);
+  assert.match(card, /DEX Paid/);
+  assert.match(card, /Active Boosts/);
   assert.match(card, /Golden Ticker/);
   assert.match(card, /activeBoosts\.toLocaleString/);
-  assert.match(card, /dexBoostPacks/);
+  assert.doesNotMatch(card, /dexBoostPacks|Pending <b>|Products <b>/); // no expired packs/history clutter
 });
 
 test("RH trading fees stay fixed while the optional referral share comes from the total", () => {
