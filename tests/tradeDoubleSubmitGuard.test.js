@@ -857,8 +857,14 @@ test("Telegram Buy is CA-first and scan/buy cards recover explicit 24h volume", 
   assert.match(gather, /scanVolumeWindowValue\("h24", meta, bonding, best\)/);
   const stats = functionBody(serverSource, "scanMarketStatsFromSources");
   assert.match(stats, /volume24h: Number\(volume24h\)/);
+  assert.match(stats, /pumpswap\|pump\[-_ \]\?amm\|raydium\|meteora\|orca/);
+  assert.match(stats, /!meta\?\.graduated && !graduatedDexMarket/); // a migrated PumpSwap coin never reuses stale curve MC
+  assert.match(stats, /Number\(bondPct\) >= 99\.5/);
+  assert.match(functionBody(serverSource, "livePairCandidateToRow"), /pumpswap\|pump\[-_ \]\?amm\|raydium\|meteora\|orca/);
   const solCard = functionBody(serverSource, "formatSlimeScanCard");
+  assert.match(solCard, /typeof stats\.onCurve === "boolean"/); // formatter cannot reclassify a migrated live pool as a stale curve
   assert.match(solCard, /volume24h > 0[\s\S]*<i>24h<\/i>/);
+  assert.match(functionBody(serverSource, "renderSolScanCardPng"), /typeof stats\.onCurve === "boolean"/);
   const solBuyCard = functionBody(serverSource, "postGroupBuy");
   assert.match(solBuyCard, /cardVol24/);
   assert.match(solBuyCard, /24h Vol/);
@@ -4408,19 +4414,27 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   );
 
   const cashtag = functionBody(serverSource, "resolveCashtagToMint");
-  assert.match(cashtag, /fetchMoralisTrendingCoins/);                // live trend membership beats clone liquidity alone
-  assert.match(cashtag, /fetchGeckoPools\("trending"/);            // independent public trending source
-  assert.match(cashtag, /String\(ticker \|\| ""\).*toLowerCase\(\) !== key/); // exact ticker matches only
-  assert.match(cashtag, /tickerCandidateScore/);
-  assert.match(cashtag, /tickerCandidateDominance/);
-  assert.match(cashtag, /tickerMarketLeadership/);
-  assert.match(cashtag, /maxima\.marketCap >= 50_000/);
-  assert.match(cashtag, /maxima\.marketCap \* 0\.05/);
-  assert.match(cashtag, /maxima\.liquidityUsd \* 0\.10/);
-  assert.match(cashtag, /screenTickerCandidateSafety/);             // every returned ticker contract is safety-screened
-  assert.match(cashtag, /const safe = screened/);
-  assert.match(cashtag, /const mint = safe\[0\]\?\.mint \|\| null/); // fail closed if every candidate is dangerous/unchecked
-  assert.match(cashtag, /tickerResolutionMetaCache\.set/);
+  const cashtagFresh = functionBody(serverSource, "resolveCashtagToMintFresh");
+  assert.match(serverSource, /const cashtagMintInFlight = new Map\(\)/);
+  assert.match(cashtag, /cashtagMintInFlight\.get\(key\)/);          // simultaneous groups share one exact search
+  assert.match(cashtag, /cached\.mint \? 60_000 : 2_000/);           // good hits stay hot; provider misses retry quickly
+  assert.match(cashtagFresh, /latest\/dex\/search/);                 // exact Dex market is the fast primary
+  assert.match(cashtagFresh, /lite-api\.jup\.ag\/tokens\/v2\/search/); // independent exact index catches canonical coins omitted by Dex search
+  assert.match(cashtagFresh, /const \[dexData, jupiterData\] = await Promise\.all/);
+  assert.match(cashtagFresh, /row\?\.isVerified === true \? 90/);    // verified canonical identities beat same-symbol spoof markets
+  assert.match(cashtagFresh, /scanFastTimeout\(trackerPromise, 180/); // Tracker may enrich but cannot hold a Dex hit
+  assert.doesNotMatch(cashtagFresh, /fetchMoralisTrendingCoins|fetchGeckoPools/); // no slow promoted-universe fan-out
+  assert.match(cashtagFresh, /String\(ticker \|\| ""\).*toLowerCase\(\) !== key/); // exact ticker matches only
+  assert.match(cashtagFresh, /tickerCandidateScore/);
+  assert.match(cashtagFresh, /tickerCandidateDominance/);
+  assert.match(cashtagFresh, /tickerMarketLeadership/);
+  assert.match(cashtagFresh, /maxima\.marketCap >= 50_000/);
+  assert.match(cashtagFresh, /maxima\.marketCap \* 0\.05/);
+  assert.match(cashtagFresh, /maxima\.liquidityUsd \* 0\.10/);
+  assert.doesNotMatch(cashtagFresh, /screenTickerCandidateSafety/);  // identification is fast; scan safety still gates Buy
+  assert.match(cashtagFresh, /const selected = ranked\[0\] \|\| null/);
+  assert.match(cashtagFresh, /tickerResolutionMetaCache\.set/);
+  assert.match(cashtagFresh, /publishSlimeScanPreview\(mint, tickerPreview\)/); // selected market is reused by the first card
   const tickerSafety = functionBody(serverSource, "screenTickerCandidateSafety");
   assert.match(tickerSafety, /webSlimeShield/);
   assert.match(tickerSafety, /getMintSafetyInfo/);                    // on-chain authorities do not rely on index text
@@ -4431,16 +4445,11 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
 
   const ticker = functionBody(serverSource, "resolveTickerToScanTarget");
   const chainHint = functionBody(serverSource, "tickerChainHintFromText");
-  assert.match(ticker, /const solPromise = resolveCashtagToMint/);  // deep Sol work starts concurrently
-  assert.match(ticker, /resolveRhTickerCandidate/);
+  assert.match(ticker, /return resolveCashtagToMint\(q\)/);        // unqualified tickers are deterministic Solana-only
   assert.match(ticker, /chainHint === "solana"/);
   assert.match(ticker, /chainHint === "robinhood"/);
-  assert.match(ticker, /tickerRhCandidateHasActiveMarket\(rh\)/); // identity-only RH clones do not win
-  assert.match(ticker, /tickerRhClearlyDominates/);                 // decisive RH market returns without waiting for Sol safety
-  assert.match(ticker, /providerTimeoutMs: 4_000/);                 // weak Sol dust gets one bounded chain-native retry
-  assert.match(ticker, /weakSol.*marketCap.*50_000.*volume24h.*100_000/s);
-  assert.match(ticker, /lookupComplete === false.*marketCap/s);     // uncertainty never promotes a micro Sol clone
-  assert.match(ticker, /rhLeadership > solLeadership/);             // stronger RH market can beat a weak Sol clone
+  assert.match(ticker, /resolveRhTickerCandidate\(q\)/);           // explicit RH wording preserves RH ticker lookup
+  assert.doesNotMatch(ticker, /Promise\.all|solPromise/);           // default lookup never waits on another chain
   assert.match(chainHint, /replace\(\/\\\$\[A-Za-z\]/);
   assert.match(chainHint, /return "robinhood"/);
   assert.match(chainHint, /return "solana"/);
@@ -4499,7 +4508,7 @@ test("Telegram scan throttling is per token and partial reads still render", () 
   assert.match(deliver, /scan\.rug \|\| scan\.onchain/);           // valid on-chain-only reads still get a card
   assert.match(look, /settleTelegramSolScanCard/);                   // one fast card keeps filling without another post
   assert.match(look, /quickKeyboard = slimeScanPendingKeyboard/);    // no Quick Buy appears before safety proof finishes
-  assert.match(functionBody(serverSource, "settleTelegramSolScanCard"), /\[2_500, 6_000, 12_000\]/);
+  assert.match(functionBody(serverSource, "settleTelegramSolScanCard"), /\[1_200, 3_500, 7_000\]/);
   assert.match(functionBody(serverSource, "settleTelegramSolScanCard"), /mergeSlimeScanResults/);
   const hardRiskKeyboard = functionBody(serverSource, "slimeScanKeyboardForResult");
   assert.match(hardRiskKeyboard, /slimeScanHardTradeRisk/);
@@ -4646,7 +4655,7 @@ test("Telegram trending picks fail closed on honeypots and PvP menus can be dism
   assert.match(pvpCallback, /editMessageReplyMarkup/);
 });
 
-test("Ticker Truth favors the dominant safe market and explains same-symbol clones", () => {
+test("Ticker Truth favors the dominant exact market and explains same-symbol clones", () => {
   const score = functionBody(serverSource, "tickerCandidateScore");
   const dominance = functionBody(serverSource, "tickerCandidateDominance");
   const leadership = functionBody(serverSource, "tickerMarketLeadership");
@@ -4666,7 +4675,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(leadership, /Math\.min\(mc, vol\) \* 120/);
   assert.match(leadership, /liq \* 100/);
   assert.match(truth, /exact-symbol contracts found/);
-  assert.match(truth, /Unsafe\/unchecked matches are omitted/);
+  assert.match(truth, /ranked by coherent market cap, liquidity and 24h volume/);
+  assert.match(truth, /full live security check/);
   assert.match(truth, /dominant real market plus live activity/);
   assert.match(look, /tickerScanSelectionLine/);
   assert.match(keyboard, /Ticker Truth/);
@@ -4712,7 +4722,7 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
     { marketCap: 31_326, liquidityUsd: 0, volume24h: 45_713, source: "pumpfun-bonding" },
     { marketCap: 14_068, liquidityUsd: 8, volume24h: 3, source: "meteora-dust" }
   ]).source, "pumpswap", "one coherent liquid pool must supply MC, liquidity, and volume instead of splicing stale pool maxima");
-  assert.match(functionBody(serverSource, "resolveCashtagToMint"), /tickerCandidateHasCredibleMarket/);
+  assert.match(functionBody(serverSource, "resolveCashtagToMintFresh"), /tickerCandidateHasCredibleMarket/);
   assert.match(functionBody(serverSource, "reconcileIndexedSolTickerCandidate"), /tickerCandidateHasCredibleMarket/);
   const noxaRh = { marketCap: 603_000, volume24h: 2_870_000 };
   const noxaSolClone = { marketCap: 4_200, volume24h: 165 };

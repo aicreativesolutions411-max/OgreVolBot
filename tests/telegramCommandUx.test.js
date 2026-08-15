@@ -83,13 +83,14 @@ test("bare /cancel stops an active group raid without opening the DM trading men
   assert.ok(dmMenuAt > groupGateAt, "group /cancel must return before the private trading menu");
 });
 
-test("new-group copy matches behavior and names both supported chains", () => {
+test("new-group copy matches fast Solana tickers and direct Robinhood CAs", () => {
   const menu = functionBody(serverSource, "groupBotMenuText");
   const modules = functionBody(serverSource, "groupBotModuleView");
   assert.match(menu, /Scan starts on/);
-  assert.match(menu, /Solana \+ Robinhood CA/);
+  assert.match(menu, /Solana CA \/ \$ticker \+ Robinhood CA/);
   assert.doesNotMatch(menu, /Everything's off/);
   assert.match(modules, /Starts on for new groups/);
+  assert.match(modules, /automatic ticker matching is Solana-only for speed/);
   assert.match(modules, /Robinhood <code>0x…<\/code>/);
 });
 

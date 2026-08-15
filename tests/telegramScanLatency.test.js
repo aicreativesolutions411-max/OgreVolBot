@@ -34,7 +34,8 @@ test("cold Telegram scans publish market facts before slow safety providers fini
   assert.match(look, /waitForSlimeScanPreview\(mint/);
   assert.match(look, /const scanPromise = gatherSlimeScan\(mint\)/);
   assert.match(look, /const previewPromise/);
-  assert.match(look, /const firstResponseBudgetMs = Math\.min\(750, Math\.max\(250,/);
+  assert.match(look, /const firstResponseBudgetMs = Math\.min\(900, Math\.max\(300,/);
+  assert.match(gather, /pairsPromise\.then\(\(previewPairs\)/);
   assert.match(look, /Loading live market data now; safety follows on this same card/);
   const preview = functionBody(serverSource, "buildSlimeScanMarketPreview");
   assert.match(preview, /cachedScan \? \{ \.\.\.cachedScan, rug: null, shield: null, dexPaid: null, dexPromotion: null \}/);
@@ -65,7 +66,7 @@ test("ordinary scans promote the fast text shell into a branded card", () => {
   const deliver = functionBody(serverSource, "deliverTelegramSolScan");
   const rh = functionBody(serverSource, "sendRhScanCard");
 
-  assert.match(look, /preferText:\s*false/);
+  assert.match(look, /preferText:\s*true/);
   assert.match(look, /photoOnly:\s*true/);
   assert.match(look, /telegram\("deleteMessage"/);
   assert.match(deliver, /photoOnly \? null : sayHtml/);
@@ -151,6 +152,11 @@ test("DexScreener pair resolution is hedged and single-flight", () => {
 
 test("plain group CA classification has a strict latency ceiling", () => {
   const router = functionBody(serverSource, "handleMessage");
-  assert.match(router, /scanFastTimeout\(isSolMintAddress\(bareCa\[1\]\),\s*1_000,\s*true\)/);
-  assert.match(router, /handleTelegramLookCommand\(chatId, message, bareCa\[1\]\)/);
+  assert.match(router, /void gatherSlimeScan\(bareCa\[1\]\)/);
+  assert.match(router, /scanFastTimeout\(isSolMintAddress\(bareCa\[1\]\),\s*650,\s*true\)/);
+  assert.match(router, /sendWalletScanCard\(chatId, bareCa\[1\], userId\)/);
+  assert.ok(
+    router.indexOf("gatherSlimeScan(bareCa[1])") < router.indexOf("await scanFastTimeout(isSolMintAddress(bareCa[1])"),
+    "market lookup must warm before account classification"
+  );
 });
