@@ -2767,12 +2767,57 @@ test("referral contests: unique invite links + join attribution + leaderboard", 
   assert.match(serverSource, /async function handleReferralCommand\(/);
   assert.match(serverSource, /async function handleChatMemberUpdate\(/);
   assert.match(serverSource, /createChatInviteLink/);
-  assert.match(functionBody(serverSource, "handleChatMemberUpdate"), /\^ref-\d\+\$|ref-/); // parse ref-<id> link name
+  const linkAttribution = functionBody(serverSource, "referralInviterFromLink");
+  assert.match(linkAttribution, /\^ref-\(\\d\+\)\$|ref-/); // parse ref-<id> link name
+  assert.match(linkAttribution, /cfg\?\.links\?\.\[named\[1\]\]\?\.link/); // reject a spoofed same-name link from another admin
+  assert.match(linkAttribution, /=== used/);
   // chat_member updates enabled (both webhook + polling) + dispatched
   assert.match(serverSource, /allowed_updates:.*"chat_member"/);
   assert.match(serverSource, /if \(update\.chat_member\)/);
   // commands wired
   assert.match(serverSource, /handleReferralCommand\(message, userId\)/);
+});
+
+test("permanent group invites track unique joins, active status, and reward-ready admin detail", () => {
+  const cfg = functionBody(serverSource, "referralConfig");
+  assert.match(cfg, /people: \{\}, joinHistory: \{\}/);
+
+  const join = functionBody(serverSource, "referralRecordJoin");
+  assert.match(join, /mutateGroupBot/);                       // one atomic persistent update
+  assert.match(join, /joinHistory/);
+  assert.match(join, /active: true/);
+  assert.match(join, /const isUnique = !previous/);           // a rejoin cannot inflate rewards
+  assert.match(join, /isUnique && c\.on/);                    // optional contest count remains additive
+
+  const leave = functionBody(serverSource, "referralRecordLeave");
+  assert.match(leave, /mutateGroupBot/);
+  assert.match(leave, /active: false/);
+
+  const updates = functionBody(serverSource, "handleChatMemberUpdate");
+  assert.match(updates, /referralRecordJoin/);
+  assert.match(updates, /referralRecordLeave/);
+  assert.doesNotMatch(updates, /if \(!cfg\.on\) return/);       // lifetime tracking works outside contests
+
+  const command = functionBody(serverSource, "handleReferralCommand");
+  assert.match(command, /\/invite/);
+  assert.match(command, /\/myinvites/);
+  assert.match(command, /\/invites/);
+  assert.match(command, /isGroupBotAdmin/);
+  assert.match(command, /includePeople: true/);
+
+  const adminBoard = functionBody(serverSource, "referralAdminBoardText");
+  assert.match(adminBoard, /Unique joins/);
+  assert.match(adminBoard, /active now/);
+  assert.match(adminBoard, /escapeTelegramHtml\(row\.inviterId\)/);
+
+  const botCommands = functionBody(serverSource, "registerTelegramBotCommands");
+  assert.match(botCommands, /command: "invite"/);
+  assert.match(botCommands, /command: "myinvites"/);
+  assert.match(botCommands, /command: "invites"/);
+
+  // Starting a temporary contest must not invalidate permanent invite links/history.
+  assert.doesNotMatch(command, /counts: \{\}, sources: \{\}, links: \{\}/);
+  assert.doesNotMatch(functionBody(serverSource, "handleGroupBotCallback"), /counts: \{\}, sources: \{\}, links: \{\}/);
 });
 
 test("owner DMs cover group joins, every Buy Bot CA path, and proven callers", () => {
