@@ -2255,6 +2255,22 @@ test("buy bot posts only real per-buy cards — no 'Buys rolling in' aggregate",
   assert.doesNotMatch(serverSource, /Buys rolling in/);            // the card text is gone entirely
 });
 
+test("scan and Buy Bot posts end with text-only SlimeWire community links", () => {
+  const footer = functionBody(serverSource, "telegramCommunityFooter");
+  assert.match(footer, /https:\/\/t\.me\/slimewireupdates/);
+  assert.match(footer, /@slimewireupdates/);
+  assert.match(footer, /https:\/\/t\.me\/SlimeWireLounge/);
+  assert.match(footer, /@SlimeWireLounge/);
+  for (const name of ["deliverTelegramSolScan", "rebuildScanCardInPlace", "editRhScanTelegramCard", "sendRhScanCard", "postGroupBuy", "postGroupBuyRh", "groupBuyStatsText"]) {
+    assert.match(functionBody(serverSource, name), /telegramWithCommunityFooter/, `${name} must append the shared footer`);
+  }
+  const compact = functionBody(serverSource, "compactTradeCardKeyboard");
+  assert.doesNotMatch(compact, /slimewireupdates|SlimeWireLounge/, "community links belong in card text, not buttons");
+  const groupBuyMarkupIndex = serverSource.indexOf("const groupBuyMarkup =");
+  assert.notEqual(groupBuyMarkupIndex, -1);
+  assert.doesNotMatch(serverSource.slice(groupBuyMarkupIndex, groupBuyMarkupIndex + 1300), /slimewireupdates|SlimeWireLounge/);
+});
+
 test("min buy zero keeps every observed Solana and Robinhood buy in an ordered Telegram queue", () => {
   const solPoll = functionBody(serverSource, "pollGroupBuyTrades");
   const collect = functionBody(serverSource, "collectGroupBuyTrades");
@@ -3308,6 +3324,24 @@ test("OCR image scan: cloud-offloaded, concurrency-capped, gated, delete-only", 
   assert.match(rose, /cfg\.ocrScan && Array\.isArray\(message\.photo\)/);
   // never touches trading — pure delete/say
   assert.doesNotMatch(functionBody(serverSource, "shieldOcrScanImage"), /buyToken|sellToken|sendTransaction/);
+});
+
+test("Rose welcome supports reusable Telegram photo, video, and GIF media", () => {
+  assert.match(functionBody(serverSource, "roseDefaults"), /welcomeMedia: null/);
+  const menu = functionBody(serverSource, "groupBotModuleView");
+  assert.match(menu, /Add welcome photo\/video/);
+  assert.match(menu, /gb:in:welcomemedia/);
+  assert.match(menu, /gb:welcome:clear/);
+  const input = functionBody(serverSource, "applyRoseWelcomeMediaInput");
+  assert.match(input, /roseWelcomeMediaFromMessage/);
+  assert.match(input, /setGroupRose\(chatId, patch\)/);
+  const sender = functionBody(serverSource, "sendRoseWelcome");
+  assert.match(sender, /sendVideo/);
+  assert.match(sender, /sendAnimation/);
+  assert.match(sender, /sendPhoto/);
+  assert.match(sender, /media\.fileId/);
+  assert.match(functionBody(serverSource, "handleGroupRose"), /sendRoseWelcome/);
+  assert.match(serverSource, /setwelcomemedia/);
 });
 
 // ---- Scan card buy row: ONE clean Buy button (the 0.5/1/5/custom amount buttons all just opened
