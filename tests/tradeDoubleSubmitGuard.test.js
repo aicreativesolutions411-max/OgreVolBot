@@ -2476,6 +2476,37 @@ test("settings menu is multi-level: home -> per-bot sub-menus, clickable toggles
   assert.match(serverSource, /if \(await applyGbInput\(message, userId\)/); // wired into the router
 });
 
+test("group and channel settings can be managed privately in DM without setup chatter", () => {
+  const commands = functionBody(serverSource, "registerTelegramBotCommands");
+  assert.match(commands, /command: "groupsettings"/);
+  const command = functionBody(serverSource, "handleGroupBotCommand");
+  assert.match(command, /groupsettings\|channelsettings/);
+  assert.match(command, /showGroupBotDmRoomList\(chat\.id, userId\)/);
+  const rooms = functionBody(serverSource, "groupBotDmAdminRooms");
+  assert.match(rooms, /isGroupBotAdmin\(chatId, userId\)/);
+  assert.match(rooms, /runWithConcurrency\(entries, 5/);
+  const callback = functionBody(serverSource, "handleGroupBotCallback");
+  assert.match(callback, /gb:dm:open:/);
+  assert.match(callback, /groupBotDmMenuTarget\(outputChatId, messageId\)/);
+  assert.match(callback, /isGroupBotAdmin\(chatId, userId/);
+  assert.match(callback, /groupBotRenderModule\(chatId,[\s\S]*messageId, outputChatId\)/);
+  assert.match(functionBody(serverSource, "groupBotPostSetup"), /Manage privately in DM/);
+  assert.match(functionBody(serverSource, "groupBotModuleView"), /gb:in:raidpreset/);
+  const typed = functionBody(serverSource, "applyGbInput");
+  assert.match(typed, /pend\.targetChatId \|\| chatId/);
+  assert.match(typed, /String\(targetChatId\)/);
+  assert.match(typed, /groupBotRenderModule\(targetChatId,[\s\S]*chatId\)/);
+  assert.match(typed, /setRaidConfig\(targetChatId/);
+  const kol = functionBody(serverSource, "applyKolFeedSourceInput");
+  assert.match(kol, /pending\.targetChatId \|\| chatId/);
+  assert.match(kol, /addKolCallFeedSource\(targetChatId, source\)/);
+  const media = functionBody(serverSource, "applyGroupBotMediaInput");
+  assert.match(media, /welcomemedia/);
+  assert.match(media, /buymedia/);
+  assert.match(media, /raidmedia/);
+  assert.match(media, /pending\.targetChatId \|\| chatId/);
+});
+
 test("group admins can remove the Buy Bot CA without resetting its other settings", () => {
   const view = functionBody(serverSource, "groupBotModuleView");
   const command = functionBody(serverSource, "handleGroupBotCommand");
@@ -3332,9 +3363,9 @@ test("Rose welcome supports reusable Telegram photo, video, and GIF media", () =
   assert.match(menu, /Add welcome photo\/video/);
   assert.match(menu, /gb:in:welcomemedia/);
   assert.match(menu, /gb:welcome:clear/);
-  const input = functionBody(serverSource, "applyRoseWelcomeMediaInput");
+  const input = functionBody(serverSource, "applyGroupBotMediaInput");
   assert.match(input, /roseWelcomeMediaFromMessage/);
-  assert.match(input, /setGroupRose\(chatId, patch\)/);
+  assert.match(input, /setGroupRose\(targetChatId, patch\)/);
   const sender = functionBody(serverSource, "sendRoseWelcome");
   assert.match(sender, /sendVideo/);
   assert.match(sender, /sendAnimation/);
