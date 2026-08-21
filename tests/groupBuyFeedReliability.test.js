@@ -598,7 +598,7 @@ test("a same-mint buy burst can pay the cold enrichment ceiling only once", () =
   );
   assert.match(
     pollGroupBuyTrades,
-    /const buys = liveFresh\s*\.filter\([\s\S]*?\)\s*\.reverse\(\);\s*const results = await Promise\.all/,
+    /const buys = liveFresh\s*\.filter\([\s\S]*?\)\s*\.reverse\(\);[\s\S]{0,120}?const results = await Promise\.all/,
     "newest-page rows must be claimed oldest-first before concurrent handoff"
   );
   assert.match(
@@ -653,15 +653,27 @@ test("DexScreener wakes the detailed buy feed in one bounded batch lane", () => 
   );
 });
 
-test("recovery polling is sparse and rotating so live buys retain provider capacity", () => {
+test("recovery polling adapts when both live wake lanes are unavailable", () => {
   const recoveryPoll = functionBody("pollGroupBuyTrades");
 
-  assert.match(serverSource, /const GROUP_BUY_RECOVERY_POLL_MS = 30_000;/);
-  assert.match(serverSource, /const GROUP_BUY_RECOVERY_BATCH = 1;/);
+  assert.match(serverSource, /const GROUP_BUY_RECOVERY_POLL_MS = 10_000;/);
+  assert.match(serverSource, /const GROUP_BUY_LIVE_RECOVERY_POLL_MS = 30_000;/);
+  assert.match(serverSource, /const GROUP_BUY_RECOVERY_BATCH = 6;/);
+  assert.match(serverSource, /const GROUP_BUY_LIVE_RECOVERY_BATCH = 1;/);
   assert.match(
     recoveryPoll,
-    /GROUP_BUY_RECOVERY_BATCH/,
-    "each recovery turn must explicitly honor the bounded mint budget"
+    /const liveWake = Boolean\(buyWsDiag\.connected \|\| groupBuyChainWakeConnected\(\)\)/,
+    "the recovery budget must react to the real push-lane health"
+  );
+  assert.match(
+    recoveryPoll,
+    /liveWake \? GROUP_BUY_LIVE_RECOVERY_BATCH : GROUP_BUY_RECOVERY_BATCH/,
+    "healthy live wake must retain the sparse provider-saving reconciliation"
+  );
+  assert.match(
+    recoveryPoll,
+    /priority: liveWake \? 100 : 120/,
+    "outage recovery must not be suppressed behind unrelated Pump background work"
   );
   assert.match(
     recoveryPoll,
@@ -739,12 +751,30 @@ test("a live wake keeps its higher priority through the exact Pump trade request
   assert.match(fetchPage, /priority: Math\.max\(Number\(priority\) \|\| 100/);
 });
 
-test("an activity wake schedules one delayed exact confirmation without fabricating an alert", () => {
+test("an activity wake retries exact confirmation until the provider indexes it", () => {
   const scheduler = functionBody("queueGroupBuyTradePoll");
   assert.match(serverSource, /const groupBuyTradeWakeConfirmTimers = new Map\(\);/);
-  assert.match(scheduler, /if \(!confirmOnce \|\| groupBuyTradeBackoff\.has\(mint\)\) return;/);
-  assert.match(scheduler, /setTimeout\(\(\) => \{[\s\S]*?wakeConfirmations \+= 1;[\s\S]*?confirmOnce: false[\s\S]*?\}, 2_500\)/);
+  assert.match(serverSource, /const GROUP_BUY_WAKE_CONFIRM_DELAYS_MS = \[500, 1_000, 2_000, 4_000\];/);
+  assert.match(scheduler, /if \(!confirmOnce \|\| result\?\.foundBuy \|\| groupBuyTradeBackoff\.has\(mint\)\) return;/);
+  assert.match(scheduler, /GROUP_BUY_WAKE_CONFIRM_DELAYS_MS\[confirmAttempt\]/);
+  assert.match(scheduler, /wakeConfirmations \+= 1;[\s\S]*?confirmAttempt: confirmAttempt \+ 1/);
   assert.doesNotMatch(scheduler, /postGroupBuy\(/, "the confirmation may only run the exact trade reader");
+});
+
+test("standard Solana logs wake the exact buy reader without fabricating cards", () => {
+  const startWake = functionBody("startGroupBuyChainWake");
+  const syncWake = functionBody("syncGroupBuyChainWakeSubscriptions");
+  const triggerWake = functionBody("triggerGroupBuyChainWakePoll");
+  const sync = functionBody("buyWsSync");
+  assert.match(serverSource, /CONFIG\.readRpcUrl,[\s\S]*?CONFIG\.rpcUrl/);
+  assert.match(syncWake, /method: "logsSubscribe"[\s\S]*?mentions: \[mint\][\s\S]*?commitment: "processed"/);
+  assert.match(syncWake, /method: "logsUnsubscribe"/);
+  assert.match(startWake, /message\?\.method !== "logsNotification"/);
+  assert.match(triggerWake, /queueGroupBuyTradePoll\(mint,[\s\S]*?priority: 120[\s\S]*?confirmOnce: true/);
+  assert.doesNotMatch(startWake, /postGroupBuy\(/);
+  assert.doesNotMatch(triggerWake, /postGroupBuy\(/);
+  assert.match(sync, /syncGroupBuyChainWake\(mints\)/);
+  assert.match(sync, /warmGroupBuyMarketContext\(mint\)/);
 });
 
 test("healthz exposes buy-feed freshness, retry, and durable delivery backlog signals", () => {
@@ -758,6 +788,9 @@ test("healthz exposes buy-feed freshness, retry, and durable delivery backlog si
     "wakeConfirmations",
     "websocketTradeAuthorization",
     "websocketSubscriptionErrors",
+    "chainWakeConnected",
+    "chainWakeSubscriptions",
+    "chainWakeNotifications",
     "lastSuccessAgoMs",
     "httpGateQueued",
     "httpGateCooldownRemainingMs",

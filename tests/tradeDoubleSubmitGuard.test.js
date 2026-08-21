@@ -1962,8 +1962,8 @@ test("Buy bot keeps transaction price and market cap aligned on both chains", ()
   const body = functionBody(serverSource, "resolveGroupBuyMarketSnapshot");
   const first = (...values) => values.map(Number).find((value) => Number.isFinite(value) && value > 0) || null;
   const resolve = Function("firstMeaningfulNumber", `return ({
-    eventPriceUsd = 0, eventMarketCapUsd = 0, nativeAmount = 0, tokens = 0,
-    nativeUsd = 0, scanPriceUsd = 0, scanMarketCapUsd = 0, supply = 0,
+    eventPriceUsd = 0, eventMarketCapUsd = 0, eventUsdAmount = 0, nativeAmount = 0, tokens = 0,
+    nativeUsd = 0, scanPriceUsd = 0, scanMarketCapUsd = 0, scanReferenceCoherent = true, supply = 0,
     preferReportedSupply = false
   } = {}) => {${body}}`)(first);
 
@@ -1974,6 +1974,14 @@ test("Buy bot keeps transaction price and market cap aligned on both chains", ()
   // Robinhood can derive the exact execution price from ETH spent / tokens received.
   assert.deepEqual(resolve({ nativeAmount: 0.5, nativeUsd: 100, tokens: 100_000, scanPriceUsd: 0.0004, scanMarketCapUsd: 400_000 }), {
     priceUsd: 0.0005, marketCapUsd: 500_000, supply: 1_000_000_000, executionPriceUsd: 0.0005
+  });
+  // Pump's exact transaction USD amount must win over a later SOL/USD quote.
+  assert.deepEqual(resolve({ eventUsdAmount: 50, nativeAmount: 0.5, nativeUsd: 80, tokens: 100_000, scanPriceUsd: 0.0004, scanMarketCapUsd: 400_000 }), {
+    priceUsd: 0.0005, marketCapUsd: 500_000, supply: 1_000_000_000, executionPriceUsd: 0.0005
+  });
+  // Price and MC from unrelated providers must not be divided into an invented supply.
+  assert.deepEqual(resolve({ eventPriceUsd: 0.002, scanPriceUsd: 0.001, scanMarketCapUsd: 1_000_000, scanReferenceCoherent: false }), {
+    priceUsd: 0.002, marketCapUsd: 1_000_000, supply: 0, executionPriceUsd: 0
   });
   // PumpPortal sometimes supplies live MC without a separate price; supply fills that price exactly.
   assert.deepEqual(resolve({ eventMarketCapUsd: 750_000, supply: 1_000_000_000 }), {
@@ -2086,11 +2094,15 @@ test("Buy bot derives Pump supply and websocket price without a guessed one-bill
   const pumpMeta = functionBody(serverSource, "getPumpFunTokenMetadata");
   const socketTrade = functionBody(serverSource, "onGroupBuyTrade");
   const supply = functionBody(serverSource, "getGroupBuySupply");
+  const rpcSupply = functionBody(serverSource, "fetchTokenSupplyUi");
   assert.match(pumpMeta, /coin\?\.base_decimals/);
   assert.match(pumpMeta, /totalSupplyRaw \/ \(10 \*\* baseDecimals\)/);
   assert.match(pumpMeta, /supplyUi/);
+  assert.doesNotMatch(pumpMeta, /marketCap: firstMeaningfulNumber\([^\r\n]*coin\?\.market_cap,/);
+  assert.doesNotMatch(pumpMeta, /usdMarketCap: firstMeaningfulNumber\([^\r\n]*coin\?\.market_cap,/);
   assert.match(supply, /fetchTokenSupplyUi\(key\)/);
   assert.match(supply, /pump\?\.supplyUi/);
+  assert.match(rpcSupply, /uiAmountString \?\? r\?\.value\?\.uiAmount/);
   assert.match(socketTrade, /\(solAmount \* solUsd\) \/ tokenAmount/);
   assert.match(socketTrade, /d\.priceUsd/);
   assert.match(socketTrade, /d\.priceSol/);
@@ -2100,6 +2112,9 @@ test("Buy bot derives Pump supply and websocket price without a guessed one-bill
   assert.match(post, /groupBuySupplyCache\.get\(mint\)\?\.value/);
   assert.doesNotMatch(post, /getPumpFunTokenMetadata\(mint, \{ force: true/);
   assert.match(post, /preferReportedSupply: onCurve/);
+  assert.match(post, /eventUsdAmount: usdAmount/);
+  assert.match(post, /scanMarketStatsFromSources/);
+  assert.match(functionBody(serverSource, "normalizeGroupBuyTrade"), /trade\?\.priceUsd, trade\?\.fillPriceUsd/);
 });
 
 test("Robinhood buy watcher is decimal-safe, lossless, concurrent, and near-live", () => {
@@ -2317,8 +2332,10 @@ test("Pump buy polling is fast, cursor-safe, and does not swallow a new coin's f
   const post = functionBody(serverSource, "postGroupBuy");
   const poll = functionBody(serverSource, "pollGroupBuyTrades");
   assert.match(serverSource, /const GROUP_BUY_WAKE_POLL_MS = 1_500/);
-  assert.match(serverSource, /const GROUP_BUY_RECOVERY_POLL_MS = 30_000/);
-  assert.match(serverSource, /const GROUP_BUY_RECOVERY_BATCH = 1/);
+  assert.match(serverSource, /const GROUP_BUY_RECOVERY_POLL_MS = 10_000/);
+  assert.match(serverSource, /const GROUP_BUY_LIVE_RECOVERY_POLL_MS = 30_000/);
+  assert.match(serverSource, /const GROUP_BUY_RECOVERY_BATCH = 6/);
+  assert.match(serverSource, /const GROUP_BUY_LIVE_RECOVERY_BATCH = 1/);
   assert.match(serverSource, /const GROUP_BUY_TRADE_MAX_PAGES = 20/);
   assert.match(applyPage, /progress\.activationCutoffAt/);
   assert.match(applyPage, /progress\.reachedSeen \|\| !hasMore/);
@@ -2332,7 +2349,8 @@ test("Pump buy polling is fast, cursor-safe, and does not swallow a new coin's f
   assert.match(start, /GROUP_BUY_WAKE_POLL_MS/);
   assert.match(start, /GROUP_BUY_RECOVERY_POLL_MS/);
   assert.doesNotMatch(start, /GROUP_BUY_TRADE_POLL_MS/);
-  assert.match(serverSource, /queueGroupBuyTradePoll\(mint, \{ priority: 100 \}\)/);
+  assert.match(poll, /queueGroupBuyTradePoll\(mint, \{ priority: liveWake \? 100 : 120 \}\)/);
+  assert.match(serverSource, /method: "logsSubscribe"[\s\S]*?mentions: \[mint\]/);
   assert.match(scan, /groupBuyScanInFlight/);
   assert.match(serverSource, /const GROUP_BUY_FAST_ENRICHMENT_MS = 120/);
   assert.match(post, /groupBuyFastTimeout\(scanRequest, GROUP_BUY_FAST_ENRICHMENT_MS, null\)/);

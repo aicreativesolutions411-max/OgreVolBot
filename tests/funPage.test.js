@@ -57,7 +57,10 @@ test("/left4sol hands desktop and mobile directly to the raw full-viewport game 
   const player = "https://itch.io/embed-upload/18456748";
   const routeStart = server.indexOf('requestUrl.pathname === "/left4sol"');
   assert.ok(routeStart >= 0, "the Node origin should recognize the branded game route");
-  const route = server.slice(routeStart - 120, routeStart + 1100);
+  // The R2 same-origin delivery branch is intentionally longer than the old redirect-only route.
+  // Keep the whole branch in view so this assertion tests behavior instead of a fixed character count.
+  const routeEnd = server.indexOf("response.end();", server.indexOf("Location: raw", routeStart));
+  const route = server.slice(routeStart - 120, routeEnd + 20);
   assert.match(route, /request\.method === "GET" \|\| request\.method === "HEAD"/);
   assert.match(route, /requestUrl\.pathname\.startsWith\("\/left4sol\/"\)/);
   assert.match(route, /response\.writeHead\(302, \{/);
