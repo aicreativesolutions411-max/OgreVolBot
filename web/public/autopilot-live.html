@@ -390,7 +390,16 @@ $("dustBtn").addEventListener("click", async () => {
   $("dustMsg").innerHTML = '<span class="muted">Selling tokens back to SOL… each is an on-chain swap, can take a bit.</span>';
   // Long-running + RPC can be slow; never hang the UI or show a scary error —
   // race against a timer and let it finish in the background.
-  const req = api("/api/web/wallets/sell-all-tokens", { method:"POST", body:JSON.stringify({ walletIndexes: [w.index] }) }).catch(() => ({ ok:false, error:"network" }));
+  const dustButton = $("dustBtn");
+  const sellAttemptId = dustButton.dataset.sellAttemptId || `autopilot-live-sell-all-${Date.now()}-${Math.random().toString(36).slice(2,10)}`;
+  dustButton.dataset.sellAttemptId = sellAttemptId;
+  const req = api("/api/web/wallets/sell-all-tokens", {
+    method:"POST",
+    body:JSON.stringify({ walletIndexes: [w.index], clientRequestId: sellAttemptId })
+  }).then((result) => {
+    if (result && result.ok) delete dustButton.dataset.sellAttemptId;
+    return result;
+  }).catch(() => ({ ok:false, error:"network" }));
   const r = await Promise.race([req, new Promise(res => setTimeout(() => res("__timeout__"), 18000))]);
   $("dustBtn").textContent = "🪙 Sell leftover tokens (dust → SOL)"; $("dustBtn").disabled = false;
   if (r === "__timeout__") {

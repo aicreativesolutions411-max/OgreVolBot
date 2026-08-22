@@ -2284,6 +2284,7 @@ export function createAutopilotEngine(deps) {
   }
 
   async function doSell(pos, pct, reason) {
+    if (pos.exitOutcomeUnknown) return;
     const move = pos.entryMc > 0 ? (pos.lastMc / pos.entryMc - 1) * 100 : 0;
     const frac = pct / 100;
     const portionOfOriginal = pos.remFrac * frac;
@@ -2295,6 +2296,13 @@ export function createAutopilotEngine(deps) {
         if (res && res.ok === false) throw new Error("sell rejected");
         if (res && Number.isFinite(res.receivedSol)) realProceeds = Number(res.receivedSol);
       } catch (e) {
+        if (e?.tradeSubmissionAmbiguous) {
+          pos.exitOutcomeUnknown = true;
+          pos.exitOutcomeUnknownAt = new Date().toISOString();
+          pos.exitOutcomeUnknownHashes = Array.isArray(e.partialHashes) ? e.partialHashes.slice(0, 12) : [];
+          record("warn", `sell ${pos.sym} submitted with unknown outcome; automatic retries paused for receipt review`);
+          return;
+        }
         pos.sellFails = (pos.sellFails || 0) + 1;
         const noBalance = /no token balance|rounded to zero/i.test((e && e.message) || "");
         const ageMs = now() - pos.openedAt;

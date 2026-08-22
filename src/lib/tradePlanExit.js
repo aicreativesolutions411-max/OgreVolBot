@@ -32,6 +32,285 @@ export function stopLossTriggerPercent(stopLossPct, bufferPct = 0) {
   return Math.max(0.1, stop - safeBuffer);
 }
 
+export function safeEntryFrictionBaseline({
+  movePct,
+  stopLossPct = 0,
+  stopLossBufferPct = 0,
+  maxFrictionPct = 45
+} = {}) {
+  const move = Number(movePct);
+  if (!Number.isFinite(move)) return null;
+
+  // A stop-loss is defined against the user's entry, not against whatever
+  // price the worker happens to observe first. Even a reading just above the
+  // trigger must not become a new zero and move the real stop deeper.
+  if (Number(stopLossPct) > 0) return 0;
+
+  // The first monitor observation is not necessarily an entry-time quote. A
+  // fast dump can happen before the worker's first pass, so never normalize an
+  // already-breached stop back to 0% as if it were ordinary entry friction.
+  const stopTrigger = stopLossTriggerPercent(stopLossPct, stopLossBufferPct);
+  if (stopTrigger > 0 && move <= -stopTrigger) return 0;
+
+  const configuredMax = Number(maxFrictionPct);
+  const safeMax = Number.isFinite(configuredMax) && configuredMax > 0
+    ? configuredMax
+    : 45;
+  return Math.max(-safeMax, Math.min(0, move));
+}
+
+export function isDefinitiveNoLiveTokenBalanceError(error) {
+  if (error?.tokenBalanceConfirmedZero === true
+    || error?.code === "NO_LIVE_TOKEN_BALANCE"
+    || error?.code === "TOKEN_BALANCE_DUST") {
+    return true;
+  }
+  // Provider text is not ownership proof. Pump/Jupiter errors regularly
+  // contain phrases such as "no token balance" or "pool not found" while the
+  // wallet still owns the bag, so only structured, provenance-bearing errors
+  // may close a stop as empty.
+  return false;
+}
+
+export function hasActionableExitSettings({
+  takeProfitPct = 0,
+  stopLossPct = 0,
+  sellDelaySeconds = 0,
+  takeProfitLadder = [],
+  trailingStopPct = 0
+} = {}) {
+  const positive = (value) => Number.isFinite(Number(value)) && Number(value) > 0;
+  return positive(takeProfitPct)
+    || positive(stopLossPct)
+    || positive(sellDelaySeconds)
+    || positive(trailingStopPct)
+    || (Array.isArray(takeProfitLadder) && takeProfitLadder.some((row) => (
+      positive(row && typeof row === "object" ? (row.pct ?? row.takeProfitPct) : row)
+    )));
+}
+
+export function verifiedSubmissionSignatureClear(current = {}, incoming = {}) {
+  const currentSignature = String(current.submissionSignature || "").trim();
+  if (!currentSignature || String(incoming.submissionSignature || "").trim()) return false;
+  if (String(incoming.resolvedSubmissionSignature || "").trim() !== currentSignature) return false;
+  const currentClaim = String(current.submissionClaimToken || "").trim();
+  const resolvedClaim = String(incoming.resolvedSubmissionClaimToken || "").trim();
+  if (currentClaim && resolvedClaim !== currentClaim) return false;
+  const resolution = String(incoming.submissionResolution || "").trim().toLowerCase();
+  if (resolution === "confirmed") return Boolean(incoming.submissionConfirmedAt);
+  if (resolution === "failed") return Boolean(incoming.submissionFailedAt);
+  if (resolution === "expired") return Boolean(incoming.submissionExpiredAt);
+  return false;
+}
+
+export function verifiedBuySubmissionSignatureClear(current = {}, incoming = {}) {
+  const currentSignature = String(current.buySubmissionSignature || "").trim();
+  if (!currentSignature || String(incoming.buySubmissionSignature || "").trim()) return false;
+  if (String(incoming.resolvedBuySubmissionSignature || "").trim() !== currentSignature) return false;
+  const currentClaim = String(current.buyReservationClaimToken || "").trim();
+  const resolvedClaim = String(incoming.resolvedBuyReservationClaimToken || "").trim();
+  if (currentClaim && resolvedClaim !== currentClaim) return false;
+  const resolution = String(incoming.buySubmissionResolution || "").trim().toLowerCase();
+  if (resolution === "confirmed") return Boolean(incoming.buySubmissionConfirmedAt);
+  if (resolution === "failed") return Boolean(incoming.buySubmissionFailedAt);
+  if (resolution === "expired") return Boolean(incoming.buySubmissionExpiredAt);
+  return false;
+}
+
+function nonNegativeRawAmount(value) {
+  try {
+    const amount = BigInt(value);
+    return amount >= 0n ? amount : null;
+  } catch {
+    return null;
+  }
+}
+
+export function protectedLotAmountFromBalance({
+  storedLotRaw,
+  currentBalanceRaw,
+  preBuyBalanceRaw,
+  hasPreBuyBaseline = preBuyBalanceRaw !== undefined && preBuyBalanceRaw !== null
+} = {}) {
+  const stored = nonNegativeRawAmount(storedLotRaw);
+  const current = nonNegativeRawAmount(currentBalanceRaw);
+
+  // Legacy plans did not record the wallet balance before the buy. Preserve
+  // their old whole-balance recovery behavior, but never use that fallback for
+  // a new protected buy that has an exact pre-buy checkpoint.
+  if (!hasPreBuyBaseline) {
+    if (stored !== null) return stored > 0n ? stored.toString() : null;
+    return current !== null && current > 0n ? current.toString() : null;
+  }
+
+  const before = nonNegativeRawAmount(preBuyBalanceRaw);
+  if (before === null || current === null) return null;
+  const available = current - before;
+  if (available <= 0n) return null;
+  const protectedLot = stored !== null ? (stored < available ? stored : available) : available;
+  return protectedLot > 0n ? protectedLot.toString() : null;
+}
+
+export function protectedLotAfterConfirmedSell({ protectedLotRaw, basisLamports, soldRaw } = {}) {
+  const lot = nonNegativeRawAmount(protectedLotRaw);
+  const sold = nonNegativeRawAmount(soldRaw);
+  if (lot === null || sold === null || lot <= 0n || sold <= 0n) return null;
+
+  const remaining = sold >= lot ? 0n : lot - sold;
+  const basis = nonNegativeRawAmount(basisLamports);
+  const remainingBasis = basis === null || basis <= 0n
+    ? null
+    : (basis * remaining) / lot;
+  return {
+    remainingRaw: remaining.toString(),
+    remainingBasisLamports: remainingBasis === null ? null : remainingBasis.toString(),
+    soldRaw: (sold > lot ? lot : sold).toString()
+  };
+}
+
+export function ladderSellAmountRaw({
+  initialLotRaw,
+  remainingLotRaw,
+  currentBalanceRaw,
+  sellPercent,
+  finalRung = false
+} = {}) {
+  const initial = nonNegativeRawAmount(initialLotRaw);
+  const remaining = nonNegativeRawAmount(remainingLotRaw);
+  const current = nonNegativeRawAmount(currentBalanceRaw);
+  if (remaining === null || current === null) return 0n;
+  const available = remaining < current ? remaining : current;
+  if (available <= 0n) return 0n;
+  if (finalRung) return available;
+
+  const pct = Number(sellPercent);
+  if (initial === null || initial <= 0n || !Number.isFinite(pct) || pct <= 0) {
+    return 0n;
+  }
+  const scaledPct = BigInt(Math.max(1, Math.round(Math.min(100, pct) * 10_000)));
+  const target = (initial * scaledPct) / 1_000_000n;
+  const nonZeroTarget = target > 0n ? target : 1n;
+  return nonZeroTarget < available ? nonZeroTarget : available;
+}
+
+function normalizedExitStatuses(row = {}) {
+  return [row.status, row.exitStatus, row.triggerStatus]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function rowIsStopLossExit(row = {}) {
+  return String(row.triggerKind || "").trim().toLowerCase() === "stop-loss"
+    || /^stop-loss\b/i.test(String(row.triggerReason || "").trim());
+}
+
+function exactExitIdentityMatch(candidate = {}, row = {}) {
+  const walletPublicKey = String(candidate.walletPublicKey || "").trim();
+  const tokenMint = String(candidate.tokenMint || "").trim();
+  if (!walletPublicKey || !tokenMint) return false;
+  if (String(row.walletPublicKey || row.publicKey || "").trim() !== walletPublicKey) return false;
+  if (String(row.tokenMint || "").trim() !== tokenMint) return false;
+  // The on-chain wallet + mint is the money identity. The same imported key
+  // can exist under more than one SlimeWire account; userId scoping here would
+  // let those accounts create overlapping full-position exits for one bag.
+  return true;
+}
+
+export function sameWalletTokenBuyBlockDecision(candidate = {}, exits = [], options = {}) {
+  const rows = Array.isArray(exits) ? exits : [exits];
+  const now = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const configuredCooldown = Number(options.stopClosedCooldownMs);
+  const stopClosedCooldownMs = Number.isFinite(configuredCooldown) && configuredCooldown >= 0
+    ? configuredCooldown
+    : 30_000;
+
+  for (const row of rows) {
+    if (!row || !exactExitIdentityMatch(candidate, row)) continue;
+    const statuses = normalizedExitStatuses(row);
+    const stopLoss = rowIsStopLossExit(row);
+
+    if (statuses.includes("outcome_unknown") || statuses.includes("needs_attention")) {
+      return { blocked: true, reason: "exit_outcome_unknown", row };
+    }
+    if (statuses.includes("pending_buy") || statuses.includes("arming")) {
+      return { blocked: true, reason: "protection_pending", row };
+    }
+    if (statuses.includes("submitting") || Boolean(row.preSellCheckpointAt && !row.sellSignature)) {
+      return { blocked: true, reason: "exit_submitting", row };
+    }
+    if (stopLoss && (statuses.includes("triggered") || statuses.includes("retrying"))) {
+      return { blocked: true, reason: "stop_loss_triggered", row };
+    }
+    if (statuses.some((status) => [
+      "active",
+      "armed",
+      "watching",
+      "retrying",
+      "triggered",
+      "timer-only",
+      "price-unavailable",
+      "waiting_next_loop",
+      "pending_buy",
+      "arming"
+    ].includes(status))) {
+      return { blocked: true, reason: "exit_active", row };
+    }
+
+    const stopClosed = stopLoss && statuses.some((status) => ["sold", "confirmed", "closed"].includes(status));
+    if (!stopClosed || stopClosedCooldownMs <= 0) continue;
+    const closedAt = Date.parse(String(
+      row.soldAt
+        || row.confirmedAt
+        || row.submissionResolvedAt
+        || row.updatedAt
+        || ""
+    ));
+    const closedAgeMs = Number.isFinite(closedAt) ? Math.max(0, now - closedAt) : Number.POSITIVE_INFINITY;
+    if (closedAgeMs < stopClosedCooldownMs) {
+      return {
+        blocked: true,
+        reason: "stop_loss_closed_cooldown",
+        retryAfterMs: stopClosedCooldownMs - closedAgeMs,
+        row
+      };
+    }
+  }
+
+  return { blocked: false, reason: "" };
+}
+
+function exitReceiptSignature(receipt = {}) {
+  return String(receipt.sellSignature || receipt.signature || "").trim();
+}
+
+function matchingSellHistoryEvent(receipt = {}, event = {}) {
+  const signature = exitReceiptSignature(receipt);
+  if (!signature || String(event.signature || "").trim() !== signature) return false;
+  if (String(event.type || "").trim().toLowerCase() !== "sell") return false;
+
+  const tokenMint = String(receipt.tokenMint || "").trim();
+  const walletPublicKey = String(receipt.walletPublicKey || receipt.publicKey || "").trim();
+  if (tokenMint && String(event.tokenMint || "").trim() !== tokenMint) return false;
+  if (walletPublicKey && String(event.walletPublicKey || "").trim() !== walletPublicKey) return false;
+  return true;
+}
+
+export function confirmedExitNeedsHistoryBackfill(receipt = {}, historyEvents = null) {
+  const signature = exitReceiptSignature(receipt);
+  if (!signature) return false;
+
+  const statuses = normalizedExitStatuses(receipt);
+  const confirmed = statuses.some((status) => ["sold", "confirmed", "closed"].includes(status));
+  if (!confirmed) return false;
+
+  if (Array.isArray(historyEvents)) {
+    return !historyEvents.some((event) => matchingSellHistoryEvent(receipt, event));
+  }
+
+  return receipt.historyRecorded !== true
+    && !String(receipt.historyRecordedAt || receipt.tradeHistoryRecordedAt || "").trim();
+}
+
 export function priceExitDecision({ movePct, takeProfitPct = 0, stopLossPct = 0, stopLossBufferPct = 0 }) {
   const move = Number(movePct);
   if (!Number.isFinite(move)) return null;

@@ -84,6 +84,8 @@
     tradeBusy: false,
     presets: { trade: [], bundle: [] },
     activePresetId: localStorage.getItem(ACTIVE_PRESET_KEY) || "",
+    presetsLoadPromise: null,
+    presetsLoadedScope: "",
     volumePoll: null,
     seasonPoll: null,
     seasonRun: null,
@@ -448,6 +450,9 @@
     state.accountOrderStateStatus = "idle";
     state.accountOrderStateLoadedAt = 0;
     state.accountOrderStatePromise = null;
+    state.presets = { trade: [], bundle: [] };
+    state.presetsLoadPromise = null;
+    state.presetsLoadedScope = "";
     state.activeWallet = null;
     state.portfolioStatus = "unavailable";
     state.portfolioUpdatedAt = 0;
@@ -836,13 +841,26 @@
     if (refreshed && render) { renderWalletHero(); renderHomeReadiness(); if (state.view === "quick") renderQuickRoute(); }
     return refreshed;
   }
-  async function loadPresets() {
-    if (!state.token) return state.presets;
-    const result = await request("/api/web/presets");
-    if (result.ok && result.data?.ok) state.presets = result.data.presets || { trade: [], bundle: [] };
-    if (!state.presets.trade.some((preset) => preset.id === state.activePresetId)) state.activePresetId = "";
-    return state.presets;
+  function presetsAccountScope() { return `${state.token}\n${state.confirmedUserId}\n${state.accountGeneration}`; }
+  async function ensurePresetsLoaded(force = false) {
+    if (!state.token) return false;
+    const scope = presetsAccountScope();
+    if (!force && state.presetsLoadedScope === scope) return true;
+    if (state.presetsLoadPromise?.scope === scope) return state.presetsLoadPromise;
+    const pending = (async () => {
+      const result = await request("/api/web/presets");
+      if (scope !== presetsAccountScope()) return false;
+      if (!result.ok || !result.data?.ok || !result.data.presets) return false;
+      state.presets = { trade: result.data.presets.trade || [], bundle: result.data.presets.bundle || [] };
+      state.presetsLoadedScope = scope;
+      return true;
+    })();
+    pending.scope = scope;
+    state.presetsLoadPromise = pending;
+    try { return await pending; }
+    finally { if (state.presetsLoadPromise === pending) state.presetsLoadPromise = null; }
   }
+  async function loadPresets() { await ensurePresetsLoaded(true); return state.presets; }
   function activePreset() { return state.presets.trade.find((preset) => preset.id === state.activePresetId) || null; }
   function activeWallet() { return state.wallets.find((wallet) => wallet.index === state.activeWallet) || state.wallets[0] || null; }
   function pumpRewardLamports(reward = {}) {
@@ -1937,7 +1955,7 @@
     return walletSwapSolanaAssets(wallet).find((position) => String(position.tokenMint || "").toLowerCase() === key) || currentPosition();
   }
   function activeAutomationStatus(status) {
-    return ["active", "armed", "watching", "monitoring", "open", "waiting", "pending", "submitting", "selling", "retrying", "timer-only", "price-unavailable"].includes(String(status || "").toLowerCase());
+    return ["active", "armed", "watching", "monitoring", "open", "waiting", "pending", "pending_buy", "arming", "submitting", "selling", "retrying", "timer-only", "price-unavailable"].includes(String(status || "").toLowerCase());
   }
   function needsAttentionAutomationStatus(status) {
     return ["outcome_unknown", "needs_attention"].includes(String(status || "").toLowerCase());
@@ -2716,7 +2734,7 @@
     const side = String(row.type || row.side || row.kind || "trade").toLowerCase();
     const symbol = String(row.symbol || meta.symbol || row.shortMint || meta.shortMint || short(token) || "coin");
     const solAmount = firstActivityValue(row.solAmount, row.amountSol);
-    const tokenAmount = firstActivityValue(row.tokenAmount, row.tokenUiAmount, row.amountToken);
+    const tokenAmount = firstActivityValue(row.tokenUiAmount, row.tokenAmount, row.amountToken);
     return {
       ...row, chain: "solana", side, token, symbol,
       name: row.name || meta.name || "Solana",
@@ -2736,7 +2754,7 @@
     const outSol = firstActivityValue(row.outSol, row.solCashout?.outSol, ["sell", "auto-sell"].includes(side) ? row.amountSol : "");
     const ethAmount = firstActivityValue(row.rhEthAmount, row.amountEth, row.ethAmount);
     const sentEth = firstActivityValue(row.sentEth, ["send", "cashout"].includes(side) ? row.amountEth : "");
-    const tokenAmount = firstActivityValue(row.tokenAmount, row.tokenUiAmount, row.amountToken, row.outToken);
+    const tokenAmount = firstActivityValue(row.tokenUiAmount, row.tokenAmount, row.amountToken, row.outToken);
     const quotedEth = firstActivityValue(row.quotedEth, row.outEth, ["sell", "auto-sell"].includes(side) ? row.out : "");
     let input = activityLeg(row.inputAmount, row.inputSymbol), output = activityLeg(row.outputAmount, row.outputSymbol);
     if (!input && !output) {
@@ -2823,7 +2841,8 @@
     const stateRows = state.accountOrderState || {}, metadata = state.accountTokenMetadata || new Map(), rows = [];
     const add = (row) => {
       const token = String(row.token || ""), meta = metadata.get(token.toLowerCase()) || {};
-      rows.push({ ...row, symbol: row.symbol || meta.symbol || (token ? short(token) : "Order"), imageUrl: row.imageUrl || meta.imageUrl || meta.imageUri || "" });
+      const signature = String(row.signature || ""), chain = row.chain || "solana";
+      rows.push({ ...row, signature, url: row.url || (signature ? activityExplorerUrl({ signature }, chain) : ""), symbol: row.symbol || meta.symbol || (token ? short(token) : "Order"), imageUrl: row.imageUrl || meta.imageUrl || meta.imageUri || "" });
     };
     for (const order of stateRows.marketOrders || []) {
       const kind = String(order.kind || order.side || "order").toLowerCase(), buy = kind.includes("buy"), token = String(order.mint || order.token || order.tokenAddress || "");
@@ -2832,7 +2851,29 @@
     const planIds = new Set();
     for (const plan of stateRows.tradePlans || []) {
       planIds.add(String(plan.id || ""));
-      add({ id: plan.id, rowKey: `plan:${plan.id}`, type: "exit", chain: "solana", token: plan.tokenMint || "", status: plan.status || "watching", title: "Auto exits", detail: `TP ${plan.takeProfitSummary || (plan.takeProfitPct ? `+${plan.takeProfitPct}%` : "off")} · SL ${plan.stopLossSummary || (plan.stopLossPct ? `-${plan.stopLossPct}%` : "off")} · sell ${plan.triggerSellPercent || plan.sellPercent || 100}%`, walletLabel: `${plan.activeWallets ?? plan.walletCount ?? 0}/${plan.walletCount ?? 0} wallets active`, source: plan.source || "SlimeWire exit plan", at: firstActivityValue(plan.completedAt, plan.updatedAt, plan.createdAt) });
+      const wallets = Array.isArray(plan.wallets) && plan.wallets.length ? plan.wallets : [{}];
+      wallets.forEach((wallet, walletOffset) => {
+        const status = String(firstActivityValue(wallet.exitStatus, wallet.status, plan.status, "watching"));
+        const submissionSignature = firstActivityValue(wallet.buySubmissionSignature, wallet.submissionSignature);
+        const signature = firstActivityValue(wallet.sellSignature, submissionSignature, wallet.buySignature);
+        const signatureLabel = wallet.sellSignature ? "Sell tx" : submissionSignature ? "Submission" : wallet.buySignature ? "Buy tx" : "";
+        add({
+          id: plan.id,
+          rowKey: `plan:${plan.id}:${wallet.publicKey || wallet.walletPublicKey || wallet.walletIndex || walletOffset}`,
+          type: "exit",
+          chain: "solana",
+          token: plan.tokenMint || "",
+          status,
+          title: ["pending_buy", "arming"].includes(status.toLowerCase()) ? "Protected buy & exits" : "Auto exits",
+          detail: `TP ${plan.takeProfitSummary || (plan.takeProfitPct ? `+${plan.takeProfitPct}%` : "off")} · SL ${plan.stopLossSummary || (plan.stopLossPct ? `-${plan.stopLossPct}%` : "off")} · sell ${wallet.triggerSellPercent || plan.triggerSellPercent || plan.sellPercent || 100}%`,
+          walletLabel: wallet.label || wallet.walletLabel || activityWalletLabel(wallet),
+          walletPublicKey: wallet.publicKey || wallet.walletPublicKey || "",
+          source: plan.source || "SlimeWire exit plan",
+          at: firstActivityValue(wallet.soldAt, wallet.triggeredAt, wallet.buySubmissionSignedAt, wallet.submissionSignedAt, wallet.armedAt, wallet.updatedAt, wallet.lastCheckedAt, plan.completedAt, plan.updatedAt, plan.createdAt),
+          signature,
+          signatureLabel
+        });
+      });
     }
     for (const guard of stateRows.exitGuards || []) {
       if (guard.planId && planIds.has(String(guard.planId))) continue;
@@ -2845,9 +2886,12 @@
     return rows.sort((left, right) => Date.parse(right.at || 0) - Date.parse(left.at || 0));
   }
   function accountOrderRowHtml(row = {}) {
-    const active = accountOrderActive(row), coinAction = row.token ? ` data-open-coin="${escapeHtml(row.token)}" data-chain-kind="${row.chain === "robinhood" ? "rh" : "sol"}"` : "";
+    const active = accountOrderActive(row), needsAttention = needsAttentionAutomationStatus(row.status), coinAction = row.token ? ` data-open-coin="${escapeHtml(row.token)}" data-chain-kind="${row.chain === "robinhood" ? "rh" : "sol"}"` : "";
     const cancel = row.cancelKind === "market" ? `<button class="account-order-cancel" type="button" data-cancel-account-order="${escapeHtml(row.id)}" data-order-chain="${escapeHtml(row.chain)}">Cancel</button>` : row.cancelKind === "rh-guard" ? `<button class="account-order-cancel" type="button" data-cancel-account-rh-guard="${escapeHtml(row.id)}">Cancel</button>` : "";
-    return `<article class="account-order-row ${active ? "active" : "complete"}"><button class="account-order-coin" type="button"${coinAction} ${row.token ? "" : "disabled"}><img src="${escapeHtml(coinImage({ tokenMint: row.token, address: row.token, symbol: row.symbol, imageUrl: row.imageUrl, chain: row.chain }))}" alt=""><i class="chain-badge ${row.chain === "robinhood" ? "rh" : "sol"}">${row.chain === "robinhood" ? "RH" : "SOL"}</i></button><div><header><b>${escapeHtml(row.title)} · ${escapeHtml(row.symbol)}</b><span class="account-order-status ${active ? "live" : ""}">${escapeHtml(String(row.status || "unknown").replace(/_/g, " "))}</span></header><strong>${escapeHtml(row.detail)}</strong><small>${escapeHtml(row.walletLabel)} · ${escapeHtml(row.source)} · ${escapeHtml(accountActivityTimeLabel(row.at))}</small></div>${cancel}</article>`;
+    const receipt = row.url ? `<a class="account-activity-tx" href="${escapeHtml(row.url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(row.signature || "")}">${escapeHtml(row.signatureLabel || "Solscan")} · ${escapeHtml(short(row.signature))} ↗</a>` : "";
+    const rowStyle = needsAttention ? ' style="border-color:rgba(255,190,60,.48);box-shadow:0 0 0 1px rgba(255,190,60,.12)"' : "";
+    const statusStyle = needsAttention ? ' style="background:rgba(255,190,60,.12);color:#ffd574"' : "";
+    return `<article class="account-order-row ${active ? "active" : needsAttention ? "attention" : "complete"}"${rowStyle}><button class="account-order-coin" type="button"${coinAction} ${row.token ? "" : "disabled"}><img src="${escapeHtml(coinImage({ tokenMint: row.token, address: row.token, symbol: row.symbol, imageUrl: row.imageUrl, chain: row.chain }))}" alt=""><i class="chain-badge ${row.chain === "robinhood" ? "rh" : "sol"}">${row.chain === "robinhood" ? "RH" : "SOL"}</i></button><div><header><b>${escapeHtml(row.title)} · ${escapeHtml(row.symbol)}</b><span class="account-order-status ${active ? "live" : needsAttention ? "attention" : ""}"${statusStyle}>${escapeHtml(needsAttention ? "Needs attention" : String(row.status || "unknown").replace(/_/g, " "))}</span></header><strong>${escapeHtml(row.detail)}</strong><small>${escapeHtml(row.walletLabel)} · ${escapeHtml(row.source)} · ${escapeHtml(accountActivityTimeLabel(row.at))}</small></div>${cancel || receipt}</article>`;
   }
   function renderAccountLedger() {
     const panel = $("[data-profile-panel]");
@@ -4072,6 +4116,40 @@
     state.activeWallet = state.wallets[0]?.index || null;if(state.activeWallet)localStorage.setItem(ACTIVE_WALLET_KEY,String(state.activeWallet));else localStorage.removeItem(ACTIVE_WALLET_KEY); paintWalletPill(); renderWalletHero(); toast("Wallet backed up and removed"); await openWalletManager();
   }
   async function ensureTradeReady() { if (!(await ensureAccount())) return false; if (!state.wallets.length) await loadWallets(); if (!state.wallets.length) { closeSheet(); setView("wallet"); toast("Create a wallet first.", true); return false; } await ensureAutomation(); return true; }
+  function buyBodyHasProtection(body = {}) {
+    return Boolean(Number(body.takeProfitPct) > 0
+      || Number(body.stopLossPct) > 0
+      || Number(body.trailingStopPct) > 0
+      || (Array.isArray(body.takeProfitLadder) && body.takeProfitLadder.length)
+      || (body.sellDelay && body.sellDelay !== "off"));
+  }
+  async function prepareBuyProtection(pending) {
+    if (!pending || pending.side !== "buy") return true;
+    if (!(await ensurePresetsLoaded())) { toast("Could not load your trade protection. Buy not submitted — try again.", true); return false; }
+    const presetId = String(state.activePresetId || "").trim(), preset = activePreset(), body = pending.body || (pending.body = {});
+    if (presetId && !preset) { toast("Your saved trade preset is unavailable. Buy not submitted — choose a preset or Manual.", true); return false; }
+    if (presetId && !buyBodyHasProtection(body)) {
+      body.takeProfitPct = preset.takeProfitPct || "";
+      body.stopLossPct = preset.stopLossPct || "";
+      body.sellPercent = preset.sellPercent || "100";
+      body.sellDelay = preset.sellDelay || "off";
+      if (Array.isArray(preset.takeProfitLadder) && preset.takeProfitLadder.length) body.takeProfitLadder = preset.takeProfitLadder;
+    }
+    const protectionRequired = Boolean(presetId || buyBodyHasProtection(body));
+    if (protectionRequired) {
+      body.autoExit = true;
+      body.protectionRequired = true;
+      if (presetId) body.presetId = presetId;
+      delete body.disableAutoExit;
+    } else {
+      body.disableAutoExit = true;
+      delete body.autoExit;
+      delete body.protectionRequired;
+      delete body.presetId;
+    }
+    pending.guard = { ...(pending.guard || {}), takeProfitPct: body.takeProfitPct || "", stopLossPct: body.stopLossPct || "" };
+    return true;
+  }
   function startRhTradeProgress(button, side) {
     const steps = side === "sell"
       ? [[0, "Finding fastest route…"], [4_000, "Selling on Robinhood…"], [10_000, "Returning proceeds to SOL…"]]
@@ -4141,6 +4219,7 @@
   }
   async function reviewTradePayload(button, pending) {
     if (!(await ensureTradeReady())) return false;
+    if (!(await prepareBuyProtection(pending))) return false;
     button.disabled = true; const oldText = button.textContent; button.textContent = "Simulating…";
     const result = await post("/api/web/transaction/preview", { kind: pending.kind, chain: pending.chain, side: pending.side, ...pending.body }, { timeout: 30_000 });
     button.disabled = false; button.textContent = oldText;

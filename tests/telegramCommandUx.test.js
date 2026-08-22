@@ -134,6 +134,9 @@ test("Telegram quick trades acknowledge immediately and scan wallets concurrentl
   const buy = functionBody(serverSource, "handleQuickBuyCallback");
   assert.ok(buy.indexOf("await ack(`⚡ Buying") < buy.indexOf("await tgExecuteQuickBuy("));
   const sell = functionBody(serverSource, "handleQuickSellCallback");
+  assert.match(sell, /idempotencyKey: `tg-quick-sell-callback:\$\{query\.id\}`/);
+  assert.match(sell, /if \(r\.outcomeUnknown\)/);
+  assert.match(sell, /It will not be sent again/);
   assert.ok(sell.indexOf("await ack(`🔴 Selling") < sell.indexOf("await tgExecuteQuickSell("));
   assert.match(functionBody(serverSource, "tgExecuteQuickSell"), /runWithConcurrency\(wallets/);
   assert.match(functionBody(serverSource, "tgExecuteQuickSell"), /runWithConcurrency\(holders/);

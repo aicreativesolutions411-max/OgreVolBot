@@ -91,9 +91,11 @@ test("all current Solana preset amount buttons apply the saved exit and report a
   assert.match(presetBuy, /No buy was sent/);
   assert.match(presetBuy, /takeProfitLadder: exit\.takeProfitLadder/);
   assert.match(presetBuy, /breakEvenAfterTp1: exit\.mode === "ladder" && exit\.stopLossPct > 0/);
-  assert.match(presetBuy, /runIdempotentMoneyOp\("tg-quick-buy-exit"/);
-  assert.match(presetBuy, /armError = friendlyError/);
-  assert.match(presetBuy, /prefs\.slippageBps, automationPermission/);
+  assert.match(presetBuy, /selectTgSolFundingWallet/);
+  assert.match(presetBuy, /webTradeBuy\(userId, \{/);
+  assert.match(presetBuy, /walletPublicKey: selected\.wallet\.publicKey/);
+  assert.match(presetBuy, /protectionRequired: true/);
+  assert.match(presetBuy, /tradeAttemptId: attemptId/);
 
   const callback = functionBody(serverSource, "handleQuickBuyPresetCallback");
   assert.match(callback, /\(\?:\(\[\\d\.\]\+\):\)\?/);

@@ -14,14 +14,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import { effectiveErc20SupplyRaw, tokenPriceInQuote } from "../src/lib/noxaLaunchpad.js";
 
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+const autopilotEngineSource = fs.readFileSync(new URL("../src/lib/autopilotEngine.js", import.meta.url), "utf8");
 const vanityMintSource = fs.readFileSync(new URL("../src/lib/vanityMint.js", import.meta.url), "utf8");
 const noxaSource = fs.readFileSync(new URL("../src/lib/noxaLaunchpad.js", import.meta.url), "utf8");
 const ggSource = fs.readFileSync(new URL("../web/public/gg.html", import.meta.url), "utf8");
 const indexSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
+const autopilotLiveSource = fs.readFileSync(new URL("../web/public/autopilot-live.html", import.meta.url), "utf8");
+const autopilotProSource = fs.readFileSync(new URL("../web/public/autopilot-pro.html", import.meta.url), "utf8");
 const polyTradingSource = fs.readFileSync(new URL("../src/lib/polymarketTrading.js", import.meta.url), "utf8");
 const polyHubSource = fs.readFileSync(new URL("../web/public/polymarket.html", import.meta.url), "utf8");
 const pumpCashbackSource = fs.readFileSync(new URL("../src/lib/pumpCashback.js", import.meta.url), "utf8");
@@ -52,6 +56,33 @@ test("Pufcat campaign page keeps live market, chart, trade, and community paths 
   assert.match(serverSource, /bannerUrl: "\/assets\/pufcat\/pufcat-hero\.webp"/);
   assert.match(serverSource, /mediaUrl: "\/assets\/pufcat\/pufcat-community\.webp"/);
   assert.doesNotMatch(pufcatSource, /market cap[^<]{0,30}\$[0-9]/i, "volatile market values must not be hard-coded");
+});
+
+test("sell-all and return-funds require stable destructive-action ids across every live client", () => {
+  const sellAll = functionBody(serverSource, "webSellAllTokens");
+  const sellAllCore = functionBody(serverSource, "webSellAllTokensCore");
+  const returnFunds = functionBody(serverSource, "webReturnFundsToConnected");
+  assert.match(sellAll, /if \(!attemptId\)/);
+  assert.match(sellAll, /Refresh SlimeWire before using Sell All/);
+  assert.match(sellAllCore, /runIdempotentMoneyOp\("web-sell-all-token"/);
+  assert.match(sellAllCore, /crypto\.createHash\("sha256"\)/);
+  assert.match(sellAllCore, /\.slice\(0, 48\)/);
+  const parent = `wallet-sell-all-${"a".repeat(36)}`;
+  const wallet = "7".repeat(44);
+  const childId = (mint) => `web-sell-all-${crypto.createHash("sha256").update(`${parent}:${wallet}:${mint}`).digest("hex").slice(0, 48)}`.slice(0, 96);
+  assert.notEqual(childId("A".repeat(44)), childId("B".repeat(44)), "each token needs an independent bounded idempotency key");
+  assert.match(sellAllCore, /ttlMs: 24 \* 60 \* 60_000/);
+  assert.match(returnFunds, /if \(!attemptId\)/);
+  assert.match(returnFunds, /Refresh SlimeWire before returning funds/);
+  assert.match(functionBody(appSource, "returnFundsToConnected"), /state\.returnFundsAttemptId \|\|= createClientAttemptId\("return-funds"\)/);
+  assert.match(functionBody(appSource, "maybeReturnSessionFundsBeforeLeaving"), /tradeAttemptId: state\.returnFundsAttemptId/);
+  assert.match(functionBody(appSource, "runWalletSweepAction"), /state\.walletSweepAttemptIds\[action\] \|\|= createClientAttemptId\("wallet-sell-all"\)/);
+  for (const source of [indexSource, ggSource]) {
+    assert.match(source, /sellAllClientRequestId=sellAllClientRequestId\|\|attemptId\(\)/);
+    assert.match(source, /returnFundsClientRequestId=returnFundsClientRequestId\|\|attemptId\(\)/);
+  }
+  assert.match(autopilotLiveSource, /clientRequestId: sellAttemptId/);
+  assert.match(autopilotProSource, /clientRequestId:sellAttemptId/);
 });
 
 test("Pump native Cash back uses official create_v2 and stays distinct from holder rewards", () => {
@@ -311,6 +342,95 @@ test("manual sell keeps an outcome-unknown tombstone for 24 hours", () => {
   assert.match(replay, /partialHashes/);
 });
 
+test("manual sells durably pause matching exits and bundle ambiguity cannot become retryable failure", () => {
+  const single = functionBody(serverSource, "webTradeSellCore");
+  assert.match(single, /withExitSellLock[\s\S]*executeManualSolSellWithProtection/);
+
+  const protectedSell = functionBody(serverSource, "executeManualSolSellWithProtection");
+  assert.ok(
+    protectedSell.indexOf("claimManualSellProtection") < protectedSell.indexOf("await task"),
+    "matching stop loss state must be claimed before a manual sell can broadcast"
+  );
+  assert.match(protectedSell, /checkpointManualSellProtection/);
+  assert.match(protectedSell, /tradeSubmissionAmbiguous[\s\S]*settleManualSellProtection/);
+  assert.match(protectedSell, /Number\(percent\) < 99\.999 && protectedTargetCount > 1/);
+  const ambiguousHolder = functionBody(serverSource, "settleAmbiguousManualSellHolder");
+  assert.match(ambiguousHolder, /manualSellReviewPreviousState/);
+  assert.match(ambiguousHolder, /manualSellIntendedPercent/);
+  assert.match(ambiguousHolder, /manualSellNeedsAttention = true/);
+
+  const bundle = functionBody(serverSource, "webBundleSellCore");
+  assert.match(bundle, /executeManualSolSellWithProtection/);
+  assert.match(bundle, /ambiguousErrors\.push\(error\)/);
+  assert.match(bundle, /throw aggregateTradeSubmissionAmbiguous/);
+
+  const rhTrade = functionBody(serverSource, "webRhTrade");
+  assert.ok(
+    rhTrade.indexOf("claimRhManualSellGuards") < rhTrade.indexOf("webRhTradeCore"),
+    "Robinhood guards must pause before the manual sell"
+  );
+  assert.match(rhTrade, /settleRhManualSellGuards[\s\S]*tradeSubmissionAmbiguous/);
+
+  const rhBundle = functionBody(serverSource, "webRhBundleSell");
+  assert.match(rhBundle, /webRhTrade\(userId/);
+  assert.match(rhBundle, /tradeAttemptId: `\$\{bundleAttemptId\}:wallet:\$\{walletIndex\}`/);
+  assert.match(rhBundle, /throw aggregateTradeSubmissionAmbiguous/);
+});
+
+test("every bulk and unattended Sol liquidation checkpoints before broadcast and tombstones ambiguity", () => {
+  const telegramBatch = functionBody(serverSource, "batchSellFlow");
+  assert.match(telegramBatch, /runIdempotentMoneyOp\([\s\S]*"tg-batch-sell-wallet"/);
+  assert.match(telegramBatch, /withExitSellLock[\s\S]*executeManualSolSellWithProtection[\s\S]*executeJupiterSwap\([\s\S]*onSigned/);
+  assert.ok(telegramBatch.indexOf("recordTradeEvents") < telegramBatch.indexOf("throw aggregateTradeSubmissionAmbiguous"));
+  assert.ok(telegramBatch.indexOf("throw aggregateTradeSubmissionAmbiguous") < telegramBatch.indexOf("clearSession"));
+
+  const telegramAll = functionBody(serverSource, "sellAllTokensFlow");
+  assert.match(telegramAll, /runIdempotentMoneyOp\([\s\S]*"tg-sell-all-token"/);
+  assert.match(telegramAll, /withExitSellLock[\s\S]*executeManualSolSellWithProtection[\s\S]*sellTokenAmountFromWallet\([^)]*onSigned/s);
+  assert.ok(telegramAll.indexOf("recordTradeEvents") < telegramAll.indexOf("throw aggregateTradeSubmissionAmbiguous"));
+  assert.ok(telegramAll.indexOf("throw aggregateTradeSubmissionAmbiguous") < telegramAll.indexOf("clearSession"));
+
+  const webAll = functionBody(serverSource, "webSellAllTokensCore");
+  assert.match(webAll, /withExitSellLock[\s\S]*executeManualSolSellWithProtection[\s\S]*sellTokenAmountFromWallet\([^)]*onSigned/s);
+  assert.match(webAll, /ambiguousErrors\.push\(sellError\)/);
+  assert.ok(webAll.indexOf("recordTradeEvents") < webAll.indexOf("throw aggregateTradeSubmissionAmbiguous"));
+
+  const bundle = functionBody(serverSource, "webBundleSellCore");
+  assert.match(bundle, /runIdempotentMoneyOp\([\s\S]*"web-bundle-sell-wallet"/);
+  assert.match(bundle, /`\$\{bundleAttemptId\}:wallet:\$\{walletIndex\}`/);
+
+  const returned = functionBody(serverSource, "webReturnFundsToConnectedCore");
+  assert.match(returned, /tradeAttemptId: returnAttemptId \? `\$\{returnAttemptId\}:sell`/);
+  assert.match(returned, /if \(error\?\.tradeSubmissionAmbiguous\) throw error/);
+});
+
+test("autopilot, RH mirror, and DCA never replay an outcome-unknown sell", () => {
+  const autopilot = serverSource.slice(serverSource.indexOf("sellPercent: async (mint"), serverSource.indexOf("async function startLiveAutopilotResume"));
+  assert.match(autopilot, /runIdempotentMoneyOp\([\s\S]*"autopilot-sell"/);
+  assert.match(autopilot, /withExitSellLock[\s\S]*executeManualSolSellWithProtection[\s\S]*onSigned/);
+  assert.match(autopilot, /if \(e\?\.tradeSubmissionAmbiguous\) throw e/);
+  assert.match(autopilotEngineSource, /if \(pos\.exitOutcomeUnknown\) return/);
+  assert.match(autopilotEngineSource, /e\?\.tradeSubmissionAmbiguous[\s\S]*pos\.exitOutcomeUnknown = true/);
+
+  const rhMirror = functionBody(serverSource, "processRhCopyWalletWatchPlan");
+  assert.match(rhMirror, /if \(rec\?\.sellOutcomeUnknown\) continue/);
+  assert.match(rhMirror, /await webRhTrade\(plan\.userId,[\s\S]*side: "sell"/);
+  assert.match(rhMirror, /tradeSubmissionAmbiguous[\s\S]*rec\.sellOutcomeUnknown = true/);
+
+  const rhVolume = functionBody(serverSource, "webRhVolumeStart");
+  assert.doesNotMatch(rhVolume, /webRhTradeCore\(/);
+  assert.match(rhVolume, /rh-volume:\$\{job\.id\}:direct:\$\{round\}:wallet:\$\{idx\}:sell/);
+  assert.match(rhVolume, /rh-volume:\$\{job\.id\}:cycle:\$\{cycleId\}:wallet:\$\{fresh\.publicKey\}:sell/);
+  assert.ok(rhVolume.indexOf("if (cycleOutcomeUnknown)") < rhVolume.indexOf("Sweep this wallet's ETH back"));
+  assert.match(rhVolume, /cycleOutcomeUnknown[\s\S]*job\.status = "needs_attention"[\s\S]*break/);
+
+  const dca = functionBody(serverSource, "processDcaPlanWallet");
+  assert.match(dca, /runIdempotentMoneyOp\([\s\S]*"dca-sell"/);
+  assert.match(dca, /withExitSellLock[\s\S]*executeManualSolSellWithProtection[\s\S]*sellTokenAmountFromWallet/);
+  assert.match(dca, /sellSubmissionSignature[\s\S]*persistCheckpoint/);
+  assert.match(dca, /tradeSubmissionAmbiguous \|\| planWallet\.sellSubmissionSignature[\s\S]*status = "outcome_unknown"/);
+});
+
 test("buy path is idempotent: webTradeBuy wraps webTradeBuyCore via runIdempotentMoneyOp", () => {
   // The real buy logic moved into a *Core fn; the public fn delegates to the shared idempotency wrapper.
   assert.match(serverSource, /async function webTradeBuyCore\(userId, body = \{\}\) \{/);
@@ -320,6 +440,127 @@ test("buy path is idempotent: webTradeBuy wraps webTradeBuyCore via runIdempoten
   assert.match(wrapper, /webTradeBuyCore\(userId, body\)/);
   // The actual swap still happens exactly once, in the core fn.
   assert.match(functionBody(serverSource, "webTradeBuyCore"), /buyTokenForPlan\(/);
+});
+
+test("managed Sol buys fail closed when the same wallet and mint already has exit protection", () => {
+  const blocker = functionBody(serverSource, "assertManagedSolBuyReentryAllowed");
+  assert.match(blocker, /Promise\.all\(\[\s*readTradePlans\(\),\s*readWebExitGuards\(\),\s*readSolExitReceipts\(\)/);
+  assert.match(blocker, /sameWalletTokenBuyBlockDecision\(/);
+  assert.match(blocker, /error\.statusCode = 409/);
+  assert.match(blocker, /two full-position plans cannot sell the same bag/);
+  const quickBuy = functionBody(serverSource, "webTradeBuyCore");
+  assert.ok(quickBuy.indexOf("assertManagedSolBuyReentryAllowed") < quickBuy.indexOf("buyTokenForPlan"));
+  const managedPlan = functionBody(serverSource, "webCreateManagedBuyPlanCore");
+  assert.ok(managedPlan.indexOf("assertManagedSolBuyReentryAllowed") < managedPlan.indexOf("runWithConcurrency"));
+});
+
+test("protected Sol buys checkpoint the old bag and only arm the newly bought lot", () => {
+  const quickBuy = functionBody(serverSource, "webTradeBuyCore");
+  const managedBuy = functionBody(serverSource, "webCreateManagedBuyPlanCore");
+  const recoverLot = functionBody(serverSource, "recoverPlanWalletTokenOutAmount");
+
+  assert.match(quickBuy, /readProtectedBuyTokenBaselineRaw\(wallet, tokenMint\)/);
+  assert.ok(
+    quickBuy.indexOf("preBuyTokenRawAmount") < quickBuy.indexOf("webCreateSingleTradeAutoExitPlan"),
+    "the exact pre-buy balance must exist before the durable protection reservation"
+  );
+  assert.match(quickBuy, /trackTokenDelta: autoExitRequested/);
+  assert.match(quickBuy, /tokenBeforeRawAmount: preBuyTokenRawAmount/);
+
+  assert.match(managedBuy, /readProtectedBuyTokenBaselineRaw\(runtime\.wallet, tokenMint\)/);
+  assert.ok(
+    managedBuy.indexOf("preBuyTokenRawAmount") < managedBuy.indexOf("plans.plans.push\(reservationPlan\)"),
+    "each protected managed wallet must checkpoint its old balance before reservation and broadcast"
+  );
+  assert.match(managedBuy, /tokenBeforeRawAmount: runtime\.preBuyTokenRawAmount/);
+  assert.match(recoverLot, /protectedLotAmountFromBalance/);
+  assert.match(recoverLot, /preBuyTokenRawAmount/);
+});
+
+test("automatic exits and repeat buys require the exact persisted wallet claim before submission", () => {
+  const walletStep = functionBody(serverSource, "processTradePlanWallet");
+  assert.match(walletStep, /submissionClaimToken = crypto\.randomUUID\(\)/);
+  assert.match(walletStep, /persistCheckpoint\(\{[\s\S]*walletCheckpoint:[\s\S]*submissionClaimToken/);
+  assert.match(walletStep, /onSigned:[\s\S]*walletCheckpoint:[\s\S]*submissionSignature/);
+
+  const runner = functionBody(serverSource, "processTradePlans");
+  assert.match(runner, /persistedWallet\.submissionClaimToken !== walletCheckpoint\.submissionClaimToken/);
+  assert.match(runner, /persistedWallet\.submissionSignature !== walletCheckpoint\.submissionSignature/);
+  assert.match(runner, /persistedWallet\.buyReservationClaimToken !== walletCheckpoint\.buyReservationClaimToken/);
+  assert.match(runner, /persistedWallet\.buySubmissionSignature !== walletCheckpoint\.buySubmissionSignature/);
+
+  const repeatBuyWrapper = functionBody(serverSource, "executeTimedPlanLoopBuy");
+  assert.match(repeatBuyWrapper, /withManagedSolBuyPositionLocks/);
+  const repeatBuy = functionBody(serverSource, "executeTimedPlanLoopBuyUnlocked");
+  assert.match(repeatBuy, /buyReservationClaimToken = crypto\.randomUUID\(\)/);
+  assert.match(repeatBuy, /walletCheckpoint:[\s\S]*buyReservationClaimToken/);
+  assert.match(repeatBuy, /onSigned:[\s\S]*walletCheckpoint:[\s\S]*buySubmissionSignature/);
+  const merge = functionBody(serverSource, "mergeTradePlanWalletsPreservingConcurrent");
+  assert.match(merge, /sameBuyClaim/);
+  assert.match(merge, /verifiedSellClear = verifiedSubmissionSignatureClear/);
+  assert.match(merge, /wouldEraseSellSignature[\s\S]*wouldEraseBuySignature/);
+  assert.match(merge, /newerCurrentState[\s\S]*currentRevision > incomingRevision/);
+  assert.match(merge, /wouldEraseSellSignature[\s\S]*wouldEraseBuySignature[\s\S]*currentProtected && !verifiedSellClear/);
+});
+
+test("legacy negative entry baselines cannot mask a protected stop loss", () => {
+  const adjust = functionBody(serverSource, "frictionAdjustedExitEstimate");
+  assert.match(
+    adjust,
+    /if \(positiveNumber\(stopLossPct\) > 0\) \{\s*holder\.entryBaselineMovePct = 0;\s*holder\.entryBaselineMarketMovePct = 0;/s
+  );
+});
+
+test("TP/SL parallel precheck is detection-only and a due repeat loop cannot buy there", () => {
+  const walletStep = functionBody(serverSource, "processTradePlanWallet");
+  const waitingStart = walletStep.indexOf('planWallet.status === "waiting_next_loop"');
+  const delayedBuyCall = walletStep.indexOf("startDelayedTimedPlanLoop", waitingStart);
+  const waitingDetectOnly = walletStep.indexOf("if (options.detectOnly)", waitingStart);
+  assert.ok(waitingStart >= 0 && waitingDetectOnly > waitingStart && waitingDetectOnly < delayedBuyCall,
+    "detectOnly must return an execution decision before a waiting loop can start its repeat buy");
+  assert.match(walletStep.slice(waitingDetectOnly, delayedBuyCall), /executionReady:\s*true[\s\S]*action:\s*"start-next-loop"/);
+
+  const precheck = functionBody(serverSource, "precheckTradePlanExits");
+  assert.match(precheck, /processTradePlanWallet\([\s\S]*detectOnly:\s*true/);
+  assert.doesNotMatch(precheck, /buyTokenForPlan|sellTradePlanWalletWithRetries|startDelayedTimedPlanLoop/);
+
+  const runner = functionBody(serverSource, "processTradePlans");
+  assert.match(runner, /precheck\.decisions\?\.get\(precheckKey\)[\s\S]*await processTradePlanWallet/);
+  assert.doesNotMatch(runner, /await runTpSlMonitorStep\(/,
+    "a submit-capable trade-plan call must never run inside Promise.race");
+});
+
+test("unlinked web guards detect under timeout but submit only in the directly awaited serial phase", () => {
+  const precheck = functionBody(serverSource, "precheckUnlinkedWebExitGuards");
+  assert.match(precheck, /runTpSlMonitorStep\([\s\S]*processWebExitGuard\([\s\S]*detectOnly:\s*true/);
+  assert.doesNotMatch(precheck, /sellTradePlanWalletWithRetries|buyTokenForPlan/);
+
+  const runner = functionBody(serverSource, "processWebExitGuards");
+  assert.match(runner, /precheckUnlinkedWebExitGuards\([\s\S]*precheck\.decisions\.get\([\s\S]*await processWebExitGuard/);
+  assert.doesNotMatch(runner, /await runTpSlMonitorStep\(/,
+    "web-guard submission must be awaited directly, outside the monitor timeout race");
+
+  const guardStep = functionBody(serverSource, "processWebExitGuard");
+  assert.ok(guardStep.indexOf("if (options.detectOnly)") < guardStep.indexOf("sellTradePlanWalletWithRetries"));
+  assert.match(guardStep, /detectionOnly:\s*true[\s\S]*executionReady:\s*true[\s\S]*triggerReason/);
+  const guardMerge = functionBody(serverSource, "writeWebExitGuardsPreservingConcurrent");
+  assert.match(guardMerge, /verifiedClear = protectedCurrent && verifiedSubmissionSignatureClear/);
+  assert.match(guardMerge, /protectedCurrent[\s\S]*wouldEraseSignature[\s\S]*!verifiedClear && !sameClaim && !sameSignature/);
+});
+
+test("confirmed Sol auto-exits persist a receipt before idempotent history and backfill exact wallet delta", () => {
+  const recorder = functionBody(serverSource, "recordConfirmedSolAutoExit");
+  const receiptAt = recorder.indexOf("persistConfirmedSolAutoExitReceipt");
+  const historyAt = recorder.indexOf("recordTradeEvents");
+  const markerAt = recorder.indexOf("markConfirmedSolAutoExitHistoryRecorded");
+  assert.ok(receiptAt >= 0 && historyAt > receiptAt && markerAt > historyAt);
+  assert.match(functionBody(serverSource, "backfillConfirmedSolAutoExitHistory"), /confirmedExitNeedsHistoryBackfill/);
+  assert.match(functionBody(serverSource, "confirmedSolExitWalletLamportDelta"), /getParsedTransaction[\s\S]*parsedWalletLamportDelta/);
+  assert.match(functionBody(serverSource, "processWebExitGuard"), /recordConfirmedSolAutoExit\(/);
+  assert.match(functionBody(serverSource, "processTradePlanWallet"), /recordConfirmedSolAutoExit\(/);
+  assert.match(functionBody(serverSource, "processWebPortfolioExits"), /recordConfirmedSolAutoExit\(/);
+  assert.match(functionBody(serverSource, "runInternalWorkerTick"), /solExitHistoryBackfill[\s\S]*backfillConfirmedSolAutoExitHistory/);
+  assert.match(functionBody(serverSource, "startTpSlStartupReconcile"), /backfillConfirmedSolAutoExitHistory/);
 });
 
 test("runIdempotentMoneyOp replays the same attempt and serializes concurrent ones", () => {
@@ -831,7 +1072,10 @@ test("Telegram Robinhood quick trades use the funded/holding wallet and keep a d
   assert.match(solBuy, /walletIndex: selected\.walletIndex/);
   assert.doesNotMatch(solBuy, /wallets\s*&&\s*wallets\[0\]/);         // never silently force Wallet 1
   const preset = functionBody(serverSource, "tgExecuteQuickBuyPreset");
-  assert.match(preset, /walletIndex: String\(r\.walletIndex \|\| 1\)/); // arm exits on the wallet that bought
+  assert.match(preset, /selectTgSolFundingWallet\(userId, amountSol\)/);
+  assert.match(preset, /walletIndex: selected\.walletIndex/);          // protected buy + exits use the same frozen wallet
+  assert.match(preset, /walletPublicKey: selected\.wallet\.publicKey/);
+  assert.match(preset, /webTradeBuy\(userId,[\s\S]*protectionRequired: true/);
 
   const holding = functionBody(serverSource, "selectTgRhTokenWallet");
   assert.match(holding, /rhErc20Balance/);
@@ -1140,13 +1384,15 @@ test("RH power tools: TP/SL guards + bundle + volume bot, all through the safe t
   assert.match(tick, /webRhTradeCore/);
   assert.match(tick, /failCount.*>= 3/s);
   assert.match(serverSource, /runWorkerTask\("rhGuards", \(\) => rhGuardTick\(\)/);
-  // Bundle + volume both route every trade through webRhTradeCore (fees + gas-estimation inherited).
+  // Bundle buys use the core; the recurring volume job uses the idempotent wrapper so ambiguous
+  // submissions are tombstoned and cannot be replayed on the next cycle.
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/bundle"/);
   assert.match(functionBody(serverSource, "webRhBundle"), /runIdempotentMoneyOp\("web-rh-bundle"/);
   assert.match(functionBody(serverSource, "webRhBundleCore"), /webRhTradeCore/);
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/volume\/start"/);
   const rhVolumeStart = functionBody(serverSource, "webRhVolumeStart");
-  assert.match(rhVolumeStart, /webRhTradeCore/);
+  assert.match(rhVolumeStart, /webRhTrade\(userId/);
+  assert.doesNotMatch(rhVolumeStart, /webRhTradeCore\(/);
   assert.match(rhVolumeStart, /fundSolPerWallet/);
   assert.match(rhVolumeStart, /webRhFundWithSol/);
   assert.match(rhVolumeStart, /payCurrency: solFunded \? "SOL" : "ETH"/);
@@ -1202,6 +1448,10 @@ test("Robinhood exits use live server pricing, atomic buy protection, and safe c
   assert.match(trade, /wantsAutoExit/);
   assert.match(trade, /requireWebAutomationPermission\(userId, "Robinhood TP\/SL guard"\)/);
   assert.match(trade, /webRhArmGuard\(userId/);
+  assert.match(trade, /withExitSellLock\(userId, positionWallet\.publicKey, `rh:\$\{positionToken\}`/);
+  assert.match(trade, /assertRhBuyReentryAllowed\(positionWallet, positionToken\)/);
+  assert.match(trade, /webRhTradeCore\(userId, tradeBody, \{ positionLockHeld: true \}\)/);
+  assert.match(functionBody(serverSource, "webRhTradeCore"), /if \(!internal\.positionLockHeld\)/);
   assert.match(trade, /lockMs: 30 \* 60_000/); // reward settlement cannot outlive the money-operation lease and replay a landed sell
   assert.match(arm, /automationExitReplacementBlocked\(g\)/); // unresolved sell attempts cannot be replaced by a second active exit
   assert.match(cancel, /status \|\| ""\)\.toLowerCase\(\) !== "active"/);
@@ -1242,7 +1492,9 @@ test("RH: auto-bundle-when-pool-opens + coin age everywhere + 75% sells", () => 
   const bundleCore = functionBody(serverSource, "webRhBundleCore");
   assert.match(bundleCore, /rhLaunchBundleWalletConfigs/);
   assert.match(bundleCore, /configByIndex\.get\(idx\)/);
-  assert.match(bundleCore, /webRhArmGuard/);
+  assert.match(bundleCore, /protectedBuy[\s\S]*webRhTrade\(userId, tradeBody\)/);
+  assert.match(bundleCore, /protectionRequired: true/);
+  assert.doesNotMatch(bundleCore, /webRhArmGuard/);             // protected buys reserve + arm atomically
   assert.match(bundleCore, /runWithConcurrency\(selectedWallets, Math\.min\(20, selectedWallets\.length\), buyOne\)/);
   assert.match(functionBody(serverSource, "rhGuardTick"), /rhAutoBundleTick/); // shares the interval
   // Age on Trending + chart (creation-time cache filled in background).
@@ -1916,7 +2168,7 @@ test("sell auto-funds the fee from a sibling wallet when the holder has no SOL",
   assert.match(functionBody(serverSource, "topUpSellFees"), /sell_fee_topup/);
   // webTradeSellCore routes BOTH its attempts through the fee-retry wrapper.
   const body = functionBody(serverSource, "webTradeSellCore");
-  assert.match(body, /sellWithFeeRetry\(store, userId, wallet, tokenMint, percent, slippageBps\)/);
+  assert.match(body, /executeManualSolSellWithProtection[\s\S]*sellWithFeeRetry\(store, userId, wallet, tokenMint, percent, slippageBps, \{ onSigned \}\)/);
   assert.doesNotMatch(body, /await sellTokenFromWallet\(/); // the raw call moved into sellWithFeeRetry
 });
 
@@ -3069,9 +3321,10 @@ test("⚡ Quick Buy (preset) + ⚙️ in-group Preset editor: buy your preset + 
   // Quick Buy preset: buys the tapper's amount then arms their TP/SL via the site auto-exit engine.
   const exec = functionBody(serverSource, "tgExecuteQuickBuyPreset");
   assert.match(exec, /amountSol = .*prefs\.quickAmount/);
-  assert.match(exec, /tgExecuteQuickBuy\(userId, mint, amountSol/);
+  assert.match(exec, /selectTgSolFundingWallet\(userId, amountSol\)/);
   assert.match(exec, /idempotencyParts/);
-  assert.match(exec, /webCreateSingleTradeAutoExitPlan\(userId, r\.wallet, mint/);
+  assert.match(exec, /webTradeBuy\(userId,[\s\S]*protectionRequired: true/);
+  assert.doesNotMatch(exec, /webCreateSingleTradeAutoExitPlan/);
   // Routed: qbp: (buy) + pe: (editor) both dispatched.
   assert.match(serverSource, /startsWith\("qbp:"\)/);
   assert.match(serverSource, /startsWith\("pe:"\)/);
@@ -3163,10 +3416,16 @@ test("in-DM one-tap SELL (qs:*): own-wallet, idempotent, on the receipt + positi
   // routed in the dispatcher alongside qb:
   assert.match(serverSource, /startsWith\("qs:"\)/);
   assert.match(serverSource, /handleQuickSellCallback\(query, userId\)/);
+  const callback = functionBody(serverSource, "handleQuickSellCallback");
+  assert.match(callback, /idempotencyKey: `tg-quick-sell-callback:\$\{query\.id\}`/);
+  assert.match(callback, /if \(r\.outcomeUnknown\)/);
   const sell = functionBody(serverSource, "tgExecuteQuickSell");
   assert.match(sell, /walletsForOwner\(walletStore, userId\)/);   // the tapper's OWN wallets
   assert.match(sell, /sellTokenFromWallet\(w, mint, pct, slippageBps/);          // real sell money-path
   assert.match(sell, /runIdempotentMoneyOp\("tg-quick-sell"/);                   // double-tap-proof
+  assert.match(sell, /withExitSellLock\(userId, w\.publicKey, mint/);             // cannot race an armed exit
+  assert.match(sell, /executeManualSolSellWithProtection\(w, mint, pct/);          // durably pauses matching exits
+  assert.match(sell, /sellTokenFromWallet\([^)]*\{ userId, priority: true, onSigned \}/s); // signed checkpoint before broadcast
   assert.match(sell, /type: "sell", source: "tg-quick-sell"/);                   // recorded for PnL
   // the DM buy receipt now carries in-chat sell buttons (25/50/100%) + Main Menu
   const rk = functionBody(serverSource, "quickBuyReceiptKeyboard");

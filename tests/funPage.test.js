@@ -59,12 +59,36 @@ function accountActivityNormalizerWith(overrides = {}) {
   return Function("state", "short", `"use strict";${js.slice(start, end)};return normalizeAccountActivityRows;`)(state, short);
 }
 
+function accountOrderRowsWith(accountOrderState) {
+  const start = js.indexOf("function accountOrderRows");
+  const end = js.indexOf("function accountOrderRowHtml", start);
+  assert.ok(start >= 0 && end > start, "account order normalization should remain extractable");
+  const first = (...values) => values.find((value) => value !== null && value !== undefined && value !== "") ?? "";
+  const short = (value) => {
+    const text = String(value || "");
+    return text.length > 10 ? `${text.slice(0, 5)}…${text.slice(-4)}` : text;
+  };
+  return Function(
+    "state", "short", "isRh", "activityWalletLabel", "formatUsd", "activityNumber", "firstActivityValue", "activityExplorerUrl",
+    `"use strict";${js.slice(start, end)};return accountOrderRows;`
+  )(
+    { accountOrderState, accountTokenMetadata: new Map() },
+    short,
+    (value) => /^0x/i.test(String(value || "")),
+    (row) => row.label || row.walletLabel || (row.walletIndex ? `Wallet ${row.walletIndex}` : "Wallet"),
+    (value) => `$${value}`,
+    (value) => String(value ?? ""),
+    first,
+    (row, chain) => row.signature ? `${chain === "robinhood" ? "https://robinhoodchain.blockscout.com/tx/" : "https://solscan.io/tx/"}${encodeURIComponent(row.signature)}` : ""
+  );
+}
+
 test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL support", () => {
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "92", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "94", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -118,7 +142,7 @@ test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH tr
   assert.match(html, /wallet-install-head[^>]+data-install-fun hidden[^>]+><span>Install<\/span>/);
   assert.match(js, /if \(routeParams\.get\("install"\) === "1"\) setTimeout\(showFunInstallGuide, 350\)/);
   assert.match(funWorker, /IS_WALLET_WORKER/);
-  assert.match(funWorker, /slimewallet-v32/);
+  assert.match(funWorker, /slimewallet-v34/);
   assert.match(JSON.stringify(walletManifest.icons), /slimewallet-icon-512\.png/);
   assert.match(js, /WALLET_BRAND_ASSET = "\/assets\/slimewire\/slimewallet-icon-192\.png"/);
   assert.match(css, /slimewallet-vault-bg\.webp/);
@@ -278,7 +302,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: IS_WALLET_ROUTE \? "\/wallet\/" : "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v89/);
+  assert.match(funWorker, /slimewire-fun-v91/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -346,7 +370,7 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
   assert.match(html, /fun\.css\?v=68/);
-  assert.match(funWorker, /slimewire-fun-v89/);
+  assert.match(funWorker, /slimewire-fun-v91/);
   assert.match(funWorker, /fun\.css\?v=68/);
   assert.match(css, /\.wallet-bottom-nav\[hidden\]\{display:none!important\}/);
   assert.match(js, /walletNav\.hidden = hideWalletNav/);
@@ -358,8 +382,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=92/);
-  assert.match(funWorker, /fun\.js\?v=92/);
+  assert.match(html, /fun\.js\?v=94/);
+  assert.match(funWorker, /fun\.js\?v=94/);
 });
 
 test("Fun volume switches pasted contracts to their authoritative chain", () => {
@@ -425,7 +449,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /"slimewire-fun-v89"/);
+  assert.match(funWorker, /"slimewire-fun-v91"/);
   assert.doesNotMatch(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(js, /loadFunScript\("\/slimewire-funding\.js\?v=8"\)/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
@@ -559,7 +583,7 @@ test("wallet activity preserves exact Solana and Robinhood transaction legs", ()
       tokens: [{ tokenMint: solMint, symbol: "PUF", name: "Pufcat", imageUrl: "/puf.png" }],
       trades: [{
         timestamp: "2026-08-21T12:00:00.000Z", type: "buy", tokenMint: solMint,
-        solAmount: "0.250000001", tokenAmount: "1234567890.123456", walletLabel: "Main",
+        solAmount: "0.250000001", tokenAmount: "1234567890123456", tokenUiAmount: "1234567890.123456", walletLabel: "Main",
         source: "SlimeWire buy", signature: "solsig"
       }]
     }
@@ -574,7 +598,7 @@ test("wallet activity preserves exact Solana and Robinhood transaction legs", ()
   assert.equal(solBuy.side, "buy");
   assert.equal(solBuy.at, "2026-08-21T12:00:00.000Z");
   assert.equal(solBuy.input, "0.250000001 SOL");
-  assert.equal(solBuy.output, "1234567890.123456 PUF", "large token amounts must never be abbreviated in receipts");
+  assert.equal(solBuy.output, "1234567890.123456 PUF", "API UI token amounts must win over raw base-unit amounts without abbreviation");
   assert.equal(solBuy.imageUrl, "/puf.png");
   assert.equal(solBuy.url, "https://solscan.io/tx/solsig");
 
@@ -590,6 +614,39 @@ test("wallet activity preserves exact Solana and Robinhood transaction legs", ()
   assert.equal(cashout.output, "0.100009 SOL");
 });
 
+test("Fun order history expands Solana protection plans into wallet-specific receipts", () => {
+  const rows = accountOrderRowsWith({
+    marketOrders: [], exitGuards: [], rhGuards: [],
+    tradePlans: [{
+      id: "plan-1", tokenMint: "Mint111111111111111111111111111111111111111", status: "running",
+      takeProfitSummary: "+50%", stopLossSummary: "-20%", createdAt: "2026-08-21T10:00:00.000Z",
+      wallets: [
+        { label: "Alpha", publicKey: "Alpha11111111111111111111111111111111111111", status: "pending_buy", buySubmissionSignature: "submission-alpha", buySubmissionSignedAt: "2026-08-21T10:01:00.000Z" },
+        { label: "Beta", publicKey: "Beta111111111111111111111111111111111111111", exitStatus: "needs_attention", buySignature: "buy-beta", updatedAt: "2026-08-21T10:02:00.000Z" }
+      ]
+    }]
+  })();
+
+  assert.equal(rows.length, 2, "one plan must render one row for each wallet");
+  const alpha = rows.find((row) => row.walletLabel === "Alpha");
+  const beta = rows.find((row) => row.walletLabel === "Beta");
+  assert.equal(alpha.status, "pending_buy");
+  assert.equal(alpha.signature, "submission-alpha");
+  assert.equal(alpha.signatureLabel, "Submission");
+  assert.equal(alpha.at, "2026-08-21T10:01:00.000Z");
+  assert.equal(alpha.url, "https://solscan.io/tx/submission-alpha");
+  assert.equal(beta.status, "needs_attention");
+  assert.equal(beta.signature, "buy-beta");
+  assert.equal(beta.signatureLabel, "Buy tx");
+  assert.equal(beta.url, "https://solscan.io/tx/buy-beta");
+  const activeStatusSource = js.slice(js.indexOf("function activeAutomationStatus"), js.indexOf("function accountOrderActive"));
+  assert.match(activeStatusSource, /"pending_buy"/);
+  assert.match(activeStatusSource, /"arming"/);
+  assert.match(js, /needsAttention \? "Needs attention"/);
+  assert.match(js, /rowStyle = needsAttention/);
+  assert.match(js, /row\.signatureLabel \|\| "Solscan"/);
+});
+
 test("wallet Activity exposes global open automation and completed order history", () => {
   assert.match(js, /request\("\/api\/web\/market-orders"\)/);
   assert.match(js, /request\("\/api\/web\/trade\/plans"\)/);
@@ -603,6 +660,9 @@ test("wallet Activity exposes global open automation and completed order history
   assert.match(js, /guard\.planId && planIds\.has/);
   assert.match(js, /data-cancel-account-order/);
   assert.match(js, /data-cancel-account-rh-guard/);
+  assert.match(js, /const wallets = Array\.isArray\(plan\.wallets\) && plan\.wallets\.length \? plan\.wallets : \[\{\}\]/);
+  assert.match(js, /\["pending_buy", "arming"\]\.includes\(status\.toLowerCase\(\)\)/);
+  assert.match(js, /wallet\.buySubmissionSignature/);
   assert.match(css, /\.account-ledger-tabs/);
   assert.match(css, /\.account-activity-row/);
   assert.match(css, /\.account-order-row/);
@@ -803,7 +863,7 @@ test("Phantom and iPhone wallet backups use a save sheet instead of navigating t
     mobileSave.indexOf("if (mobileBackupSaveRequired())") < mobileSave.indexOf("URL.createObjectURL(blob)"),
     "mobile wallet browsers must exit into the save sheet before blob downloads are created"
   );
-  assert.match(html, /\/fun\.js\?v=92/, "the fixed wallet script must bypass Phantom's long-lived asset cache");
+  assert.match(html, /\/fun\.js\?v=94/, "the fixed wallet script must bypass Phantom's long-lived asset cache");
 });
 
 test("the root terminal also batches Phantom wallet backups behind a direct save tap", () => {

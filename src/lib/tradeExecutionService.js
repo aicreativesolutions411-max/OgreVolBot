@@ -299,7 +299,10 @@ export function tpSlLogEntry(event, fields = {}) {
   };
 }
 
-export function exitProviderOrder({ priceExit = false, pumpPortalSellFallbackEnabled = true } = {}) {
+export function exitProviderOrder({ priceExit = false, pumpPortalSellFallbackEnabled = true, preferredProvider = "" } = {}) {
+  const preferred = String(preferredProvider || "").toLowerCase();
+  if (priceExit && pumpPortalSellFallbackEnabled && preferred === "jupiter") return ["jupiter", "pumpportal"];
+  if (priceExit && pumpPortalSellFallbackEnabled && ["pump", "pumpportal", "pumpfun"].includes(preferred)) return ["pumpportal", "jupiter"];
   if (priceExit && pumpPortalSellFallbackEnabled) return ["pumpportal", "jupiter"];
   if (pumpPortalSellFallbackEnabled) return ["jupiter", "pumpportal"];
   return ["jupiter"];

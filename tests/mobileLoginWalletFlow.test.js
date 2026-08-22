@@ -165,5 +165,5 @@ test("standalone SlimeWallet batches Phantom backups behind a direct save tap", 
     "Phantom must leave through the save sheet before a blob URL can be created"
   );
   assert.match(appSource, /data-download[\s\S]{0,220}userInitiated: true/);
-  assert.match(htmlSource, /app\.js\?v=20260729-phantom-backup/);
+  assert.match(htmlSource, /app\.js\?v=20260821-stoploss/);
 });

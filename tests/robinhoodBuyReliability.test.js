@@ -84,11 +84,12 @@ test("SOL-funded Robinhood trades avoid duplicate Relay waits and race read-only
   assert.match(server, /firstSuccessfulRhQuote\(quoteAttempts/);
 });
 
-test("web Solana buys acknowledge without nine-round token-delta polling", () => {
+test("web Solana protected buys capture the exact token delta without post-buy polling", () => {
   const start = server.indexOf("async function webTradeBuyCore");
   const end = server.indexOf("async function webTradeSell", start);
   const body = server.slice(start, end);
-  assert.match(body, /trackTokenDelta: false/);
+  assert.match(body, /trackTokenDelta: autoExitRequested/);
+  assert.match(body, /tokenBeforeRawAmount: preBuyTokenRawAmount/);
   assert.match(body, /priority: true/);
   assert.doesNotMatch(body, /readTokenDeltaAfterBuy/);
 });

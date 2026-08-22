@@ -1,6 +1,33 @@
 <!doctype html>
 <html lang="en">
+  <head>
+  <script>
+    // The archived terminal is view-only. Install the network shield before
+    // any legacy module runs so this page can never spend or consume live APIs.
+    (() => {
+      const blocked = /\/api\/|ogrevolbot\.onrender|dexscreener|geckoterminal|pumpportal|solanatracker|kolscan|birdeye|helius|alchemy|quiknode|rpcpool|jup\.ag|jupiter|block-engine|unavatar|weserv/i;
+      const empty = () => Promise.resolve(new Response('{"ok":false,"referenceOnly":true,"rows":[],"positions":[],"balances":[]}', {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      }));
+      const originalFetch = window.fetch;
+      if (originalFetch) window.fetch = function archivedFetch(input) {
+        const url = typeof input === "string" ? input : (input && input.url) || "";
+        return blocked.test(url) ? empty() : originalFetch.apply(this, arguments);
+      };
+      window.addEventListener("DOMContentLoaded", () => {
+        const banner = document.createElement("div");
+        banner.textContent = "Reference snapshot — live data and trading are off. Open slimewire.org for the live app.";
+        banner.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:99999;background:#1c2a16;color:#bdf08a;font:600 12px/1.4 system-ui,sans-serif;padding:7px 12px;text-align:center;border-bottom:1px solid #2c4022";
+        document.body.appendChild(banner);
+        document.body.style.paddingTop = "30px";
+      });
+    })();
+  </script>
+  <!-- Legacy duplicate shield retained only as archived source. The valid,
+       parseable network shield above is the active implementation.
   <head><script>(function(){var DATA=//api/|ogrevolbot.onrender|dexscreener|geckoterminal|pumpportal|solanatracker|kolscan|birdeye|helius|alchemy|quiknode|rpcpool|jup.ag|jupiter|block-engine|unavatar|weserv/i;function empty(){return Promise.resolve(new Response('{"ok":false,"referenceOnly":true,"rows":[],"livePairs":{"rows":[]},"positions":[],"balances":[]}',{status:200,headers:{"Content-Type":"application/json"}}));}var of=window.fetch;if(of)window.fetch=function(u){try{var s=(typeof u==="string")?u:(u&&u.url)||"";if(DATA.test(s))return empty();}catch(e){}return of.apply(this,arguments);};try{var ox=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){this.__blk=DATA.test(String(u||""));return ox.apply(this,arguments);};var os=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.send=function(){if(this.__blk){try{this.abort();}catch(e){}return;}return os.apply(this,arguments);};}catch(e){}try{window.WebSocket=function(){return {close:function(){},send:function(){},addEventListener:function(){},removeEventListener:function(){}};};}catch(e){}window.addEventListener("DOMContentLoaded",function(){try{var b=document.createElement("div");b.textContent="📦 Reference snapshot of the old terminal — live data is off (no APIs/credits). The live app is at slimewire.org.";b.style.cssText="position:fixed;left:0;right:0;top:0;z-index:99999;background:#1c2a16;color:#bdf08a;font:600 12px/1.4 system-ui,sans-serif;padding:7px 12px;text-align:center;border-bottom:1px solid #2c4022";document.body.appendChild(b);document.body.style.paddingTop="30px";}catch(e){}});})();</script>
+  -->
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <base href="/">
@@ -73,7 +100,7 @@
     <script defer src="/config.js"></script>
     <script defer src="/vendor/tweetnacl-fast.min.js"></script>
     <script defer src="/vendor/solana-web3.iife.min.js?v=20260605-browser-trade-v1"></script>
-    <script type="module" src="/app.js?v=20260729-phantom-backup"></script>
+    <script type="module" src="/app.js?v=20260821-stoploss"></script>
     <script>
       // PWA: register the service worker (installable shell + push) and offer "Install app".
       (() => {
@@ -656,5 +683,3 @@
     </main>
   </body>
 </html>
-
-

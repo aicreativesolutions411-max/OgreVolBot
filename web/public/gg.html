@@ -607,7 +607,7 @@
   .chartSplitMain.chartSplitAdjusted .tapeTable{max-height:none;min-height:58px;flex:1 1 auto}
   @media(max-width:820px){.chartTapeSplit{flex-basis:24px;height:24px}.chartTapeSplit:before{width:72px}.chartTapeSplit span{right:8px;font-size:8px}.chartSplitMain.chartSplitAdjusted .marketTape{padding-bottom:8px}}
 </style>
-<link rel="stylesheet" href="/terminal-pro.css?v=20260821a">
+<link rel="stylesheet" href="/terminal-pro.css?v=20260821b">
 <script defer src="/vendor/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -823,7 +823,7 @@
     return r;
   }
   function jpost(path,body,timeoutMs){const opts={method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})};try{if(timeoutMs&&typeof AbortSignal!=="undefined"&&AbortSignal.timeout)opts.signal=AbortSignal.timeout(timeoutMs);}catch(e){}return api(path,opts);}
-  function setToken(t){const next=t||"";if(next!==state.token){localStorage.removeItem(WALLET_PREVIEW_KEY);walletPreviewLastSignature="";walletPreviewLastSavedAt=0;state._walletsFromPreview=false;}state.token=next;if(next)localStorage.setItem(TOKEN_KEY,next);else localStorage.removeItem(TOKEN_KEY);}
+  function setToken(t){const next=t||"";if(next!==state.token){localStorage.removeItem(WALLET_PREVIEW_KEY);walletPreviewLastSignature="";walletPreviewLastSavedAt=0;state._walletsFromPreview=false;state.presets={trade:[],bundle:[]};presetsLoadedToken="";presetsLoadPromise=null;}state.token=next;if(next)localStorage.setItem(TOKEN_KEY,next);else localStorage.removeItem(TOKEN_KEY);}
   function apiMessage(d,fallback){return (d&&(d.message||d.error))||fallback||"Something went wrong.";}
 
   // Referral capture: a /r/CODE link redirects here as /?ref=CODE — remember it and attribute on signup.
@@ -955,19 +955,19 @@
   }
   function verifiedReceiptsHtml(pnl){
     const t=(pnl&&pnl.totals)||{};state._lastPnlTotals=t;
-    const rz=Number(t.realizedSol),realized=isFinite(rz)?((rz>=0?"+":"")+rz.toFixed(3)+" SOL"):"pending";
+    const rz=Number(t.netCashFlowSol??t.realizedSol),netCashFlow=isFinite(rz)?((rz>=0?"+":"")+rz.toFixed(3)+" SOL"):"pending";
     const trades=Number(t.tradeCount||0);
-    return '<details class="fold" style="grid-column:1/-1"><summary>Verified Swamp Receipts sharing<span class="sub">proof links, PnL cards, share text</span><span class="chev">v</span></summary><div class="foldbody">'+
+    return '<details class="fold" style="grid-column:1/-1"><summary>Verified Swamp Receipts sharing<span class="sub">proof links, net cash flow cards, share text</span><span class="chev">v</span></summary><div class="foldbody">'+
       '<div class="swampgrid">'+
-        swampMini("Receipt summary",esc(realized)+" realized across "+esc(String(trades))+" closed trade"+(trades===1?"":"s")+".",swampAction("Copy proof","GG.copyReceipt()")+swampAction("Share","GG.shareReceipt()"))+
-        swampMini("Card flow","Use any closed trade row to generate a verified PnL card, then save or share it.",swampAction("Refresh history","GG.go('portfolio')"))+
+        swampMini("Receipt summary",esc(netCashFlow)+" net cash flow across "+esc(String(trades))+" trade"+(trades===1?"":"s")+".",swampAction("Copy proof","GG.copyReceipt()")+swampAction("Share","GG.shareReceipt()"))+
+        swampMini("Card flow","Use any token row to generate a verified net cash flow card, then save or share it.",swampAction("Refresh history","GG.go('portfolio')"))+
         swampMini("Public route","The receipt points back to SlimeWire instead of a loose screenshot.",swampAction("Copy portfolio link","GG.copy('"+esc(location.origin+"/gg#portfolio")+"')"))+
       '</div></div></details>';
   }
   function receiptText(mint){
-    const t=state._lastPnlTotals||{},rz=Number(t.realizedSol);
+    const t=state._lastPnlTotals||{},rz=Number(t.netCashFlowSol??t.realizedSol);
     if(mint)return "Verified Swamp Receipt: trade proof on SlimeWire for "+shortAscii(mint)+". "+coinRouteUrl(mint);
-    return "Verified Swamp Receipts: "+(isFinite(rz)?((rz>=0?"+":"")+rz.toFixed(3)+" SOL realized"):"trade history")+" on SlimeWire. "+location.origin+"/gg#portfolio";
+    return "Verified Swamp Receipts: "+(isFinite(rz)?((rz>=0?"+":"")+rz.toFixed(3)+" SOL net cash flow"):"trade history")+" on SlimeWire. "+location.origin+"/gg#portfolio";
   }
   async function recordSwampReceipt(kind,mint,summary,pub){
     if(!state.token)return null;
@@ -1033,7 +1033,7 @@
   function alertRulesHtml(){
     const r=state.alertRules||{};
     const row=(k,txt)=>'<label class="swampcheck"><input type="checkbox" data-alert-rule value="'+k+'" '+(r[k]?"checked":"")+'> <span>'+esc(txt)+'</span></label>';
-    return '<div data-alert-rules>'+row("kol","KOL pile-on: tracked caller plus smart-wallet confluence.")+row("scout","Scout queue: watched CA or wallet starts moving.")+row("launch","Launch Boss: fresh launch, egg post, or raid-room milestone.")+row("receipts","Receipts: PnL card or verified receipt ready to share.")+'<div class="swampactions"><button class="chip" data-alert-save type="button">Save alert rules</button><button class="chip" type="button" onclick="GG.enableAlerts()">Enable push</button></div></div>';
+    return '<div data-alert-rules>'+row("kol","KOL pile-on: tracked caller plus smart-wallet confluence.")+row("scout","Scout queue: watched CA or wallet starts moving.")+row("launch","Launch Boss: fresh launch, egg post, or raid-room milestone.")+row("receipts","Receipts: net cash flow card or verified receipt ready to share.")+'<div class="swampactions"><button class="chip" data-alert-save type="button">Save alert rules</button><button class="chip" type="button" onclick="GG.enableAlerts()">Enable push</button></div></div>';
   }
   function swampPassportFoldHtml(){
     const w=activeWalletObj(),u=state.user||{},pid=w?("SWP-"+shortAscii(w.publicKey)):"SWP-guest";
@@ -1102,11 +1102,16 @@
     if(ok&&d&&d.ok&&file&&file.text){downloadText(file.filename,file.text);toast("Robinhood/EVM recovery key downloaded.");}
     else toast((d&&d.error)||"Robinhood/EVM backup failed",true);
   }
-  async function loadPresets(){
-    if(!state.token)return;
-    const {ok,d}=await api("/api/web/presets");
-    if(ok&&d&&d.ok&&d.presets){state.presets={trade:d.presets.trade||[],bundle:d.presets.bundle||[]};}
+  let presetsLoadPromise=null,presetsLoadedToken="";
+  async function ensurePresetsLoaded(force=false){
+    const token=String(state.token||"");if(!token)return false;
+    if(!force&&presetsLoadedToken===token)return true;
+    if(presetsLoadPromise&&presetsLoadPromise.token===token)return presetsLoadPromise;
+    const pending=(async()=>{const {ok,d}=await api("/api/web/presets");if(token!==state.token)return false;if(ok&&d&&d.ok&&d.presets){state.presets={trade:d.presets.trade||[],bundle:d.presets.bundle||[]};presetsLoadedToken=token;return true;}return false;})();
+    pending.token=token;presetsLoadPromise=pending;
+    try{return await pending;}finally{if(presetsLoadPromise===pending)presetsLoadPromise=null;}
   }
+  async function loadPresets(){return ensurePresetsLoaded(true);}
   // Read the ladder stage inputs (#pL1p/#pL1s …) into [{pct,sellPercent}], ascending. sell% 0 = backend
   // fills it evenly. ladderLabel renders a preset's ladder compactly ("+50% → +100% → +200%").
   function readPresetLadder(){
@@ -1253,9 +1258,11 @@
     else toast((d&&(d.message||d.error))||"ETH send failed",true);
   }
   // ---------- fund recovery / exits ----------
+  let sellAllClientRequestId="",returnFundsClientRequestId="";
   async function sellAllTokens(dest){
-    const {ok,d}=await jpost("/api/web/wallets/sell-all-tokens",dest?{destination:dest}:{});
-    if(ok&&d&&d.ok){toast((d.sweep&&(d.sweep.summary||d.sweep.message))||"Sold all tokens to SOL");await refreshWallets();return true;}
+    sellAllClientRequestId=sellAllClientRequestId||attemptId();
+    const {ok,d}=await jpost("/api/web/wallets/sell-all-tokens",{...(dest?{destination:dest}:{}),clientRequestId:sellAllClientRequestId});
+    if(ok&&d&&d.ok){sellAllClientRequestId="";toast((d.sweep&&(d.sweep.summary||d.sweep.message))||"Sold all tokens to SOL");await refreshWallets();return true;}
     toast((d&&(d.message||d.error))||"Sell-all failed",true);return false;
   }
   async function sendSolTo(idx,dest,amt){
@@ -1322,8 +1329,9 @@
     const select=$("#swDestSelect"),all=$("#swAll"),none=$("#swNone");if(select)select.onchange=syncSweepWalletControls;document.querySelectorAll(".swTarget").forEach(x=>x.onchange=syncSweepWalletControls);if(all)all.onclick=()=>{document.querySelectorAll(".swTarget").forEach(x=>{if(!x.disabled)x.checked=true;});syncSweepWalletControls();};if(none)none.onclick=()=>{document.querySelectorAll(".swTarget").forEach(x=>x.checked=false);syncSweepWalletControls();};syncSweepWalletControls();
   }
   async function returnToConnected(){
-    const {ok,d}=await jpost("/api/web/wallets/return-to-connected",{});
-    if(ok&&d&&d.ok){toast((d.summary||d.message)||"Returning everything to your connected wallet");await refreshWallets();return true;}
+    returnFundsClientRequestId=returnFundsClientRequestId||attemptId();
+    const {ok,d}=await jpost("/api/web/wallets/return-to-connected",{clientRequestId:returnFundsClientRequestId});
+    if(ok&&d&&d.ok){returnFundsClientRequestId="";toast((d.summary||d.message)||"Returning everything to your connected wallet");await refreshWallets();return true;}
     toast((d&&(d.message||d.error))||"Return failed",true);return false;
   }
   async function armExits(mint,tp,sl,walletScope){
@@ -2567,6 +2575,9 @@
   }
   async function rhTrade(address,side,opts){
     if(!(await ensureTradeReady()))return;
+    if(side==="buy"&&!(await ensurePresetsLoaded())){toast("Could not load your trade protection. Buy not submitted — try again.",true);return;}
+    const activePresetId=side==="buy"?String(state.activeTradePreset||"").trim():"",activePreset=activePresetId?activeTradePresetObj():null;
+    if(side==="buy"&&activePresetId&&!activePreset){toast("Your saved trade preset is unavailable. Buy not submitted — choose a preset or Manual.",true);return;}
     // Pre-buy honeypot guard — a real on-chain sell-sim runs server-side too, but check here first so we
     // can BLOCK un-sellable coins + balance-drainers and WARN on heavy concentration before spending.
     if(side==="buy"){
@@ -2580,6 +2591,14 @@
     hap();toast(side==="buy"?"⚡ Buying…":"Selling…");
     const tradeOpts={...(opts||{})},walletIndex=String(tradeOpts.walletIndex||state.activeWallet||1);
     delete tradeOpts.walletIndex;
+    if(side==="buy"){
+      const customProtection=Boolean(tradeOpts.protectionRequired||tradeOpts.autoExit||Number(tradeOpts.takeProfitPct)>0||Number(tradeOpts.stopLossPct)>0||(Array.isArray(tradeOpts.takeProfitLadder)&&tradeOpts.takeProfitLadder.length)||Number(tradeOpts.trailingStopPct)>0||(tradeOpts.sellDelay&&tradeOpts.sellDelay!=="off"));
+      if(activePresetId){
+        Object.assign(tradeOpts,{presetId:activePresetId,protectionRequired:true,autoExit:true,takeProfitPct:activePreset.takeProfitPct||"",stopLossPct:activePreset.stopLossPct||"",takeProfitLadder:Array.isArray(activePreset.takeProfitLadder)?activePreset.takeProfitLadder:[],sellDelay:activePreset.sellDelay||"off",sellPercent:activePreset.sellPercent||"100",slippageBps:activePreset.slippageBps||tradeOpts.slippageBps||"500"});
+        delete tradeOpts.disableAutoExit;
+      }else if(customProtection){tradeOpts.protectionRequired=true;tradeOpts.autoExit=true;delete tradeOpts.disableAutoExit;}
+      else{tradeOpts.disableAutoExit=true;delete tradeOpts.presetId;delete tradeOpts.protectionRequired;delete tradeOpts.autoExit;}
+    }
     const body={walletIndex,side,tokenAddress:address,tradeAttemptId:attemptId(),...tradeOpts};
     const {ok,d}=await jpost("/api/web/rh/trade",body);
     if(ok&&d&&d.ok){
@@ -3602,17 +3621,20 @@
   async function execBuy(mint,amount){
     const a=Number(amount);if(!isFinite(a)||a<=0){toast("Enter a SOL amount.",true);return;}
     if(!(await ensureTradeReady()))return;
+    if(!(await ensurePresetsLoaded())){toast("Could not load your trade protection. Buy not submitted — try again.",true);return;}
+    if(state.activeTradePreset&&!activeTradePresetObj()){toast("Your saved trade preset is unavailable. Choose a preset or Manual before buying.",true);return;}
     if(!tradeLock("buy",mint)){toast("That buy is already going through — hang tight.");return;}
     hap();toast("Buying ◎"+a.toFixed(3)+"…");
     const big=$("#bigbuy");if(big){big.disabled=true;big.textContent="Submitting…";}
     try{
-      const p=activeTradePresetObj();
+      const presetId=String(state.activeTradePreset||"").trim(),p=activeTradePresetObj();
       const lad=p&&Array.isArray(p.takeProfitLadder)&&p.takeProfitLadder.length?p.takeProfitLadder:null;
       const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(a),slippageBps:(p&&p.slippageBps)||"400",tradeAttemptId:attemptId()};
-      if(lad){body.autoExit=true;body.takeProfitLadder=lad;body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";}
+      if(presetId){body.presetId=presetId;body.protectionRequired=true;body.autoExit=true;}
+      if(lad){body.takeProfitLadder=lad;body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";}
       else if(p&&(p.takeProfitPct||p.stopLossPct||(p.sellDelay&&p.sellDelay!=="off"))){
         body.autoExit=true;body.takeProfitPct=p.takeProfitPct||"";body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";body.sellPercent=p.sellPercent||"100";
-      }else body.disableAutoExit=true;   // plain buy = HOLD; the backend otherwise force-arms a default TP/SL that fires instantly on a fresh-buy quote
+      }else if(!presetId)body.disableAutoExit=true;   // only explicit Manual / HOLD may bypass trade protection
       const {ok,status,d}=await postTrade("/api/web/trade/buy",body);
       handleTradeResult(ok,status,d,"Buy");
     }finally{resetBigBtn();tradeUnlock("buy",mint);}
@@ -3894,19 +3916,24 @@
   function clearQuickBuy(){state.quickBuy=null;localStorage.removeItem("ggQuickBuy");if(state.route==="trending")subbarTrending();}
   async function execQuickBuy(mint,q){
     q=q||state.quickBuy||{};
+    if(!(await ensureTradeReady()))return;
+    if(!(await ensurePresetsLoaded())){toast("Could not load your trade protection. Buy not submitted — try again.",true);return;}
     // ⚡ 1-click has NO button to disable, so without this guard a fast double-tap fired two real buys
     // (each tap mints its own tradeAttemptId, so the server dedup can't pair them). Lock side+mint.
     if(!tradeLock("buy",mint)){toast("That buy is already going through — hang tight.");return;}
     try{
       // Your OWN take-profit / stop-loss win; otherwise fall back to a saved preset's exits.
-      const p=q.presetId?((state.presets.trade||[]).find(x=>x.id===q.presetId)||null):null;
+      const presetId=String(q.presetId||"").trim(),p=presetId?((state.presets.trade||[]).find(x=>x.id===presetId)||null):null;
+      if(presetId&&!p){toast("Your saved quick-buy preset is unavailable. Buy not submitted.",true);return;}
       const tp=q.tp||(p&&p.takeProfitPct)||"",sl=q.sl||(p&&p.stopLossPct)||"";
       const trail=q.trail||(p&&p.trailingStopPct)||"",trailAct=q.trailAct||(p&&p.trailingActivatePct)||"",be=!!(q.be||(p&&p.breakEvenAfterTp1));
       const lad=(Array.isArray(q.ladder)&&q.ladder.length)?q.ladder:((p&&Array.isArray(p.takeProfitLadder)&&p.takeProfitLadder.length)?p.takeProfitLadder:null);
       const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(q.amt),slippageBps:String(q.slip||(p&&p.slippageBps)||"500"),tradeAttemptId:attemptId()};
-      if(lad){body.autoExit=true;body.takeProfitLadder=lad;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";}
-      else if(tp||sl||Number(trail)>0||(p&&p.sellDelay&&p.sellDelay!=="off")){body.autoExit=true;body.takeProfitPct=tp;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";body.sellPercent=(p&&p.sellPercent)||"100";}
-      else body.disableAutoExit=true;    // no TP/SL/trail set → HOLD (don't let the backend force a default auto-exit)
+      const protectionRequired=Boolean(presetId||lad||tp||sl||Number(trail)>0||(p&&p.sellDelay&&p.sellDelay!=="off"));
+      if(protectionRequired){body.protectionRequired=true;if(presetId)body.presetId=presetId;body.autoExit=true;}
+      if(lad){body.takeProfitLadder=lad;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";}
+      else if(protectionRequired){body.takeProfitPct=tp;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";body.sellPercent=(p&&p.sellPercent)||"100";}
+      else body.disableAutoExit=true;    // only explicit Manual / HOLD may bypass trade protection
       // 🎯 Cornix-style advanced exits (engine runs them; arm only in profit so they never loss-sell)
       if(Number(trail)>0){body.trailingStopPct=String(trail);if(Number(trailAct)>0)body.trailingActivatePct=String(trailAct);}
       if(be)body.breakEvenAfterTp1=true;
@@ -4132,28 +4159,28 @@
     const pnl=(d&&d.pnl)||null;
     if(!ok||!pnl){view.innerHTML='<div class="empty"><div class="big">⚠</div><div><b>Could not load PnL</b><br><span class="mut">'+esc((d&&d.error)||"Try again in a moment.")+'</span></div></div>';return;}
     const t=pnl.totals||{},toks=pnl.tokens||[];
-    const rz=Number(t.realizedSol),rzc=isFinite(rz)?(rz>=0?"up":"down"):"mut";
-    const totals='<div class="wbox"><h3>Realized PnL</h3><div class="secgrid">'+
-      '<div class="cell"><b class="'+rzc+'">'+(isFinite(rz)?(rz>=0?"+":"")+rz.toFixed(3)+"◎":"—")+'</b><span>realized</span></div>'+
+    const rz=Number(t.netCashFlowSol??t.realizedSol),rzc=isFinite(rz)?(rz>=0?"up":"down"):"mut";
+    const totals='<div class="wbox"><h3>Net cash flow</h3><div class="secgrid">'+
+      '<div class="cell"><b class="'+rzc+'">'+(isFinite(rz)?(rz>=0?"+":"")+rz.toFixed(3)+"◎":"—")+'</b><span>net cash flow</span></div>'+
       '<div class="cell"><b>'+(t.tradeCount||0)+'</b><span>trades</span></div>'+
       '<div class="cell"><b>'+(t.buys||0)+' / '+(t.sells||0)+'</b><span>buys / sells</span></div></div></div>';
-    const list=toks.length?toks.map(tk=>{const r=Number(tk.realizedSol),cls=isFinite(r)?(r>=0?"up":"down"):"mut";
+    const list=toks.length?toks.map(tk=>{const r=Number(tk.netCashFlowSol??tk.realizedSol),cls=isFinite(r)?(r>=0?"up":"down"):"mut";
       const token=tk.tokenMint||tk.address||"",sym=tk.symbol||short(token);
       return '<div class="walletrow" style="cursor:pointer" onclick="GG.pnlCard(\''+esc(token)+'\',\''+esc(sym||"")+'\')"><div class="ico" title="Open chart" role="button" tabindex="0" onclick="event.stopPropagation();GG.open(\''+esc(token)+'\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();event.stopPropagation();GG.open(\''+esc(token)+'\')}" style="cursor:pointer">'+(tk.imageUrl?'<img src="'+esc(tk.imageUrl)+'" style="width:100%;height:100%;border-radius:11px;object-fit:cover">':'🪙')+'</div>'+
         '<div class="info"><b>'+esc(sym||short(token))+'</b><div class="addr mut">'+esc(tk.holdTime||tk.name||"")+'</div></div>'+
-        '<div class="bal"><b class="'+cls+'">'+(isFinite(r)?(r>=0?"+":"")+r.toFixed(3)+"◎":"—")+'</b><span>realized</span></div>'+
+        '<div class="bal"><b class="'+cls+'">'+(isFinite(r)?(r>=0?"+":"")+r.toFixed(3)+"◎":"—")+'</b><span>net cash flow</span></div>'+
         '<button class="wbtn ghost" style="margin-left:10px;padding:9px 12px" onclick="event.stopPropagation();GG.open(\''+esc(token)+'\')">Chart</button>'+
         '<button class="wbtn ghost" style="padding:9px 12px" onclick="event.stopPropagation();GG.pnlCard(\''+esc(token)+'\',\''+esc(sym||"")+'\')">🏆 Card</button></div>';
-    }).join(""):'<p class="mut" style="font-size:12px">No closed trades yet — your trade history &amp; PnL cards appear here once you take some profit.</p>';
-    view.innerHTML='<div class="wgrid">'+totals+verifiedReceiptsHtml(pnl)+'<div class="wbox"><h3>📜 Trade history</h3><p class="sub">Every coin you\'ve closed, with realized PnL. Tap <b>🏆 Card</b> to build a shareable SlimeWire PnL card you can save &amp; post on X.</p>'+list+'</div></div>';
+    }).join(""):'<p class="mut" style="font-size:12px">No trade cash flow yet — token history and cards appear after your first indexed trade.</p>';
+    view.innerHTML='<div class="wgrid">'+totals+verifiedReceiptsHtml(pnl)+'<div class="wbox"><h3>📜 Trade cash flow</h3><p class="sub">Every token you\'ve traded, with net cash flow (SOL received minus SOL spent). Tap <b>🏆 Card</b> to build a shareable SlimeWire trade card you can save &amp; post on X.</p>'+list+'</div></div>';
   }
   async function openPnlCard(mint,sym){
-    toast("Building your PnL card…");
+    toast("Building your net cash flow card…");
     try{
       const r=await fetch(API_BASE+"/api/web/pnl/card?tokenMint="+encodeURIComponent(mint),{headers:state.token?{Authorization:"Bearer "+state.token}:{}});
       if(!r.ok){toast(r.status===401?"Sign in to build cards":"No card for this token yet",true);return;}
       const url=URL.createObjectURL(await r.blob());
-      openModal('<h3>🏆 PnL Card — '+esc(sym||short(mint))+'</h3>'+
+      openModal('<h3>🏆 Net cash flow card — '+esc(sym||short(mint))+'</h3>'+
         '<img src="'+url+'" style="width:100%;border-radius:12px;border:1px solid var(--border);margin:4px 0 12px">'+
         '<div style="display:flex;gap:9px;flex-wrap:wrap"><a class="wbtn" style="flex:1;min-width:105px;text-align:center;text-decoration:none" href="'+url+'" download="slimewire-pnl-'+esc((sym||"card").replace(/[^a-z0-9]/gi,""))+'.png">Save card</a>'+
         '<button class="wbtn ghost" style="flex:1;min-width:105px" onclick="GG.copy(\''+esc(coinRouteUrl(mint))+'\')">Copy link</button>'+
@@ -4475,7 +4502,7 @@
   // that swaps buy↔sell (SOL↔token). Token side picks from popular pairs or a custom CA. Tap flip
   // again to swap back. SOL↔token only — buy spends SOL, sell takes a % of the token you hold.
   const SWAP_POPULAR=[{s:"USDC",m:"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"},{s:"USDT",m:"Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"},{s:"JUP",m:"JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"},{s:"RAY",m:"4k3Dyjzvzp8eCTuFJYgmGnN95VhWPuTsf1KfzYEU7K1k"},{s:"BONK",m:"DezXAZ8z7PnrnRJjz3uq8NgV8Q9ddCzB9Ckr7JpPvvR"},{s:"WIF",m:"EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLQBkRzUPzWf"}];
-  let swapDir="buy",swapTok=null,swapChain="solana",swapRhPayAsset="sol";   // both chains are SOL-first; Robinhood conversion stays behind the scenes
+  let swapDir="buy",swapTok=null,swapChain="solana",swapRhPayAsset="sol",swapPresetId=String(state.activeTradePreset||"");   // both chains are SOL-first; Robinhood conversion stays behind the scenes
   function swapAssetMeta(){return swapChain==="robinhood"?{asset:"SOL",icon:"\u25ce",label:"SOL · network conversion automatic",amtPh:"0.05"}:{asset:"SOL",icon:"\u25ce",label:"SOL",amtPh:"0.5"};}
   async function renderSwap(){
     setActiveView("v-swap");subbarTool("🔄 Swap");if(state.token){await refreshWallets();await loadPresets();}if(state.route!=="swap")return;
@@ -4489,7 +4516,8 @@
     const tokChip='<button class="swtok pick" id="swTok">'+tl+' ▾</button>';
     const payChip=payIsTok?tokChip:assetChip;const recvChip=payIsTok?assetChip:tokChip;
     const selStyle=(on)=>on?"border-color:var(--green);color:var(--green);background:var(--green-dim)":"";
-    const preOpts='<option value="">Manual TP / SL</option>'+(state.presets.trade||[]).map(p=>'<option value="'+esc(p.id)+'">'+esc(p.name||"Preset")+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+'</option>').join("");
+    const swapPreset=(state.presets.trade||[]).find(p=>p.id===swapPresetId)||null;
+    const preOpts='<option value=""'+(!swapPresetId?' selected':'')+'>Manual TP / SL</option>'+(state.presets.trade||[]).map(p=>'<option value="'+esc(p.id)+'"'+(p.id===swapPresetId?' selected':'')+'>'+esc(p.name||"Preset")+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+'</option>').join("");
     v.innerHTML='<div class="wgrid"><div class="wbox" style="max-width:470px;margin:0 auto;width:100%"><h3>🔄 Swap <span class="mut" style="font-size:11px;font-weight:400">· one wallet, both chains</span></h3>'+
       '<div class="field"><label>Pay with</label><div style="display:flex;gap:8px">'+
         '<button class="swtok" id="swAssetSol" style="flex:1;text-align:center;'+selStyle(swapChain==="solana")+'">◎ SOL</button>'+
@@ -4500,11 +4528,11 @@
       '<div class="swapflip"><button id="swFlip" title="Flip buy / sell">⇅</button></div>'+
       '<div class="swapbox"><span class="swlab">You receive</span><div class="swrow"><span class="swrecv mut">'+(payIsTok?(cm.icon+" "+cm.asset):tl)+'</span>'+recvChip+'</div></div>'+
       '<div class="field" style="margin-top:12px"><label>Coin contract (CA)</label><div style="display:flex;gap:8px"><input id="swCaMain" placeholder="Paste a Solana or Robinhood (0x…) CA" style="flex:1" value="'+(swapTok?esc(swapTok.mint):"")+'"><button class="wbtn" id="swCaUse" style="width:auto;padding:0 14px">Use</button></div></div>'+
-      '<div class="field"><label>Slippage (bps)</label><input id="swSlip" inputmode="numeric" value="500"></div>'+
+      '<div class="field"><label>Slippage (bps)</label><input id="swSlip" inputmode="numeric" value="'+esc((swapPreset&&swapPreset.slippageBps)||"500")+'"></div>'+
       // Exit presets — TP/SL that arm automatically on a BUY (the site watches the price + sells for you). Both chains.
       '<div style="border-top:1px solid var(--border);margin:6px 0 10px"></div>'+
       '<div class="field"><label>🎯 Exit preset (TP / SL)</label><select id="swPreset">'+preOpts+'</select></div>'+
-      '<div class="field row2"><div><label id="swTpLbl">Take profit %</label><input id="swTp" inputmode="numeric" placeholder="off"></div><div><label>Stop loss %</label><input id="swSl" inputmode="numeric" placeholder="off"></div></div>'+
+      '<div class="field row2"><div><label id="swTpLbl">Take profit %</label><input id="swTp" inputmode="numeric" placeholder="off" value="'+esc((swapPreset&&swapPreset.takeProfitPct)||"")+'"></div><div><label>Stop loss %</label><input id="swSl" inputmode="numeric" placeholder="off" value="'+esc((swapPreset&&swapPreset.stopLossPct)||"")+'"></div></div>'+
       '<label style="display:flex;align-items:center;gap:9px;font-size:12px;cursor:pointer;margin-bottom:10px"><input type="checkbox" id="swLadder"> Ladder across my wallets — buy from several &amp; sell at stepped TP targets (not all at one price)</label>'+
       '<div id="swLadderWrap" style="display:none">'+
         '<div class="field"><label>Take-profit MAX % (ladder top — the TP above is the MIN)</label><input id="swTpTop" inputmode="numeric" placeholder="e.g. 120"></div>'+
@@ -4529,7 +4557,7 @@
     $("#swAssetRh").onclick=()=>{swapRhPayAsset="sol";if(swapChain!=="robinhood"){swapChain="robinhood";if(swapTok&&swapTok.chain!=="robinhood")swapTok=null;}paintSwap();};
     $("#swCaUse").onclick=()=>swapUseCa(($("#swCaMain")||{}).value);
     const cin=$("#swCaMain");if(cin)cin.onkeydown=(e)=>{if(e.key==="Enter")swapUseCa(cin.value);};
-    $("#swPreset").onchange=()=>{const p=(state.presets.trade||[]).find(x=>x.id===$("#swPreset").value);if(p){$("#swTp").value=p.takeProfitPct||"";$("#swSl").value=p.stopLossPct||"";if(p.slippageBps)$("#swSlip").value=p.slippageBps;}};
+    $("#swPreset").onchange=()=>{swapPresetId=String($("#swPreset").value||"");const p=(state.presets.trade||[]).find(x=>x.id===swapPresetId);if(p){$("#swTp").value=p.takeProfitPct||"";$("#swSl").value=p.stopLossPct||"";if(p.slippageBps)$("#swSlip").value=p.slippageBps;}};
     const ld=$("#swLadder");if(ld)ld.onchange=()=>{const on=ld.checked;$("#swLadderWrap").style.display=on?"":"none";$("#swTpLbl").textContent=on?"Take profit MIN %":"Take profit %";};
     $("#swGo").onclick=()=>execSwap();
   }
@@ -4560,10 +4588,17 @@
     if(!swapTok){toast("Paste a coin CA first.",true);return;}
     const amt=(($("#swAmt")||{}).value||"").trim();if(!amt){toast(swapDir==="buy"?("Enter a "+swapAssetMeta().asset+" amount."):"Enter a sell %.",true);return;}
     if(!(await ensureTradeReady()))return;
+    if(!(await ensurePresetsLoaded())){toast("Could not load your trade protection. Swap not submitted — try again.",true);return;}
+    const presetId=String((($("#swPreset")||{}).value||swapPresetId)||"").trim(),preset=presetId?((state.presets.trade||[]).find(x=>x.id===presetId)||null):null;
+    if(presetId&&!preset){toast("Your selected exit preset is unavailable. Swap not submitted — choose a preset or Manual.",true);return;}
+    swapPresetId=presetId;
     const wi=(($("#swWal")||{}).value)||String(state.activeWallet||1);
-    const slip=(($("#swSlip")||{}).value||"").trim()||"500";
-    const tp=(($("#swTp")||{}).value||"").trim(),sl=(($("#swSl")||{}).value||"").trim();
-    if($("#swLadder")&&$("#swLadder").checked&&swapDir==="buy")return execSwapLadder({tp,sl,slip});
+    const slip=String((preset&&preset.slippageBps)||(($("#swSlip")||{}).value||"").trim()||"500");
+    const tp=preset?String(preset.takeProfitPct||""):(($("#swTp")||{}).value||"").trim(),sl=preset?String(preset.stopLossPct||""):(($("#swSl")||{}).value||"").trim();
+    if($("#swLadder")&&$("#swLadder").checked&&swapDir==="buy"){
+      if(presetId){toast("Saved presets are locked for safety. Choose Manual TP / SL to build a custom wallet ladder.",true);return;}
+      return execSwapLadder({tp,sl,slip});
+    }
     const b=$("#swGo");b.disabled=true;b.textContent="Submitting…";
     const done=()=>{b.disabled=false;b.textContent=(swapDir==="buy"?"Buy ":"Sell ")+(swapTok.symbol||"");};
     if(swapChain==="robinhood"){
@@ -4574,7 +4609,9 @@
       const body={walletIndex:String(wi),side:swapDir,tokenAddress:swapTok.mint,tradeAttemptId:attemptId()};
       if(swapDir==="buy"){
         body.payCurrency="SOL";body.amountSol=String(amt);
-        if((Number(tp)>0)||(Number(sl)>0))Object.assign(body,{autoExit:true,takeProfitPct:tp||"",stopLossPct:sl||"",sellPercent:"100",symbol:swapTok.symbol||""});
+        if(presetId)Object.assign(body,{presetId,protectionRequired:true,autoExit:true,takeProfitPct:tp||"",stopLossPct:sl||"",sellPercent:"100",symbol:swapTok.symbol||""});
+        else if((Number(tp)>0)||(Number(sl)>0))Object.assign(body,{protectionRequired:true,autoExit:true,takeProfitPct:tp||"",stopLossPct:sl||"",sellPercent:"100",symbol:swapTok.symbol||""});
+        else body.disableAutoExit=true;
       }else body.percent=String(amt);
       const {ok,d}=await jpost("/api/web/rh/trade",body);
       if(ok&&d&&d.ok){
@@ -4587,7 +4624,8 @@
       let res;
       if(swapDir==="buy"){
         const body={tokenMint:swapTok.mint,walletIndex:wi,amountSol:String(amt),slippageBps:slip,tradeAttemptId:attemptId()};
-        if((Number(tp)>0)||(Number(sl)>0)){body.autoExit=true;body.takeProfitPct=tp||"";body.stopLossPct=sl||"";body.sellPercent="100";body.sellDelay="off";}
+        if(presetId){body.presetId=presetId;body.protectionRequired=true;body.autoExit=true;body.takeProfitPct=tp||"";body.stopLossPct=sl||"";body.sellPercent="100";body.sellDelay="off";}
+        else if((Number(tp)>0)||(Number(sl)>0)){body.protectionRequired=true;body.autoExit=true;body.takeProfitPct=tp||"";body.stopLossPct=sl||"";body.sellPercent="100";body.sellDelay="off";}
         else body.disableAutoExit=true;
         res=await jpost("/api/web/trade/buy",body);
       } else res=await jpost("/api/web/trade/sell",{tokenMint:swapTok.mint,walletIndex:wi,percent:String(amt),slippageBps:slip,tradeAttemptId:attemptId()});
@@ -4611,7 +4649,7 @@
       for(let k=0;k<wallets.length;k++){
         const idx=wallets[k];const amt=min+Math.random()*(max-min);
         let tpv=String(tp);if(tpTop&&Number(tpTop)>Number(tp))tpv=String(Math.round((Number(tp)+(Number(tpTop)-Number(tp))*(wallets.length>1?k/(wallets.length-1):0))*10)/10);
-        const rhLadderBody={walletIndex:String(idx),side:"buy",tokenAddress:swapTok.mint,tradeAttemptId:attemptId(),autoExit:true,takeProfitPct:tpv,stopLossPct:sl||"",sellPercent:"100",symbol:swapTok.symbol||""};
+        const rhLadderBody={walletIndex:String(idx),side:"buy",tokenAddress:swapTok.mint,tradeAttemptId:attemptId(),protectionRequired:true,autoExit:true,takeProfitPct:tpv,stopLossPct:sl||"",sellPercent:"100",symbol:swapTok.symbol||""};
         if(swapRhPayAsset==="sol"){rhLadderBody.payCurrency="SOL";rhLadderBody.amountSol=amt.toFixed(5);}
         else{rhLadderBody.payCurrency="ETH";rhLadderBody.amountEth=amt.toFixed(5);}
         const {ok,d}=await jpost("/api/web/rh/trade",rhLadderBody);
@@ -4651,7 +4689,7 @@
           let tp=o.tp;
           if(o.tpTop&&o.tp){const lo=Number(o.tp),hi=Number(o.tpTop);if(isFinite(lo)&&isFinite(hi)&&hi>lo)tp=String(Math.round((lo+(hi-lo)*(order.length>1?k/(order.length-1):0))*10)/10);}
           const body={tokenMint:o.tokenMint,walletIndex:idx,amountSol:amt.toFixed(4),slippageBps:String(o.slip),tradeAttemptId:attemptId()};
-          if(tp||o.sl){body.autoExit=true;body.takeProfitPct=tp||"";body.stopLossPct=o.sl||"";body.sellDelay="off";body.sellPercent="100";if(o.tpTop)label+=" · TP "+tp+"%";}
+          if(tp||o.sl){body.protectionRequired=true;body.autoExit=true;body.takeProfitPct=tp||"";body.stopLossPct=o.sl||"";body.sellDelay="off";body.sellPercent="100";if(o.tpTop)label+=" · TP "+tp+"%";}
           else body.disableAutoExit=true;
           res=await jpost("/api/web/trade/buy",body);if(res&&res.ok&&res.d&&res.d.ok)spent+=amt;}
         const good=res&&res.ok&&res.d&&res.d.ok;if(good)okc++;else fail++;
@@ -5642,7 +5680,7 @@
   });
 })();
 </script>
-<script src="/terminal-pro.js?v=20260821a"></script>
+<script src="/terminal-pro.js?v=20260821b"></script>
 <script src="/fun-indicators.js?v=20260719a"></script>
 </body>
 </html>

@@ -152,9 +152,10 @@ test("Protected Buy is a previewed preset flow, not an auto-submit bypass", () =
   assert.match(modalBody, /You still review and sign in your wallet/);
   assert.match(modalBody, /avoidNeedsAccept/);
   assert.match(confirmBody, /isConnectedTradeWallet/);
-  assert.match(confirmBody, /executeQuickBuyAmount/);
+  assert.match(confirmBody, /Protected Buy requires a managed SlimeWire wallet/);
+  assert.doesNotMatch(confirmBody, /executeQuickBuyAmount/);
   assert.match(confirmBody, /quickPresetTrade/);
-  assert.match(confirmBody, /Managed TP\/SL was not server-armed for this connected wallet/);
+  assert.match(confirmBody, /Submitting protected buy/);
 });
 
 test("KOL Dump Detector and Replay stay inside the existing decision layer UI", () => {

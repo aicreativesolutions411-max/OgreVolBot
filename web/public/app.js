@@ -424,6 +424,7 @@ const state = {
   distributeBusy: false,
   returnFundsStatus: "",
   returnFundsBusy: false,
+  returnFundsAttemptId: "",
   sniperResult: null,
   ogreAiResult: null,
   ogreAiStatus: "",
@@ -549,6 +550,7 @@ const state = {
   walletLaunchSnipeStatus: "",
   walletLaunchSnipeResult: null,
   walletSweepStatus: "",
+  walletSweepAttemptIds: {},
   loginModalOpen: window.location.pathname.startsWith("/login") || window.location.pathname.startsWith("/account/login") || new URLSearchParams(window.location.search || "").get("login") === "1",
   loginModalTab: "login",
   loginReturnTo: "",
@@ -582,6 +584,8 @@ let autoExitCheckInFlight = false;
 let autoExitWatchTimers = [];
 let loginModalReturnFocus = null;
 let walletRefreshPromise = null;
+let presetsLoadPromise = null;
+let presetsLoadedScope = "";
 let walletRefreshWatchdog = null;
 let positionsRefreshPromise = null;
 let positionsRefreshPromiseKey = "";
@@ -3017,6 +3021,7 @@ async function loadAll(options = {}) {
     state.connectedWalletBalance = null;
     state.launchWatches = [];
     state.presets = { trade: [], bundle: [] };
+    presetsLoadedScope = "";
     state.tradePlans = [];
     state.watchlist = { rows: [], count: 0 };
     render();
@@ -3043,6 +3048,7 @@ async function loadAll(options = {}) {
       state.pnl = pnl.pnl || null;
       state.launchWatches = launchWatches.watches || [];
       state.presets = presets.presets || { trade: [], bundle: [] };
+      presetsLoadedScope = appPresetsScope();
       ensureSelectedPresetsStillExist();
       state.watchlist = watchlist.watchlist || { rows: [], count: 0 };
       state.tradePlans = tradePlans.plans || [];
@@ -3068,6 +3074,7 @@ async function loadAll(options = {}) {
     state.pnl = pnl.pnl || null;
     state.launchWatches = launchWatches.watches || [];
     state.presets = presets.presets || { trade: [], bundle: [] };
+    presetsLoadedScope = appPresetsScope();
     ensureSelectedPresetsStillExist();
     state.watchlist = watchlist.watchlist || { rows: [], count: 0 };
     state.tradePlans = tradePlans.plans || [];
@@ -4546,7 +4553,7 @@ function portfolioWalletCount() {
 }
 
 function portfolioRealizedPnlLabel() {
-  return state.pnl?.totals?.realizedSol || "+0 SOL";
+  return state.pnl?.totals?.netCashFlowSol ?? state.pnl?.totals?.realizedSol ?? "+0 SOL";
 }
 
 function secondsSince(isoText) {
@@ -6369,13 +6376,13 @@ function renderTabs() {
 }
 
 function tekWalletBarHtml() {
-  const realized = state.pnl?.totals?.realizedSol || "+0 SOL";
+  const netCashFlow = state.pnl?.totals?.netCashFlowSol ?? state.pnl?.totals?.realizedSol ?? "+0 SOL";
   return `
     <div class="tek-wallet-bar">
       <div class="tek-stat"><span>Wallets</span><strong>${escapeHtml(state.wallets.length)}</strong></div>
       <div class="tek-stat"><span>Total SOL</span><strong>${escapeHtml(totalSol().toFixed(4))}</strong></div>
       <div class="tek-stat"><span>Positions</span><strong>${escapeHtml(state.positions?.length || 0)}</strong></div>
-      <div class="tek-stat"><span>Realized</span><strong>${escapeHtml(realized)}</strong></div>
+      <div class="tek-stat"><span>Net cash flow</span><strong>${escapeHtml(netCashFlow)}</strong></div>
       <div class="tek-wallet-actions">
         <button data-tab="positions">Positions</button>
         <button data-tab="wallets">Wallets</button>
@@ -7301,7 +7308,7 @@ function xConnectSection() {
     <section class="create-wallet-card x-connect-card">
       <div>
         <h3>X Profile</h3>
-        <p>Save, change, or unlink the X handle used for share buttons on PnL cards, trades, scanner picks, watchlists, KOL signals, and launch watches. Posts always open in X for review first.</p>
+        <p>Save, change, or unlink the X handle used for share buttons on trade cash flow cards, trades, scanner picks, watchlists, KOL signals, and launch watches. Posts always open in X for review first.</p>
       </div>
       <label>
         X Handle
@@ -7549,11 +7556,13 @@ function planShareText(row, label = "Armed timed trade") {
 }
 
 function pnlShareText(row) {
-  return `PnL on ${row.shortMint || shortAddress(row.tokenMint)}: ${row.realizedSol} realized, ${row.buys} buy(s), ${row.sells} sell(s).`;
+  const netCashFlow = row.netCashFlowSol ?? row.realizedSol ?? "0";
+  return `Net cash flow on ${row.shortMint || shortAddress(row.tokenMint)}: ${netCashFlow} SOL, ${row.buys} buy(s), ${row.sells} sell(s).`;
 }
 
 function positionShareText(position) {
-  return `Watching ${position.shortMint || shortAddress(position.tokenMint)}: ${position.uiAmount} tokens across ${position.walletCount} wallet(s), PnL ${position.openPnlSol || position.realizedSol || "tracking"}.`;
+  const netCashFlow = position.netCashFlowSol ?? position.realizedSol;
+  return `Watching ${position.shortMint || shortAddress(position.tokenMint)}: ${position.uiAmount} tokens across ${position.walletCount} wallet(s), PnL ${position.openPnlSol || netCashFlow || "tracking"}.`;
 }
 
 function sniperShareText(row) {
@@ -9221,15 +9230,18 @@ function fieldValue(selectSelector, customSelector, fallback = "") {
 function presetOptionsHtml(kind, selectedId = "") {
   const presets = state.presets?.[kind] || [];
   const manualSelected = !selectedId || selectedId === "none" || selectedId === "manual";
+  const selectedMissing = kind === "trade" && Boolean(selectedId) && !manualSelected && selectedId !== "custom" && !presets.some((preset) => preset.id === selectedId);
   const createLabel = kind === "bundle" ? "Create / edit bundle preset" : "Create / edit trade preset";
   if (!presets.length) {
     return `
       <option value="" ${manualSelected ? "selected" : ""}>No preset / manual</option>
+      ${selectedMissing ? `<option value="${escapeHtml(selectedId)}" selected disabled>Selected preset unavailable — choose another</option>` : ""}
       <option value="custom" ${selectedId === "custom" ? "selected" : ""}>${createLabel}</option>
     `;
   }
   return `
     <option value="" ${manualSelected ? "selected" : ""}>No preset / manual</option>
+    ${selectedMissing ? `<option value="${escapeHtml(selectedId)}" selected disabled>Selected preset unavailable — choose another</option>` : ""}
     ${presets.map((preset) => `<option value="${escapeHtml(preset.id)}" ${preset.id === selectedId ? "selected" : ""}>${escapeHtml(preset.name)}</option>`).join("")}
     <option value="custom" ${selectedId === "custom" ? "selected" : ""}>${createLabel}</option>
   `;
@@ -9665,12 +9677,14 @@ async function maybeReturnSessionFundsBeforeLeaving(action = "leaving") {
       cancelLabel: "Skip"
     });
     if (!confirmed) return;
+    state.returnFundsAttemptId ||= createClientAttemptId("return-funds");
     await api("/api/web/wallets/return-to-connected", {
       method: "POST",
-      body: JSON.stringify({ destination: connected.publicKey, walletIndexes }),
+      body: JSON.stringify({ destination: connected.publicKey, walletIndexes, tradeAttemptId: state.returnFundsAttemptId }),
       dedupe: false,
       timeoutMs: API_LONG_ACTION_TIMEOUT_MS
     });
+    state.returnFundsAttemptId = "";
   } catch (error) {
     // Best-effort: never trap the user in the session if the sweep fails.
     try { window.alert(`Could not return funds automatically: ${error.message}. Use the Return Funds button to retry.`); } catch (_) {}
@@ -9702,16 +9716,18 @@ async function returnFundsToConnected() {
   });
   if (!confirmed) return;
   state.returnFundsBusy = true;
+  state.returnFundsAttemptId ||= createClientAttemptId("return-funds");
   setReturnFundsStatus("Selling tokens and returning SOL...");
   render();
   try {
     const data = await api("/api/web/wallets/return-to-connected", {
       method: "POST",
-      body: JSON.stringify({ destination: connected.publicKey, walletIndexes }),
+      body: JSON.stringify({ destination: connected.publicKey, walletIndexes, tradeAttemptId: state.returnFundsAttemptId }),
       dedupe: false,
       timeoutMs: API_LONG_ACTION_TIMEOUT_MS
     });
     state.returnFundsBusy = false;
+    state.returnFundsAttemptId = "";
     setReturnFundsStatus(data.summary || "Funds returned to your connected wallet.");
     await refreshWalletState({ force: true, deep: false, reason: "return-funds" }).catch(() => {});
     render();
@@ -13674,6 +13690,10 @@ async function runWalletSweepAction(action, payloadOverride = null) {
       ? walletSendManyPayload()
       : walletSweepSelectionPayload({ destinationRequired: action !== "sell-all" }));
     if (action === "sell-all") payload.destination = "";
+    if (action === "sell-all" || action === "sell-all-sweep") {
+      state.walletSweepAttemptIds[action] ||= createClientAttemptId("wallet-sell-all");
+      payload.clientRequestId ||= state.walletSweepAttemptIds[action];
+    }
     if (action === "sell-all-sweep" && !payload.destination) {
       throw new Error("Enter a destination wallet for Sell Tokens + Send SOL.");
     }
@@ -13684,6 +13704,7 @@ async function runWalletSweepAction(action, payloadOverride = null) {
       timeoutMs: API_LONG_ACTION_TIMEOUT_MS
     });
     state.walletSweepStatus = summarizeSweepResult(data.sweep);
+    if (action === "sell-all" || action === "sell-all-sweep") delete state.walletSweepAttemptIds[action];
     writeWalletActionStatus(state.walletSweepStatus);
     await refreshWalletState({ force: true, deep: true });
     state.activeTab = "wallets";
@@ -14268,7 +14289,7 @@ async function sharePnlCard(tokenMint, shareText) {
     const file = new File([blob], filename, { type: "image/png" });
     if (navigator.canShare?.({ files: [file] })) {
       await navigator.share({
-        title: "SlimeWire PnL Card",
+        title: "SlimeWire Net cash flow card",
         text: shareTextWithSite(shareText),
         url: shareSiteUrl,
         files: [file]
@@ -14276,7 +14297,7 @@ async function sharePnlCard(tokenMint, shareText) {
       return;
     }
     await downloadPnlCard(tokenMint);
-    openXShare(`${shareText} PnL card downloaded and ready to attach.`);
+    openXShare(`${shareText} Net cash flow card downloaded and ready to attach.`);
   } catch (error) {
     setError(error.message);
   }
@@ -14528,6 +14549,12 @@ function confirmConnectedBrowserTrade({ side, connected, form = {}, actionDetail
 
 async function executeConnectedBrowserTrade({ side, form, actionDetail, amountSol = "", amountMode = "", percent = "", attemptId, statusWriter = setTradeStatus }) {
   const writeStatus = typeof statusWriter === "function" ? statusWriter : setTradeStatus;
+  if (side === "buy") {
+    const selected = await resolveSelectedTradePresetForBuy();
+    if (selected.presetId) {
+      throw new Error("Protected presets require a managed SlimeWire wallet. Choose a managed wallet or explicitly select Manual before using a connected wallet.");
+    }
+  }
   const { provider, connected } = await connectedTradeProvider();
   if (!state.walletFastApprovalsEnabled && !(await confirmConnectedBrowserTrade({ side, connected, form, actionDetail, amountSol, amountMode, percent }))) {
     throw new Error("Connected-wallet trade cancelled.");
@@ -14668,6 +14695,7 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
   let tradeAttemptId = "";
   try {
     let form = readTradeForm("buy");
+    const selectedProtection = await resolveSelectedTradePresetForBuy();
     actionDetail = amountMode === "max" ? "max" : String(amountSol || "custom");
     const active = activeTradeAction("trade-buy", form.tokenMint, actionDetail);
     if (active) {
@@ -14689,13 +14717,7 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
       slippageBps: form.slippageBps,
       tradeAttemptId
     };
-    // Swap-form buys inherit TP/SL/timer from the active preset - auto-armed
-    // on managed wallets (connected wallets can't server-sell, handled below).
-    const exitDefaults = presetExitDefaults();
-    const wantsAutoExit = isEnabledTradeTarget(exitDefaults.takeProfitPct)
-      || isEnabledTradeTarget(exitDefaults.stopLossPct)
-      || isEnabledTradeTarget(exitDefaults.sellDelay);
-    if (wantsAutoExit) Object.assign(payload, { autoExit: true, ...exitDefaults });
+    const protectionEnabled = applyManagedBuyProtection(payload, selectedProtection);
     if (amountMode === "max") {
       payload.amountMode = "max";
     } else {
@@ -14707,6 +14729,9 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
     const resolved = resolveConnectedTradeForm(form, { side: "buy", statusWriter: setTradeStatus });
     form = resolved.form;
     payload.walletIndex = form.walletIndex;
+    if (isConnectedTradeWallet(form.walletIndex) && selectedProtection.presetId) {
+      throw new Error("Protected presets require a managed SlimeWire wallet. Choose a managed wallet or explicitly select Manual before using a connected wallet.");
+    }
 
     if (isConnectedTradeWallet(form.walletIndex)) {
       setTradeAction("trade-buy", form.tokenMint, actionDetail, {
@@ -14737,17 +14762,6 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
       return;
     }
 
-    const autoExit = readSingleTradeAutoExit();
-    if (autoExit.enabled) {
-      Object.assign(payload, {
-        autoExit: true,
-        takeProfitPct: autoExit.takeProfitPct,
-        stopLossPct: autoExit.stopLossPct,
-        sellDelay: autoExit.sellDelay,
-        sellPercent: autoExit.sellPercent
-      });
-    }
-
     setTradeAction("trade-buy", form.tokenMint, actionDetail, {
       state: "clicked",
       tradeAttemptId,
@@ -14761,7 +14775,7 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
       details: `trade-buy:${shortAddress(form.tokenMint)}:${actionDetail}`
     });
     render();
-    setTradeStatus(autoExit.enabled ? "Sending buy and arming auto-exit..." : "Sending buy...");
+    setTradeStatus(protectionEnabled ? "Sending buy and arming auto-exit..." : "Sending buy...");
     await sleep(20);
     const requestStartedAt = perfNow();
     setTradeAction("trade-buy", form.tokenMint, actionDetail, { state: "submitting" });
@@ -15513,8 +15527,88 @@ function presetById(kind, id) {
   return (state.presets?.[kind] || []).find((preset) => preset.id === id) || null;
 }
 
+function appPresetsScope() {
+  if (!state.token || !state.user) return "";
+  return `${String(state.token)}:${String(state.user.id || state.user.userId || "")}`;
+}
+
+async function ensureAppPresetsLoaded(force = false) {
+  const scope = appPresetsScope();
+  if (!scope) return false;
+  if (!force && presetsLoadedScope === scope) return true;
+  if (presetsLoadPromise?.scope === scope) return presetsLoadPromise;
+  const pending = (async () => {
+    const data = await api("/api/web/presets");
+    if (scope !== appPresetsScope()) return false;
+    if (!data?.presets) return false;
+    state.presets = {
+      trade: data.presets.trade || [],
+      bundle: data.presets.bundle || []
+    };
+    presetsLoadedScope = scope;
+    ensureSelectedPresetsStillExist();
+    return true;
+  })();
+  pending.scope = scope;
+  presetsLoadPromise = pending;
+  try {
+    return await pending;
+  } catch {
+    return false;
+  } finally {
+    if (presetsLoadPromise === pending) presetsLoadPromise = null;
+  }
+}
+
+async function resolveSelectedTradePresetForBuy() {
+  const presetId = String(state.selectedTradePresetId || "").trim();
+  if (!presetId) return { presetId: "", preset: null };
+  if (!(await ensureAppPresetsLoaded())) {
+    throw new Error("Could not load your selected trade protection. Buy not submitted — try again.");
+  }
+  const preset = presetById("trade", presetId);
+  if (!preset) {
+    throw new Error("Your selected trade preset is unavailable. Buy not submitted — choose a preset or Manual.");
+  }
+  return { presetId, preset };
+}
+
+function applyManagedBuyProtection(payload, selected, custom = null) {
+  if (selected?.presetId && selected.preset) {
+    Object.assign(payload, {
+      presetId: selected.presetId,
+      protectionRequired: true,
+      autoExit: true,
+      takeProfitPct: selected.preset.takeProfitPct || "",
+      stopLossPct: selected.preset.stopLossPct || "",
+      sellDelay: selected.preset.sellDelay || "off",
+      sellPercent: selected.preset.sellPercent || "100",
+      slippageBps: selected.preset.slippageBps || payload.slippageBps || "400"
+    });
+    delete payload.disableAutoExit;
+    return true;
+  }
+  if (custom?.enabled) {
+    Object.assign(payload, {
+      protectionRequired: true,
+      autoExit: true,
+      takeProfitPct: custom.takeProfitPct || "",
+      stopLossPct: custom.stopLossPct || "",
+      sellDelay: custom.sellDelay || "off",
+      sellPercent: custom.sellPercent || "100"
+    });
+    delete payload.disableAutoExit;
+    return true;
+  }
+  payload.disableAutoExit = true;
+  delete payload.presetId;
+  delete payload.protectionRequired;
+  delete payload.autoExit;
+  return false;
+}
+
 function ensureSelectedPresetsStillExist() {
-  if (state.selectedTradePresetId === "custom" || (state.selectedTradePresetId && !presetById("trade", state.selectedTradePresetId))) {
+  if (state.selectedTradePresetId === "custom") {
     state.selectedTradePresetId = "";
   }
   if (state.selectedBundlePresetId === "custom" || (state.selectedBundlePresetId && !presetById("bundle", state.selectedBundlePresetId))) {
@@ -15930,7 +16024,7 @@ function protectedBuyModalHtml() {
         <small>${escapeHtml(protectedBuyPresetSummary(preset))}</small>
         <small>Wallet: ${escapeHtml(protectedBuyWalletLabel(modal.walletIndex))}</small>
         <small>Priority fee: existing trade default.</small>
-        ${connectedWalletSelected ? `<small class="warning-text">Connected wallets still use normal wallet confirmation. Use a funded session wallet when you want server TP/SL armed like a managed wallet.</small>` : ""}
+        ${connectedWalletSelected ? `<small class="warning-text">Protected Buy cannot submit from a connected wallet because TP/SL would not be server-armed. Choose a funded managed wallet above.</small>` : ""}
       </article>
       ${shield.verdict === "AVOID" ? `
         <label class="checkbox-line protected-buy-risk-line">
@@ -15940,7 +16034,7 @@ function protectedBuyModalHtml() {
       ` : ""}
       <div class="quick-buy-actions">
         <button type="button" data-protected-buy-close>Cancel</button>
-        <button type="button" class="primary" data-protected-buy-confirm ${submitting || avoidNeedsAccept ? "disabled" : ""}>${submitting ? "Submitting..." : connectedWalletSelected ? "Open Wallet Confirmation" : "Submit Protected Buy"}</button>
+        <button type="button" class="primary" data-protected-buy-confirm ${submitting || avoidNeedsAccept || connectedWalletSelected ? "disabled" : ""}>${submitting ? "Submitting..." : connectedWalletSelected ? "Choose Managed Wallet" : "Submit Protected Buy"}</button>
       </div>
       ${modal.status ? `<small class="connect-status">${escapeHtml(modal.status)}</small>` : ""}
       ${modal.error ? `<small class="warning-text">${escapeHtml(modal.error)}</small>` : ""}
@@ -15976,6 +16070,9 @@ async function confirmProtectedBuyModal() {
       throw new Error("SlimeShield says AVOID. Check the risk box if you still want to continue.");
     }
     const preset = protectedBuyPresetById(form.presetId);
+    if (isConnectedTradeWallet(form.walletIndex)) {
+      throw new Error("Protected Buy requires a managed SlimeWire wallet so TP/SL can be armed before submission.");
+    }
     state.protectedBuyModal = {
       ...state.protectedBuyModal,
       ...form,
@@ -15983,13 +16080,6 @@ async function confirmProtectedBuyModal() {
       error: ""
     };
     renderProtectedBuyModal();
-    if (isConnectedTradeWallet(form.walletIndex)) {
-      const trade = await executeQuickBuyAmount({ ...form, source: `protected-buy:${preset.id}` });
-      state.protectedBuyModal = { ...state.protectedBuyModal, open: false, status: "", error: "" };
-      render({ force: true, preserveSmartChartFrame: state.activeTab === "smartChart" });
-      setError(trade?.message || "Protected Buy submitted through your wallet. Managed TP/SL was not server-armed for this connected wallet.");
-      return;
-    }
     await sleep(20);
     state.protectedBuyModal = { ...state.protectedBuyModal, open: false, status: "", error: "" };
     render({ force: true, preserveSmartChartFrame: state.activeTab === "smartChart" });
@@ -16043,16 +16133,21 @@ async function executeQuickBuyAmount({
 }) {
   const value = Number(amountSol);
   if (!Number.isFinite(value) || value <= 0) throw new Error("Enter a SOL amount greater than zero.");
+  const selectedProtection = await resolveSelectedTradePresetForBuy();
   const tradeAttemptId = createClientAttemptId("quick-buy");
   const exitSettings = normalizeTimerSellSettings(sellDelay, sellPercent);
   const autoExitEnabled = isEnabledTradeTarget(takeProfitPct)
     || isEnabledTradeTarget(stopLossPct)
     || isEnabledTradeTarget(exitSettings.sellDelay);
+  const protectionEnabled = Boolean(selectedProtection.presetId || autoExitEnabled);
   let form = { tokenMint, walletIndex, slippageBps };
   const statusWriter = state.quickBuyModal?.open ? (message) => setQuickBuyModalStatus(message, "") : setTradeStatus;
   const resolved = resolveConnectedTradeForm(form, { side: "buy", statusWriter });
   form = resolved.form;
   walletIndex = form.walletIndex;
+  if (isConnectedTradeWallet(walletIndex) && protectionEnabled) {
+    throw new Error("Protected TP/SL buys require a managed SlimeWire wallet. Choose a managed wallet or select Manual before using a connected wallet.");
+  }
   state.quickBuyLast = {
     source,
     tokenMint,
@@ -16087,11 +16182,6 @@ async function executeQuickBuyAmount({
       statusWriter
     });
     state.quickBuyLast = { ...state.quickBuyLast, status: "submitted" };
-    if (autoExitEnabled) {
-      const message = "Connected wallet buy submitted. TP/SL choices were not server-armed because browser-wallet exits still require wallet approval.";
-      if (state.quickBuyModal?.open) setQuickBuyModalStatus(message, "");
-      else setTradeStatus(message);
-    }
     return trade;
   }
 
@@ -16105,15 +16195,13 @@ async function executeQuickBuyAmount({
     slippageBps,
     tradeAttemptId
   };
-  if (autoExitEnabled) {
-    Object.assign(payload, {
-      autoExit: true,
-      takeProfitPct,
-      stopLossPct,
-      sellDelay: exitSettings.sellDelay,
-      sellPercent: exitSettings.sellPercent
-    });
-  }
+  applyManagedBuyProtection(payload, selectedProtection, {
+    enabled: autoExitEnabled,
+    takeProfitPct,
+    stopLossPct,
+    sellDelay: exitSettings.sellDelay,
+    sellPercent: exitSettings.sellPercent
+  });
   const data = await api("/api/web/trade/buy", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -16140,6 +16228,9 @@ async function executeChartConnectedBuy(tokenMint = "") {
   const value = Number(amountSol);
   if (!tokenMint) throw new Error("Select a token before buying.");
   if (!Number.isFinite(value) || value <= 0) throw new Error("Enter a buy amount greater than zero.");
+  const selectedProtection = await resolveSelectedTradePresetForBuy();
+  const autoExit = readChartTradeAutoExit();
+  const protectionEnabled = Boolean(selectedProtection.presetId || autoExit.enabled);
   let walletIndex = $("[data-chart-buy-wallet]")?.value || "";
   if (!walletIndex) throw new Error("Choose a wallet before buying.");
   const tradeAttemptId = createClientAttemptId("chart-buy");
@@ -16151,6 +16242,9 @@ async function executeChartConnectedBuy(tokenMint = "") {
   const resolved = resolveConnectedTradeForm(form, { side: "chart buy", statusWriter: setChartTradeStatus });
   form = resolved.form;
   walletIndex = form.walletIndex;
+  if (isConnectedTradeWallet(walletIndex) && protectionEnabled) {
+    throw new Error("Protected TP/SL buys require a managed SlimeWire wallet. Choose a managed wallet or select Manual before using a connected wallet.");
+  }
   const active = activeTradeAction("trade-buy", tokenMint, String(amountSol));
   if (active) return state.tradeResult;
   state.quickBuyLast = {
@@ -16194,7 +16288,6 @@ async function executeChartConnectedBuy(tokenMint = "") {
     return trade;
   }
 
-  const autoExit = readChartTradeAutoExit();
   const payload = {
     tokenMint,
     walletIndex,
@@ -16202,16 +16295,8 @@ async function executeChartConnectedBuy(tokenMint = "") {
     slippageBps: form.slippageBps,
     tradeAttemptId
   };
-  if (autoExit.enabled) {
-    Object.assign(payload, {
-      autoExit: true,
-      takeProfitPct: autoExit.takeProfitPct,
-      stopLossPct: autoExit.stopLossPct,
-      sellDelay: autoExit.sellDelay,
-      sellPercent: autoExit.sellPercent
-    });
-  }
-  setChartTradeStatus(autoExit.enabled ? "Sending buy and arming auto-exit..." : "Sending buy...");
+  applyManagedBuyProtection(payload, selectedProtection, autoExit);
+  setChartTradeStatus(protectionEnabled ? "Sending buy and arming auto-exit..." : "Sending buy...");
   const data = await api("/api/web/trade/buy", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -16271,9 +16356,11 @@ async function confirmQuickBuyModal() {
 
 async function quickPresetTrade(tokenMint, presetOverride = null) {
   const clickStartedAt = perfNow();
-  const preset = presetOverride || presetById("trade", state.selectedTradePresetId);
+  const requestedPresetId = String(state.selectedTradePresetId || "").trim();
+  let preset = presetOverride;
+  let savedPresetId = "";
   let actionDetail = "quick";
-  if (!preset) {
+  if (!presetOverride && !requestedPresetId) {
     openQuickBuy(tokenRefFromMint(tokenMint, { source: "missing-preset" }), {
       source: "missing-preset",
       forceModal: true
@@ -16281,7 +16368,13 @@ async function quickPresetTrade(tokenMint, presetOverride = null) {
     return;
   }
   try {
-    const amountSol = presetOverride ? normalizedQuickBuyAmount(preset.amountSol) : activeQuickBuyAmount(preset);
+    await ensureWebAccount(null, "Opening secure web profile...");
+    if (requestedPresetId) {
+      const selectedProtection = await resolveSelectedTradePresetForBuy();
+      preset = selectedProtection.preset;
+      savedPresetId = selectedProtection.presetId;
+    }
+    const amountSol = savedPresetId ? activeQuickBuyAmount(preset) : normalizedQuickBuyAmount(preset.amountSol);
     if (!amountSol) throw new Error("Set a quick buy amount first.");
     actionDetail = String(amountSol);
     const active = activeTradeAction("trade-buy", tokenMint, actionDetail);
@@ -16306,7 +16399,6 @@ async function quickPresetTrade(tokenMint, presetOverride = null) {
     state.tradeToken = tokenMint;
     render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
     await sleep(0);
-    await ensureWebAccount(null, "Opening secure web profile...");
     const walletIndex = preset.walletIndex || (preset.walletIndexes || [])[0] || "1";
     if (!state.wallets.some((wallet) => String(wallet.index) === String(walletIndex))) {
       throw new Error("This trade preset wallet is not loaded. Edit it in the Trade tab.");
@@ -16316,12 +16408,14 @@ async function quickPresetTrade(tokenMint, presetOverride = null) {
       walletIndex,
       amountSol,
       slippageBps: preset.slippageBps,
+      protectionRequired: true,
       autoExit: true,
       takeProfitPct: preset.takeProfitPct,
       stopLossPct: preset.stopLossPct,
       sellDelay: preset.sellDelay || "off",
       sellPercent: preset.sellPercent || "100"
     };
+    if (savedPresetId) payload.presetId = savedPresetId;
     setError("");
     state.tradeToken = tokenMint;
     await sleep(20);
@@ -17643,33 +17737,36 @@ function pnlHtml() {
   const header = `
     <section class="account-check-card">
       <div>
-        <h3>PnL / Results</h3>
-        <p>Refresh after a trade closes, or jump back to open positions and wallet balances.</p>
+        <h3>Trade cash flow / Results</h3>
+        <p>Refresh after a trade is indexed, or jump back to open positions and wallet balances.</p>
       </div>
-      <button class="primary" data-refresh-all>Refresh PnL</button>
+      <button class="primary" data-refresh-all>Refresh cash flow</button>
       <button data-tab="positions">Open Positions</button>
       <button data-tab="wallets">Wallet Balances</button>
     </section>
   `;
-  if (!state.pnl?.totals?.tradeCount) return `${header}${emptyState("No PnL yet", "Trades made through the bot will show here.")}`;
+  if (!state.pnl?.totals?.tradeCount) return `${header}${emptyState("No trade cash flow yet", "Trades made through the bot will show here.")}`;
+  const netCashFlow = state.pnl.totals.netCashFlowSol ?? state.pnl.totals.realizedSol ?? "0";
   return `
     ${header}
     <section class="pnl-summary">
       <div><span>Trades</span><strong>${state.pnl.totals.tradeCount}</strong></div>
       <div><span>Spent</span><strong>${state.pnl.totals.spentSol} SOL</strong></div>
       <div><span>Received</span><strong>${state.pnl.totals.receivedSol} SOL</strong></div>
-      <div><span>Realized</span><strong>${state.pnl.totals.realizedSol}</strong></div>
+      <div><span>Net cash flow</span><strong>${escapeHtml(netCashFlow)}</strong></div>
     </section>
     <div class="pnl-portfolio-table">
       <div class="pnl-portfolio-head">
         <span>Token</span>
         <span>Invested</span>
         <span>Sold</span>
-        <span>Change</span>
+        <span>Net cash flow</span>
         <span>Avg Hold</span>
         <span>Action</span>
       </div>
-      ${state.pnl.tokens.map((row) => `
+      ${state.pnl.tokens.map((row) => {
+        const rowNetCashFlow = row.netCashFlowSol ?? row.realizedSol ?? "0";
+        return `
         <article class="pnl-portfolio-row with-avatar">
           <div class="pnl-token-cell">
             <button type="button" class="pnl-avatar-action" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="pnl-avatar" data-token-chart-tab="chart" aria-label="Open ${escapeHtml(row.symbol || row.shortMint || "token")} chart" style="border:0;background:transparent;padding:0;margin:0;display:inline-flex;cursor:pointer">
@@ -17683,7 +17780,7 @@ function pnlHtml() {
           </div>
           <span>${escapeHtml(row.spentSol || "0")} SOL</span>
           <span>${escapeHtml(row.receivedSol || "0")} SOL</span>
-          <span class="${String(row.realizedSol || "").startsWith("-") ? "negative" : "positive"}">${escapeHtml(row.realizedSol || "0")}</span>
+          <span class="${String(rowNetCashFlow).startsWith("-") ? "negative" : "positive"}">${escapeHtml(rowNetCashFlow)}</span>
           <span>${escapeHtml(row.holdTime || "n/a")}<small>Latest ${escapeHtml(formatDate(row.lastTradeAt))}</small></span>
           <div class="card-actions compact">
             ${xShareButton(pnlShareText(row), "Share")}
@@ -17692,8 +17789,8 @@ function pnlHtml() {
             <button data-share-pnl-card="${escapeHtml(row.tokenMint)}" data-share-text="${escapeHtml(pnlShareText(row))}">Post</button>
             <a href="${row.dexUrl}" target="_blank" rel="noreferrer">Dex</a>
           </div>
-        </article>
-      `).join("")}
+        </article>`;
+      }).join("")}
     </div>
   `;
 }
@@ -21842,7 +21939,7 @@ function positionIntelHtml(position) {
   const pnlToken = (state.pnl?.tokens || []).find((row) => String(row.tokenMint) === mint);
   const feedRow = allRawSignalRows().find((row) => String(row?.tokenMint || "") === mint);
   const plan = (Array.isArray(state.tradePlans) ? state.tradePlans : []).find((item) =>
-    String(item.tokenMint) === mint && ["watching", "active", "armed", "pending"].includes(String(item.status || "").toLowerCase()));
+    String(item.tokenMint) === mint && ["watching", "active", "armed", "pending", "pending_buy", "arming", "outcome_unknown", "needs_attention"].includes(String(item.status || "").toLowerCase()));
   const bits = [];
   if (pnlToken?.spentSol) bits.push(`Entry ${pnlToken.spentSol} SOL`);
   if (feedRow?.marketCapLabel) bits.push(`MC ${feedRow.marketCapLabel}`);
@@ -21911,7 +22008,7 @@ function positionRowHtml(position) {
     : isValueUpdating
       ? "updating"
       : isConnectedWalletPosition
-        ? "realized only"
+        ? "net cash flow only"
         : "Price unavailable";
   const valueStatus = position.valueError
     ? isValueUpdating
@@ -23567,7 +23664,7 @@ function ogreAgentContext() {
       tokenMint: openPosition.tokenMint,
       uiAmount: openPosition.uiAmount,
       estimatedValueSol: openPosition.estimatedValueSol,
-      openPnlSol: openPosition.openPnlSol || openPosition.realizedSol || ""
+      openPnlSol: openPosition.openPnlSol || (openPosition.netCashFlowSol ?? openPosition.realizedSol) || ""
     } : null,
     walletPublicKey: String(state.user?.connectedWallet?.publicKey || state.connectedWalletBalance?.publicKey || "").slice(0, 80),
     recentPairs: ogreAgentRecentMarketRows()
