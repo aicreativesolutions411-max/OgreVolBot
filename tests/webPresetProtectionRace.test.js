@@ -124,10 +124,10 @@ test("Wallet, Go, and Fun buy previews fail closed and freeze their requested pr
 });
 
 test("Wallet and Go publish the protected-buy release through a fresh app cache", () => {
-  assert.match(funHtml, /fun\.js\?v=94/);
-  assert.match(funWorker, /slimewallet-v34/);
-  assert.match(funWorker, /slimewire-fun-v91/);
-  assert.match(funWorker, /fun\.js\?v=94/);
+  assert.match(funHtml, /fun\.js\?v=95/);
+  assert.match(funWorker, /slimewallet-v36/);
+  assert.match(funWorker, /slimewire-fun-v93/);
+  assert.match(funWorker, /fun\.js\?v=95/);
 });
 
 test("terminal app resolves selected presets once per account and never erases a stale protected choice", () => {
@@ -211,4 +211,16 @@ test("terminal protection payload builder behaves fail-closed for preset, custom
   assert.equal(manual.presetId, undefined);
   assert.equal(manual.protectionRequired, undefined);
   assert.equal(manual.autoExit, undefined);
+});
+
+test("desktop existing-protection conflicts route to the reviewed Go add flow", () => {
+  for (const html of [indexSource, ggSource]) {
+    assert.match(html, /function existingProtectionAddRequired\(result\)/);
+    assert.match(html, /Number\(result&&result\.status\)===409/);
+    assert.match(html, /Review add in SlimeWire Go/);
+    assert.match(html, /\/fun\/\?ca=/);
+    assert.match(html, /No funds moved in the rejected desktop request/);
+    assert.match(html, /if\(existingProtectionAddRequired\(result\)\)\{showExistingProtectionAddReview\(mint\);return;\}/);
+    assert.match(html, /if\(existingProtectionAddRequired\(res\)\)\{done\(\);showExistingProtectionAddReview\(swapTok\.mint\);return;\}/);
+  }
 });

@@ -14,9 +14,9 @@
   <link id="slimeAppleIcon" rel="apple-touch-icon" href="/assets/slimewire/fun-app-icon-180.png">
   <link id="slimeAppManifest" rel="manifest" href="/fun-manifest.webmanifest?v=2">
   <script>if(/^\/wallet(?:\/|\.html|$)/i.test(location.pathname)){document.documentElement.classList.add("wallet-route-prepaint");document.title="SlimeWallet — SOL + ETH Wallet";document.getElementById("slimeAppManifest").href="/wallet-manifest.webmanifest?v=2";document.getElementById("slimeAppIcon").href="/assets/slimewire/slimewallet-icon-192.png";document.getElementById("slimeAppleIcon").href="/assets/slimewire/slimewallet-icon-192.png";document.querySelector('meta[name="apple-mobile-web-app-title"]').content="SlimeWallet"}</script>
-  <link rel="stylesheet" href="/fun.css?v=68">
+  <link rel="stylesheet" href="/fun.css?v=69">
   <script src="/config.js"></script>
-  <script defer src="/fun.js?v=94"></script>
+  <script defer src="/fun.js?v=95"></script>
 </head>
 <body>
   <div class="fun-app" id="funApp">
@@ -91,7 +91,7 @@
       <section class="fun-view quick-view" data-view="quick" aria-label="Quick trade">
         <header class="quick-header">
           <a class="brand" href="/fun" aria-label="SlimeWire Go home"><img src="/assets/slimewire/png/slimewire-mark-64.png" alt=""><span>SLIMEWIRE</span><b>GO</b></a>
-          <button class="quick-wallet-pill" type="button" data-wallet-entry>Connect wallet</button>
+          <div class="quick-header-actions"><button class="quick-activity-pill" type="button" data-wallet-route-tab="activity">Activity &amp; orders</button><button class="quick-wallet-pill" type="button" data-wallet-entry>Connect wallet</button></div>
         </header>
         <div class="quick-route-intro"><span class="eyebrow">SOCIAL TO TRADE IN SECONDS</span><h1>Quick <em>Buy</em></h1><p>Paste a Solana or Robinhood contract—or open a preloaded link from Telegram.</p></div>
         <form class="quick-paste-card" data-quick-paste-form>

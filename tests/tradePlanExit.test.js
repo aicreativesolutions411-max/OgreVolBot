@@ -1,14 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  authoritativeManagedPlanCoversPosition,
   calculateMoveSnapshot,
   confirmedExitNeedsHistoryBackfill,
   hasActionableExitSettings,
   isDefinitiveNoLiveTokenBalanceError,
   ladderSellAmountRaw,
+  pendingProtectedPositionAdd,
+  preservePendingPositionAddPlanState,
   priceExitDecision,
+  protectedLotAfterConfirmedBuy,
   protectedLotAfterConfirmedSell,
   protectedLotAmountFromBalance,
+  protectedPositionAddDecision,
+  protectedPositionAddRevisionMatches,
   recentStoredPriceExitDecision,
   safeEntryFrictionBaseline,
   sameWalletTokenBuyBlockDecision,
@@ -78,6 +84,184 @@ test("confirmed partial exits reduce both protected tokens and remaining cost ba
     remainingBasisLamports: "0",
     soldRaw: "30"
   });
+});
+
+test("confirmed top-up expands one protected lot and its remaining basis", () => {
+  assert.deepEqual(protectedLotAfterConfirmedBuy({
+    initialLotRaw: "100",
+    protectedLotRaw: "100",
+    basisLamports: "500000000",
+    grossLamports: "502500000",
+    feeLamports: "2500000",
+    boughtRaw: "40",
+    boughtBasisLamports: "200000000",
+    boughtGrossLamports: "201000000",
+    boughtFeeLamports: "1000000"
+  }), {
+    initialRaw: "140",
+    remainingRaw: "140",
+    basisLamports: "700000000",
+    grossLamports: "703500000",
+    feeLamports: "3500000",
+    boughtRaw: "40"
+  });
+
+  assert.equal(protectedLotAfterConfirmedBuy({
+    initialLotRaw: "100",
+    protectedLotRaw: "100",
+    basisLamports: "500000000",
+    boughtRaw: "0",
+    boughtBasisLamports: "200000000"
+  }), null, "a missing confirmed token increase cannot expand protection");
+});
+
+test("position add eligibility accepts exactly one untouched same-user protected plan", () => {
+  const holder = {
+    publicKey: "wallet-a",
+    status: "watching",
+    exitStatus: "watching",
+    triggerStatus: "armed",
+    tokenOutAmount: "100",
+    protectedTokenRemainingRaw: "100",
+    basisLamports: "500000000",
+    grossLamports: "502500000",
+    feeLamports: "2500000",
+    preBuyTokenRawAmount: "20",
+    buySignature: "original-buy",
+    walletStateRevision: 7,
+    protectedLotRevision: 3,
+    completedTakeProfitLevels: []
+  };
+  const plan = {
+    id: "plan-a",
+    userId: "user-a",
+    tokenMint: "mint-a",
+    status: "watching",
+    protectionIntent: "armed",
+    executionMode: "managed_server",
+    loopCount: 1,
+    wallets: [holder]
+  };
+  const guard = {
+    planId: "plan-a",
+    userId: "user-a",
+    walletPublicKey: "wallet-a",
+    tokenMint: "mint-a",
+    buySignature: "original-buy",
+    status: "watching"
+  };
+  const result = protectedPositionAddDecision({
+    userId: "user-a",
+    walletPublicKey: "wallet-a",
+    tokenMint: "mint-a"
+  }, [plan], [guard], []);
+  assert.equal(result.eligible, true);
+  assert.equal(result.plan, plan);
+  assert.equal(result.holder, holder);
+  assert.equal(protectedPositionAddRevisionMatches(holder, 7, 3), true);
+  assert.equal(protectedPositionAddRevisionMatches(holder, 6, 3), false, "a stale reviewed wallet revision fails closed");
+  assert.equal(protectedPositionAddRevisionMatches(holder, 7, 2), false, "a stale protected-lot revision fails closed");
+});
+
+test("position add eligibility blocks partial, in-flight, duplicate, unlinked, and cross-user protection", () => {
+  const holder = {
+    publicKey: "wallet-a",
+    status: "watching",
+    exitStatus: "watching",
+    triggerStatus: "armed",
+    tokenOutAmount: "100",
+    protectedTokenRemainingRaw: "100",
+    basisLamports: "500000000",
+    preBuyTokenRawAmount: "0",
+    buySignature: "buy-a",
+    completedTakeProfitLevels: []
+  };
+  const plan = {
+    id: "plan-a",
+    userId: "user-a",
+    tokenMint: "mint-a",
+    status: "watching",
+    protectionIntent: "armed",
+    executionMode: "managed_server",
+    loopCount: 1,
+    wallets: [holder]
+  };
+  const candidate = { userId: "user-a", walletPublicKey: "wallet-a", tokenMint: "mint-a" };
+  assert.equal(protectedPositionAddDecision(candidate, [{ ...plan, wallets: [{ ...holder, completedTakeProfitLevels: [0] }] }]).reason, "partial_position");
+  assert.equal(protectedPositionAddDecision(candidate, [{ ...plan, wallets: [{ ...holder, buySubmissionSignature: "signed" }] }]).reason, "position_inflight");
+  assert.equal(protectedPositionAddDecision(candidate, [plan, { ...plan, id: "plan-b" }]).reason, "multiple_plans");
+  assert.equal(protectedPositionAddDecision(candidate, [plan], [{
+    userId: "user-a", walletPublicKey: "wallet-a", tokenMint: "mint-a", status: "watching"
+  }]).reason, "unlinked_guard");
+  assert.equal(protectedPositionAddDecision(candidate, [{ ...plan, userId: "user-b" }]).reason, "cross_user_protection");
+  assert.equal(protectedPositionAddDecision(candidate, [{
+    ...plan,
+    sellAfterAt: "2026-08-22T12:01:00.000Z"
+  }], [], [], {
+    now: Date.parse("2026-08-22T12:00:00.000Z"),
+    timerSafetyWindowMs: 120_000
+  }).reason, "timer_due", "a position add cannot race a due timer exit");
+  assert.equal(protectedPositionAddDecision(candidate, [plan], [], [{
+    walletPublicKey: "wallet-a", tokenMint: "mint-a", status: "outcome_unknown"
+  }]).reason, "exit_outcome_unknown");
+});
+
+test("a stale watching plan snapshot cannot erase a signed pending position add", () => {
+  const pendingWallet = {
+    publicKey: "wallet-a",
+    status: "outcome_unknown",
+    exitStatus: "outcome_unknown",
+    triggerStatus: "outcome_unknown",
+    buyReservationKind: "position_add",
+    buyReservationClaimToken: "claim-a",
+    buySubmissionSignature: "signed-add-a",
+    lastError: "Signed add outcome is unknown.",
+    updatedAt: "2026-08-22T12:02:00.000Z"
+  };
+  assert.equal(pendingProtectedPositionAdd(pendingWallet), true);
+  const merged = preservePendingPositionAddPlanState({
+    id: "plan-a",
+    status: "pending_buy",
+    protectionIntent: "pending_buy",
+    wallets: [pendingWallet],
+    updatedAt: "2026-08-22T12:02:00.000Z"
+  }, {
+    id: "plan-a",
+    status: "watching",
+    protectionIntent: "armed",
+    wallets: [{ publicKey: "wallet-a", status: "watching" }],
+    updatedAt: "2026-08-22T12:01:00.000Z"
+  }, [pendingWallet]);
+
+  assert.equal(merged.status, "pending_buy");
+  assert.equal(merged.protectionIntent, "pending_buy");
+  assert.equal(merged.wallets[0].buySubmissionSignature, "signed-add-a");
+  assert.equal(merged.lastError, "Signed add outcome is unknown.");
+});
+
+test("an authoritative managed top-up plan excludes the full-balance portfolio watchdog", () => {
+  const entry = { userId: "user-a", walletPublicKey: "wallet-a", tokenMint: "mint-a" };
+  const topUpPlan = {
+    id: "plan-a",
+    userId: "user-a",
+    tokenMint: "mint-a",
+    executionMode: "managed_server",
+    status: "watching",
+    protectionIntent: "armed",
+    wallets: [{
+      publicKey: "wallet-a",
+      status: "watching",
+      exitStatus: "watching",
+      tokenOutAmount: "200",
+      protectedTokenRemainingRaw: "200",
+      basisLamports: "150",
+      positionAddSignatures: ["top-up-signature"]
+    }]
+  };
+
+  assert.equal(authoritativeManagedPlanCoversPosition(entry, [topUpPlan]), true);
+  assert.equal(authoritativeManagedPlanCoversPosition({ ...entry, walletPublicKey: "wallet-b" }, [topUpPlan]), false);
+  assert.equal(authoritativeManagedPlanCoversPosition(entry, [{ ...topUpPlan, status: "completed" }]), false);
 });
 
 test("ladder rungs allocate the original protected lot and the final rung clears dust", () => {
@@ -320,7 +504,15 @@ test("confirmed exit receipt requests one idempotent history backfill", () => {
     type: "sell",
     signature: "sell-sig",
     tokenMint: "mint-a",
-    walletPublicKey: "wallet-a"
+    walletPublicKey: "wallet-a",
+    solLamportsReceived: "0"
+  }]), true, "a signature-only zero row must remain eligible for exact proceeds repair");
+  assert.equal(confirmedExitNeedsHistoryBackfill(receipt, [{
+    type: "sell",
+    signature: "sell-sig",
+    tokenMint: "mint-a",
+    walletPublicKey: "wallet-a",
+    solLamportsReceived: "975"
   }]), false);
 });
 

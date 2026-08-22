@@ -4206,6 +4206,9 @@
   function transactionPreviewHtml(preview = {}) {
     const impact = Number(preview.priceImpactPct), impactText = Number.isFinite(impact) ? `${impact.toFixed(2)}%` : "Provider did not expose it";
     const warnings = (preview.warnings || []).map((warning) => `<li>${escapeHtml(warning)}</li>`).join("");
+    const positionAdd = preview.positionAdd && preview.positionAdd.planId
+      ? `<div class="transaction-warning trade-receipt-notice success"><b>Add to existing protection</b><ul><li>${escapeHtml(preview.positionAdd.summary || "This buy joins the current protected position. Its existing automatic exits stay in control of the combined position.")}</li></ul></div>`
+      : "";
     const status = preview.simulation?.status === "passed" ? "SIMULATION PASSED" : "ROUTE PREFLIGHT PASSED";
     const confirmControl = preview.kind === "send"
       ? `<button class="submit-trade" type="button" data-confirm-sol-send>Confirm send</button>`
@@ -4213,7 +4216,7 @@
     return `<div class="sheet-title transaction-preview-title"><img src="${escapeHtml(preview.kind === "send" ? slimePfp(preview.walletPublicKey) : coinImage(state.selected || {}))}" alt=""><div><h2>Review ${escapeHtml(preview.side || "transaction")}</h2><p>${escapeHtml(preview.walletLabel || "Slime wallet")} · live quote</p></div></div>
       <div class="simulation-status ${preview.simulation?.status === "passed" ? "passed" : "verified"}"><span>✓</span><div><b>${status}</b><p>${escapeHtml(preview.simulation?.message || "Live route checks passed. Nothing was broadcast.")}</p></div></div>
       <section class="transaction-preview-card"><div><span>You send</span><b>${escapeHtml(preview.inputAmount)} ${escapeHtml(preview.inputLabel)}</b></div><div><span>Estimated receive</span><b>${escapeHtml(preview.estimatedOutput)} ${escapeHtml(preview.outputLabel)}</b></div><div><span>Minimum received</span><b>${escapeHtml(preview.minimumReceived)} ${escapeHtml(preview.outputLabel)}</b></div><div><span>Price impact</span><b>${escapeHtml(impactText)}</b></div><div><span>App fee</span><b>${escapeHtml(preview.appFee || "Included")}</b></div><div><span>Network fee</span><b>${escapeHtml(preview.networkFee || "Estimated at submit")}</b></div><div><span>Balance after</span><b>${escapeHtml(preview.balanceAfter || "Recalculated at submit")}</b></div><div><span>Route</span><b>${escapeHtml(preview.route || preview.chain || "Live route")}</b></div></section>
-      ${warnings ? `<div class="transaction-warning"><b>Before you confirm</b><ul>${warnings}</ul></div>` : ""}
+      ${positionAdd}${warnings ? `<div class="transaction-warning"><b>Before you confirm</b><ul>${warnings}</ul></div>` : ""}
       ${confirmControl}
       <button class="sheet-secondary" type="button" data-edit-trade-preview>Edit transaction</button><p class="fineprint">The quote and simulation do not move funds. SlimeWallet performs safety checks again immediately before submission.</p>`;
   }
@@ -4224,6 +4227,19 @@
     const result = await post("/api/web/transaction/preview", { kind: pending.kind, chain: pending.chain, side: pending.side, ...pending.body }, { timeout: 30_000 });
     button.disabled = false; button.textContent = oldText;
     if (!result.ok || !result.data?.ok || !result.data?.preview) { toast(apiMessage(result.data, "This transaction did not pass preflight."), true); return false; }
+    const positionAdd = result.data.preview.positionAdd;
+    if (pending.side === "buy" && pending.chain === "solana" && positionAdd?.planId) {
+      const walletStateRevision = Number(positionAdd.walletStateRevision);
+      if (!Number.isInteger(walletStateRevision) || walletStateRevision < 0) {
+        toast("Existing protection changed while this trade was reviewed. Please review it again.", true);
+        return false;
+      }
+      pending.body.addToProtectionPlanId = String(positionAdd.planId);
+      pending.body.addToProtectionWalletRevision = walletStateRevision;
+    } else if (pending?.body) {
+      delete pending.body.addToProtectionPlanId;
+      delete pending.body.addToProtectionWalletRevision;
+    }
     state.pendingTradePreview = { ...pending, preview: result.data.preview };
     openSheet(transactionPreviewHtml(result.data.preview));
     return true;
@@ -4272,7 +4288,8 @@
       else if (autoExitError) notices.push({ tone: "danger", title: "Trade landed; TP / SL did not arm", message: `${String(autoExitError)} Open the position and arm exits manually; do not repeat the buy.` });
       else notices.push({ tone: "warning", title: "Verify TP / SL in Activity", message: "The buy was submitted, but the response did not confirm that automated exits were armed." });
     } else if (pending.chain !== "robinhood" && side === "buy") {
-      if (trade.autoExitArmed === true) notices.push({ tone: "success", title: "TP / SL armed", message: "Your automated exit protection is active on the server." });
+      if (trade.positionAddApplied === true) notices.push({ tone: "success", title: "Added to existing TP / SL", message: trade.existingProtectionSummary || "The new tokens and cost basis were merged into the existing protected position. No second exit plan was created." });
+      else if (trade.autoExitArmed === true) notices.push({ tone: "success", title: "TP / SL armed", message: "Your automated exit protection is active on the server." });
       else if (trade.autoExitError) notices.push({ tone: "danger", title: "Buy landed; TP / SL did not arm", message: `${String(trade.autoExitError)} Open the position and arm exits manually; do not repeat the buy.` });
       else if (protectionRequested) notices.push({ tone: "warning", title: "Verify TP / SL in Activity", message: "The buy was submitted, but the response did not confirm that automated exits were armed." });
     }
@@ -4370,6 +4387,7 @@
     state.tradeBusy = true; button.disabled = true; button.textContent = "Submitting…";
     let result;
     let guardResult = null;
+    let retrySameAttempt = false;
     let stopRhProgress = () => {};
     try {
       if (!(await ensureTradeReady())) return;
@@ -4390,8 +4408,11 @@
         openSheet(tradeReceiptHtml(receipt));
         setTimeout(async () => { await loadPortfolioSnapshot({ force: true }); if (state.view === "wallet-asset") renderWalletAsset(); else renderCoinShell(); }, 900);
       }
-      else toast(result.data?.message || result.data?.error || `${side} failed`, true);
-    } finally { stopRhProgress(); state.tradeBusy = false; button.disabled = false; button.textContent = `${side === "buy" ? "Buy" : "Sell"} ${coin.symbol || "coin"}`; }
+      else if (result.status === 0) {
+        retrySameAttempt = true;
+        toast(`The network did not return a final ${side} result. Do not edit or start another trade. Check Activity, or tap Confirm again to safely resume this exact attempt.`, true);
+      } else toast(result.data?.message || result.data?.error || `${side} failed`, true);
+    } finally { stopRhProgress(); state.tradeBusy = false; button.disabled = false; button.textContent = retrySameAttempt ? `Retry same ${side} safely` : `Confirm ${side}`; }
   }
   async function armExits() {
     if (!(await ensureTradeReady())) return;

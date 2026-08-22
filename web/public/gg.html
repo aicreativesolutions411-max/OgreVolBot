@@ -3635,7 +3635,9 @@
       else if(p&&(p.takeProfitPct||p.stopLossPct||(p.sellDelay&&p.sellDelay!=="off"))){
         body.autoExit=true;body.takeProfitPct=p.takeProfitPct||"";body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";body.sellPercent=p.sellPercent||"100";
       }else if(!presetId)body.disableAutoExit=true;   // only explicit Manual / HOLD may bypass trade protection
-      const {ok,status,d}=await postTrade("/api/web/trade/buy",body);
+      const result=await postTrade("/api/web/trade/buy",body);
+      if(existingProtectionAddRequired(result)){showExistingProtectionAddReview(mint);return;}
+      const {ok,status,d}=result;
       handleTradeResult(ok,status,d,"Buy");
     }finally{resetBigBtn();tradeUnlock("buy",mint);}
   }
@@ -3938,7 +3940,9 @@
       if(Number(trail)>0){body.trailingStopPct=String(trail);if(Number(trailAct)>0)body.trailingActivatePct=String(trailAct);}
       if(be)body.breakEvenAfterTp1=true;
       toast("Buying ◎"+Number(q.amt).toFixed(3)+"…");
-      const {ok,status,d}=await postTrade("/api/web/trade/buy",body);
+      const result=await postTrade("/api/web/trade/buy",body);
+      if(existingProtectionAddRequired(result)){showExistingProtectionAddReview(mint);return;}
+      const {ok,status,d}=result;
       handleTradeResult(ok,status,d,"Buy ◎"+Number(q.amt).toFixed(3));
     }finally{tradeUnlock("buy",mint);}
   }
@@ -3979,6 +3983,14 @@
       r=await jpost(path,body);
     }
     return r;
+  }
+  function existingProtectionAddRequired(result){
+    const message=String((result&&result.d&&(result.d.message||result.d.error))||"");
+    return Number(result&&result.status)===409&&/active automatic protection|exact protected position|reviewed trade preview/i.test(message);
+  }
+  function showExistingProtectionAddReview(mint){
+    const href="/fun/?ca="+encodeURIComponent(String(mint||""));
+    openModal('<h3>Add to protected position</h3><p class="sub">This wallet already has one automatic exit plan for this coin. Review the add in SlimeWire Go so the new tokens and cost basis join that same TP / SL instead of creating a competing plan.</p><div class="lcnote"><b>Your current exits stay unchanged.</b><br>No funds moved in the rejected desktop request.</div><div class="actions" style="margin-top:12px"><a class="wbtn" href="'+esc(href)+'">Review add in SlimeWire Go</a><button class="wbtn ghost" type="button" onclick="GG.closeModal()">Cancel</button></div>');
   }
   function openTradeReceipt(trade,label){
     if(!trade)return;
@@ -4628,6 +4640,7 @@
         else if((Number(tp)>0)||(Number(sl)>0)){body.protectionRequired=true;body.autoExit=true;body.takeProfitPct=tp||"";body.stopLossPct=sl||"";body.sellPercent="100";body.sellDelay="off";}
         else body.disableAutoExit=true;
         res=await jpost("/api/web/trade/buy",body);
+        if(existingProtectionAddRequired(res)){done();showExistingProtectionAddReview(swapTok.mint);return;}
       } else res=await jpost("/api/web/trade/sell",{tokenMint:swapTok.mint,walletIndex:wi,percent:String(amt),slippageBps:slip,tradeAttemptId:attemptId()});
       done();
       handleTradeResult(res.ok,res.status,res.d,swapDir==="buy"?"Buy":"Sell");

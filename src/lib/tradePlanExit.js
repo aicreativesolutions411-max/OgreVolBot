@@ -168,6 +168,120 @@ export function protectedLotAfterConfirmedSell({ protectedLotRaw, basisLamports,
   };
 }
 
+export function protectedLotAfterConfirmedBuy({
+  initialLotRaw,
+  protectedLotRaw,
+  basisLamports,
+  grossLamports,
+  feeLamports,
+  boughtRaw,
+  boughtBasisLamports,
+  boughtGrossLamports,
+  boughtFeeLamports
+} = {}) {
+  const initial = nonNegativeRawAmount(initialLotRaw);
+  const remaining = nonNegativeRawAmount(protectedLotRaw);
+  const bought = nonNegativeRawAmount(boughtRaw);
+  if (initial === null || remaining === null || bought === null || bought <= 0n) return null;
+
+  const basis = nonNegativeRawAmount(basisLamports);
+  const boughtBasis = nonNegativeRawAmount(boughtBasisLamports);
+  const gross = nonNegativeRawAmount(grossLamports);
+  const boughtGross = nonNegativeRawAmount(boughtGrossLamports);
+  const fees = nonNegativeRawAmount(feeLamports);
+  const boughtFees = nonNegativeRawAmount(boughtFeeLamports);
+
+  return {
+    initialRaw: (initial + bought).toString(),
+    remainingRaw: (remaining + bought).toString(),
+    basisLamports: basis === null || boughtBasis === null ? null : (basis + boughtBasis).toString(),
+    grossLamports: gross === null || boughtGross === null ? null : (gross + boughtGross).toString(),
+    feeLamports: fees === null || boughtFees === null ? null : (fees + boughtFees).toString(),
+    boughtRaw: bought.toString()
+  };
+}
+
+export function protectedPositionAddRevisionMatches(holder = {}, expectedWalletStateRevision, expectedProtectedLotRevision) {
+  const currentWalletRevision = Math.max(0, Number.parseInt(holder.walletStateRevision || 0, 10) || 0);
+  const currentLotRevision = Math.max(0, Number.parseInt(holder.protectedLotRevision || 0, 10) || 0);
+  const expectedWallet = Number(expectedWalletStateRevision);
+  const expectedLot = Number(expectedProtectedLotRevision);
+  return Number.isInteger(expectedWallet)
+    && expectedWallet >= 0
+    && Number.isInteger(expectedLot)
+    && expectedLot >= 0
+    && currentWalletRevision === expectedWallet
+    && currentLotRevision === expectedLot;
+}
+
+const PENDING_POSITION_ADD_STATUSES = new Set([
+  "pending_buy",
+  "arming",
+  "needs_attention",
+  "outcome_unknown"
+]);
+
+export function pendingProtectedPositionAdd(wallet = {}) {
+  if (String(wallet?.buyReservationKind || "") !== "position_add") return false;
+  const statuses = [wallet?.status, wallet?.exitStatus, wallet?.triggerStatus]
+    .map((value) => String(value || "").toLowerCase());
+  const unresolvedClaim = Boolean(
+    String(wallet?.buyReservationClaimToken || "").trim()
+    || String(wallet?.buySubmissionSignature || "").trim()
+  );
+  return unresolvedClaim && statuses.some((status) => PENDING_POSITION_ADD_STATUSES.has(status));
+}
+
+export function preservePendingPositionAddPlanState(currentPlan = {}, incomingPlan = {}, mergedWallets = []) {
+  const wallets = Array.isArray(mergedWallets) ? mergedWallets : [];
+  const pendingWallet = wallets.find((wallet) => pendingProtectedPositionAdd(wallet));
+  if (!pendingWallet) return { ...incomingPlan, wallets };
+  const timestamps = [incomingPlan.updatedAt, currentPlan.updatedAt, pendingWallet.updatedAt]
+    .map((value) => ({ value, time: Date.parse(value || "") }))
+    .filter((entry) => Number.isFinite(entry.time))
+    .sort((left, right) => right.time - left.time);
+  return {
+    ...incomingPlan,
+    wallets,
+    status: "pending_buy",
+    protectionIntent: "pending_buy",
+    lastError: pendingWallet.lastError || currentPlan.lastError || incomingPlan.lastError
+      || "A protected position add is awaiting on-chain reconciliation.",
+    updatedAt: timestamps[0]?.value || incomingPlan.updatedAt || currentPlan.updatedAt || null
+  };
+}
+
+const AUTHORITATIVE_MANAGED_WALLET_STATUSES = new Set([
+  "armed",
+  "watching",
+  "retrying",
+  "triggered",
+  "submitting",
+  "outcome_unknown",
+  "waiting_next_loop",
+  "timer-only",
+  "price-unavailable",
+  "pending_buy",
+  "arming",
+  "needs_attention",
+  "manual_hold"
+]);
+
+export function authoritativeManagedPlanCoversPosition(entry = {}, plans = []) {
+  return (Array.isArray(plans) ? plans : []).some((plan) => {
+    if (!plan?.id || String(plan.executionMode || "") !== "managed_server") return false;
+    if (String(plan.userId || "") !== String(entry.userId || "")
+      || String(plan.tokenMint || "") !== String(entry.tokenMint || "")) return false;
+    if (["completed", "closed", "canceled", "cancelled", "failed", "stopped"]
+      .includes(String(plan.status || "").toLowerCase())) return false;
+    return (Array.isArray(plan.wallets) ? plan.wallets : []).some((wallet) => (
+      String(wallet?.publicKey || "") === String(entry.walletPublicKey || "")
+      && [wallet?.status, wallet?.exitStatus, wallet?.triggerStatus]
+        .some((status) => AUTHORITATIVE_MANAGED_WALLET_STATUSES.has(String(status || "").toLowerCase()))
+    ));
+  });
+}
+
 export function ladderSellAmountRaw({
   initialLotRaw,
   remainingLotRaw,
@@ -279,6 +393,87 @@ export function sameWalletTokenBuyBlockDecision(candidate = {}, exits = [], opti
   return { blocked: false, reason: "" };
 }
 
+export function protectedPositionAddDecision(candidate = {}, plans = [], guards = [], receipts = [], options = {}) {
+  const walletPublicKey = String(candidate.walletPublicKey || "").trim();
+  const tokenMint = String(candidate.tokenMint || "").trim();
+  const userId = String(candidate.userId || "").trim();
+  if (!walletPublicKey || !tokenMint || !userId) return { eligible: false, reason: "missing_identity" };
+  const terminalPlans = new Set(["canceled", "cancelled", "stopped", "closed", "completed"]);
+  const matchingPlans = (Array.isArray(plans) ? plans : []).filter((plan) => (
+    String(plan?.tokenMint || "") === tokenMint
+    && !terminalPlans.has(String(plan?.status || "").toLowerCase())
+    && (Array.isArray(plan?.wallets) ? plan.wallets : []).some((holder) => String(holder?.publicKey || "") === walletPublicKey)
+  ));
+  if (matchingPlans.some((plan) => String(plan?.userId || "") !== userId)) {
+    return { eligible: false, reason: "cross_user_protection" };
+  }
+  if (matchingPlans.length !== 1) return { eligible: false, reason: matchingPlans.length ? "multiple_plans" : "no_active_plan" };
+  const plan = matchingPlans[0];
+  const holders = Array.isArray(plan.wallets) ? plan.wallets : [];
+  const holder = holders.find((row) => String(row?.publicKey || "") === walletPublicKey);
+  const holderStatuses = [holder?.status, holder?.exitStatus].map((value) => String(value || "").toLowerCase());
+  const triggerStatus = String(holder?.triggerStatus || "").toLowerCase();
+  const initial = nonNegativeRawAmount(holder?.tokenOutAmount);
+  const remaining = nonNegativeRawAmount(holder?.protectedTokenRemainingRaw);
+  const basis = nonNegativeRawAmount(holder?.basisLamports);
+  const partial = (Array.isArray(holder?.completedTakeProfitLevels) && holder.completedTakeProfitLevels.length > 0)
+    || (Array.isArray(holder?.partialExitSignatures) && holder.partialExitSignatures.length > 0)
+    || (nonNegativeRawAmount(holder?.protectedTokenSoldRaw) || 0n) > 0n
+    || (initial !== null && remaining !== null && initial !== remaining);
+  const inFlight = Boolean(holder?.submissionClaimToken
+    || holder?.submissionSignature
+    || holder?.buyReservationClaimToken
+    || holder?.buySubmissionSignature
+    || holder?.manualSellClaimToken);
+  const now = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const configuredTimerWindow = Number(options.timerSafetyWindowMs);
+  const timerSafetyWindowMs = Number.isFinite(configuredTimerWindow) && configuredTimerWindow >= 0
+    ? configuredTimerWindow
+    : 120_000;
+  const sellAfterAt = Date.parse(String(holder?.sellAfterAt || plan?.sellAfterAt || ""));
+  const timerDueSoon = Number.isFinite(sellAfterAt) && sellAfterAt <= now + timerSafetyWindowMs;
+  const exactCheckpoint = holder && Object.prototype.hasOwnProperty.call(holder, "preBuyTokenRawAmount")
+    && initial !== null && initial > 0n
+    && remaining !== null && remaining > 0n
+    && basis !== null && basis > 0n
+    && Boolean(String(holder.buySignature || "").trim());
+  if (String(plan.status || "").toLowerCase() !== "watching"
+    || String(plan.protectionIntent || "armed").toLowerCase() !== "armed"
+    || String(plan.executionMode || "") !== "managed_server"
+    || Number.parseInt(plan.loopCount || 1, 10) !== 1
+    || holders.length !== 1
+    || !holderStatuses.every((status) => ["watching", "armed", "timer-only"].includes(status))
+    || !["watching", "armed", "timer-only", "price-unavailable"].includes(triggerStatus)
+    || holder?.autoExitDisabled
+    || holder?.manualExit
+    || inFlight
+    || timerDueSoon
+    || partial
+    || !exactCheckpoint) {
+    return { eligible: false, reason: partial ? "partial_position" : inFlight ? "position_inflight" : timerDueSoon ? "timer_due" : "unsafe_plan_state" };
+  }
+
+  const activeGuards = (Array.isArray(guards) ? guards : []).filter((guard) => (
+    String(guard?.walletPublicKey || guard?.publicKey || "") === walletPublicKey
+    && String(guard?.tokenMint || "") === tokenMint
+    && !normalizedExitStatuses(guard).some((status) => ["sold", "confirmed", "failed", "canceled", "cancelled", "skipped"].includes(status))
+  ));
+  if (activeGuards.length > 1) return { eligible: false, reason: "multiple_guards" };
+  if (activeGuards.some((guard) => !guard.planId
+    || String(guard.planId) !== String(plan.id || "")
+    || String(guard.userId || "") !== userId
+    || (guard.buySignature && String(guard.buySignature) !== String(holder.buySignature)))) {
+    return { eligible: false, reason: "unlinked_guard" };
+  }
+  if (activeGuards.some((guard) => normalizedExitStatuses(guard).some((status) => (
+    ["submitting", "outcome_unknown", "needs_attention", "retrying", "triggered"].includes(status)
+  )))) return { eligible: false, reason: "guard_inflight" };
+
+  const conflict = sameWalletTokenBuyBlockDecision(candidate, Array.isArray(receipts) ? receipts : [receipts], options);
+  if (conflict.blocked) return { eligible: false, reason: conflict.reason };
+  return { eligible: true, reason: "", plan, holder };
+}
+
 function exitReceiptSignature(receipt = {}) {
   return String(receipt.sellSignature || receipt.signature || "").trim();
 }
@@ -292,7 +487,14 @@ function matchingSellHistoryEvent(receipt = {}, event = {}) {
   const walletPublicKey = String(receipt.walletPublicKey || receipt.publicKey || "").trim();
   if (tokenMint && String(event.tokenMint || "").trim() !== tokenMint) return false;
   if (walletPublicKey && String(event.walletPublicKey || "").trim() !== walletPublicKey) return false;
-  return true;
+  // A signature-only/zero-output row is not complete history. The confirmed
+  // receipt worker must remain eligible to enrich it after the exact wallet
+  // lamport delta becomes available.
+  try {
+    return BigInt(event.solLamportsReceived || 0) > 0n;
+  } catch {
+    return false;
+  }
 }
 
 export function confirmedExitNeedsHistoryBackfill(receipt = {}, historyEvents = null) {

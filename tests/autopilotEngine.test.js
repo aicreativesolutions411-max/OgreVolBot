@@ -1116,7 +1116,7 @@ test("server autopilot sell adapter passes original token amount to sell helper"
   assert.match(adapter, /sellTokenFromWallet/);
   assert.match(adapter, /\.\.\.\(baseRawAmount \? \{ baseRawAmount \} : \{\}\)/);
   assert.match(adapter, /executeManualSolSellWithProtection/);
-  assert.match(adapter, /if \(e\?\.tradeSubmissionAmbiguous\) throw e/);
+  assert.match(adapter, /if \(e\?\.tradeSubmissionAmbiguous \|\| e\?\.autopilotStateReplayWait\) throw e/);
   // the live-money fix: exits escalate slippage until they land instead of failing flat at 7%
   assert.match(adapter, /levels|escalat/i);
 });

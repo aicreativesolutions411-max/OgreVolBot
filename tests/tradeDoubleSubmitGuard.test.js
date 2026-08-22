@@ -408,7 +408,7 @@ test("autopilot, RH mirror, and DCA never replay an outcome-unknown sell", () =>
   const autopilot = serverSource.slice(serverSource.indexOf("sellPercent: async (mint"), serverSource.indexOf("async function startLiveAutopilotResume"));
   assert.match(autopilot, /runIdempotentMoneyOp\([\s\S]*"autopilot-sell"/);
   assert.match(autopilot, /withExitSellLock[\s\S]*executeManualSolSellWithProtection[\s\S]*onSigned/);
-  assert.match(autopilot, /if \(e\?\.tradeSubmissionAmbiguous\) throw e/);
+  assert.match(autopilot, /if \(e\?\.tradeSubmissionAmbiguous \|\| e\?\.autopilotStateReplayWait\) throw e/);
   assert.match(autopilotEngineSource, /if \(pos\.exitOutcomeUnknown\) return/);
   assert.match(autopilotEngineSource, /e\?\.tradeSubmissionAmbiguous[\s\S]*pos\.exitOutcomeUnknown = true/);
 
@@ -428,7 +428,363 @@ test("autopilot, RH mirror, and DCA never replay an outcome-unknown sell", () =>
   assert.match(dca, /runIdempotentMoneyOp\([\s\S]*"dca-sell"/);
   assert.match(dca, /withExitSellLock[\s\S]*executeManualSolSellWithProtection[\s\S]*sellTokenAmountFromWallet/);
   assert.match(dca, /sellSubmissionSignature[\s\S]*persistCheckpoint/);
-  assert.match(dca, /tradeSubmissionAmbiguous \|\| planWallet\.sellSubmissionSignature[\s\S]*status = "outcome_unknown"/);
+  assert.match(dca, /tradeSubmissionAmbiguous \|\| error\?\.dcaSellHistoryPending \|\| planWallet\.sellSubmissionSignature[\s\S]*status = "outcome_unknown"/);
+});
+
+test("DCA buy recovers one signed tranche and commits Activity before advancing counters", async () => {
+  const body = functionBody(serverSource, "processDcaPlanWallet");
+  let buySubmits = 0;
+  let historyCalls = 0;
+  const checkpoints = [];
+  const processWallet = new Function(
+    "walletsForOwner", "bigIntToSafeNumber", "reconcileSubmittedSolanaSignature",
+    "readConfirmedBuyOwnerMintRawDelta", "positiveRawString", "runIdempotentMoneyOp", "buyTokenForPlan",
+    "recordTradeEvents", "appendLimited", "formatBuySuccessLine", "submittedUnknownHashes", "friendlyError",
+    `return async function processDcaPlanWallet(plan, planWallet, walletStore, options = {}) {${body}};`
+  )(
+    (store) => store.wallets,
+    (value) => Number(value),
+    async () => ({ state: "confirmed" }),
+    async () => "777",
+    (value) => /^\d+$/.test(String(value || "")) && BigInt(value) > 0n ? String(value) : null,
+    async (_namespace, _userId, _attemptId, task) => task(),
+    async (_wallet, _mint, amountLamports, _slippage, options) => {
+      buySubmits += 1;
+      await options.onSigned({
+        signature: "dca-buy-sig-1",
+        requestId: "req-1",
+        lastValidBlockHeight: 900,
+        recentBlockhash: "blockhash-1",
+        provider: "rpc",
+        amountLamports: String(amountLamports),
+        swapLamports: String(amountLamports - 10),
+        feeLamports: "10"
+      });
+      return {
+        signature: "dca-buy-sig-1",
+        amountLamports: String(amountLamports),
+        swapLamports: String(amountLamports - 10),
+        feeLamports: "10",
+        outputAmount: "777",
+        tokenDeltaAmount: "777"
+      };
+    },
+    async () => {
+      historyCalls += 1;
+      if (historyCalls === 1) throw new Error("history disk unavailable");
+    },
+    (rows, value) => [...(Array.isArray(rows) ? rows : []), value],
+    () => "buy receipt",
+    (error) => error?.signature ? [error.signature] : [],
+    (error) => error?.message || String(error)
+  );
+  const plan = {
+    id: "dca-plan-1",
+    userId: "user-1",
+    side: "buy",
+    tokenMint: "mint-1",
+    orderCount: 2,
+    slippageBps: 500
+  };
+  const planWallet = {
+    publicKey: "wallet-1",
+    label: "Wallet 1",
+    status: "active",
+    remainingLamports: "1000",
+    completedOrders: 0,
+    failures: 0,
+    results: []
+  };
+  const walletStore = { wallets: [{ publicKey: "wallet-1", label: "Wallet 1" }] };
+  const persistCheckpoint = async () => {
+    checkpoints.push(JSON.parse(JSON.stringify(planWallet)));
+  };
+
+  const first = await processWallet(plan, planWallet, walletStore, { persistCheckpoint });
+  assert.equal(first.changed, true);
+  assert.equal(buySubmits, 1);
+  assert.equal(planWallet.status, "outcome_unknown");
+  assert.equal(planWallet.remainingLamports, "1000", "history failure must not debit the tranche twice");
+  assert.equal(planWallet.completedOrders, 0, "history failure must not advance completed orders");
+  assert.equal(planWallet.buySubmissionSignature, "dca-buy-sig-1", "signed checkpoint must remain recoverable");
+  assert.ok(checkpoints.some((row) => row.buyAttemptId && !row.buySubmissionSignature), "claim must persist before signing");
+  assert.ok(checkpoints.some((row) => row.buySubmissionSignature === "dca-buy-sig-1"), "signature/blockhash must persist before broadcast");
+
+  const recovered = await processWallet(plan, planWallet, walletStore, { persistCheckpoint });
+  assert.equal(recovered.changed, true);
+  assert.equal(buySubmits, 1, "confirmed retry must recover the signed tranche without another buy submit");
+  assert.equal(historyCalls, 2);
+  assert.equal(planWallet.remainingLamports, "500");
+  assert.equal(planWallet.completedOrders, 1);
+  assert.equal(planWallet.status, "active");
+  assert.equal(planWallet.lastSignature, "dca-buy-sig-1");
+  assert.equal(planWallet.buySubmissionSignature, undefined);
+  const runner = functionBody(serverSource, "processDcaPlans");
+  assert.match(runner, /recoverableBuyWallet[\s\S]*plan\.status === "needs_attention"/,
+    "the runner must keep reconciling a signed buy after the plan enters needs_attention");
+  assert.match(runner, /recoverableBuySubmission[\s\S]*processDcaPlanWallet/);
+});
+
+test("DCA sell history failure retains its signed checkpoint and leaves tranche counters unchanged", async () => {
+  const body = functionBody(serverSource, "processDcaPlanWallet");
+  let sellSubmits = 0;
+  const processWallet = new Function(
+    "walletsForOwner", "runIdempotentMoneyOp", "withExitSellLock", "executeManualSolSellWithProtection",
+    "sellTokenAmountFromWallet", "normalizeManualSellAttemptId", "recordTradeEvents", "confirmedSolSellReceiptAmounts", "appendLimited",
+    "formatSellSuccessLine", "submittedUnknownHashes", "friendlyError",
+    `return async function processDcaPlanWallet(plan, planWallet, walletStore, options = {}) {${body}};`
+  )(
+    (store) => store.wallets,
+    async (_namespace, _userId, _attemptId, task) => task(),
+    async (_userId, _wallet, _mint, task) => task(),
+    async (_wallet, _mint, _pct, task) => task(async () => {}),
+    async (_wallet, _mint, amountRaw, _slippage, options) => {
+      sellSubmits += 1;
+      await options.onSigned({ signature: "dca-sell-sig-1", recentBlockhash: "sell-blockhash", lastValidBlockHeight: 901 });
+      return { signature: "dca-sell-sig-1", tokenAmount: String(amountRaw), outputLamports: "100", feePaidLamports: "1" };
+    },
+    (value) => String(value || "").trim(),
+    async () => { throw new Error("history disk unavailable"); },
+    (sell) => ({ solLamportsReceived: "99", grossSolLamportsReceived: "100", tradeFeeLamports: "1", feeStatus: sell.feeStatus || "" }),
+    (rows, value) => [...(Array.isArray(rows) ? rows : []), value],
+    () => "sell receipt",
+    (error) => error?.signature ? [error.signature] : [],
+    (error) => error?.message || String(error)
+  );
+  const plan = { id: "dca-plan-sell", userId: "user-1", side: "sell", tokenMint: "mint-1", orderCount: 2, slippageBps: 500 };
+  const planWallet = { publicKey: "wallet-1", label: "Wallet 1", status: "active", remainingRawAmount: "1000", completedOrders: 0, results: [] };
+  const walletStore = { wallets: [{ publicKey: "wallet-1", label: "Wallet 1" }] };
+  const result = await processWallet(plan, planWallet, walletStore, { persistCheckpoint: async () => {} });
+  assert.equal(result.changed, true);
+  assert.equal(sellSubmits, 1);
+  assert.equal(planWallet.status, "outcome_unknown");
+  assert.equal(planWallet.remainingRawAmount, "1000");
+  assert.equal(planWallet.completedOrders, 0);
+  assert.equal(planWallet.sellSubmissionSignature, "dca-sell-sig-1");
+  assert.ok(planWallet.sellAttemptId);
+});
+
+test("DCA sell never advances a tranche from a different prior manual-sell replay", async () => {
+  const body = functionBody(serverSource, "processDcaPlanWallet");
+  let sellResult;
+  let sellSubmits = 0;
+  let historyCalls = 0;
+  let checkpointCalls = 0;
+  const processWallet = new Function(
+    "walletsForOwner", "runIdempotentMoneyOp", "withExitSellLock", "executeManualSolSellWithProtection",
+    "sellTokenAmountFromWallet", "normalizeManualSellAttemptId", "recordTradeEvents", "confirmedSolSellReceiptAmounts", "appendLimited",
+    "formatSellSuccessLine", "submittedUnknownHashes", "friendlyError",
+    `return async function processDcaPlanWallet(plan, planWallet, walletStore, options = {}) {${body}};`
+  )(
+    (store) => store.wallets,
+    async (_namespace, _userId, _attemptId, task) => task(),
+    async (_userId, _wallet, _mint, task) => task(),
+    async () => sellResult,
+    async () => { sellSubmits += 1; throw new Error("a replay guard must not submit"); },
+    (value) => String(value || "").trim(),
+    async () => { historyCalls += 1; },
+    () => ({ solLamportsReceived: "99", grossSolLamportsReceived: "100", tradeFeeLamports: "1", feeStatus: "paid" }),
+    (rows, value) => [...(Array.isArray(rows) ? rows : []), value],
+    () => "sell receipt",
+    (error) => error?.signature ? [error.signature] : [],
+    (error) => error?.message || String(error)
+  );
+  const walletStore = { wallets: [{ publicKey: "wallet-1", label: "Wallet 1" }] };
+  const persistCheckpoint = async () => { checkpointCalls += 1; };
+  const plan = { id: "dca-plan-cross", userId: "user-1", side: "sell", tokenMint: "mint-1", orderCount: 2, slippageBps: 500 };
+  const planWallet = { publicKey: "wallet-1", label: "Wallet 1", status: "active", remainingRawAmount: "1000", completedOrders: 0, results: [] };
+  sellResult = {
+    signature: "prior-manual-sig",
+    tokenAmount: "500",
+    outputLamports: "100",
+    manualSellAttemptId: "prior-manual-attempt",
+    duplicate: true,
+    recovered: true,
+    crossAttemptReplay: true,
+    blockedNewSubmission: true,
+    priorManualSellAttemptId: "prior-manual-attempt",
+    priorManualSellSignature: "prior-manual-sig"
+  };
+
+  const blocked = await processWallet(plan, planWallet, walletStore, { persistCheckpoint });
+  assert.equal(blocked.changed, true);
+  assert.equal(sellSubmits, 0, "a prior receipt replay must not broadcast another sell");
+  assert.equal(historyCalls, 0, "a prior receipt must not be booked as this DCA tranche");
+  assert.equal(planWallet.status, "needs_attention");
+  assert.equal(planWallet.remainingRawAmount, "1000");
+  assert.equal(planWallet.completedOrders, 0);
+  assert.equal(planWallet.lastSellAttemptId, undefined);
+  assert.equal(planWallet.sellAttemptId, "dca-plan-cross:wallet-1:sell:1", "the current DCA claim must remain intact");
+  assert.equal(planWallet.blockedPriorManualSellAttemptId, "prior-manual-attempt");
+  assert.equal(planWallet.blockedPriorManualSellSignature, "prior-manual-sig");
+  assert.ok(checkpointCalls >= 2, "both the claim and blocked provenance must be durable");
+
+  const exactPlan = { ...plan, id: "dca-plan-exact" };
+  const exactAttemptId = "dca-plan-exact:wallet-1:sell:1";
+  const exactWallet = {
+    publicKey: "wallet-1",
+    label: "Wallet 1",
+    status: "outcome_unknown",
+    remainingRawAmount: "1000",
+    completedOrders: 0,
+    sellAttemptId: exactAttemptId,
+    sellSubmissionSignature: "exact-dca-sig",
+    results: []
+  };
+  sellResult = {
+    signature: "exact-dca-sig",
+    tokenAmount: "500",
+    outputLamports: "100",
+    manualSellAttemptId: exactAttemptId,
+    duplicate: true,
+    recovered: true
+  };
+  const exact = await processWallet(exactPlan, exactWallet, walletStore, { persistCheckpoint });
+  assert.equal(exact.changed, true);
+  assert.equal(historyCalls, 1, "the exact same DCA attempt may apply its confirmed receipt once");
+  assert.equal(exactWallet.remainingRawAmount, "500");
+  assert.equal(exactWallet.completedOrders, 1);
+  assert.equal(exactWallet.lastSellAttemptId, exactAttemptId);
+  assert.equal(exactWallet.lastSignature, "exact-dca-sig");
+  assert.equal(exactWallet.sellAttemptId, undefined);
+  assert.equal(exactWallet.sellSubmissionSignature, undefined);
+});
+
+test("limit-order sell results distinguish an exact recovery from a different prior receipt", () => {
+  const body = functionBody(serverSource, "limitOrderSellResultDisposition");
+  const disposition = new Function(
+    "objectRows", "normalizeManualSellAttemptId", "limitOrderResultSignature",
+    `return function limitOrderSellResultDisposition(order = {}, result = {}) {${body}};`
+  )(
+    (value) => Array.isArray(value) ? value.filter((row) => row && typeof row === "object" && !Array.isArray(row)) : [],
+    (value) => String(value || "").trim(),
+    (result) => String(result.signature || result.sellResults?.find((row) => row?.signature)?.signature || "")
+  );
+
+  assert.equal(disposition({ id: "web-1", source: "web" }, {
+    signature: "fresh-web-sig",
+    manualSellAttemptId: "web-mc-order-web-1"
+  }).status, "filled");
+  assert.equal(disposition({ id: "web-1", source: "web" }, {
+    signature: "same-web-sig",
+    manualSellAttemptId: "web-mc-order-web-1",
+    duplicate: true,
+    recovered: true
+  }).status, "filled", "the exact same limit-order attempt may recover its own receipt");
+  assert.equal(disposition({ id: "web-1", source: "web" }, {
+    signature: "prior-user-sig",
+    manualSellAttemptId: "web-mc-order-web-1",
+    duplicate: true,
+    recovered: true,
+    crossAttemptReplay: true,
+    blockedNewSubmission: true,
+    priorManualSellAttemptId: "browser-sell-before-limit",
+    priorManualSellSignature: "prior-user-sig"
+  }).status, "needs_attention", "a different prior receipt is not this order's fill");
+  assert.equal(disposition({ id: "web-1", source: "web" }, {
+    signature: "wrong-attempt-sig",
+    manualSellAttemptId: "some-other-attempt",
+    recovered: true
+  }).status, "outcome_unknown", "mismatched recovery provenance must fail closed");
+  assert.equal(disposition({ id: "web-1", source: "web" }, {
+    manualSellAttemptId: "web-mc-order-web-1",
+    status: "SUBMITTING"
+  }).status, "outcome_unknown", "a busy/no-signature result is never a fill");
+
+  const exactTgRow = {
+    ok: true,
+    walletPublicKey: "tg-wallet-1",
+    walletLabel: "TG Wallet 1",
+    signature: "tg-sig",
+    attemptedManualSellAttemptId: "limit-order-tg-1:mint:50:wallet",
+    manualSellAttemptId: "limit-order-tg-1:mint:50:wallet",
+    duplicate: true,
+    recovered: true
+  };
+  assert.equal(disposition({ id: "tg-1", source: "telegram" }, {
+    ok: true,
+    sellResults: [exactTgRow]
+  }).status, "filled");
+  assert.equal(disposition({ id: "tg-1", source: "telegram" }, {
+    ok: true,
+    sellResults: [{ ...exactTgRow, signature: "", duplicate: false, recovered: false }]
+  }).status, "outcome_unknown", "Telegram success without a confirmed per-wallet signature is never a fill");
+  const failedTgRow = {
+    ok: false,
+    walletPublicKey: "tg-wallet-2",
+    walletLabel: "TG Wallet 2",
+    attemptedManualSellAttemptId: "limit-order-tg-1:mint:50:tg-wallet-2",
+    manualSellAttemptId: "limit-order-tg-1:mint:50:tg-wallet-2",
+    signature: "",
+    outcomeUnknown: false,
+    failReason: "route unavailable"
+  };
+  const partialTg = disposition({ id: "tg-1", source: "telegram" }, {
+    ok: true,
+    fails: 1,
+    sellResults: [exactTgRow, failedTgRow]
+  });
+  assert.equal(partialTg.status, "needs_attention", "one successful wallet cannot mark a multi-wallet order filled");
+  assert.equal(partialTg.partialFill, true);
+  assert.deepEqual(partialTg.completedWalletSellReceipts.map((row) => row.walletPublicKey), ["tg-wallet-1"]);
+  assert.deepEqual(partialTg.incompleteWalletSellAttempts.map((row) => row.walletPublicKey), ["tg-wallet-2"]);
+  assert.equal(partialTg.completedWalletSellReceipts[0].manualSellAttemptId, exactTgRow.manualSellAttemptId);
+  assert.equal(partialTg.incompleteWalletSellAttempts[0].attemptedManualSellAttemptId, failedTgRow.attemptedManualSellAttemptId);
+  const ambiguousPartialTg = disposition({ id: "tg-1", source: "telegram" }, {
+    ok: true,
+    fails: 1,
+    outcomeUnknown: true,
+    partialHashes: ["unknown-wallet-2-sig"],
+    sellResults: [exactTgRow, { ...failedTgRow, signature: "unknown-wallet-2-sig", outcomeUnknown: true }]
+  });
+  assert.equal(ambiguousPartialTg.status, "outcome_unknown");
+  assert.equal(ambiguousPartialTg.partialFill, true);
+  assert.equal(disposition({ id: "tg-1", source: "telegram" }, {
+    ok: true,
+    fails: 0,
+    sellResults: [exactTgRow, {
+      ...exactTgRow,
+      walletPublicKey: "tg-wallet-2",
+      signature: "tg-sig-2",
+      attemptedManualSellAttemptId: "limit-order-tg-1:mint:50:tg-wallet-2",
+      manualSellAttemptId: "limit-order-tg-1:mint:50:tg-wallet-2"
+    }]
+  }).status, "filled", "all exact signed wallet receipts still fill the order");
+  assert.equal(disposition({ id: "tg-1", source: "telegram" }, {
+    ok: false,
+    fails: 1,
+    sellResults: [failedTgRow]
+  }).status, "failed", "an all-failed result remains failed rather than partial");
+  assert.equal(disposition({ id: "tg-1", source: "telegram" }, {
+    ok: true,
+    crossAttemptReplay: true,
+    blockedNewSubmission: true,
+    priorManualSellAttemptIds: ["prior-tg-attempt"],
+    priorManualSellSignatures: ["prior-tg-sig"],
+    sellResults: [{ ...exactTgRow, crossAttemptReplay: true, blockedNewSubmission: true, priorManualSellAttemptId: "prior-tg-attempt", priorManualSellSignature: "prior-tg-sig" }]
+  }).status, "needs_attention");
+  assert.equal(disposition({ id: "tg-1", source: "telegram" }, {
+    ok: true,
+    sellResults: [
+      exactTgRow,
+      { ...exactTgRow, signature: "prior-mixed-sig", crossAttemptReplay: true, blockedNewSubmission: true, priorManualSellAttemptId: "prior-mixed", priorManualSellSignature: "prior-mixed-sig" }
+    ]
+  }).status, "needs_attention", "one blocked wallet makes a mixed multi-wallet result non-filled");
+
+  const wrapper = functionBody(serverSource, "executeManualSolSellWithProtection");
+  assert.match(wrapper, /priorManualSellSignature/);
+  const tg = functionBody(serverSource, "tgExecuteQuickSell");
+  assert.match(tg, /attemptedManualSellAttemptId[\s\S]*crossAttemptReplay[\s\S]*sellResults/);
+  assert.match(tg, /catch \(error\)[\s\S]*walletPublicKey: w\.publicKey[\s\S]*attemptedManualSellAttemptId: attemptId/);
+  assert.match(tg, /balanceUnavailable: true/);
+  const web = functionBody(serverSource, "webTradeSellCore");
+  assert.match(web, /crossAttemptReplay: result\.crossAttemptReplay[\s\S]*priorManualSellSignature/);
+  const poll = functionBody(serverSource, "pollLimitOrders");
+  assert.match(poll, /limitOrderSellResultDisposition\(o, result\)[\s\S]*disposition\.status !== "filled"/);
+  assert.match(poll, /limitOrderSellResultDisposition\(o, r\)[\s\S]*\["outcome_unknown", "needs_attention"\]/);
+  assert.match(poll, /walletOutcomePatch[\s\S]*completedWalletSellReceipts[\s\S]*incompleteWalletSellAttempts/);
+  assert.match(functionBody(serverSource, "reconcileStaleLimitOrderSubmissions"), /limitOrderSellResultDisposition\(order, cached\.result\)/);
+  assert.match(functionBody(serverSource, "manualSellResultSubmitted"), /blockedNewSubmission === true \|\| result\.crossAttemptReplay === true/);
 });
 
 test("buy path is idempotent: webTradeBuy wraps webTradeBuyCore via runIdempotentMoneyOp", () => {
@@ -446,8 +802,10 @@ test("managed Sol buys fail closed when the same wallet and mint already has exi
   const blocker = functionBody(serverSource, "assertManagedSolBuyReentryAllowed");
   assert.match(blocker, /Promise\.all\(\[\s*readTradePlans\(\),\s*readWebExitGuards\(\),\s*readSolExitReceipts\(\)/);
   assert.match(blocker, /sameWalletTokenBuyBlockDecision\(/);
-  assert.match(blocker, /error\.statusCode = 409/);
-  assert.match(blocker, /two full-position plans cannot sell the same bag/);
+  assert.match(blocker, /managedSolBuyReentryError/);
+  const blockedError = functionBody(serverSource, "managedSolBuyReentryError");
+  assert.match(blockedError, /error\.statusCode = 409/);
+  assert.match(blockedError, /two full-position plans cannot sell the same bag/);
   const quickBuy = functionBody(serverSource, "webTradeBuyCore");
   assert.ok(quickBuy.indexOf("assertManagedSolBuyReentryAllowed") < quickBuy.indexOf("buyTokenForPlan"));
   const managedPlan = functionBody(serverSource, "webCreateManagedBuyPlanCore");
@@ -501,6 +859,705 @@ test("automatic exits and repeat buys require the exact persisted wallet claim b
   assert.match(merge, /wouldEraseSellSignature[\s\S]*wouldEraseBuySignature/);
   assert.match(merge, /newerCurrentState[\s\S]*currentRevision > incomingRevision/);
   assert.match(merge, /wouldEraseSellSignature[\s\S]*wouldEraseBuySignature[\s\S]*currentProtected && !verifiedSellClear/);
+  const writer = functionBody(serverSource, "writeTradePlansPreservingNewPlans");
+  assert.ok(writer.indexOf("mergeTradePlanWalletsPreservingConcurrent") < writer.indexOf("preservePendingPositionAddPlanState"));
+});
+
+test("reviewed protected-position adds reserve, checkpoint, and merge one exact lot without a second plan", () => {
+  const preview = functionBody(serverSource, "webSolTradePreview");
+  assert.match(preview, /positionAdd = \{[\s\S]*planId:[\s\S]*walletStateRevision:[\s\S]*protectedLotRevision:[\s\S]*summary:/);
+  assert.match(preview, /existingProtectionSummary/);
+
+  const core = functionBody(serverSource, "webTradeBuyCore");
+  assert.match(core, /addToProtectionPlanId/);
+  assert.ok(core.indexOf("executeManagedSolPositionAdd") < core.indexOf("webCreateSingleTradeAutoExitPlan"));
+  assert.ok(core.indexOf('requireWebAutomationPermission(userId, "protected position add")') < core.indexOf("executeManagedSolPositionAdd"));
+
+  const claim = functionBody(serverSource, "claimManagedSolPositionAdd");
+  assert.match(claim, /addToProtectionPlanId/);
+  assert.match(claim, /addToProtectionWalletRevision/);
+  assert.match(claim, /protectedPositionAddDecision/);
+  assert.match(claim, /protectedPositionAddRevisionMatches/);
+  assert.match(claim, /buyReservationKind = "position_add"/);
+  assert.match(claim, /buyReservationExpectedWalletRevision/);
+  assert.match(claim, /buyReservationExpectedProtectedLotRevision/);
+  assert.match(claim, /bumpTradePlanWalletStateRevision/);
+
+  const execute = functionBody(serverSource, "executeManagedSolPositionAdd");
+  assert.ok(execute.indexOf("claimManagedSolPositionAdd") < execute.indexOf("buyTokenForPlan"), "the existing holder must be reserved before broadcast");
+  assert.match(execute, /locallySignedOnly: true/);
+  assert.match(execute, /rejectSignatureOnlyResponse: true/);
+  assert.match(execute, /onSigned:[\s\S]*checkpointManagedSolPositionAdd/);
+  assert.match(execute, /readConfirmedBuyOwnerMintRawDelta\([\s\S]*?\)\.catch\(\(\) => null\)/);
+  assert.match(execute, /finalizeManagedSolPositionAdd\([\s\S]*?\)\.catch\(\(\) => null\)/);
+  assert.match(execute, /positionAddApplied: Boolean\(finalized\)/);
+  assert.match(execute, /safeArmWebExitGuardsForPlan\(finalized\.plan, \[finalized\.holder\]\)/);
+  assert.doesNotMatch(execute, /plans\.plans\.push/);
+
+  const parsedDelta = functionBody(serverSource, "parsedOwnerMintRawDelta");
+  assert.match(parsedDelta, /ownerSigned/);
+  assert.match(parsedDelta, /ownerAccountIndexes/);
+  assert.match(parsedDelta, /accountIndex/);
+  assert.match(parsedDelta, /postTotal - preTotal/);
+
+  const apply = functionBody(serverSource, "applyConfirmedPositionAdd");
+  assert.equal((apply.match(/protectedLotAfterConfirmedBuy\(/g) || []).length, 1);
+  assert.match(apply, /holder\.preBuyTokenRawAmount = previous\.preBuyTokenRawAmount/);
+  assert.match(apply, /holder\.buySignature = previous\.buySignature/);
+  assert.match(apply, /bumpProtectedLotRevision/);
+  assert.match(apply, /bumpTradePlanWalletStateRevision/);
+  assert.doesNotMatch(apply, /sellAfterAt\s*=/, "a position add must preserve the original timer deadline");
+});
+
+test("protected-position add rejects stale/unreviewed states and reconciles signed ambiguity exactly once", () => {
+  const claim = functionBody(serverSource, "claimManagedSolPositionAdd");
+  assert.match(claim, /if \(!requestedPlanId \|\| !Number\.isInteger\(requestedWalletRevision\)/);
+  assert.match(claim, /requestedPlanId !== String\(eligible\?\.plan\?\.id/);
+  assert.match(claim, /requestedWalletRevision !== Number\(eligible\?\.walletRevision\)/);
+  assert.ok(claim.indexOf("protectedPositionAddRevisionMatches") < claim.indexOf('buyReservationKind = "position_add"'));
+
+  const settle = functionBody(serverSource, "settleManagedSolPositionAddError");
+  assert.match(settle, /error\?\.tradePreSubmit === true && !error\?\.tradeSubmissionAmbiguous/);
+  assert.ok(settle.indexOf("definitelyPreSubmit") < settle.indexOf("holder.buySubmissionSignature"));
+  assert.match(settle, /definitelyPreSubmit \|\| \(!ambiguous && !signature\)[\s\S]*restorePositionAddHolder/);
+  assert.match(settle, /tradeSubmissionAmbiguous/);
+  assert.match(settle, /status = "outcome_unknown"/);
+  assert.match(settle, /plan\.status = "pending_buy"/);
+  assert.match(settle, /no replay will be sent/);
+
+  const reconcile = functionBody(serverSource, "reconcilePendingManagedBuyProtectionPlans");
+  assert.match(reconcile, /planHasPendingPositionAdd/);
+  assert.match(reconcile, /pendingProtectedPositionAdd/);
+  assert.match(reconcile, /unresolvedPositionAdd/);
+  assert.match(reconcile, /buyReservationKind === "position_add"/);
+  assert.match(reconcile, /readConfirmedBuyOwnerMintRawDelta/);
+  assert.match(reconcile, /String\(trade\.signature \|\| ""\) === pendingSignature/);
+  assert.match(reconcile, /applyConfirmedPositionAdd/);
+  assert.match(reconcile, /restorePositionAddHolder/);
+  const unsignedReservation = reconcile.slice(
+    reconcile.indexOf("if (positionAdd && !pendingSignature)"),
+    reconcile.indexOf("const event =", reconcile.indexOf("if (positionAdd && !pendingSignature)"))
+  );
+  assert.match(unsignedReservation, /status = "needs_attention"/);
+  assert.match(unsignedReservation, /No replay or automatic exit/);
+  assert.doesNotMatch(unsignedReservation, /restorePositionAddHolder/);
+  assert.match(reconcile, /\["unavailable", "unknown_expiry"\]\.includes\(chainState\?\.state\)/);
+  assert.match(reconcile, /protectedLotRevision\(planWallet\) !== Number\(planWallet\.buyReservationExpectedProtectedLotRevision/);
+
+  const decision = fs.readFileSync(new URL("../src/lib/tradePlanExit.js", import.meta.url), "utf8");
+  assert.match(decision, /"partial_position"/);
+  assert.match(decision, /"multiple_plans"/);
+  assert.match(decision, /"unlinked_guard"/);
+  assert.match(decision, /"cross_user_protection"/);
+  assert.match(decision, /"timer_due"/);
+});
+
+test("repeat-buy recovery cannot reuse the previous loop signature or receipt", () => {
+  const reserve = functionBody(serverSource, "executeTimedPlanLoopBuyUnlocked");
+  const archiveAt = reserve.indexOf("previousLoopBuySignatures");
+  const clearAt = reserve.indexOf("planWallet.buySignature = null");
+  const claimAt = reserve.indexOf("planWallet.buyReservationClaimToken = crypto.randomUUID()");
+  assert.ok(archiveAt >= 0 && clearAt > archiveAt && claimAt > clearAt,
+    "the completed loop signature must be archived and cleared before the next reservation is durable");
+
+  const recovery = functionBody(serverSource, "reconcilePendingManagedBuyProtectionPlans");
+  assert.ok(
+    recovery.indexOf("const chainState = chainStates.get(stateKey(plan, planWallet))")
+      < recovery.indexOf("const event = objectRows(history.trades).find"),
+    "chain recovery state must be initialized before receipt matching uses it",
+  );
+  assert.match(recovery, /expectedAttemptId = Number\(wallet\?\.pendingLoopNumber/);
+  assert.match(recovery, /`loop-\$\{Number\(wallet\.pendingLoopNumber\)\}`/);
+  assert.match(recovery, /String\(trade\.protectionAttemptId \|\| ""\) === expectedAttemptId/);
+  assert.match(recovery, /firstString\(wallet\?\.buySubmissionSignature, wallet\?\.submissionSignature, attemptReceipt\?\.signature\)/);
+  assert.doesNotMatch(recovery, /firstString\(wallet\?\.buySubmissionSignature, wallet\?\.submissionSignature, wallet\?\.buySignature\)/,
+    "pending recovery must never fall back to an earlier completed buy signature");
+  assert.doesNotMatch(recovery, /firstString\(event\?\.signature, chainState\?\.signature, planWallet\.buySignature/,
+    "pending recovery must never accept a prior loop signature during apply");
+});
+
+test("signed Solana recovery expires only after authoritative blockhash and final chain absence", async () => {
+  const body = functionBody(serverSource, "reconcileAbsentSignedSolanaSubmission");
+  const build = new Function(
+    "rpcWithRetry",
+    "connection",
+    "CONFIG",
+    `return async function reconcileAbsentSignedSolanaSubmission(signature, context = {}) {${body}};`
+  );
+  const runWithClient = (client) => build(
+    async (_label, operation) => operation(),
+    client,
+    { rpcRetries: 0 }
+  );
+
+  let finalLookups = 0;
+  assert.equal((await runWithClient({
+    isBlockhashValid: async () => ({ value: true }),
+    getSignatureStatuses: async () => { finalLookups += 1; return { value: [null] }; },
+    getParsedTransaction: async () => { finalLookups += 1; return null; }
+  })("signed-a", { recentBlockhash: "recent-a" })).state, "pending");
+  assert.equal(finalLookups, 0, "a still-valid blockhash must never be treated as absent");
+
+  assert.equal((await runWithClient({
+    isBlockhashValid: async () => ({ value: false }),
+    getSignatureStatuses: async () => { throw new Error("rpc unavailable"); },
+    getParsedTransaction: async () => null
+  })("signed-b", { recentBlockhash: "recent-b" })).state, "unavailable");
+
+  assert.equal((await runWithClient({
+    isBlockhashValid: async () => ({ value: false }),
+    getSignatureStatuses: async () => ({ value: [null] }),
+    getParsedTransaction: async () => { throw new Error("indexer unavailable"); }
+  })("signed-c", { recentBlockhash: "recent-c" })).state, "unavailable");
+
+  assert.equal((await runWithClient({
+    isBlockhashValid: async () => ({ value: false }),
+    getSignatureStatuses: async () => ({ value: [null] }),
+    getParsedTransaction: async () => ({ meta: null })
+  })("signed-d", { recentBlockhash: "recent-d" })).state, "confirmed", "any returned parsed transaction proves it landed");
+
+  assert.equal((await runWithClient({
+    isBlockhashValid: async () => ({ value: false }),
+    getSignatureStatuses: async () => ({ value: [null] }),
+    getParsedTransaction: async () => null
+  })("signed-e", { recentBlockhash: "recent-e" })).state, "expired");
+});
+
+test("Pump managed checkpoints persist blockhash context and unknown expiry pauses every automatic exit", () => {
+  const absence = functionBody(serverSource, "reconcileAbsentSignedSolanaSubmission");
+  assert.match(absence, /rpcWithRetry\([\s\S]*primary blockhash validity[\s\S]*connection\.isBlockhashValid/);
+  assert.match(absence, /rpcWithRetry\([\s\S]*primary final signature check[\s\S]*connection\.getSignatureStatuses/);
+  assert.match(absence, /rpcWithRetry\([\s\S]*primary final parsed transaction check[\s\S]*connection\.getParsedTransaction/);
+  assert.doesNotMatch(absence, /rpcRead\(/);
+  for (const name of ["buyTokenViaPumpPortal", "sellTokenAmountFromWalletViaPumpPortal"]) {
+    const body = functionBody(serverSource, name);
+    assert.match(body, /signedSolanaTransactionBlockContext\(tx\)/);
+    const localCheckpoint = body.indexOf("signedSolanaTransactionBlockContext(tx)");
+    const localOnSigned = body.indexOf("options.onSigned", localCheckpoint);
+    const localSend = body.indexOf("sendPumpTradeTx", localCheckpoint);
+    assert.ok(localCheckpoint >= 0 && localCheckpoint < localOnSigned);
+    assert.ok(localOnSigned < localSend);
+  }
+  assert.match(functionBody(serverSource, "buyTokenViaPumpPortal"), /options\.locallySignedOnly \|\| options\.rejectSignatureOnlyResponse/);
+  const checkpoint = functionBody(serverSource, "checkpointManagedSolPositionAdd");
+  assert.match(checkpoint, /buySubmissionRecentBlockhash = submission\.recentBlockhash \|\| submission\.blockhash \|\| null/);
+  const reconcile = functionBody(serverSource, "reconcilePendingManagedBuyProtectionPlans");
+  assert.match(reconcile, /reconcileAbsentSignedSolanaSubmission/);
+  assert.match(reconcile, /recentBlockhash: wallet\?\.buySubmissionRecentBlockhash \|\| wallet\?\.submissionRecentBlockhash/);
+  assert.match(reconcile, /\["pending", "unavailable", "unknown_expiry"\]\.includes\(absence\.state\)/);
+  for (const name of ["processWebExitGuard", "processTradePlanWallet"]) {
+    assert.match(functionBody(serverSource, name), /\["pending", "unknown", "unavailable", "unknown_expiry"\]\.includes\(reconciliation\.state\)/);
+  }
+});
+
+test("confirmed protected top-ups keep a durable signature receipt and backfill Activity once", () => {
+  const apply = functionBody(serverSource, "applyConfirmedPositionAdd");
+  assert.match(apply, /upsertManagedSolPositionAddReceipt/);
+  assert.match(apply, /historyRecorded: false/);
+  assert.ok(apply.indexOf("upsertManagedSolPositionAddReceipt") < apply.indexOf("clearPositionAddReservation"));
+
+  const execute = functionBody(serverSource, "executeManagedSolPositionAdd");
+  assert.match(execute, /recordTradeEvents\(\[recordEvent\]\)/);
+  assert.match(execute, /historyRecorded: false/);
+  assert.match(execute, /if \(!positiveRawString\(exactBoughtRaw\)\)/);
+  assert.ok(execute.indexOf("if (!positiveRawString(exactBoughtRaw))") < execute.indexOf("recordTradeEvents([recordEvent])"));
+  assert.match(execute, /historyRecordError: recordError/);
+  assert.match(execute, /positionAddApplied: Boolean\(finalized\)[\s\S]*recordError/);
+
+  const backfill = functionBody(serverSource, "backfillManagedSolPositionAddHistory");
+  assert.match(backfill, /upsertManagedSolPositionAddHistoryEvent\(event\)/);
+  assert.match(backfill, /if \(!history\.complete\) continue/);
+  assert.match(backfill, /historyRecorded: true/);
+  const upsert = functionBody(serverSource, "upsertManagedSolPositionAddHistoryEvent");
+  assert.match(upsert, /withFileLock\(tradeHistoryPath\(\)/);
+  assert.match(upsert, /find\(\(trade\) => String\(trade\.signature \|\| ""\) === signature\)/);
+  assert.match(upsert, /if \(!positiveRawString\(row\.tokenAmount\)\)/);
+  assert.match(upsert, /if \(!positiveRawString\(row\.solLamportsSpent\)\)/);
+  assert.match(upsert, /if \(!String\(row\.source \|\| ""\)\.trim\(\)\)/);
+  assert.doesNotMatch(upsert, /row\.tokenAmount\s*=.*else/, "a positive recorded amount must never be overwritten");
+  const worker = functionBody(serverSource, "reconcilePendingManagedBuyProtectionPlans");
+  assert.ok(worker.indexOf("backfillManagedSolPositionAddHistory") < worker.indexOf("readTradePlans"));
+  assert.match(worker, /applyConfirmedPositionAdd[\s\S]*backfillManagedSolPositionAddHistory/);
+});
+
+test("manual Sol sell recovery applies a signed outcome once and never retries an unproven absence", () => {
+  const amountSell = functionBody(serverSource, "sellTokenAmountFromWallet");
+  assert.match(amountSell, /checkpointSignedSell[\s\S]*tokenAmount: sellAmount\.toString\(\)/);
+  assert.match(amountSell, /onSigned: checkpointSignedSell/);
+  const checkpoint = functionBody(serverSource, "checkpointManualSellProtection");
+  assert.match(checkpoint, /manualSellSubmissionRecentBlockhash/);
+  assert.match(checkpoint, /manualSellIntendedTokenAmount/);
+  const recovery = functionBody(serverSource, "reconcilePendingManualSolSellProtection");
+  assert.match(recovery, /immediatelyRecoverable/);
+  assert.match(recovery, /Date\.now\(\) - signedAt >= CONFIG\.stopLossSubmitStaleMs/);
+  assert.ok(recovery.indexOf("if (!immediatelyRecoverable && !staleSubmitting) return") < recovery.indexOf("groups.set(key, group)"),
+    "a live submitting request must finish fee collection before recovery can derive proceeds");
+  assert.match(recovery, /reconcileSubmittedSolanaSignature/);
+  assert.match(recovery, /\["pending", "unavailable", "unknown_expiry"\]\.includes\(outcome\.state\)\) continue/);
+  assert.match(recovery, /\["failed", "expired"\]\.includes\(outcome\.state\)[\s\S]*settleManualSellProtection\(claimed, "failed"\)/);
+  assert.match(recovery, /outcome\.state !== "confirmed" \|\| !group\.tokenAmount \|\| group\.percent === null/);
+  assert.match(recovery, /settleManualSellProtection\(claimed, "confirmed"/);
+  assert.match(recovery, /source: "manual_sell_recovery"/);
+  assert.match(recovery, /persistConfirmedSolAutoExitReceipt\(receipt\)/);
+  assert.match(recovery, /confirmedSolExitWalletReceiptAmounts\(\{[\s\S]*signature: group\.signature,[\s\S]*walletPublicKey: group\.walletPublicKey/);
+  assert.match(recovery, /if \(exactProceeds\) \{[\s\S]*recordConfirmedSolAutoExit\(\{[\s\S]*\.\.\.exactProceeds/);
+  assert.ok(recovery.indexOf("persistConfirmedSolAutoExitReceipt(receipt)") < recovery.indexOf('settleManualSellProtection(claimed, "confirmed"'), "the pending exact receipt must survive a crash before the lot claim clears");
+  assert.ok(recovery.indexOf('settleManualSellProtection(claimed, "confirmed"') < recovery.indexOf("confirmedSolExitWalletReceiptAmounts({"), "lot state applies once before derived history work");
+  assert.doesNotMatch(recovery, /recordTradeEvents\([\s\S]*solLamportsReceived: "0"/, "unavailable proceeds must never create a false zero Activity row");
+  const recordConfirmed = functionBody(serverSource, "recordConfirmedSolAutoExit");
+  assert.match(recordConfirmed, /BigInt\(saved\.solLamportsReceived \|\| 0\) <= 0n[\s\S]*pendingOutput: true/);
+  assert.match(functionBody(serverSource, "processWebExitGuards"), /reconcilePendingManualSolSellProtection/);
+  assert.match(functionBody(serverSource, "reconcilePendingManagedBuyProtectionPlans"), /reconcilePendingManualSolSellProtection/);
+});
+
+test("ordinary confirmed manual Sol sells persist exact receipts before clearing protection", async () => {
+  const body = functionBody(serverSource, "executeManualSolSellWithProtection");
+  assert.ok(body.indexOf("persistConfirmedSolAutoExitReceipt(receipt)") < body.indexOf('settleManualSellProtection(claimed, "confirmed"'),
+    "the exact receipt must be durable before the claim is cleared and its lot is applied");
+  assert.match(body, /\.\.\.confirmedSolSellReceiptAmounts\(sell\)/);
+  assert.match(body, /historyRecorded: false/);
+  assert.match(body, /persistStandaloneManualSellSubmission/);
+  assert.match(body, /needsAttention: BigInt\(confirmedSolSellReceiptAmounts\(sell\)\.solLamportsReceived/);
+  assert.match(body, /confirmed_receipt_pending/);
+  assert.doesNotMatch(body, /recordConfirmedSolAutoExit\(/,
+    "the shared wrapper must not pre-empt each caller's source-specific Activity append");
+
+  const build = new Function(
+    "crypto",
+    "firstString",
+    "normalizeManualSellAttemptId",
+    "reconcileStandaloneManualSellSubmission",
+    "standaloneManualSellSubmissionError",
+    "standaloneManualSellReplayResult",
+    "assertNoUnresolvedStandaloneManualSell",
+    "claimManualSellProtection",
+    "settleManualSellProtection",
+    "checkpointManualSellProtection",
+    "persistStandaloneManualSellSubmission",
+    "persistConfirmedSolAutoExitReceipt",
+    "confirmedSolSellReceiptAmounts",
+    "positiveRawString",
+    "normalizeTradeHistoryAmount",
+    "friendlyError",
+    "audit",
+    "markTradeSubmissionAmbiguous",
+    `return async function executeManualSolSellWithProtection(wallet, tokenMint, percent, task, options = {}) {${body}};`
+  );
+  const run = ({ persistError = null, protectedTargets = true, amounts = null } = {}) => {
+    const calls = [];
+    let savedReceipt = null;
+    const execute = build(
+      { randomUUID: () => "claim-1" },
+      (...values) => values.find((value) => String(value || "").trim()) || "",
+      (value) => String(value || "").trim().replace(/[^\w:-]/g, "").slice(0, 96),
+      async () => ({ state: "none" }),
+      (row) => Object.assign(new Error("prior outcome unknown"), { tradeSubmissionAmbiguous: true, signature: row?.signature }),
+      (row) => ({ signature: row.signature, tokenAmount: row.tokenAmount, outputLamports: row.outputLamports || "0", duplicate: true, recovered: true }),
+      async () => ({ checked: 0 }),
+      async () => ({ claimToken: "claim-1", planTargets: protectedTargets ? ["p:w"] : [], guardTargets: [] }),
+      async (_claimed, outcome) => { calls.push(`settle:${outcome}`); },
+      async () => true,
+      async (submission) => submission,
+      async (receipt) => {
+        calls.push("receipt");
+        savedReceipt = receipt;
+        assert.equal(receipt.signature, "sell-sig");
+        assert.equal(receipt.tokenAmount, "25");
+        assert.equal(receipt.solLamportsReceived, amounts?.solLamportsReceived || "975");
+        if (persistError) throw persistError;
+        return receipt;
+      },
+      () => amounts || ({ solLamportsReceived: "975", grossSolLamportsReceived: "1000", tradeFeeLamports: "25", feeStatus: "paid" }),
+      (value) => (/^[1-9]\d*$/.test(String(value || "")) ? String(value) : null),
+      (value) => String(value ?? "0"),
+      (error) => String(error?.message || error || ""),
+      async () => true,
+      (value) => Object.assign(value instanceof Error ? value : new Error(String(value)), { tradeSubmissionAmbiguous: true })
+    );
+    return { execute, calls, savedReceipt: () => savedReceipt };
+  };
+
+  const success = run();
+  const result = await success.execute(
+    { publicKey: "wallet-1", ownerId: "user-1", label: "Primary" },
+    "mint-1",
+    100,
+    async () => ({ signature: "sell-sig", tokenAmount: "25", outputLamports: "1000", feeLamports: "25", feeStatus: "paid" }),
+    { userId: "user-1", manualSellAttemptId: "manual-attempt-1" }
+  );
+  assert.equal(result.signature, "sell-sig");
+  assert.deepEqual(success.calls, ["receipt", "settle:confirmed"]);
+
+  const failedReceipt = run({ persistError: new Error("disk unavailable") });
+  const confirmed = await failedReceipt.execute(
+    { publicKey: "wallet-1", ownerId: "user-1", label: "Primary" },
+    "mint-1",
+    100,
+    async () => ({ signature: "sell-sig", tokenAmount: "25", outputLamports: "1000", feeLamports: "25", feeStatus: "paid" }),
+    { userId: "user-1", manualSellAttemptId: "manual-attempt-2" }
+  );
+  assert.match(confirmed.recordError, /receipt pending/i);
+  assert.deepEqual(failedReceipt.calls, ["receipt", "settle:confirmed_receipt_pending"]);
+
+  const noTargetZeroOutput = run({
+    protectedTargets: false,
+    amounts: { solLamportsReceived: "0", grossSolLamportsReceived: "0", tradeFeeLamports: "0", feeStatus: "" }
+  });
+  const zero = await noTargetZeroOutput.execute(
+    { publicKey: "wallet-1", ownerId: "user-1", label: "Primary" },
+    "mint-1",
+    25,
+    async (onSigned) => {
+      await onSigned({ signature: "sell-sig", tokenAmount: "25", recentBlockhash: "blockhash-zero" });
+      return { signature: "sell-sig", tokenAmount: "25", outputLamports: "0", feeLamports: "0" };
+    },
+    { userId: "user-1", manualSellAttemptId: "manual-attempt-zero" }
+  );
+  assert.match(zero.protectionRecordError, /exact wallet proceeds/i);
+  assert.equal(noTargetZeroOutput.savedReceipt().historyRecorded, false);
+  assert.equal(noTargetZeroOutput.savedReceipt().needsAttention, true);
+  assert.equal(noTargetZeroOutput.savedReceipt().solLamportsReceived, "0");
+  assert.deepEqual(noTargetZeroOutput.calls, ["receipt", "settle:confirmed"]);
+});
+
+test("an unprotected partial manual sell checkpoints onSigned and a restart cannot sell a second tranche", async () => {
+  const body = functionBody(serverSource, "executeManualSolSellWithProtection");
+  assert.ok(body.indexOf("persistStandaloneManualSellSubmission") < body.indexOf("checkpointManualSellProtection"),
+    "the standalone signature must be durable before the protected-holder checkpoint and broadcast return");
+  assert.match(functionBody(serverSource, "runManualSellCriticalAttempt"), /reconcileStandaloneManualSellAttempt/);
+  const reconciler = functionBody(serverSource, "reconcileStandaloneManualSellSubmission");
+  assert.match(reconciler, /\["failed", "expired"\]/);
+  assert.match(reconciler, /outcome\.state !== "confirmed"[\s\S]*status: "ambiguous"/);
+  assert.match(reconciler, /persistConfirmedSolAutoExitReceipt/);
+  assert.match(functionBody(serverSource, "reconcilePendingStandaloneManualSells"), /stopLossSubmitStaleMs/,
+    "the worker must not race a live caller's fee collection");
+  assert.match(body, /assertNoUnresolvedStandaloneManualSell\(standaloneIdentity/);
+  const crossAttemptGate = functionBody(serverSource, "assertNoUnresolvedStandaloneManualSell");
+  assert.match(crossAttemptGate, /standaloneManualSellSamePosition/);
+  assert.match(crossAttemptGate, /reconcileStandaloneManualSellSubmission/);
+  assert.match(crossAttemptGate, /\["failed", "expired"\]\.includes\(outcome\.state\)/);
+  assert.match(crossAttemptGate, /standaloneManualSellSubmissionError/);
+  assert.doesNotMatch(body, /consumeStandaloneManualSellSubmission/,
+    "internal confirmation must not consume the same-position tombstone before Activity commits");
+  const consumed = functionBody(serverSource, "standaloneManualSellConsumed");
+  assert.match(consumed, /activityCommittedAt/);
+  assert.match(consumed, /historyRecordedAt/);
+  assert.match(consumed, /crossAttemptReplayUntil/);
+  assert.match(consumed, /MANUAL_SELL_CROSS_ATTEMPT_REPLAY_MS/);
+  assert.match(consumed, /clientAcknowledgedAt/);
+  assert.doesNotMatch(consumed, /row\.consumedAt \|\| row\.resultConsumedAt/,
+    "legacy premature consumedAt markers must remain fail-closed");
+  assert.match(functionBody(serverSource, "recordTradeEvents"), /committedSellReceipts[\s\S]*markConfirmedSolAutoExitHistoryRecorded/,
+    "only a positive Activity row may start the durable response-loss replay window");
+  const activityMarker = functionBody(serverSource, "markConfirmedSolAutoExitHistoryRecorded");
+  assert.match(activityMarker, /submission\.status = "confirmed"/,
+    "a durable positive Activity row must repair a standalone status write lost after receipt persistence");
+  assert.match(activityMarker, /submission\.activityCommittedAt/);
+  assert.match(activityMarker, /submission\.crossAttemptReplayUntil/,
+    "Activity must start a durable cross-attempt replay window, not immediately release the tombstone");
+
+  const normalizeBody = functionBody(serverSource, "normalizeManualSellAttemptId");
+  const normalize = new Function("crypto", `return function normalizeManualSellAttemptId(value = "") {${normalizeBody}};`)(crypto);
+  const commonPrefix = `manual-${"a".repeat(120)}`;
+  const longA = normalize(`${commonPrefix}:wallet:1`);
+  const longB = normalize(`${commonPrefix}:wallet:2`);
+  assert.notEqual(longA, longB, "long wallet-scoped attempts must not collide after canonicalization");
+  assert.ok(longA.length <= 96 && longB.length <= 96);
+
+  let durable = null;
+  let taskCalls = 0;
+  const build = new Function(
+    "crypto", "firstString", "normalizeManualSellAttemptId", "reconcileStandaloneManualSellSubmission",
+    "standaloneManualSellSubmissionError", "standaloneManualSellReplayResult", "assertNoUnresolvedStandaloneManualSell",
+    "claimManualSellProtection", "settleManualSellProtection",
+    "checkpointManualSellProtection", "persistStandaloneManualSellSubmission", "persistConfirmedSolAutoExitReceipt",
+    "confirmedSolSellReceiptAmounts", "positiveRawString", "normalizeTradeHistoryAmount", "friendlyError", "audit", "markTradeSubmissionAmbiguous",
+    `return async function executeManualSolSellWithProtection(wallet, tokenMint, percent, task, options = {}) {${body}};`
+  );
+  const execute = build(
+    { randomUUID: () => "claim-crash" },
+    (...values) => values.find((value) => String(value || "").trim()) || "",
+    (value) => String(value || "").trim().replace(/[^\w:-]/g, "").slice(0, 96),
+    async (identity) => durable && durable.manualSellAttemptId === identity.manualSellAttemptId
+      ? (durable.status === "ambiguous" ? { state: "ambiguous", row: durable } : { state: durable.status, row: durable })
+      : { state: "none" },
+    (row) => Object.assign(new Error("prior signed sell is unresolved"), {
+      tradeSubmissionAmbiguous: true,
+      signature: row.signature,
+      partialHashes: [row.signature]
+    }),
+    (row) => ({
+      signature: row.signature,
+      tokenAmount: row.tokenAmount,
+      outputLamports: row.outputLamports || "0",
+      feeLamports: row.feeLamports || "0",
+      feePaidLamports: row.feePaidLamports || "0",
+      duplicate: true,
+      recovered: true
+    }),
+    async (identity, { excludeAttemptId } = {}) => {
+      if (durable
+        && durable.userId === identity.userId
+        && durable.walletPublicKey === identity.walletPublicKey
+        && durable.tokenMint === identity.tokenMint
+        && durable.manualSellAttemptId !== excludeAttemptId
+        && !["failed", "expired"].includes(durable.status)) {
+        if (durable.status === "confirmed") {
+          return {
+            checked: 1,
+            replay: {
+              row: durable,
+              result: {
+                signature: durable.signature,
+                tokenAmount: durable.tokenAmount,
+                outputLamports: durable.outputLamports || "1000",
+                feeLamports: durable.feeLamports || "25",
+                feePaidLamports: durable.feePaidLamports || "25",
+                duplicate: true,
+                recovered: true
+              }
+            }
+          };
+        }
+        throw Object.assign(new Error("prior wallet/mint sell unresolved"), {
+          tradeSubmissionAmbiguous: true,
+          signature: durable.signature
+        });
+      }
+      return { checked: durable ? 1 : 0, replay: null };
+    },
+    async () => ({ claimToken: "claim-crash", planTargets: [], guardTargets: [] }),
+    async () => {},
+    async () => true,
+    async (row) => { durable = { ...(durable || {}), ...row }; return durable; },
+    async () => true,
+    () => ({ solLamportsReceived: "0", grossSolLamportsReceived: "0", tradeFeeLamports: "0", feeStatus: "" }),
+    (value) => (/^[1-9]\d*$/.test(String(value || "")) ? String(value) : null),
+    (value) => String(value ?? "0"),
+    (error) => String(error?.message || error || ""),
+    async () => true,
+    (value, stage) => Object.assign(value instanceof Error ? value : new Error(String(value)), {
+      tradeSubmissionAmbiguous: true,
+      tradeStage: stage
+    })
+  );
+  const options = { userId: "user-1", manualSellAttemptId: "partial-crash-attempt" };
+  await assert.rejects(
+    () => execute(
+      { publicKey: "wallet-1", ownerId: "user-1", label: "Primary" },
+      "mint-1",
+      25,
+      async (onSigned) => {
+        taskCalls += 1;
+        await onSigned({ signature: "partial-sig", tokenAmount: "25", recentBlockhash: "blockhash-1" });
+        throw Object.assign(new Error("process disappeared after broadcast"), { signature: "partial-sig", tradeSubmissionAmbiguous: true });
+      },
+      options
+    ),
+    (error) => error.tradeSubmissionAmbiguous === true && error.signature === "partial-sig"
+  );
+  assert.equal(durable.status, "ambiguous");
+  assert.equal(durable.tokenAmount, "25");
+  await assert.rejects(
+    () => execute(
+      { publicKey: "wallet-1", ownerId: "user-1", label: "Primary" },
+      "mint-1",
+      25,
+      async () => { taskCalls += 1; return {}; },
+      options
+    ),
+    (error) => error.tradeSubmissionAmbiguous === true && error.signature === "partial-sig"
+  );
+  assert.equal(taskCalls, 1, "the restarted request must reconcile the signed attempt instead of selling another 25%");
+  await assert.rejects(
+    () => execute(
+      { publicKey: "wallet-1", ownerId: "user-1", label: "Primary" },
+      "mint-1",
+      25,
+      async () => { taskCalls += 1; return {}; },
+      { userId: "user-1", manualSellAttemptId: "different-attempt-b" }
+    ),
+    (error) => error.tradeSubmissionAmbiguous === true && error.signature === "partial-sig"
+  );
+  assert.equal(taskCalls, 1, "attempt B must be blocked by attempt A's unresolved wallet/mint checkpoint");
+
+  // The confirmation-success crash window is distinct from an ambiguous send:
+  // execute() has persisted A as confirmed, but the outer caller has not yet
+  // appended Activity or returned its HTTP/TG result.
+  durable = null;
+  taskCalls = 0;
+  const confirmedA = await execute(
+    { publicKey: "wallet-1", ownerId: "user-1", label: "Primary" },
+    "mint-1",
+    25,
+    async (onSigned) => {
+      taskCalls += 1;
+      await onSigned({ signature: "confirmed-sig-a", tokenAmount: "25", recentBlockhash: "blockhash-confirmed" });
+      return {
+        signature: "confirmed-sig-a",
+        tokenAmount: "25",
+        outputLamports: "1000",
+        feeLamports: "25",
+        feePaidLamports: "25"
+      };
+    },
+    { userId: "user-1", manualSellAttemptId: "confirmed-attempt-a" }
+  );
+  assert.equal(confirmedA.signature, "confirmed-sig-a");
+  assert.equal(durable.status, "confirmed");
+  assert.equal(durable.historyRecordedAt, undefined,
+    "internal confirmation must leave the tombstone unconsumed before the outer Activity commit and replay window");
+  const beforeActivityReplay = await execute(
+    { publicKey: "wallet-1", ownerId: "user-1", label: "Primary" },
+    "mint-1",
+    25,
+    async () => { taskCalls += 1; return {}; },
+    { userId: "user-1", manualSellAttemptId: "confirmed-attempt-b" }
+  );
+  assert.equal(beforeActivityReplay.signature, "confirmed-sig-a");
+  assert.equal(beforeActivityReplay.crossAttemptReplay, true);
+  assert.equal(taskCalls, 1,
+    "attempt B must not resell after A confirms internally but before Activity/result completion");
+
+  // Activity can commit and then the process can disappear before its response
+  // or attempt-result cache is durable. That commit starts a replay window; it
+  // is not acknowledgement that permits attempt C to sell another partial bag.
+  durable.activityCommittedAt = new Date().toISOString();
+  durable.historyRecordedAt = durable.activityCommittedAt;
+  durable.crossAttemptReplayUntil = new Date(Date.now() + 15 * 60_000).toISOString();
+  const afterActivityCrashReplay = await execute(
+    { publicKey: "wallet-1", ownerId: "user-1", label: "Primary" },
+    "mint-1",
+    25,
+    async () => { taskCalls += 1; return {}; },
+    { userId: "user-1", manualSellAttemptId: "confirmed-attempt-c-after-activity-crash" }
+  );
+  assert.equal(afterActivityCrashReplay.signature, "confirmed-sig-a");
+  assert.equal(afterActivityCrashReplay.blockedNewSubmission, true);
+  assert.equal(afterActivityCrashReplay.priorManualSellAttemptId, "confirmed-attempt-a");
+  assert.equal(taskCalls, 1,
+    "Activity-before-response crash plus fresh attempt C must replay A and submit zero new sells");
+});
+
+test("cross-attempt manual sell gate replays confirmed receipts until durable acknowledgement or cooldown", async () => {
+  const body = functionBody(serverSource, "assertNoUnresolvedStandaloneManualSell");
+  const now = Date.parse("2026-08-22T00:10:00.000Z");
+  let row = {
+    userId: "user-1",
+    manualSellAttemptId: "attempt-a-crashed",
+    walletPublicKey: "wallet-1",
+    tokenMint: "mint-1",
+    signature: "sell-sig-a",
+    status: "ambiguous"
+  };
+  let rowSet = null;
+  const gate = new Function(
+    "normalizeManualSellAttemptId", "readSolExitReceipts", "objectRows", "standaloneManualSellSamePosition",
+    "standaloneManualSellConsumed", "reconcileStandaloneManualSellSubmission", "standaloneManualSellSubmissionError",
+    "standaloneManualSellReplayResult",
+    `return async function assertNoUnresolvedStandaloneManualSell(identity = {}, options = {}) {${body}};`
+  )(
+    (value) => String(value || ""),
+    async () => ({ manualSubmissions: rowSet || [row] }),
+    (value) => Array.isArray(value) ? value : [],
+    (candidate, identity) => candidate.userId === identity.userId
+      && candidate.walletPublicKey === identity.walletPublicKey
+      && candidate.tokenMint === identity.tokenMint,
+    (candidate) => Boolean(candidate.clientAcknowledgedAt)
+      || (Boolean(candidate.activityCommittedAt || candidate.historyRecordedAt)
+        && Number.isFinite(Date.parse(candidate.crossAttemptReplayUntil || ""))
+        && now >= Date.parse(candidate.crossAttemptReplayUntil)),
+    async (candidate) => ({ state: candidate.status, row: candidate }),
+    (candidate, message) => Object.assign(new Error(message), { tradeSubmissionAmbiguous: true, signature: candidate.signature }),
+    (candidate) => ({ signature: candidate.signature, tokenAmount: candidate.tokenAmount || "25", duplicate: true, recovered: true })
+  );
+  const attemptB = { userId: "user-1", walletPublicKey: "wallet-1", tokenMint: "mint-1" };
+  await assert.rejects(
+    () => gate(attemptB, { excludeAttemptId: "attempt-b-new" }),
+    (error) => error.tradeSubmissionAmbiguous === true && error.signature === "sell-sig-a"
+  );
+  row = { ...row, status: "confirmed" };
+  assert.equal((await gate(attemptB, { excludeAttemptId: "attempt-b-new" })).replay.row.signature, "sell-sig-a");
+  row = { ...row, status: "failed" };
+  assert.equal((await gate(attemptB, { excludeAttemptId: "attempt-b-new" })).checked, 1);
+  row = { ...row, status: "expired" };
+  assert.equal((await gate(attemptB, { excludeAttemptId: "attempt-b-new" })).checked, 1);
+  row = { ...row, status: "confirmed", consumedAt: "2026-08-22T00:00:00.000Z" };
+  assert.equal((await gate(attemptB, { excludeAttemptId: "attempt-b-new" })).replay.row.signature, "sell-sig-a",
+    "the vulnerable build's internal consumedAt marker must not reopen the bag");
+  row = {
+    ...row,
+    activityCommittedAt: "2026-08-22T00:09:00.000Z",
+    historyRecordedAt: "2026-08-22T00:09:00.000Z",
+    crossAttemptReplayUntil: "2026-08-22T00:24:00.000Z"
+  };
+  assert.equal((await gate(attemptB, { excludeAttemptId: "attempt-b-new" })).replay.row.signature, "sell-sig-a",
+    "Activity commit alone must still replay the prior receipt while its response-loss window is live");
+  assert.equal((await gate(attemptB, {
+    excludeAttemptId: "trusted-dca-attempt-b",
+    trustedPriorAttemptId: "attempt-a-crashed",
+    trustedPriorSignature: "wrong-signature"
+  })).replay.row.signature, "sell-sig-a",
+  "a loose/incorrect automation acknowledgement must not release the prior receipt");
+  const trustedAutomation = await gate(attemptB, {
+    excludeAttemptId: "trusted-dca-attempt-b",
+    trustedPriorAttemptId: "attempt-a-crashed",
+    trustedPriorSignature: "sell-sig-a"
+  });
+  assert.equal(trustedAutomation.replay, null,
+    "a durable automation follow-up may proceed only when its exact prior attempt and signature match");
+  const priorApplied = { ...row };
+  const newestApplied = {
+    ...row,
+    manualSellAttemptId: "trusted-dca-attempt-b",
+    signature: "sell-sig-b",
+    confirmedAt: "2026-08-22T00:09:30.000Z"
+  };
+  rowSet = [priorApplied, newestApplied];
+  assert.equal((await gate(attemptB, { excludeAttemptId: "browser-reload-attempt-c" })).replay.row.signature, "sell-sig-b",
+    "an unacknowledged browser reload must replay the newest receipt and submit no third sell");
+  assert.equal((await gate(attemptB, {
+    excludeAttemptId: "trusted-stop-loss-attempt-c",
+    trustedPriorAttemptId: "trusted-dca-attempt-b",
+    trustedPriorSignature: "sell-sig-b"
+  })).replay, null,
+  "an exact durable acknowledgement of the newest applied sale authorizes an urgent automated follow-up without older receipts blocking it");
+  assert.equal((await gate(attemptB, {
+    excludeAttemptId: "stale-trusted-attempt-c",
+    trustedPriorAttemptId: "attempt-a-crashed",
+    trustedPriorSignature: "sell-sig-a"
+  })).replay.row.signature, "sell-sig-b",
+  "a stale acknowledgement cannot skip a newer confirmed sale");
+  rowSet = null;
+  row = { ...row, crossAttemptReplayUntil: "2026-08-22T00:09:59.000Z" };
+  assert.equal((await gate(attemptB, { excludeAttemptId: "attempt-b-new" })).replay, null,
+    "a deliberate fresh sell may proceed after the conservative durable replay window");
+  row = { ...row, crossAttemptReplayUntil: "2026-08-22T00:24:00.000Z", clientAcknowledgedAt: "2026-08-22T00:09:30.000Z" };
+  assert.equal((await gate(attemptB, { excludeAttemptId: "attempt-b-new" })).replay, null,
+    "an explicit durable acknowledgement is an immediate safe release path");
+
+  const wrapper = functionBody(serverSource, "executeManualSolSellWithProtection");
+  assert.match(wrapper, /trustedPriorAttemptId: options\.trustedPriorManualSellAttemptId/);
+  assert.match(wrapper, /trustedPriorSignature: options\.trustedPriorManualSellSignature/);
+  const dca = functionBody(serverSource, "processDcaPlanWallet");
+  assert.match(dca, /trustedPriorManualSellAttemptId: planWallet\.lastSellAttemptId/);
+  assert.match(dca, /trustedPriorManualSellSignature: planWallet\.lastSignature/);
+  const autopilotSell = serverSource.slice(serverSource.indexOf("const sellAttemptId = pos"), serverSource.indexOf("async function startLiveAutopilotResume"));
+  assert.match(autopilotSell, /trustedPriorManualSellAttemptId: pos\?\.lastManualSellAttemptId/);
+  assert.match(autopilotSell, /pos\.lastManualSellSignature = String\(res\.signature\)/);
+  assert.ok(
+    autopilotSell.indexOf("await recordTradeEvents") < autopilotSell.indexOf("pos.lastManualSellSignature = String(res.signature)")
+      && autopilotSell.indexOf("pos.lastManualSellSignature = String(res.signature)") < autopilotSell.indexOf("await writeJsonFile(AUTOPILOT_STATE_FILE"),
+    "autopilot must commit Activity, then persist the exact prior receipt acknowledgement before a later fast exit can use it"
+  );
+  assert.match(autopilotSell, /replayAlreadyAppliedInMemory[\s\S]*autopilotStateReplayWait/,
+    "a recovered receipt already applied in memory must not be booked as a new sell");
+  const limitPoll = functionBody(serverSource, "pollLimitOrders");
+  assert.ok(limitPoll.indexOf("priorSellAcknowledgements") < limitPoll.indexOf("await webTradeSell"),
+    "a limit order must persist its exact prior receipt acknowledgement before the follow-up sell");
+  assert.match(functionBody(serverSource, "webTradeSellCore"), /options\.trustedPriorManualSellAcknowledgement/);
+  assert.doesNotMatch(functionBody(serverSource, "webTradeSellCore"), /body\.trustedPriorManualSellAcknowledgement/,
+    "browser input must not be able to forge the trusted automation acknowledgement");
 });
 
 test("legacy negative entry baselines cannot mask a protected stop loss", () => {
@@ -555,12 +1612,406 @@ test("confirmed Sol auto-exits persist a receipt before idempotent history and b
   const markerAt = recorder.indexOf("markConfirmedSolAutoExitHistoryRecorded");
   assert.ok(receiptAt >= 0 && historyAt > receiptAt && markerAt > historyAt);
   assert.match(functionBody(serverSource, "backfillConfirmedSolAutoExitHistory"), /confirmedExitNeedsHistoryBackfill/);
-  assert.match(functionBody(serverSource, "confirmedSolExitWalletLamportDelta"), /getParsedTransaction[\s\S]*parsedWalletLamportDelta/);
+  assert.match(functionBody(serverSource, "recordTradeEvents"), /enrichIncompleteSellHistoryEvent\(existing, event\)/);
+  assert.match(functionBody(serverSource, "confirmedSolExitWalletReceiptAmounts"), /getParsedTransaction[\s\S]*parsedWalletLamportDelta/);
   assert.match(functionBody(serverSource, "processWebExitGuard"), /recordConfirmedSolAutoExit\(/);
   assert.match(functionBody(serverSource, "processTradePlanWallet"), /recordConfirmedSolAutoExit\(/);
   assert.match(functionBody(serverSource, "processWebPortfolioExits"), /recordConfirmedSolAutoExit\(/);
   assert.match(functionBody(serverSource, "runInternalWorkerTick"), /solExitHistoryBackfill[\s\S]*backfillConfirmedSolAutoExitHistory/);
   assert.match(functionBody(serverSource, "startTpSlStartupReconcile"), /backfillConfirmedSolAutoExitHistory/);
+});
+
+test("exact sell backfill enriches one zero-proceeds signature row without overwriting a positive receipt", () => {
+  const body = functionBody(serverSource, "enrichIncompleteSellHistoryEvent");
+  const build = new Function(
+    "positiveRawString",
+    "normalizeTradeHistoryAmount",
+    `return function enrichIncompleteSellHistoryEvent(existing = {}, incoming = {}) {${body}};`
+  );
+  const positiveRawString = (value) => (/^[1-9]\d*$/.test(String(value || "")) ? String(value) : null);
+  const enrich = build(positiveRawString, (value) => String(value ?? "0"));
+  const zero = {
+    type: "sell",
+    signature: "sell-sig",
+    source: "web_trade",
+    tokenAmount: "25",
+    solLamportsReceived: "0"
+  };
+  assert.equal(enrich(zero, {
+    type: "sell",
+    signature: "sell-sig",
+    source: "manual_sell_recovery",
+    tokenAmount: "25",
+    solLamportsReceived: "975",
+    grossSolLamportsReceived: "1000",
+    tradeFeeLamports: "25",
+    feeStatus: "paid"
+  }), true);
+  assert.equal(zero.solLamportsReceived, "975");
+  assert.equal(zero.grossSolLamportsReceived, "1000");
+  assert.equal(zero.tradeFeeLamports, "25");
+  assert.equal(zero.source, "web_trade", "the original caller provenance must remain intact");
+
+  const exact = { type: "sell", solLamportsReceived: "1200" };
+  assert.equal(enrich(exact, { type: "sell", solLamportsReceived: "975" }), false);
+  assert.equal(exact.solLamportsReceived, "1200", "a later backfill must never overwrite positive proceeds");
+
+  const sharedWarning = functionBody(serverSource, "manualSellReceiptWarning");
+  assert.match(sharedWarning, /protectionRecordError/);
+  assert.match(functionBody(serverSource, "webTradeSellCore"), /manualSellReceiptWarning\(result\)/);
+  assert.match(functionBody(serverSource, "webTradeSellCore"), /feePending \? "Fee outcome is still confirming; final net proceeds are pending\."/);
+  assert.match(functionBody(serverSource, "webBundleSellCore"), /manualSellReceiptWarning\(sell\)/);
+  assert.match(functionBody(serverSource, "webSellAllTokensCore"), /manualSellReceiptWarning\(sell\)/);
+  assert.match(functionBody(serverSource, "formatSellSuccessLine"), /manualSellReceiptWarning\(sell\)/);
+  assert.match(functionBody(serverSource, "formatSellAllTokenLine"), /manualSellReceiptWarning\(sell\)/);
+  assert.match(functionBody(serverSource, "tgExecuteQuickSell"), /recordWarning: manualSellReceiptWarning\(r\)/);
+});
+
+test("manual sell receipts are monotonic and a zero recovery cannot erase exact amounts", async () => {
+  const body = functionBody(serverSource, "persistConfirmedSolAutoExitReceipt");
+  let store = {
+    receipts: [{
+      signature: "sell-sig",
+      sellSignature: "sell-sig",
+      walletPublicKey: "wallet-1",
+      tokenMint: "mint-1",
+      tokenAmount: "25",
+      solLamportsReceived: "975",
+      grossSolLamportsReceived: "1000",
+      tradeFeeLamports: "25",
+      feeStatus: "paid",
+      status: "confirmed",
+      historyRecorded: false,
+      needsAttention: false
+    }],
+    manualSubmissions: [],
+    manualFeeIntents: []
+  };
+  const normalizeAmount = (value) => /^\d+$/.test(String(value ?? "")) ? String(value) : "0";
+  const normalizeReceipt = (receipt) => ({
+    ...receipt,
+    signature: String(receipt.signature || receipt.sellSignature || ""),
+    sellSignature: String(receipt.signature || receipt.sellSignature || ""),
+    status: "confirmed",
+    exitStatus: "confirmed",
+    tokenAmount: normalizeAmount(receipt.tokenAmount || "0"),
+    solLamportsReceived: normalizeAmount(receipt.solLamportsReceived || "0"),
+    grossSolLamportsReceived: normalizeAmount(receipt.grossSolLamportsReceived || receipt.solLamportsReceived || "0"),
+    tradeFeeLamports: normalizeAmount(receipt.tradeFeeLamports || "0"),
+    historyRecorded: receipt.historyRecorded === true,
+    historyRecordedAt: receipt.historyRecordedAt || null
+  });
+  const key = (receipt) => `${receipt.signature || receipt.sellSignature}:${receipt.walletPublicKey}:${receipt.tokenMint}`;
+  const persist = new Function(
+    "normalizeConfirmedSolAutoExitReceipt", "confirmedSolAutoExitReceiptKey", "withFileLock",
+    "solExitReceiptsPath", "readSolExitReceipts", "positiveRawString", "normalizeTradeHistoryAmount",
+    "confirmedExitNeedsHistoryBackfill", "SOL_EXIT_RECEIPT_RECORDED_MAX", "writeJsonFile",
+    `return async function persistConfirmedSolAutoExitReceipt(receipt = {}) {${body}};`
+  )(
+    normalizeReceipt,
+    key,
+    async (_path, task) => task(),
+    () => "receipts.json",
+    async () => store,
+    (value) => (/^[1-9]\d*$/.test(String(value || "")) ? String(value) : null),
+    normalizeAmount,
+    (receipt) => receipt.historyRecorded !== true,
+    2_000,
+    async (_path, next) => { store = next; }
+  );
+  const saved = await persist({
+    signature: "sell-sig",
+    walletPublicKey: "wallet-1",
+    tokenMint: "mint-1",
+    tokenAmount: "0",
+    solLamportsReceived: "0",
+    grossSolLamportsReceived: "0",
+    tradeFeeLamports: "0",
+    feeStatus: "",
+    needsAttention: true,
+    historyRecordError: "Confirmed manual sell is waiting for its exact wallet proceeds."
+  });
+  assert.equal(saved.tokenAmount, "25");
+  assert.equal(saved.solLamportsReceived, "975");
+  assert.equal(saved.grossSolLamportsReceived, "1000");
+  assert.equal(saved.tradeFeeLamports, "25");
+  assert.equal(saved.feeStatus, "paid");
+  assert.equal(saved.needsAttention, false);
+  assert.equal(saved.historyRecordError, null);
+
+  const netOnlyRecovery = await persist({
+    signature: "sell-sig",
+    walletPublicKey: "wallet-1",
+    tokenMint: "mint-1",
+    tokenAmount: "25",
+    solLamportsReceived: "975",
+    tradeFeeLamports: "25",
+    feeStatus: "paid"
+  });
+  assert.equal(netOnlyRecovery.grossSolLamportsReceived, "1000",
+    "an omitted gross value must not be synthesized from net and replace exact persisted gross proceeds");
+});
+
+test("manual sell fee recovery waits for unknown debits and subtracts only confirmed paid fees", async () => {
+  const body = functionBody(serverSource, "confirmedSolExitWalletReceiptAmounts");
+  let feeResolution = { state: "pending", feePaidLamports: "0" };
+  const recover = new Function(
+    "rpcRead", "parsedWalletLamportDelta", "reconcileManualSolSellFeeIntent", "positiveBigIntOrZero",
+    `return async function confirmedSolExitWalletReceiptAmounts(receipt = {}) {${body}};`
+  )(
+    async (_label, task) => task({ getParsedTransaction: async () => ({ meta: { err: null } }) }),
+    () => 1000,
+    async () => feeResolution,
+    (value) => { try { const parsed = BigInt(value || 0); return parsed > 0n ? parsed : 0n; } catch { return 0n; } }
+  );
+  const identity = { signature: "sell-sig", walletPublicKey: "wallet-1", tokenMint: "mint-1" };
+  assert.equal(await recover(identity), null, "an unresolved signed fee debit must keep exact proceeds pending");
+  feeResolution = { state: "resolved", feePaidLamports: "25" };
+  const exact = await recover(identity);
+  assert.equal(exact.grossSolLamportsReceived, "1000");
+  assert.equal(exact.tradeFeeLamports, "25");
+  assert.equal(exact.solLamportsReceived, "975");
+
+  const collector = functionBody(serverSource, "collectSolFee");
+  assert.ok(collector.indexOf("onFeeIntent") < collector.indexOf("const ownerTask"),
+    "the frozen fee allocation must persist before any fee leg can sign");
+  assert.match(collector, /onSigned: checkpointFeeLeg\("owner", ownerLamports\)/);
+  assert.match(collector, /onSigned: checkpointFeeLeg\("cashCow", cashCowLamports\)/);
+  assert.match(collector, /onSigned: checkpointFeeLeg\("referral", referralLamports\)/);
+});
+
+test("manual sell fee recovery retires only stale never-signed legs after a pre-sign crash", async () => {
+  const body = functionBody(serverSource, "reconcileManualSolSellFeeIntent");
+  assert.match(functionBody(serverSource, "collectManualSolSellFee"), /collectionStartedAt/);
+  assert.match(body, /unsignedIntentStale/);
+  assert.match(body, /status === "pending" && !String\(leg\.signedAt/);
+  assert.match(body, /unsigned_intent_stale_before_sign/);
+  assert.match(body, /collectionFinishedAt: intent\.collectionFinishedAt \|\| resolvedAt/);
+
+  let intent;
+  let persistCalls = 0;
+  const positive = (value) => { try { const parsed = BigInt(value || 0); return parsed > 0n ? parsed : 0n; } catch { return 0n; } };
+  const paid = (details = {}) => Object.values(details.legs || {}).reduce((sum, leg) => (
+    ["paid", "embedded"].includes(String(leg?.status || "").toLowerCase()) ? sum + positive(leg.lamports) : sum
+  ), 0n);
+  const reconcile = new Function(
+    "readManualSolSellFeeIntent", "positiveBigIntOrZero", "MANUAL_SOL_SELL_UNSIGNED_FEE_STALE_MS",
+    "reconcileSubmittedSolanaSignature", "paidManualSolSellFeeLamports", "persistManualSolSellFeeIntent",
+    `return async function reconcileManualSolSellFeeIntent(identity = {}, options = {}) {${body}};`
+  )(
+    async () => intent,
+    positive,
+    15 * 60_000,
+    async () => ({ state: "pending" }),
+    paid,
+    async (patch) => {
+      persistCalls += 1;
+      intent = { ...intent, ...patch, legs: { ...(intent.legs || {}), ...(patch.legs || {}) } };
+      return intent;
+    }
+  );
+  const started = Date.parse("2026-08-22T00:00:00.000Z");
+  const identity = { sourceSignature: "swap-sig", walletPublicKey: "wallet-1", tokenMint: "mint-1" };
+  intent = {
+    ...identity,
+    feeLamports: "25",
+    feePaidLamports: "0",
+    status: "submitting",
+    collectionStartedAt: new Date(started).toISOString(),
+    legs: {
+      owner: { status: "pending", lamports: "25", signature: "" },
+      cashCow: { status: "not_due", lamports: "0", signature: "" },
+      referral: { status: "not_due", lamports: "0", signature: "" }
+    }
+  };
+
+  const young = await reconcile(identity, { now: started + 59_000, unsignedStaleMs: 60_000 });
+  assert.equal(young.state, "pending");
+  assert.equal(young.intent.legs.owner.status, "pending");
+  assert.equal(persistCalls, 0, "a live/fresh pre-sign fee intent must never be retired by recovery");
+
+  const stale = await reconcile(identity, { now: started + 61_000, unsignedStaleMs: 60_000 });
+  assert.equal(stale.state, "resolved");
+  assert.equal(stale.intent.legs.owner.status, "not_collected");
+  assert.equal(stale.intent.legs.owner.recoveryReason, "unsigned_intent_stale_before_sign");
+  assert.ok(stale.intent.collectionFinishedAt);
+  assert.equal(stale.feePaidLamports, "0");
+
+  persistCalls = 0;
+  intent = {
+    ...identity,
+    feeLamports: "25",
+    feePaidLamports: "0",
+    status: "outcome_unknown",
+    collectionStartedAt: new Date(started).toISOString(),
+    legs: {
+      owner: {
+        status: "outcome_unknown",
+        lamports: "25",
+        signature: "signed-fee-leg",
+        signedAt: new Date(started).toISOString()
+      }
+    }
+  };
+  const signed = await reconcile(identity, { now: started + 24 * 60 * 60_000, unsignedStaleMs: 60_000 });
+  assert.equal(signed.state, "pending");
+  assert.equal(signed.intent.legs.owner.status, "outcome_unknown");
+  assert.equal(signed.intent.legs.owner.signature, "signed-fee-leg");
+  assert.equal(persistCalls, 0, "signed/ambiguous fee legs must never age-expire without chain proof");
+});
+
+test("manual sell Activity uses exact paid-fee amounts on Telegram and autopilot", () => {
+  const body = functionBody(serverSource, "confirmedSolSellReceiptAmounts");
+  const amounts = new Function(
+    "positiveBigIntOrZero",
+    `return function confirmedSolSellReceiptAmounts(sell = {}) {${body}};`
+  )((value) => { try { const parsed = BigInt(value || 0); return parsed > 0n ? parsed : 0n; } catch { return 0n; } });
+  assert.deepEqual(amounts({ outputLamports: "1000", feeLamports: "25", feePaidLamports: "25", feeStatus: "paid" }), {
+    solLamportsReceived: "975",
+    grossSolLamportsReceived: "1000",
+    tradeFeeLamports: "25",
+    feeStatus: "paid"
+  });
+  assert.deepEqual(amounts({ outputLamports: "1000", feeLamports: "25", feePaidLamports: "0", feeStatus: "fee failed" }), {
+    solLamportsReceived: "1000",
+    grossSolLamportsReceived: "1000",
+    tradeFeeLamports: "0",
+    feeStatus: "fee failed"
+  });
+  assert.equal(amounts({ outputLamports: "1000", feeLamports: "25", feePaidLamports: "0", feeRecoveryPending: true }).solLamportsReceived, "0");
+
+  const quickSell = functionBody(serverSource, "tgExecuteQuickSell");
+  assert.match(quickSell, /const receiptAmounts = confirmedSolSellReceiptAmounts\(r\)/);
+  assert.match(quickSell, /\.\.\.receiptAmounts/);
+  const autopilotSell = serverSource.slice(serverSource.indexOf("sellPercent: async (mint, pct"), serverSource.indexOf("async function startLiveAutopilotResume"));
+  assert.match(autopilotSell, /const receiptAmounts = confirmedSolSellReceiptAmounts\(res\)/);
+  assert.match(autopilotSell, /\.\.\.receiptAmounts/);
+});
+
+test("manual sell receipts display paid, failed, and pending fee outcomes honestly", () => {
+  const amountsBody = functionBody(serverSource, "confirmedSolSellReceiptAmounts");
+  const positive = (value) => { try { const parsed = BigInt(value || 0); return parsed > 0n ? parsed : 0n; } catch { return 0n; } };
+  const amounts = new Function(
+    "positiveBigIntOrZero",
+    `return function confirmedSolSellReceiptAmounts(sell = {}) {${amountsBody}};`
+  )(positive);
+  const renderAmount = (value) => String(value);
+  const warning = (sell) => sell.recordError || "";
+
+  const success = new Function(
+    "confirmedSolSellReceiptAmounts", "positiveBigIntOrZero", "lamportsBigToSol",
+    "formatSwapAttemptSuffix", "manualSellReceiptWarning",
+    `return function formatSellSuccessLine(wallet, sell) {${functionBody(serverSource, "formatSellSuccessLine")}};`
+  )(amounts, positive, renderAmount, () => "", warning);
+  const paid = success({ label: "Primary" }, {
+    signature: "paid-sig", outputLamports: "1000", feeLamports: "25", feePaidLamports: "25", feeStatus: "paid"
+  });
+  assert.match(paid, /gross out 1000 SOL/);
+  assert.match(paid, /fee charged 25 SOL/);
+  assert.match(paid, /net received 975 SOL/);
+  const failed = success({ label: "Primary" }, {
+    signature: "failed-fee-sig", outputLamports: "1000", feeLamports: "25", feePaidLamports: "0", feeStatus: ", fee failed"
+  });
+  assert.match(failed, /fee charged 0 SOL/);
+  assert.match(failed, /net received 1000 SOL/);
+  const pendingSell = {
+    signature: "pending-fee-sig", outputLamports: "1000", feeLamports: "25", feePaidLamports: "0",
+    feeRecoveryPending: true, feeStatus: ", fee reconciliation pending"
+  };
+  const pending = success({ label: "Primary" }, pendingSell);
+  assert.match(pending, /fee and final net pending confirmation/i);
+  assert.doesNotMatch(pending, /net received 0 SOL/i);
+
+  const sellAll = new Function(
+    "confirmedSolSellReceiptAmounts", "positiveBigIntOrZero", "lamportsBigToSol", "shortMint", "manualSellReceiptWarning",
+    `return function formatSellAllTokenLine(wallet, token, sell) {${functionBody(serverSource, "formatSellAllTokenLine")}};`
+  )(amounts, positive, renderAmount, (mint) => mint, warning);
+  const pendingAll = sellAll({ label: "Primary" }, { uiAmount: "25", mint: "mint-1", accountCount: 1 }, pendingSell);
+  assert.match(pendingAll, /proceeds pending fee confirmation/i);
+  assert.doesNotMatch(pendingAll, /got 0 SOL/i);
+
+  const recap = new Function(
+    "confirmedSolSellReceiptAmounts", "positiveBigIntOrZero", "lamportsBigToSol", "formatSignedLamports", "manualSellReceiptWarning",
+    `return function formatPriceExitRecap(planWallet, sell, triggerReason, loopCount) {${functionBody(serverSource, "formatPriceExitRecap")}};`
+  )(amounts, positive, renderAmount, renderAmount, warning);
+  const pendingRecap = recap({ label: "Primary", basisLamports: "500", completedLoops: 1 }, pendingSell, "stop-loss -8%", 1);
+  assert.match(pendingRecap, /got back pending fee confirmation/i);
+  assert.doesNotMatch(pendingRecap, /net -?500 SOL/i);
+
+  const bundle = functionBody(serverSource, "webBundleSellCore");
+  assert.match(bundle, /const receiptAmounts = confirmedSolSellReceiptAmounts\(sell\)/);
+  assert.match(bundle, /netSol: feePending \? null : lamportsBigToSol\(netLamports\)/);
+  assert.match(bundle, /feeSol: feePending \? null : lamportsBigToSol\(feeLamports\)/);
+  const webSellAll = functionBody(serverSource, "webSellAllTokensCore");
+  assert.match(webSellAll, /outputSol: feePending \? null : lamportsToSol\(receiptAmounts\.solLamportsReceived\)/);
+  assert.match(webSellAll, /feeSol: feePending \? null : lamportsToSol\(receiptAmounts\.tradeFeeLamports\)/);
+});
+
+test("history marker reconciliation does not append a duplicate sell row", async () => {
+  const body = functionBody(serverSource, "backfillConfirmedSolAutoExitHistory");
+  const receipt = {
+    signature: "sell-sig",
+    walletPublicKey: "wallet-1",
+    tokenMint: "mint-1",
+    status: "confirmed",
+    solLamportsReceived: "975",
+    historyRecorded: false
+  };
+  const history = [{
+    signature: "sell-sig",
+    walletPublicKey: "wallet-1",
+    tokenMint: "mint-1",
+    type: "sell",
+    solLamportsReceived: "975"
+  }];
+  let markCalls = 0;
+  let recordCalls = 0;
+  const needs = (row, events = null) => {
+    if (!Array.isArray(events)) return row.historyRecorded !== true;
+    return !events.some((event) => event.signature === row.signature
+      && event.walletPublicKey === row.walletPublicKey
+      && event.tokenMint === row.tokenMint
+      && event.type === "sell"
+      && BigInt(event.solLamportsReceived || 0) > 0n);
+  };
+  const backfill = new Function(
+    "solExitHistoryBackfillActive", "seedConfirmedSolAutoExitReceipts", "readSolExitReceipts", "readTradeHistory",
+    "confirmedExitNeedsHistoryBackfill", "markConfirmedSolAutoExitHistoryRecorded",
+    "confirmedSolExitWalletReceiptAmounts", "persistConfirmedSolAutoExitReceipt", "recordConfirmedSolAutoExit",
+    `return async function backfillConfirmedSolAutoExitHistory(options = {}) {${body}};`
+  )(
+    false,
+    async () => ({ seeded: 0 }),
+    async () => ({ receipts: [receipt] }),
+    async () => ({ trades: history }),
+    needs,
+    async () => { markCalls += 1; return true; },
+    async () => { throw new Error("RPC recovery should not run for complete history"); },
+    async (row) => row,
+    async () => { recordCalls += 1; return { recorded: true }; }
+  );
+  const result = await backfill({ limit: 8 });
+  assert.equal(result.marked, 1);
+  assert.equal(markCalls, 1);
+  assert.equal(recordCalls, 0, "existing positive history must only flip the receipt marker, never append/fan out again");
+});
+
+test("protected top-ups stay owned by the managed plan, never the full-balance portfolio watchdog", () => {
+  const sources = functionBody(serverSource, "eligibleWebDefaultExitSource");
+  assert.match(sources, /web_trade_position_add/);
+  assert.match(sources, /web_trade_position_add_recovery/);
+
+  const settings = functionBody(serverSource, "webPortfolioExitSettings");
+  assert.ok(settings.indexOf("authoritativeManagedPlanCoversPosition") < settings.indexOf("defaultWebExitGuardSettings"));
+
+  const runner = functionBody(serverSource, "processWebPortfolioExits");
+  assert.match(runner, /reason = "trade_plans_authoritative"/);
+  assert.ok(runner.indexOf("authoritativeManagedPlanCoversPosition") < runner.indexOf("sellTokenAmountFromWallet"));
+
+  const close = functionBody(serverSource, "markWebPortfolioPositionClosed");
+  assert.match(close, /mutateTradePlans/);
+  assert.match(close, /bumpTradePlanWalletStateRevision/);
+  assert.doesNotMatch(close, /writeTradePlans\(/);
 });
 
 test("runIdempotentMoneyOp replays the same attempt and serializes concurrent ones", () => {
@@ -1384,11 +2835,14 @@ test("RH power tools: TP/SL guards + bundle + volume bot, all through the safe t
   assert.match(tick, /webRhTradeCore/);
   assert.match(tick, /failCount.*>= 3/s);
   assert.match(serverSource, /runWorkerTask\("rhGuards", \(\) => rhGuardTick\(\)/);
-  // Bundle buys use the core; the recurring volume job uses the idempotent wrapper so ambiguous
-  // submissions are tombstoned and cannot be replayed on the next cycle.
+  // Every bundle buy and recurring-volume trade uses the idempotent guarded
+  // wrapper so active positions cannot be bypassed and ambiguous submissions
+  // cannot be replayed on the next cycle.
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/bundle"/);
   assert.match(functionBody(serverSource, "webRhBundle"), /runIdempotentMoneyOp\("web-rh-bundle"/);
-  assert.match(functionBody(serverSource, "webRhBundleCore"), /webRhTradeCore/);
+  const rhBundle = functionBody(serverSource, "webRhBundleCore");
+  assert.match(rhBundle, /webRhTrade\(userId, tradeBody\)/);
+  assert.doesNotMatch(rhBundle, /webRhTradeCore\(/);
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/volume\/start"/);
   const rhVolumeStart = functionBody(serverSource, "webRhVolumeStart");
   assert.match(rhVolumeStart, /webRhTrade\(userId/);
@@ -1476,6 +2930,23 @@ test("editing Solana exits is serialized with the worker and refuses unresolved 
   assert.match(lease, /"worker-task:webExitGuards"/);
   assert.match(cancelMirrors, /matching\.some\(automationExitReplacementBlocked\)/);
   assert.match(cancelMirrors, /statusCode = 409/);
+
+  const finalCommit = arm.indexOf("await mutateTradePlans(async (plans)");
+  const pendingAddBlock = arm.indexOf("const pendingManagedBuy =", finalCommit);
+  const guardCancellation = arm.indexOf("await cancelWebExitGuardsForReplacement", finalCommit);
+  const newPlanInsertion = arm.indexOf("plans.plans.push(plan)", finalCommit);
+  assert.ok(finalCommit >= 0 && pendingAddBlock > finalCommit);
+  assert.ok(pendingAddBlock < guardCancellation, "a pending add must block before linked guards can be canceled");
+  assert.ok(pendingAddBlock < newPlanInsertion, "a pending add must block before a second plan can be inserted");
+  const lockedBlocker = arm.slice(pendingAddBlock, guardCancellation);
+  assert.match(lockedBlocker, /String\(existing\.userId \|\| ""\) === String\(userId\)/);
+  assert.match(lockedBlocker, /String\(existing\.tokenMint \|\| ""\) === tokenMint/);
+  assert.match(lockedBlocker, /executionMode \|\| ""\) === "managed_server"/);
+  assert.match(lockedBlocker, /requested\.has\(String\(planWallet\.publicKey \|\| ""\)\)/);
+  assert.match(lockedBlocker, /pendingProtectedPositionAdd\(planWallet\)/);
+  assert.match(lockedBlocker, /buyReservationClaimToken/);
+  assert.match(lockedBlocker, /buySubmissionSignature/);
+  assert.match(lockedBlocker, /error\.statusCode = 409/);
 });
 
 test("RH: auto-bundle-when-pool-opens + coin age everywhere + 75% sells", () => {
@@ -1492,7 +2963,11 @@ test("RH: auto-bundle-when-pool-opens + coin age everywhere + 75% sells", () => 
   const bundleCore = functionBody(serverSource, "webRhBundleCore");
   assert.match(bundleCore, /rhLaunchBundleWalletConfigs/);
   assert.match(bundleCore, /configByIndex\.get\(idx\)/);
-  assert.match(bundleCore, /protectedBuy[\s\S]*webRhTrade\(userId, tradeBody\)/);
+  assert.match(bundleCore, /disableAutoExit: true/);
+  assert.match(bundleCore, /manualExit: Boolean\(walletConfig && pumpLaunchManualExit/);
+  assert.match(bundleCore, /tradeAttemptId: `\$\{bundleAttemptId\}:wallet:\$\{idx\}`/);
+  assert.match(bundleCore, /webRhTrade\(userId, tradeBody\)/);
+  assert.doesNotMatch(bundleCore, /webRhTradeCore\(/);
   assert.match(bundleCore, /protectionRequired: true/);
   assert.doesNotMatch(bundleCore, /webRhArmGuard/);             // protected buys reserve + arm atomically
   assert.match(bundleCore, /runWithConcurrency\(selectedWallets, Math\.min\(20, selectedWallets\.length\), buyOne\)/);
@@ -1974,14 +3449,292 @@ test("separate Solana fee legs are unique and expose per-leg completion", () => 
   assert.match(send, /partialHashes = \[signedSignature\]/);
 });
 
+test("legacy fee send stays outcome-unknown when retry hides a transient attempt", async () => {
+  const body = functionBody(serverSource, "sendLegacyTransaction");
+  const build = new Function(
+    "connection", "backupConnection", "CONFIG", "rpcWithRetry", "classifyFeeConfirmation",
+    "markTradeSubmissionAmbiguous", "isTransientSendError", "bs58", "friendlyError",
+    "rpcStats", "backupRpcMetricOptions",
+    `return async function sendLegacyTransaction(tx, signers, options = {}) {${body}};`
+  );
+  let sendAttempts = 0;
+  let checkpoint = null;
+  const send = build(
+    {
+      sendRawTransaction: async () => {
+        sendAttempts += 1;
+        if (sendAttempts === 1) throw new Error("send timed out after upstream accepted bytes");
+        throw new Error("blockhash not found");
+      },
+      confirmTransaction: async () => ({ value: null })
+    },
+    null,
+    { rpcRetries: 1 },
+    async (_label, operation) => {
+      try { return await operation(); } catch { return operation(); }
+    },
+    ({ confirmation, error }) => {
+      if (confirmation?.value?.err) return { status: "failed_on_chain", error: confirmation.value.err };
+      if (error) return { status: "outcome_unknown", error };
+      return { status: "confirmed" };
+    },
+    (value, stage) => {
+      const error = value instanceof Error ? value : new Error(String(value));
+      error.tradeSubmissionAmbiguous = true;
+      error.tradeStage = stage;
+      return error;
+    },
+    (error) => /timed out/i.test(String(error?.message || error)),
+    { encode: () => "local-fee-signature" },
+    (error) => String(error?.message || error || ""),
+    {},
+    {}
+  );
+  const tx = {
+    signature: null,
+    sign() { this.signature = new Uint8Array([1]); },
+    serialize() { return Buffer.from("same-signed-fee-bytes"); }
+  };
+  await assert.rejects(
+    () => send(tx, [{ publicKey: "fee-payer" }], {
+      latestBlockhash: { blockhash: "fee-blockhash", lastValidBlockHeight: 123 },
+      markAmbiguous: true,
+      onSigned: async (submission) => { checkpoint = submission; }
+    }),
+    (error) => {
+      assert.equal(sendAttempts, 2);
+      assert.equal(checkpoint.signature, "local-fee-signature");
+      assert.equal(error.signature, "local-fee-signature");
+      assert.deepEqual(error.partialHashes, ["local-fee-signature"]);
+      assert.equal(error.tradeSubmissionAmbiguous, true);
+      assert.match(error.message, /blockhash not found/i);
+      return true;
+    }
+  );
+  assert.match(body, /primaryTransientSendAttempted/);
+  assert.ok(body.indexOf("primaryTransientSendAttempted = true") < body.indexOf("throw markAmbiguousFeeSend(error)"));
+  const collector = functionBody(serverSource, "collectSolFee");
+  assert.match(collector, /error\?\.tradeSubmissionAmbiguous \? "outcome_unknown" : "failed"/);
+  const durableCollector = functionBody(serverSource, "collectManualSolSellFee");
+  assert.match(durableCollector, /manualSolSellFeeDetailsUnresolved/);
+  assert.match(durableCollector, /feeRecoveryPending: unresolved/);
+});
+
 test("priority web trades keep Jito privacy but fall back quickly with the same signature", () => {
   const send = functionBody(serverSource, "sendPumpTradeTx");
   assert.match(send, /const priorityFastLane = Boolean\(opts\.priority\)/);
   assert.match(send, /priorityFastLane \? 3_000 : 8_000/);
   assert.match(send, /Math\.min\(configuredConfirmMs, 2_500\)/);
   assert.match(send, /return sendVersionedTransaction\(tx, label, opts\)/);
+  assert.match(send, /jitoSubmittedSwapSignature = swapSig/);
+  assert.ok(send.indexOf("jitoSubmissionAttemptedSignature = swapSig") < send.indexOf("await submitJitoBundle"),
+    "the signed swap must be considered outcome-unknown before awaiting block-engine responses");
+  assert.match(send, /rpc-after-jito-submit/);
+  assert.match(send, /ambiguous\.tradePreSubmit = false/);
   assert.match(functionBody(serverSource, "sellTokenAmountFromWalletViaPumpPortal"), /tipSol: CONFIG\.tradeJitoExitTipSol,[\s\S]*priority/,
     "manual web sells must opt into the same short priority confirmation lane as buys");
+});
+
+test("a primary Solana send signature survives confirmation timeout and stale backup failure as ambiguous", async () => {
+  const body = functionBody(serverSource, "sendVersionedTransaction");
+  const build = new Function(
+    "connection",
+    "backupConnection",
+    "CONFIG",
+    "rpcWithRetry",
+    "isTransientSendError",
+    "friendlyError",
+    "rpcStats",
+    "backupRpcMetricOptions",
+    "markTradeSubmissionAmbiguous",
+    "firstString",
+    "bs58",
+    `return async function sendVersionedTransaction(tx, label = "send versioned transaction", options = {}) {${body}};`
+  );
+  const primary = {
+    sendRawTransaction: async () => "primary-signature",
+    confirmTransaction: async () => { throw new Error("confirmation timed out"); }
+  };
+  const backup = {
+    sendRawTransaction: async () => { throw new Error("blockhash not found"); },
+    confirmTransaction: async () => ({ value: null })
+  };
+  const send = build(
+    primary,
+    backup,
+    { rpcRetries: 0 },
+    async (_label, operation) => operation(),
+    (error) => /timed out/i.test(String(error?.message || error)),
+    (error) => String(error?.message || error || ""),
+    {},
+    {},
+    (value, stage) => {
+      const error = value instanceof Error ? value : new Error(String(value));
+      error.tradeSubmissionAmbiguous = true;
+      error.tradeStage = stage;
+      return error;
+    },
+    (...values) => values.find((value) => String(value || "").trim()) || "",
+    { encode: () => "locally-signed-signature" }
+  );
+  await assert.rejects(
+    () => send({ serialize: () => Buffer.from("signed"), signatures: [new Uint8Array([1])] }, "protected buy"),
+    (error) => {
+      assert.equal(error.signature, "primary-signature");
+      assert.equal(error.tradeSubmissionAmbiguous, true);
+      assert.equal(error.tradePreSubmit, false);
+      assert.match(error.tradeStage, /backup-after-submit/);
+      return true;
+    }
+  );
+
+  const responseLost = build(
+    {
+      sendRawTransaction: async () => { throw new Error("send timed out"); },
+      confirmTransaction: async () => ({ value: null })
+    },
+    backup,
+    { rpcRetries: 0 },
+    async (_label, operation) => operation(),
+    (error) => /timed out/i.test(String(error?.message || error)),
+    (error) => String(error?.message || error || ""),
+    {},
+    {},
+    (value, stage) => {
+      const error = value instanceof Error ? value : new Error(String(value));
+      error.tradeSubmissionAmbiguous = true;
+      error.tradeStage = stage;
+      return error;
+    },
+    (...values) => values.find((value) => String(value || "").trim()) || "",
+    { encode: () => "locally-signed-signature" }
+  );
+  await assert.rejects(
+    () => responseLost({ serialize: () => Buffer.from("signed"), signatures: [new Uint8Array([1])] }, "protected add"),
+    (error) => {
+      assert.equal(error.signature, "locally-signed-signature");
+      assert.equal(error.tradeSubmissionAmbiguous, true);
+      assert.equal(error.tradePreSubmit, false);
+      return true;
+    }
+  );
+
+  let hiddenAttempt = 0;
+  const hiddenRetry = build(
+    {
+      sendRawTransaction: async () => {
+        hiddenAttempt += 1;
+        if (hiddenAttempt === 1) throw new Error("send timed out");
+        throw new Error("blockhash not found");
+      },
+      confirmTransaction: async () => ({ value: null })
+    },
+    null,
+    { rpcRetries: 1 },
+    async (_label, operation) => {
+      try {
+        return await operation();
+      } catch {
+        return operation();
+      }
+    },
+    (error) => /timed out/i.test(String(error?.message || error)),
+    (error) => String(error?.message || error || ""),
+    {},
+    {},
+    (value, stage) => {
+      const error = value instanceof Error ? value : new Error(String(value));
+      error.tradeSubmissionAmbiguous = true;
+      error.tradeStage = stage;
+      return error;
+    },
+    (...values) => values.find((value) => String(value || "").trim()) || "",
+    { encode: () => "hidden-retry-local-signature" }
+  );
+  await assert.rejects(
+    () => hiddenRetry({ serialize: () => Buffer.from("signed"), signatures: [new Uint8Array([2])] }, "hidden retry"),
+    (error) => {
+      assert.equal(hiddenAttempt, 2);
+      assert.equal(error.signature, "hidden-retry-local-signature");
+      assert.equal(error.tradeSubmissionAmbiguous, true);
+      assert.equal(error.tradePreSubmit, false);
+      return true;
+    }
+  );
+});
+
+test("Jito timeout followed by deterministic same-byte RPC failure stays outcome-unknown", async () => {
+  const body = functionBody(serverSource, "sendPumpTradeTx");
+  const build = new Function(
+    "CONFIG",
+    "sendVersionedTransaction",
+    "lastJitoBundleSubmitMs",
+    "JITO_MIN_SUBMIT_GAP_MS",
+    "bs58",
+    "PublicKey",
+    "JITO_TIP_ACCOUNTS",
+    "rpcWithRetry",
+    "connection",
+    "Transaction",
+    "SystemProgram",
+    "submitJitoBundle",
+    "sleep",
+    "console",
+    "markTradeSubmissionAmbiguous",
+    "firstString",
+    `return async function sendPumpTradeTx(tx, keypair, label, opts = {}) {${body}};`
+  );
+  class FakeTransaction {
+    add() { return this; }
+    sign() {}
+    serialize() { return Buffer.from("tip"); }
+  }
+  const common = [
+    { tradeJitoBundle: true, tradeJitoTipSol: 0.0001, tradeJitoConfirmMs: 1 },
+    0,
+    1,
+    { encode: () => "jito-local-signature" },
+    class FakePublicKey { constructor(value) { this.value = value; } },
+    ["tip-account"],
+    async (_label, operation) => operation(),
+    { getLatestBlockhash: async () => ({ blockhash: "recent" }) },
+    FakeTransaction,
+    { transfer: (value) => value },
+    async () => { throw new Error("all block engines timed out"); },
+    async () => {},
+    { log() {}, warn() {} },
+    (value, stage) => {
+      const error = value instanceof Error ? value : new Error(String(value));
+      error.tradeSubmissionAmbiguous = true;
+      error.tradeStage = stage;
+      return error;
+    },
+    (...values) => values.find((value) => String(value || "").trim()) || ""
+  ];
+  const tx = { signatures: [new Uint8Array([3])], serialize: () => Buffer.from("swap") };
+  const keypair = { publicKey: "payer" };
+
+  const failsAfterAttempt = build(
+    common[0],
+    async () => { throw new Error("blockhash not found"); },
+    ...common.slice(1)
+  );
+  await assert.rejects(
+    () => failsAfterAttempt(tx, keypair, "jito protected add"),
+    (error) => {
+      assert.equal(error.signature, "jito-local-signature");
+      assert.equal(error.tradeSubmissionAmbiguous, true);
+      assert.equal(error.tradePreSubmit, false);
+      return true;
+    }
+  );
+
+  const successfulFallback = build(
+    common[0],
+    async () => "jito-local-signature",
+    ...common.slice(1)
+  );
+  assert.equal(await successfulFallback(tx, keypair, "jito protected add"), "jito-local-signature");
 });
 
 test("web trade bookkeeping and independent fee legs no longer serialize confirmations", () => {
@@ -2157,7 +3910,8 @@ test("trade history dedupes by on-chain signature (fixes positions 'up double')"
   assert.match(functionBody(serverSource, "readTradeHistory"), /store\.trades = store\.trades\.filter[\s\S]*tradeEventDedupeKey/);
   const rec = functionBody(serverSource, "recordTradeEvents");
   assert.match(rec, /withFileLock\(tradeHistoryPath\(\)/);
-  assert.match(rec, /if \(key && seen\.has\(key\)\) continue/);
+  assert.match(rec, /const existing = key \? byKey\.get\(key\) : null/);
+  assert.match(rec, /if \(existing\)[\s\S]*enrichIncompleteSellHistoryEvent\(existing, event\)[\s\S]*continue/);
 });
 
 test("sell auto-funds the fee from a sibling wallet when the holder has no SOL", () => {
@@ -3449,7 +5203,7 @@ test("⏰ Limit orders: MC-triggered buy/sell, own-wallet, idempotent-claim, pau
   assert.match(poll, /o\.dir === ">=" \? mc >= o\.triggerMc : mc <= o\.triggerMc/);  // trigger evaluation
   assert.match(poll, /settleLimitOrder\(o\.id, "filling"/);                          // CLAIM before executing = no double-fire
   assert.match(poll, /tgExecuteQuickBuy\(o\.userId, o\.mint, o\.amountSol, \{ idempotencyKey: `limit-order-\$\{o\.id\}`/); // own-wallet, stable-attempt buy
-  assert.match(poll, /tgExecuteQuickSell\(o\.userId, o\.mint, o\.pct, \{ idempotencyKey: `limit-order-\$\{o\.id\}`/);       // own-wallet, stable-attempt sell
+  assert.match(poll, /tgExecuteQuickSell\(o\.userId, o\.mint, o\.pct, \{\s*idempotencyKey: `limit-order-\$\{o\.id\}`[\s\S]*trustedPriorSellAcknowledgements/); // own-wallet, stable-attempt sell with exact prior receipt acknowledgement
   assert.match(poll, /strictWallet: true/);                                          // web order never falls through to another wallet
   assert.match(poll, /ambiguous \? "outcome_unknown" : "failed"/);                 // uncertain chain result is never blindly retried
   assert.match(poll, /if \(!live\.length \|\| paused\)[\s\S]*return summary/);     // global pause = don't fire

@@ -31,11 +31,26 @@ function functionBody(source, name) {
   throw new Error(`Could not isolate ${name}`);
 }
 
-for (const name of ["webTradeSellCore", "webBundleBuyCore", "webBundleSellCore"]) {
+for (const name of ["webBundleBuyCore"]) {
   test(`${name} preserves submitted transactions when history storage fails`, () => {
     const body = functionBody(server, name);
     assert.match(body, /let recordError = ""/);
     assert.match(body, /catch \(error\)/);
+    assert.match(body, /recordError/);
+  });
+}
+
+for (const name of ["webTradeSellCore", "webBundleSellCore"]) {
+  test(`${name} preserves submitted transactions and receipt warnings when history storage fails`, () => {
+    const body = functionBody(server, name);
+    assert.match(body, /let recordError = /);
+    if (name === "webTradeSellCore") {
+      assert.match(body, /feePending \? "Fee outcome is still confirming; final net proceeds are pending\."/);
+      assert.match(body, /manualSellReceiptWarning\(result\)/);
+    } else {
+      assert.match(body, /results\.map\(\(row\) => row\.recordWarning\)\.filter\(Boolean\)\.join\("; "\)/);
+    }
+    assert.match(body, /catch \(error\)|historyResult\.status === "rejected"/);
     assert.match(body, /recordError/);
   });
 }
