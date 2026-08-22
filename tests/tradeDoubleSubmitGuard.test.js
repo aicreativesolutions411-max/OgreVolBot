@@ -867,9 +867,13 @@ test("reviewed protected-position adds reserve, checkpoint, and merge one exact 
   const preview = functionBody(serverSource, "webSolTradePreview");
   assert.match(preview, /positionAdd = \{[\s\S]*planId:[\s\S]*walletStateRevision:[\s\S]*protectedLotRevision:[\s\S]*summary:/);
   assert.match(preview, /existingProtectionSummary/);
+  assert.match(preview, /allowPositionAdd: !webAutoExitExplicitlyDisabled\(body\)/,
+    "an explicit swap-only buy must not silently inherit an existing automatic exit");
 
   const core = functionBody(serverSource, "webTradeBuyCore");
   assert.match(core, /addToProtectionPlanId/);
+  assert.match(core, /requestedPositionAdd && webAutoExitExplicitlyDisabled\(body\)/);
+  assert.match(core, /A swap-only buy cannot join an automatic TP \/ SL plan/);
   assert.ok(core.indexOf("executeManagedSolPositionAdd") < core.indexOf("webCreateSingleTradeAutoExitPlan"));
   assert.ok(core.indexOf('requireWebAutomationPermission(userId, "protected position add")') < core.indexOf("executeManagedSolPositionAdd"));
 

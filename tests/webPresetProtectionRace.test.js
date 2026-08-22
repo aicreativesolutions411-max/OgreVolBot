@@ -124,10 +124,10 @@ test("Wallet, Go, and Fun buy previews fail closed and freeze their requested pr
 });
 
 test("Wallet and Go publish the protected-buy release through a fresh app cache", () => {
-  assert.match(funHtml, /fun\.js\?v=95/);
-  assert.match(funWorker, /slimewallet-v36/);
-  assert.match(funWorker, /slimewire-fun-v93/);
-  assert.match(funWorker, /fun\.js\?v=95/);
+  assert.match(funHtml, /fun\.js\?v=96/);
+  assert.match(funWorker, /slimewallet-v37/);
+  assert.match(funWorker, /slimewire-fun-v94/);
+  assert.match(funWorker, /fun\.js\?v=96/);
 });
 
 test("terminal app resolves selected presets once per account and never erases a stale protected choice", () => {

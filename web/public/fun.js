@@ -732,6 +732,7 @@
     paintWalletPill();
     renderCashHandoff();
     renderHomeReadiness();
+    if (state.view === "wallet-swap") renderWalletSwap();
     if (options.saveCache !== false) saveWalletPortfolioCache({
       ...data,
       balances: state.wallets,
@@ -1922,9 +1923,9 @@
     if (!IS_WALLET_ROUTE) return;
     const panel = $("[data-wallet-swap-panel]");
     if (!panel) return;
-    const wallet = activeWallet(), coin = state.selected || {}, key = coinKey(coin), preset = activePreset();
+    const wallet = activeWallet(), coin = state.selected || {}, key = coinKey(coin);
     const side = state.walletSwapSide === "sell" ? "sell" : "buy";
-    const amount = side === "sell" ? (state.walletSwapSellPercent || "100") : (state.walletSwapAmount || preset?.amountSol || "0.10");
+    const amount = side === "sell" ? (state.walletSwapSellPercent || "100") : (state.walletSwapAmount || "0.10");
     const holding = selectedWalletHolding(), quantity = coin.chain === "robinhood" ? positionNumber(holding?.uiAmount) : (positionQuantity(holding) ?? positionNumber(holding?.quantity)), hasHolding = Number(quantity) > 0;
     const paySelector = side === "sell" ? walletSwapCoinButton(coin, "pay", "Choose coin") : walletSwapNativeButton("pay");
     const receiveSelector = side === "sell" ? walletSwapNativeButton("receive") : walletSwapCoinButton(coin, "receive", "Choose coin");
@@ -1935,9 +1936,9 @@
     const swapActionLabel = !wallet ? "Create or fund wallet" : !key ? "Choose a coin" : side === "sell" && !hasHolding ? "No coin balance" : side === "sell" ? `Review sell ${amount}%` : `Review ${amount} SOL swap`;
     panel.innerHTML = `<header class="wallet-swap-head"><button type="button" data-wallet-route-back aria-label="Back to wallet"><img src="${WALLET_BRAND_ASSET}" alt=""></button><h1><span>SWAP</span><small><i aria-hidden="true">&#128274;</i> Secure route</small></h1><button class="wallet-swap-menu" type="button" data-manage-wallets aria-label="Manage wallets"><span></span><span></span><span></span></button></header>
       <section class="wallet-swap-shell ${side === "sell" ? "direction-sell" : "direction-buy"}"><div class="wallet-swap-card ${loading ? "loading" : ""}"><div class="wallet-swap-side pay"><header><span>PAY</span><em>Balance ${escapeHtml(payBalance)}</em></header><div class="wallet-swap-asset-line">${paySelector}<label class="wallet-swap-amount"><input data-wallet-swap-input inputmode="decimal" value="${escapeHtml(amount)}" aria-label="${side === "sell" ? "Sell percent" : "SOL amount"}"><small>${side === "sell" ? "%" : ""}</small></label></div></div><button class="wallet-swap-reverse" type="button" data-wallet-swap-reverse aria-label="Flip pay and receive assets"><span>↑</span><span>↓</span></button><div class="wallet-swap-side receive"><header><span>RECEIVE</span><em>${coin.chain === "robinhood" ? "Robinhood route" : "Best route"}</em></header><div class="wallet-swap-asset-line">${receiveSelector}<strong>${escapeHtml(receiveNote)}</strong></div></div></div>
-      ${walletSwapRecentHtml(side)}<div class="wallet-swap-presets">${values.map((value) => `<button type="button" data-wallet-swap-amount="${value}" class="${Number(value) === Number(amount) ? "active" : ""}">${value}${side === "sell" ? "%" : ""}</button>`).join("")}<button class="wallet-preset-settings" type="button" data-manage-presets aria-label="Open trade presets"><span aria-hidden="true">&#9881;</span><small>Presets</small></button></div>
+      ${walletSwapRecentHtml(side)}<div class="wallet-swap-presets">${values.map((value) => `<button type="button" data-wallet-swap-amount="${value}" class="${Number(value) === Number(amount) ? "active" : ""}">${value}${side === "sell" ? "%" : ""}</button>`).join("")}<span class="wallet-preset-settings wallet-swap-only-badge" aria-label="Swap only; automatic exits are off"><span aria-hidden="true">&#8644;</span><small>Swap only</small></span></div>
       <section class="wallet-swap-details"><div><span>Best route</span><b>${key ? (side === "sell" ? "Coin → SOL" : "SOL → coin") : "Select coin"}</b></div><div><span>Price impact</span><b>${key ? "Checked live" : "—"}</b></div><div><span>Network fee</span><b>Estimated live</b></div></section></section>
-      <button class="wallet-review-swap" type="button" ${swapAction}>${escapeHtml(swapActionLabel)}</button><p class="wallet-route-note">✧ SOL buys coins. Flip a held coin above to sell it back to SOL.</p>`;
+      <button class="wallet-review-swap" type="button" ${swapAction}>${escapeHtml(swapActionLabel)}</button><p class="wallet-route-note">✧ Swap buys do not auto-sell. Use Buy on the coin page when you want TP / SL protection.</p>`;
     if (state.walletSwapAnimate) {
       state.walletSwapAnimate = false;
       const shell = panel.querySelector(".wallet-swap-shell");
@@ -3632,12 +3633,15 @@
   }
   function openTradeSheet(side = "buy", preset = {}) {
     const coin = state.selected || {}, rh = coin.chain === "robinhood", key = coinKey(coin), wallet = activeWallet();
-    if (side === "buy" && activePreset()) preset = { ...presetTradeOptions(activePreset()), ...preset };
+    const swapOnly = side === "buy" && preset.swapOnly === true;
+    if (side === "buy" && activePreset() && !swapOnly) preset = { ...presetTradeOptions(activePreset()), ...preset };
     const amount = preset.amount || (rh ? "0.05" : "0.1"), tp = preset.tp || "", sl = preset.sl || "";
     const wallets = state.wallets.length ? state.wallets.map((item) => `<option value="${item.index}" ${item.index === state.activeWallet ? "selected" : ""}>${escapeHtml(item.label || `Wallet ${item.index}`)} · ${Number(item.sol || 0).toFixed(3)} SOL</option>`).join("") : '<option value="">Create a wallet first</option>';
-    const buyFields = `<div class="field"><label>${rh ? "Spend SOL · auto-converts for Robinhood" : "Buy amount · SOL"}</label><input data-trade-amount inputmode="decimal" value="${escapeHtml(amount)}" aria-label="Trade amount"><div class="amount-chips">${(rh ? ["0.01", "0.025", "0.05", "0.1"] : ["0.05", "0.1", "0.25", "0.5"]).map((value) => `<button type="button" data-amount-chip="${value}">${value}</button>`).join("")}</div></div>
-      <div class="field-row"><div class="field"><label>Take profit %</label><input data-trade-tp inputmode="decimal" value="${escapeHtml(tp)}" placeholder="off"></div><div class="field"><label>Stop loss %</label><input data-trade-sl inputmode="decimal" value="${escapeHtml(sl)}" placeholder="off"></div></div>
-      ${!rh ? `<details ${preset.ladder || preset.trail ? "open" : ""}><summary style="color:var(--muted);font-size:11px">Ladder, trailing stop & break-even</summary><input type="hidden" data-trade-ladder value="${escapeHtml(preset.ladder || "")}"><div class="ladder-presets"><button type="button" data-ladder-preset="" class="${preset.ladder ? "" : "active"}">Single TP</button><button type="button" data-ladder-preset="smart" class="${preset.ladder === "smart" ? "active" : ""}">25% ladder</button><button type="button" data-ladder-preset="fast" class="${preset.ladder === "fast" ? "active" : ""}">Fast ladder</button></div><div class="field-row"><div class="field"><label>Trailing stop %</label><input data-trade-trail inputmode="decimal" value="${escapeHtml(preset.trail || "")}" placeholder="off"></div><div class="field"><label>Arm after +%</label><input data-trade-trail-arm inputmode="decimal" value="${escapeHtml(preset.trailArm || "")}" placeholder="auto"></div></div><label class="check-row"><input type="checkbox" data-trade-be ${preset.be ? "checked" : ""}> Move stop to break-even after TP1</label></details>` : '<p class="fineprint">Your SOL wallet funds this trade automatically. No separate Robinhood wallet setup or manual ETH conversion is required.</p>'}`;
+    const buyProtectionFields = swapOnly
+      ? '<div class="read-card account-status"><span>SWAP ONLY</span><h3>No automatic sell</h3><p>This route only swaps SOL into the selected coin. It will not inherit your active TP / SL preset.</p></div>'
+      : `<div class="field-row"><div class="field"><label>Take profit %</label><input data-trade-tp inputmode="decimal" value="${escapeHtml(tp)}" placeholder="off"></div><div class="field"><label>Stop loss %</label><input data-trade-sl inputmode="decimal" value="${escapeHtml(sl)}" placeholder="off"></div></div>
+        ${!rh ? `<details ${preset.ladder || preset.trail ? "open" : ""}><summary style="color:var(--muted);font-size:11px">Ladder, trailing stop & break-even</summary><input type="hidden" data-trade-ladder value="${escapeHtml(preset.ladder || "")}"><div class="ladder-presets"><button type="button" data-ladder-preset="" class="${preset.ladder ? "" : "active"}">Single TP</button><button type="button" data-ladder-preset="smart" class="${preset.ladder === "smart" ? "active" : ""}">25% ladder</button><button type="button" data-ladder-preset="fast" class="${preset.ladder === "fast" ? "active" : ""}">Fast ladder</button></div><div class="field-row"><div class="field"><label>Trailing stop %</label><input data-trade-trail inputmode="decimal" value="${escapeHtml(preset.trail || "")}" placeholder="off"></div><div class="field"><label>Arm after +%</label><input data-trade-trail-arm inputmode="decimal" value="${escapeHtml(preset.trailArm || "")}" placeholder="auto"></div></div><label class="check-row"><input type="checkbox" data-trade-be ${preset.be ? "checked" : ""}> Move stop to break-even after TP1</label></details>` : '<p class="fineprint">Your SOL wallet funds this trade automatically. No separate Robinhood wallet setup or manual ETH conversion is required.</p>'}`;
+    const buyFields = `<input type="hidden" data-trade-swap-only value="${swapOnly ? "true" : "false"}"><div class="field"><label>${rh ? "Spend SOL · auto-converts for Robinhood" : "Buy amount · SOL"}</label><input data-trade-amount inputmode="decimal" value="${escapeHtml(amount)}" aria-label="Trade amount"><div class="amount-chips">${(rh ? ["0.01", "0.025", "0.05", "0.1"] : ["0.05", "0.1", "0.25", "0.5"]).map((value) => `<button type="button" data-amount-chip="${value}">${value}</button>`).join("")}</div></div>${buyProtectionFields}`;
     const sellPercent = Math.min(100, Math.max(1, Number(preset.percent) || 100));
     const sellFields = `<div class="field"><label>Sell percent</label><input data-trade-percent inputmode="numeric" value="${escapeHtml(String(sellPercent))}"><div class="amount-chips">${[25, 50, 75, 100].map((value) => `<button type="button" data-percent-chip="${value}" class="${value === sellPercent ? "active" : ""}">${value}%</button>`).join("")}</div></div>${rh ? '<p class="fineprint">Sale proceeds return to this SOL wallet automatically.</p>' : ""}`;
     openSheet(`<div class="sheet-title"><img src="${escapeHtml(coinImage(coin))}" alt=""><div><h2>${escapeHtml(coin.symbol || short(key))}</h2><p>${rh ? "Robinhood · one SOL wallet" : "Solana"} · ${escapeHtml(short(key))}</p></div></div>
@@ -4125,6 +4129,24 @@
   }
   async function prepareBuyProtection(pending) {
     if (!pending || pending.side !== "buy") return true;
+    if (pending.swapOnly === true) {
+      const body = pending.body || (pending.body = {});
+      body.disableAutoExit = true;
+      delete body.autoExit;
+      delete body.protectionRequired;
+      delete body.presetId;
+      delete body.takeProfitPct;
+      delete body.stopLossPct;
+      delete body.trailingStopPct;
+      delete body.trailingActivatePct;
+      delete body.takeProfitLadder;
+      delete body.breakEvenAfterTp1;
+      delete body.breakEvenStopPct;
+      delete body.sellDelay;
+      delete body.sellPercent;
+      pending.guard = { takeProfitPct: "", stopLossPct: "" };
+      return true;
+    }
     if (!(await ensurePresetsLoaded())) { toast("Could not load your trade protection. Buy not submitted — try again.", true); return false; }
     const presetId = String(state.activePresetId || "").trim(), preset = activePreset(), body = pending.body || (pending.body = {});
     if (presetId && !preset) { toast("Your saved trade preset is unavailable. Buy not submitted — choose a preset or Manual.", true); return false; }
@@ -4179,14 +4201,17 @@
   }
   function tradePayloadFromSheet(side) {
     const coin = state.selected || {}, key = coinKey(coin), walletIndex = Number($("[data-trade-wallet]")?.value || state.activeWallet), rh = coin.chain === "robinhood";
+    const wallet = state.wallets.find((item) => Number(item.index) === walletIndex) || activeWallet();
+    const swapOnly = side === "buy" && $("[data-trade-swap-only]")?.value === "true";
     const body = rh
-      ? { walletIndex, side, tokenAddress: key, tradeAttemptId: attemptId("fun-rh") }
-      : { tokenMint: key, walletIndex, tradeAttemptId: attemptId("fun-sol"), slippageBps: side === "sell" ? "1200" : "500" };
+      ? { walletIndex, walletPublicKey: wallet?.publicKey || "", side, tokenAddress: key, tradeAttemptId: attemptId("fun-rh") }
+      : { tokenMint: key, walletIndex, walletPublicKey: wallet?.publicKey || "", tradeAttemptId: attemptId("fun-sol"), slippageBps: side === "sell" ? "1200" : "500" };
     const guard = { takeProfitPct: "", stopLossPct: "" };
     if (side === "buy") {
       body.amountSol = String($("[data-trade-amount]")?.value || "");
       if (rh) body.payCurrency = "SOL";
-      const tp = $("[data-trade-tp]")?.value || "", sl = $("[data-trade-sl]")?.value || "", trail = $("[data-trade-trail]")?.value || "", ladder = $("[data-trade-ladder]")?.value || "";
+      if (swapOnly) body.disableAutoExit = true;
+      const tp = swapOnly ? "" : ($("[data-trade-tp]")?.value || ""), sl = swapOnly ? "" : ($("[data-trade-sl]")?.value || ""), trail = swapOnly ? "" : ($("[data-trade-trail]")?.value || ""), ladder = swapOnly ? "" : ($("[data-trade-ladder]")?.value || "");
       guard.takeProfitPct = tp; guard.stopLossPct = sl;
       if (rh && (Number(tp) > 0 || Number(sl) > 0)) {
         Object.assign(body, { autoExit: true, takeProfitPct: tp, stopLossPct: sl, sellPercent: "100", symbol: coin.symbol || "" });
@@ -4201,7 +4226,7 @@
         } else body.disableAutoExit = true;
       }
     } else body.percent = String($("[data-trade-percent]")?.value || "100");
-    return { kind: "trade", chain: rh ? "robinhood" : "solana", side, body, guard, coin: { key, symbol: coin.symbol || "coin", priceUsd: coin.priceUsd || 0 } };
+    return { kind: "trade", chain: rh ? "robinhood" : "solana", side, body, guard, swapOnly, coin: { key, symbol: coin.symbol || "coin", priceUsd: coin.priceUsd || 0 } };
   }
   function transactionPreviewHtml(preview = {}) {
     const impact = Number(preview.priceImpactPct), impactText = Number.isFinite(impact) ? `${impact.toFixed(2)}%` : "Provider did not expose it";
@@ -4986,7 +5011,15 @@
     if (event.target.closest("[data-multi-wallet-entry]")) { await openMultiWalletEntry(); return; }
     if (event.target.closest("[data-wallet-consolidate-entry]")) { if (!(await ensureAccount())) return; await loadWallets(); if (!state.wallets.length) { await openWalletManager(); toast("Add or restore a wallet first.", true); return; } await openWalletManager({ consolidate: true }); return; }
     if (event.target.closest("[data-wallet-consolidate-from-bundle]")) { const selectedIndexes = $$('[data-multi-wallet]:checked').map((input) => Number(input.value)); if (!selectedIndexes.length) { toast("Choose at least one wallet.", true); return; } await openWalletManager({ consolidate: true, selectedIndexes }); return; }
-    if (event.target.closest("[data-wallet-swap]")) { closeSearch(); closeSheet(); setView("wallet-swap"); return; }
+    if (event.target.closest("[data-wallet-swap]")) {
+      closeSearch(); closeSheet();
+      state.walletSwapSide = "buy";
+      state.walletSwapPickerRole = "receive";
+      setView("wallet-swap");
+      await loadWalletBalancePreview({ force: true });
+      if (state.view === "wallet-swap") renderWalletSwap();
+      return;
+    }
     if (event.target.closest("[data-wallet-open-terminal]")) { state.walletSwapSelecting = false; openSearch(); return; }
     if (event.target.closest("[data-wallet-pick-token]")) { openWalletSwapAssetPicker("receive"); return; }
     if (event.target.closest("[data-wallet-swap-reverse]")) {
@@ -5020,7 +5053,19 @@
     if (event.target.closest("[data-wallet-show-asset]")) { setView("wallet-asset"); return; }
     if (event.target.closest("[data-wallet-expand-chart]")) { $(".wallet-inline-chart")?.classList.toggle("expanded"); return; }
     const walletSwapAmount = event.target.closest("[data-wallet-swap-amount]"); if (walletSwapAmount) { if (state.walletSwapSide === "sell") state.walletSwapSellPercent = walletSwapAmount.dataset.walletSwapAmount || "100"; else state.walletSwapAmount = walletSwapAmount.dataset.walletSwapAmount || "0.10"; renderWalletSwap(); return; }
-    if (event.target.closest("[data-wallet-review-swap]")) { const value = String($("[data-wallet-swap-input]")?.value || "").trim(); if (!activeWallet()) { openFundingSheet(); return; } if (state.walletSwapSide === "sell") { state.walletSwapSellPercent = value || state.walletSwapSellPercent || "100"; openTradeSheet("sell", { percent: state.walletSwapSellPercent }); } else { state.walletSwapAmount = value || state.walletSwapAmount || "0.10"; openTradeSheet("buy", { amount: state.walletSwapAmount }); } return; }
+    if (event.target.closest("[data-wallet-review-swap]")) {
+      const value = String($("[data-wallet-swap-input]")?.value || "").trim();
+      await loadWalletBalancePreview({ force: true });
+      if (!activeWallet()) { openFundingSheet(); return; }
+      if (state.walletSwapSide === "sell") {
+        state.walletSwapSellPercent = value || state.walletSwapSellPercent || "100";
+        openTradeSheet("sell", { percent: state.walletSwapSellPercent });
+      } else {
+        state.walletSwapAmount = value || state.walletSwapAmount || "0.10";
+        openTradeSheet("buy", { amount: state.walletSwapAmount, swapOnly: true });
+      }
+      return;
+    }
     const nav = event.target.closest("[data-nav]"); if (nav) { closeSearch(); closeSheet(); setView(nav.dataset.nav); return; }
     if (event.target.closest("[data-open-search]")) { openSearch(); return; }
     if (event.target.closest("[data-open-cash]")) { location.assign("/cash/?from=fun"); return; }
