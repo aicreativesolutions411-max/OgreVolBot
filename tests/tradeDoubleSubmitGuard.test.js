@@ -866,6 +866,12 @@ test("Telegram Buy is CA-first and scan/buy cards recover explicit 24h volume", 
   assert.match(functionBody(serverSource, "livePairCandidateToRow"), /pumpswap\|pump\[-_ \]\?amm\|raydium\|meteora\|orca/);
   const solCard = functionBody(serverSource, "formatSlimeScanCard");
   assert.match(solCard, /typeof stats\.onCurve === "boolean"/); // formatter cannot reclassify a migrated live pool as a stale curve
+  assert.match(solCard, /slimeScanPairIdentity/);
+  assert.match(solCard, /\$\$\{esc\(sym\)\} \/ \$\{esc\(quoteSymbol\)\}/); // real TOKEN / SOL pair identity, never a synthetic launch label
+  assert.doesNotMatch(solCard, /Fresh Launch/);
+  const solPng = functionBody(serverSource, "renderSolScanCardPng");
+  assert.match(solPng, /slimeScanPairIdentity/);
+  assert.doesNotMatch(solPng, /Fresh Launch/);
   assert.match(solCard, /volume24h > 0[\s\S]*<i>24h<\/i>/);
   assert.match(functionBody(serverSource, "renderSolScanCardPng"), /typeof stats\.onCurve === "boolean"/);
   const solBuyCard = functionBody(serverSource, "postGroupBuy");
@@ -5055,6 +5061,20 @@ test("Ticker Truth favors the dominant exact market and explains same-symbol clo
   assert.match(solLook, /deliverTelegramSolScan/);
   assert.match(functionBody(serverSource, "deliverTelegramSolScan"), /scanMarketStatsFromSources/); // caller MC matches card facts
   assert.match(functionBody(serverSource, "formatSlimeScanCard"), /Shield\s+<b>/); // explicit safety verdict remains on the full card
+  const identityPlaceholder = new Function("shortMint", `return function(value, mint) {${functionBody(serverSource, "slimeScanIdentityPlaceholder")}}`)(
+    (mint) => `${String(mint).slice(0, 4)}…${String(mint).slice(-4)}`
+  );
+  assert.equal(identityPlaceholder("Fresh Launch", "9HNEutCZLoo6GZWQTmAgVvbtmLGV1mdeR8X3HWTooYXt"), true);
+  assert.equal(identityPlaceholder("BABYANSEM", "9HNEutCZLoo6GZWQTmAgVvbtmLGV1mdeR8X3HWTooYXt"), false);
+  const settleSol = functionBody(serverSource, "settleTelegramSolScanCard");
+  assert.match(settleSol, /Exact Solana pair not found/);
+  assert.match(settleSol, /case-sensitive/);
+  assert.match(settleSol, /No trade controls are shown for an unverified pair/);
+  const deliverSol = functionBody(serverSource, "deliverTelegramSolScan");
+  assert.match(deliverSol, /inChannel && pairVerified/);
+  assert.match(deliverSol, /slimeScanSafetyProofReady\(scan\) && !slimeScanHardTradeRisk\(scan\)[\s\S]*queueScanCopyFromResolvedScan/);
+  const lookSol = functionBody(serverSource, "handleTelegramLookCommand");
+  assert.doesNotMatch(lookSol, /queueScanCopyFromResolvedScan\(message, mint/);
   assert.match(functionBody(serverSource, "renderSolScanCardPng"), /xFallbackLogoBuffer/); // every Sol card gets a circular PFP shell
 });
 
