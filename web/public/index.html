@@ -607,7 +607,7 @@
   .chartSplitMain.chartSplitAdjusted .tapeTable{max-height:none;min-height:58px;flex:1 1 auto}
   @media(max-width:820px){.chartTapeSplit{flex-basis:24px;height:24px}.chartTapeSplit:before{width:72px}.chartTapeSplit span{right:8px;font-size:8px}.chartSplitMain.chartSplitAdjusted .marketTape{padding-bottom:8px}}
 </style>
-<link rel="stylesheet" href="/terminal-pro.css?v=20260725a">
+<link rel="stylesheet" href="/terminal-pro.css?v=20260821a">
 <script defer src="/vendor/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -887,6 +887,7 @@
     }finally{state._rhBalancesLoading=false;}
   }
   function activeWalletObj(){return state.wallets.find(w=>w.index===state.activeWallet)||state.wallets[0]||null;}
+  function walletSnapshot(index){const wallet=(state.wallets||[]).find(w=>Number(w.index)===Number(index))||null;return wallet?{index:Number(wallet.index),label:String(wallet.label||("Wallet "+wallet.index)),publicKey:String(wallet.publicKey||"")}:null;}
   function tradeWalletOptionsHtml(){
     return (state.wallets||[]).map(w=>'<option value="'+w.index+'"'+(Number(w.index)===Number(state.activeWallet)?' selected':'')+'>'+esc(w.label||('Wallet '+w.index))+' · ◎'+Number(w.sol||0).toFixed(3)+(w.rhEth==null?'':' · '+Number(w.rhEth).toFixed(5)+' ETH')+'</option>').join('');
   }
@@ -1325,9 +1326,11 @@
     if(ok&&d&&d.ok){toast((d.summary||d.message)||"Returning everything to your connected wallet");await refreshWallets();return true;}
     toast((d&&(d.message||d.error))||"Return failed",true);return false;
   }
-  async function armExits(mint,tp,sl){
+  async function armExits(mint,tp,sl,walletScope){
     await ensureAutomation();   // arming server-side TP/SL needs the automation permission on your wallet
-    const {ok,d}=await jpost("/api/web/positions/arm-exits",{tokenMint:mint,takeProfitPct:String(tp||""),stopLossPct:String(sl||""),sellPercent:"100",sellDelay:"off"});
+    const selected=walletScope||walletSnapshot(state.activeWallet||1);
+    if(!selected||!selected.publicKey){toast("The selected wallet is still loading. Refresh Wallet, then try again.",true);return false;}
+    const {ok,d}=await jpost("/api/web/positions/arm-exits",{tokenMint:mint,takeProfitPct:String(tp||""),stopLossPct:String(sl||""),sellPercent:"100",sellDelay:"off",replaceExisting:true,walletIndexes:[Number(selected.index)],walletPublicKeys:[String(selected.publicKey)]});
     if(ok&&d&&d.ok){toast("🎯 TP/SL armed — it auto-sells at your targets");return true;}
     toast((d&&(d.message||d.error))||"Couldn't arm TP/SL",true);return false;
   }
@@ -1723,7 +1726,8 @@
     n.textContent=state.trenchTab==="picks"?"What the top wallets &amp; KOLs are buying — newest first.":state.trenchTab==="rh"?"Coins on Robinhood's brand-new chain — straight from the chain itself.":state.trenchTab==="slimehood"?"Coins launched through SlimeWire on Robinhood Chain — ✅ our no-rug contract.":"Fresh → about to migrate → graduated.";
     sb.appendChild(n);
   }
-  function subbarPortfolio(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Portfolio";sb.appendChild(h);const tabs=el("div","tabs");[["positions","Positions"],["nfts","NFTs"],["cards","History & PnL"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===state.portfolioTab?"on":"";b.onclick=()=>{state.portfolioTab=id;renderPortfolio();};tabs.appendChild(b);});sb.appendChild(tabs);}
+  function subbarPortfolio(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Portfolio";sb.appendChild(h);const tabs=el("div","tabs");[["positions","Positions"],["activity","Activity"],["orders","Orders & exits"],["nfts","NFTs"],["cards","PnL & cards"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===state.portfolioTab?"on":"";b.onclick=()=>setPortfolioTab(id);tabs.appendChild(b);});sb.appendChild(tabs);}
+  function setPortfolioTab(tab){state.portfolioTab=tab;renderPortfolio();}
   function subbarWallet(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Wallet";sb.appendChild(h);}
   function subbarTrade(r){const sb=$("#subbar");sb.innerHTML="";const back=el("button","chip");back.textContent="← Back";back.onclick=()=>go("trending");sb.appendChild(back);const h=el("h1");h.style.fontSize="15px";h.textContent=r?(r.symbol||short(state.mint)):short(state.mint);sb.appendChild(h);
     const mint=state.mint;if(mint){const ca=el("button","chip cachip");ca.title="Click to copy contract address";ca.innerHTML=esc(short(mint))+' <span class="cc">⧉</span>';ca.onclick=()=>copy(mint);sb.appendChild(ca);}}
@@ -2592,9 +2596,12 @@
   // Single full-width list, steady in-place refresh (syncCards, ~15s), client-enriched socials + stats.
   async function rhBuyAmount(address,amount,applyQuickTp=false){
     const a=String(amount||"").trim();
-    const result=await rhTrade(address,"buy",{payCurrency:"SOL",amountSol:a});
     const tp=applyQuickTp?rhQuickTp():0;
-    if(result&&tp>0)await rhArmQuickTakeProfit(address,tp);
+    const symbol=String((state.rhRows&&state.rhRows[String(address).toLowerCase()]&&state.rhRows[String(address).toLowerCase()].symbol)||(($("#rhTvSym")||{}).textContent)||"").trim();
+    const options={payCurrency:"SOL",amountSol:a};
+    if(tp>0)Object.assign(options,{autoExit:true,takeProfitPct:String(tp),stopLossPct:"",sellPercent:"100",symbol});
+    const result=await rhTrade(address,"buy",options);
+    if(result&&tp>0&&!result.autoExitArmed)toast("Buy landed, but take profit did not arm: "+(result.autoExitError||"open TP / SL and try again"),true);
     return result;
   }
   async function renderSlimePicks(wrap){
@@ -3689,12 +3696,13 @@
   // even with the app closed (uses /api/web/positions/arm-exits).
   function armExitsModal(mint,sym){
     const nm=sym||short(mint);
+    const selected=walletSnapshot(state.activeWallet||1);
     openModal('<h3>🎯 Auto-sell '+esc(nm)+'</h3>'+
       '<p class="sub mut" style="font-size:12px">Set a take-profit and/or stop-loss on this bag — it sells itself when hit, even if the app is closed.</p>'+
       '<div class="field row2"><div><label>Take profit %</label><input id="aeTp" inputmode="decimal" value="40"></div><div><label>Stop loss %</label><input id="aeSl" inputmode="decimal" value="8"></div></div>'+
       '<div id="aeMsg" class="wnote" style="margin:2px 0 12px"></div>'+
       '<div style="display:flex;gap:9px"><button class="wbtn ghost" style="flex:1" onclick="GG.closeModal()">Cancel</button><button class="wbtn" id="aeGo" style="flex:1">🎯 Arm auto-sell</button></div>');
-    const go=$("#aeGo");if(go)go.onclick=async()=>{const tp=$("#aeTp").value.trim(),sl=$("#aeSl").value.trim();if(!tp&&!sl){$("#aeMsg").textContent="Set a take-profit and/or stop-loss first.";return;}go.disabled=true;go.textContent="Arming…";const okk=await armExits(mint,tp,sl);go.disabled=false;go.textContent="🎯 Arm auto-sell";if(okk)closeModal();};
+    const go=$("#aeGo");if(go)go.onclick=async()=>{const tp=$("#aeTp").value.trim(),sl=$("#aeSl").value.trim();if(!tp&&!sl){$("#aeMsg").textContent="Set a take-profit and/or stop-loss first.";return;}go.disabled=true;go.textContent="Arming…";const okk=await armExits(mint,tp,sl,selected);go.disabled=false;go.textContent="🎯 Arm auto-sell";if(okk)closeModal();};
   }
   // 1-click buy contract: once you've set a quick-buy amount (+ optional TP/SL preset), the ⚡ Buy on
   // any pair fires instantly with it — no menu. The FIRST time (nothing set) it opens the quick-buy
@@ -3961,7 +3969,7 @@
     const explorer=String(trade.explorerUrl||trade.explorerTx||(sig?"https://solscan.io/tx/"+encodeURIComponent(sig):""));
     openModal('<h3>✓ '+esc((label||side)+" submitted")+'</h3><p class="sub mut" style="font-size:12px">One idempotent order was received. Portfolio balances refresh automatically while the chain and indexers settle.</p><div class="feebox"><div class="line"><span>Status</span><b>Submitted</b></div><div class="line"><span>Wallet</span><b>'+esc(wallet||"Managed wallet")+'</b></div><div class="line"><span>Amount</span><b>'+esc(amount)+'</b></div>'+(sig?'<div class="line"><span>Signature</span><button class="wbtn ghost" id="tradeReceiptCopy" type="button">'+esc(short(sig))+' · Copy</button></div>':'')+'</div>'+auto+settlement+persistence+'<div class="actions" style="margin-top:12px">'+(explorer?'<a class="wbtn" href="'+esc(explorer)+'" target="_blank" rel="noopener">View on explorer</a>':'')+'<button class="wbtn ghost" id="tradeReceiptActivity" type="button">View activity</button></div>');
     const copyBtn=$("#tradeReceiptCopy");if(copyBtn)copyBtn.onclick=()=>copy(sig,"Signature copied");
-    const activity=$("#tradeReceiptActivity");if(activity)activity.onclick=()=>{state.portfolioTab="cards";closeModal();go("portfolio");};
+    const activity=$("#tradeReceiptActivity");if(activity)activity.onclick=()=>{state.portfolioTab="activity";closeModal();go("portfolio");};
   }
   function handleTradeResult(ok,status,d,label){
     if(ok&&d&&d.ok&&d.trade){toast(label+" submitted");openTradeReceipt(d.trade,label);afterTradeRefresh();return;}
@@ -4014,6 +4022,10 @@
     if(portfolioPollT){clearTimeout(portfolioPollT);portfolioPollT=null;}
     const view=$("#v-portfolio");
     if(!state.token){view.innerHTML='<div class="empty"><div class="big">📊</div><div><b>No account yet</b><br><span class="mut">Set up a wallet to start tracking your positions and PnL here.</span></div><div class="cta" onclick="GG.go(\'wallet\')">Set up a wallet</div></div>';return;}
+    if(state.portfolioTab==="activity"||state.portfolioTab==="orders"){
+      view.innerHTML='<div class="loading"><span class="spin"></span> Loading activity…</div>';
+      const mode=state.portfolioTab,mount=()=>{if(state.route!=="portfolio"||state.portfolioTab!==mode)return;if(window.SlimeWirePro?.renderPortfolioActivity)window.SlimeWirePro.renderPortfolioActivity(view,mode);else setTimeout(mount,40);};mount();return;
+    }
     if(state.portfolioTab==="nfts"){return renderWalletNfts(view);}
     if(state.portfolioTab==="cards"){return renderPnlCards(view);}
     // Instant: show the last-known positions immediately, refresh in the background, repaint.
@@ -4562,11 +4574,11 @@
       const body={walletIndex:String(wi),side:swapDir,tokenAddress:swapTok.mint,tradeAttemptId:attemptId()};
       if(swapDir==="buy"){
         body.payCurrency="SOL";body.amountSol=String(amt);
+        if((Number(tp)>0)||(Number(sl)>0))Object.assign(body,{autoExit:true,takeProfitPct:tp||"",stopLossPct:sl||"",sellPercent:"100",symbol:swapTok.symbol||""});
       }else body.percent=String(amt);
       const {ok,d}=await jpost("/api/web/rh/trade",body);
       if(ok&&d&&d.ok){
-        let autoExitArmed=false,autoExitError="";
-        if(swapDir==="buy"&&((Number(tp)>0)||(Number(sl)>0))){const guard=await jpost("/api/web/rh/guards",{walletIndex:String(wi),tokenAddress:swapTok.mint,symbol:swapTok.symbol||"",takeProfitPct:tp,stopLossPct:sl,sellPercent:"100"}).catch(()=>null);autoExitArmed=Boolean(guard&&guard.ok&&guard.d&&guard.d.ok);if(!autoExitArmed)autoExitError=(guard&&guard.d&&(guard.d.message||guard.d.error))||"The TP/SL guard could not be armed.";}
+        const autoExitArmed=Boolean(d.autoExitArmed),autoExitError=String(d.autoExitError||"");
         const rhWallet=state.wallets.find(w=>Number(w.index)===Number(wi));
         openTradeReceipt({type:swapDir,signature:(d.txHashes||[]).at(-1)||"",explorerUrl:d.explorerTx||"",walletLabel:(rhWallet&&rhWallet.label)||("Wallet "+wi),walletPublicKey:(rhWallet&&rhWallet.publicKey)||"",spentSol:swapDir==="buy"?((d.solFunding&&d.solFunding.amountSol)||amt):null,netSol:swapDir==="sell"&&d.solCashout?d.solCashout.outSol:null,solCashoutError:d.solCashoutError||"",recordError:d.recordError||"",autoExitArmed,autoExitError},swapDir==="buy"?"Buy":"Sell");
       } else toast((d&&(d.message||d.error))||"Trade failed",true);
@@ -4595,19 +4607,19 @@
     const logEl=$("#swLadderLog");if(logEl)logEl.innerHTML="";
     const b=$("#swGo");b.disabled=true;b.textContent="Laddering…";
     if(swapChain==="robinhood"){
-      staggerRunning=true;let okc=0,fail=0;
+      staggerRunning=true;let okc=0,fail=0,unprotected=0;
       for(let k=0;k<wallets.length;k++){
         const idx=wallets[k];const amt=min+Math.random()*(max-min);
         let tpv=String(tp);if(tpTop&&Number(tpTop)>Number(tp))tpv=String(Math.round((Number(tp)+(Number(tpTop)-Number(tp))*(wallets.length>1?k/(wallets.length-1):0))*10)/10);
-        const rhLadderBody={walletIndex:String(idx),side:"buy",tokenAddress:swapTok.mint,tradeAttemptId:attemptId()};
+        const rhLadderBody={walletIndex:String(idx),side:"buy",tokenAddress:swapTok.mint,tradeAttemptId:attemptId(),autoExit:true,takeProfitPct:tpv,stopLossPct:sl||"",sellPercent:"100",symbol:swapTok.symbol||""};
         if(swapRhPayAsset==="sol"){rhLadderBody.payCurrency="SOL";rhLadderBody.amountSol=amt.toFixed(5);}
         else{rhLadderBody.payCurrency="ETH";rhLadderBody.amountEth=amt.toFixed(5);}
         const {ok,d}=await jpost("/api/web/rh/trade",rhLadderBody);
-        const good=ok&&d&&d.ok;if(good){okc++;await jpost("/api/web/rh/guards",{walletIndex:String(idx),tokenAddress:swapTok.mint,symbol:swapTok.symbol||"",takeProfitPct:tpv,stopLossPct:sl,sellPercent:"100"}).catch(()=>{});}else fail++;
-        staggerLog(logEl,'<div style="font-size:12px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)"><b style="color:'+(good?"var(--green)":"var(--red)")+'">🟢 BUY '+amt.toFixed(4)+' '+(swapRhPayAsset==="sol"?"SOL":"ETH")+' · TP '+tpv+'%</b> · wallet '+idx+' · '+(good?"✓":esc(String((d&&(d.message||d.error))||"failed").slice(0,34)))+'</div>');
+        const good=ok&&d&&d.ok,protectedOk=good&&Boolean(d.autoExitArmed);if(good){okc++;if(!protectedOk)unprotected++;}else fail++;
+        staggerLog(logEl,'<div style="font-size:12px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)"><b style="color:'+(protectedOk?"var(--green)":good?"#d7bc78":"var(--red)")+'">🟢 BUY '+amt.toFixed(4)+' '+(swapRhPayAsset==="sol"?"SOL":"ETH")+' · TP '+tpv+'%</b> · wallet '+idx+' · '+(protectedOk?"✓ armed":good?("buy ✓ · exit failed: "+esc(String(d.autoExitError||"retry TP / SL").slice(0,34))):esc(String((d&&(d.message||d.error))||"failed").slice(0,34)))+'</div>');
         if(k<wallets.length-1)await sleepMs(Math.round(rnd(1,4)*1000));
       }
-      staggerRunning=false;toast("Ladder done — "+okc+" armed"+(fail?", "+fail+" failed":""));
+      staggerRunning=false;toast("Ladder done — "+(okc-unprotected)+" armed"+(unprotected?", "+unprotected+" bought but unprotected":"")+(fail?", "+fail+" failed":""),unprotected>0);
     } else {
       const r=await runStagger({wallets,rounds:1,mode:"buy",amtMin:min,amtMax:max,sellMin:0,sellMax:0,sellBias:0,delayMin:1,delayMax:4,slip:Number(slip),tp:tp,tpTop:tpTop||"",sl:sl},logEl);
       toast("Ladder done — "+r.okc+" buys"+(r.fail?", "+r.fail+" failed":"")+" · ◎"+r.spent.toFixed(3));
@@ -5576,7 +5588,7 @@
   document.addEventListener("click",(e)=>{if(!e.target.closest(".ctmore"))document.querySelectorAll(".ctmore.open").forEach(x=>x.classList.remove("open"));});
 
   // ---------- expose + boot ----------
-  window.GG={open:openCoinRoute,openSell:(m)=>{state.pendingSell=m;go("trade",m);},sellPos:(m,s)=>quickSellModal(m,s),sendPos:(m,s)=>sendTokenModal(m,s),armPos:(m,s)=>armExitsModal(m,s),go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,setMarketChain,saveBackupFile,copyBackupFile,
+  window.GG={open:openCoinRoute,openSell:(m)=>{state.pendingSell=m;go("trade",m);},sellPos:(m,s)=>quickSellModal(m,s),sendPos:(m,s)=>sendTokenModal(m,s),armPos:(m,s)=>armExitsModal(m,s),go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,setPortfolioTab,walletSnapshot,setMarketChain,saveBackupFile,copyBackupFile,
     escrowModal,renderEscrow,escrowFinalize,escrowRefund,launchesModal,claimFees,claimPumpReward,loadPumpRewards,dexProfileReview,saveDexProfileDraft,openDexProfileCheckout,exportPumpCreatorWallet,toast,
     launchRh:()=>{state.launchRail="robinhood";state.launchTab="coin";go("launch");},
     rhTrade:(a)=>rhTradeModal(a),rhBuy:(a,amt)=>rhBuyAmount(a,amt),rhBuyAmount:(a,amt)=>rhBuyAmount(a,amt),rhSell:(a,p)=>rhTrade(a,"sell",{percent:p}),rhQuick:(a)=>rhBuyAmount(a,rhQuickEth()),
@@ -5630,7 +5642,7 @@
   });
 })();
 </script>
-<script src="/terminal-pro.js?v=20260725a"></script>
+<script src="/terminal-pro.js?v=20260821a"></script>
 <script src="/fun-indicators.js?v=20260719a"></script>
 </body>
 </html>

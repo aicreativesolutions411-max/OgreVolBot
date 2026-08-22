@@ -1,5 +1,15 @@
 const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
+// Keep provider uncertainty distinct from a confirmed wallet. Telegram scan inputs are token-oriented,
+// so callers may optimistically keep an unknown address on the scan path while the explicit /wallet
+// command remains authoritative. Collapsing null to false was routing real tokens to wallet cards during
+// short RPC/Blockscout/DexScreener outages.
+export function rhAddressScanRoute(classification) {
+  if (classification?.isToken === true) return "token";
+  if (classification?.isToken === false) return "wallet";
+  return "unknown";
+}
+
 function withTimeout(ms) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);

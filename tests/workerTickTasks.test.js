@@ -10,14 +10,20 @@ test("fast TP/SL tick can skip broad portfolio scanning while keeping web guards
     runTradePlans: true,
     runPortfolioExits: false,
     runWebExitGuards: true,
-    runTimedTradePlans: true
+    runTimedTradePlans: true,
+    runRhGuards: true,
+    runLimitOrders: false
   }, {
-    workerTickRunTradePlans: true
+    workerTickRunTradePlans: true,
+    workerTickRunRhGuards: true,
+    workerTickRunLimitOrders: true
   });
 
   assert.equal(flags.portfolioExits, false);
   assert.equal(flags.webExitGuards, true);
   assert.equal(flags.tradePlans, true);
+  assert.equal(flags.rhGuards, true);
+  assert.equal(flags.limitOrders, false);
 });
 
 test("worker tick defaults remain backward compatible", () => {
@@ -28,7 +34,9 @@ test("worker tick defaults remain backward compatible", () => {
   assert.deepEqual(flags, {
     portfolioExits: true,
     webExitGuards: true,
-    tradePlans: true
+    tradePlans: true,
+    rhGuards: true,
+    limitOrders: true
   });
 });
 
@@ -38,7 +46,9 @@ test("data worker can never claim trade or portfolio tasks", () => {
     runTradePlans: true,
     runPortfolioExits: true,
     runWebExitGuards: true,
-    runTimedTradePlans: true
+    runTimedTradePlans: true,
+    runRhGuards: true,
+    runLimitOrders: true
   }, {
     workerTickRunTradePlans: true,
     taskSet: "data"
@@ -47,7 +57,9 @@ test("data worker can never claim trade or portfolio tasks", () => {
   assert.deepEqual(flags, {
     portfolioExits: false,
     webExitGuards: false,
-    tradePlans: false
+    tradePlans: false,
+    rhGuards: false,
+    limitOrders: false
   });
 });
 
@@ -57,7 +69,9 @@ test("broad trade tick can run portfolio fallback without duplicating the fast p
     runTradePlans: false,
     runPortfolioExits: true,
     runWebExitGuards: false,
-    runTimedTradePlans: false
+    runTimedTradePlans: false,
+    runRhGuards: false,
+    runLimitOrders: true
   }, {
     workerTickRunTradePlans: true,
     taskSet: "trade"
@@ -66,8 +80,27 @@ test("broad trade tick can run portfolio fallback without duplicating the fast p
   assert.deepEqual(flags, {
     portfolioExits: true,
     webExitGuards: false,
-    tradePlans: false
+    tradePlans: false,
+    rhGuards: false,
+    limitOrders: true
   });
+});
+
+test("RH guards and limit orders have independent server-side feature gates", () => {
+  const flags = workerTickTaskFlags({
+    taskSet: "trade",
+    runRhGuards: true,
+    runLimitOrders: true
+  }, {
+    workerTickRunTradePlans: true,
+    workerTickRunRhGuards: false,
+    workerTickRunLimitOrders: false,
+    taskSet: "trade"
+  });
+
+  assert.equal(flags.tradePlans, true);
+  assert.equal(flags.rhGuards, false);
+  assert.equal(flags.limitOrders, false);
 });
 
 test("periodic task only runs when its interval is due", () => {

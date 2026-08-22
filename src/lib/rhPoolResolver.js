@@ -11,6 +11,7 @@ export const RH_POOL_QUOTE_TOKENS = new Set([
 ]);
 
 const poolResolutionCache = new Map();
+const poolResolutionInFlight = new Map();
 const resolvedPoolHintsByToken = new Map();
 
 function rememberResolvedPoolHint(tokenAddress, poolAddress, pair = null) {
@@ -132,6 +133,18 @@ async function firstResolved(tasks) {
   });
 }
 
+async function waitForInteractiveResolution(promise, fallback, timeoutMs) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => { timer = setTimeout(() => resolve(fallback), timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** Resolve an exact RH pool address to the traded token; normal tokens pass through. */
 export async function resolveRhPoolToken(address, options = {}) {
   const input = normalizeAddress(address);
@@ -142,30 +155,44 @@ export async function resolveRhPoolToken(address, options = {}) {
   const cacheMs = cached?.resolved ? 24 * 60 * 60_000 : 30_000;
   if (cached && now - cached.at < cacheMs) return cached.token;
 
+  const interactive = options.interactive === true;
+  const interactiveTimeoutMs = Math.max(100, Math.min(900, Number(options.interactiveTimeoutMs) || 450));
+  const pending = poolResolutionInFlight.get(key);
+  if (pending) return interactive
+    ? waitForInteractiveResolution(pending, cached?.token || input, interactiveTimeoutMs)
+    : pending;
+
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   if (typeof fetchImpl !== "function") return input;
   const timeoutMs = Math.max(250, Number(options.timeoutMs) || 2500);
-  const dexTask = fetchJsonWithin(fetchImpl, `https://api.dexscreener.com/latest/dex/pairs/robinhood/${key}`, timeoutMs)
-    .then((data) => dexPairToken(data, input));
-  // DexScreener's direct pair route and search index are separate deployments;
-  // either can briefly know a new pool before the other. Exact-address matching
-  // keeps the search fallback safe from same-symbol clone mistakes.
-  const dexSearchTask = fetchJsonWithin(fetchImpl, `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(key)}`, timeoutMs)
-    .then((data) => dexPairToken(data, input));
-  // The public Robinhood RPC is the only server-side fallback. GeckoTerminal is
-  // intentionally browser-only in this project because Render's shared IP is
-  // hard-rate-limited. token0/token1 resolution remains conservative: the RPC
-  // result is accepted only when exactly one side is a known quote asset.
-  const rpcTask = rpcPoolToken(fetchImpl, String(options.rpcUrl || RH_PUBLIC_RPC), input, timeoutMs);
-  const token = await firstResolved([dexTask, dexSearchTask, rpcTask]);
-  const result = token || input;
-  if (token && token.toLowerCase() !== key) rememberResolvedPoolHint(token, input);
-  poolResolutionCache.set(key, { at: now, token: result, resolved: Boolean(token && token.toLowerCase() !== key) });
-  if (poolResolutionCache.size > 500) poolResolutionCache.delete(poolResolutionCache.keys().next().value);
-  return result;
+  const task = (async () => {
+    const dexTask = fetchJsonWithin(fetchImpl, `https://api.dexscreener.com/latest/dex/pairs/robinhood/${key}`, timeoutMs)
+      .then((data) => dexPairToken(data, input));
+    // DexScreener's direct pair route and search index are separate deployments;
+    // either can briefly know a new pool before the other. Exact-address matching
+    // keeps the search fallback safe from same-symbol clone mistakes.
+    const dexSearchTask = fetchJsonWithin(fetchImpl, `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(key)}`, timeoutMs)
+      .then((data) => dexPairToken(data, input));
+    // The public Robinhood RPC is the only server-side fallback. GeckoTerminal is
+    // intentionally browser-only in this project because Render's shared IP is
+    // hard-rate-limited. token0/token1 resolution remains conservative: the RPC
+    // result is accepted only when exactly one side is a known quote asset.
+    const rpcTask = rpcPoolToken(fetchImpl, String(options.rpcUrl || RH_PUBLIC_RPC), input, timeoutMs);
+    const token = await firstResolved([dexTask, dexSearchTask, rpcTask]);
+    const result = token || input;
+    if (token && token.toLowerCase() !== key) rememberResolvedPoolHint(token, input);
+    poolResolutionCache.set(key, { at: Date.now(), token: result, resolved: Boolean(token && token.toLowerCase() !== key) });
+    if (poolResolutionCache.size > 500) poolResolutionCache.delete(poolResolutionCache.keys().next().value);
+    return result;
+  })().finally(() => {
+    if (poolResolutionInFlight.get(key) === task) poolResolutionInFlight.delete(key);
+  });
+  poolResolutionInFlight.set(key, task);
+  return interactive ? waitForInteractiveResolution(task, cached?.token || input, interactiveTimeoutMs) : task;
 }
 
 export function clearRhPoolResolverCache() {
   poolResolutionCache.clear();
+  poolResolutionInFlight.clear();
   resolvedPoolHintsByToken.clear();
 }

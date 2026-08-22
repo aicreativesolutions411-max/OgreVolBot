@@ -576,6 +576,22 @@
     else { const node = one("#toast"); if (node) { node.textContent = message; node.className = `toast show${error ? " err" : ""}`; setTimeout(() => { node.className = "toast"; }, 3000); } }
   }
 
+  async function freezeManagedWallet(walletIndex) {
+    const index = Number(walletIndex) || 1;
+    const exposed = window.GG?.walletSnapshot?.(index);
+    if (exposed?.publicKey) return { index, publicKey: String(exposed.publicKey), label: String(exposed.label || `Wallet ${index}`) };
+    try {
+      const saved = JSON.parse(localStorage.getItem("slimewireTerminalWalletPreviewV1") || "null");
+      const preview = Array.isArray(saved?.wallets) ? saved.wallets.find((row) => Number(row?.index) === index) : null;
+      if (preview?.publicKey) return { index, publicKey: String(preview.publicKey), label: String(preview.label || `Wallet ${index}`) };
+    } catch (_) {}
+    const result = await request("/api/web/wallets");
+    const wallet = result.ok && result.data?.ok && Array.isArray(result.data.wallets)
+      ? result.data.wallets.find((row) => Number(row?.index) === index)
+      : null;
+    return wallet?.publicKey ? { index, publicKey: String(wallet.publicKey), label: String(wallet.label || `Wallet ${index}`) } : null;
+  }
+
   async function refreshOrders(context) {
     const list = one("[data-pro-order-list]"); if (!list) return;
     const result = await request(`/api/web/market-orders?token=${encodeURIComponent(context.token)}`), rows = result.ok && result.data?.ok ? (result.data.orders || []) : [];
@@ -587,29 +603,209 @@
     const context = currentContext(trade), token = localStorage.getItem(TOKEN_KEY) || "";
     if (!token) { toast("Open Wallet to create or log into your profile first", true); window.GG?.go?.("wallet"); return; }
     const mcText = (one(context.rh ? "#rhTvStats div:first-child b" : "#thead .st div:first-child b") || {}).textContent || "—", wallet = Number(localStorage.getItem(ACTIVE_WALLET_KEY)) || 1;
+    // Freeze the reviewed wallet by index + public key. A wallet switch while
+    // this sheet is open cannot redirect an already-reviewed server-side order.
+    const frozenWallet = await freezeManagedWallet(wallet);
+    if (!frozenWallet?.publicKey) { toast("Wallet details are still loading. Refresh Wallet, then try again.", true); return; }
     const modal = one("#modal"), box = one("#modalBox"); if (!modal || !box) return;
     box.innerHTML = `<button class="x" type="button" data-pro-order-close>✕</button><div class="proOrders"><h3>⏱ Market-cap orders</h3><p class="sub mut" style="font-size:12px">${escapeHtml(context.symbol)} · current MC ${escapeHtml(mcText)} · wallet ${wallet}. Add one rule or combine all three.</p>
       <div class="orderCard"><h4>Auto buy</h4><div class="fieldGrid"><div class="field"><label>Buy when MC touches</label><input data-order-buy-mc inputmode="decimal" placeholder="30k"></div><div class="field"><label>Spend SOL</label><input data-order-buy-sol inputmode="decimal" value="0.1"></div></div></div>
-      <div class="orderCard"><h4>Profit ladder</h4><div class="fieldGrid"><div class="field"><label>MC targets</label><input data-order-ladder-mc placeholder="75k, 100k, 150k"></div><div class="field"><label>Sell % at each</label><input data-order-ladder-sell placeholder="25, 25, 50"></div></div></div>
+      <div class="orderCard"><h4>Profit ladder</h4><div class="fieldGrid"><div class="field"><label>MC targets</label><input data-order-ladder-mc placeholder="75k, 100k, 150k"></div><div class="field"><label>Sell % of remaining</label><input data-order-ladder-sell placeholder="25, 25, 100"></div></div></div>
       <div class="orderCard"><h4>Stop loss by MC</h4><div class="fieldGrid"><div class="field"><label>Exit if MC touches</label><input data-order-stop-mc inputmode="decimal" placeholder="20k"></div><div class="field"><label>Sell %</label><input data-order-stop-sell inputmode="numeric" value="100"></div></div></div>
       <button class="wbtn" type="button" data-pro-submit-orders style="width:100%">Arm selected orders</button><p class="wnote">Targets above or below the current market cap are handled automatically. Orders run server-side after you close the site.</p><div class="orderList" data-pro-order-list><div class="orderRow"><span>Loading active orders…</span></div></div></div>`;
+    box.dataset.proOrderAttempt = `market-orders-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     modal.classList.add("on"); one("[data-pro-order-close]", box)?.addEventListener("click", () => window.GG?.closeModal?.());
     one("[data-pro-submit-orders]", box)?.addEventListener("click", async (event) => {
       const orders = [], buyText = one("[data-order-buy-mc]", box)?.value.trim() || "", buyMc = parseMarketCap(buyText), buySol = Number(one("[data-order-buy-sol]", box)?.value || 0);
       if (buyText) { if (!buyMc || buySol < .005) { toast("Add a valid buy MC and at least 0.005 SOL", true); return; } orders.push({ side: "buy", targetMarketCapUsd: buyMc, amountSol: buySol }); }
       const targets = String(one("[data-order-ladder-mc]", box)?.value || "").split(",").map(parseMarketCap).filter((value) => value > 0).slice(0, 4), sells = String(one("[data-order-ladder-sell]", box)?.value || "").split(",").map(Number);
-      targets.forEach((target, index) => orders.push({ side: "sell", targetMarketCapUsd: target, sellPercent: sells[index] > 0 ? sells[index] : Math.max(1, Math.floor(100 / targets.length)) }));
+      targets.forEach((target, index) => orders.push({ side: "sell", targetMarketCapUsd: target, sellPercent: sells[index] > 0 ? sells[index] : (index === targets.length - 1 ? 100 : Math.max(1, Math.floor(100 / targets.length))) }));
       const stop = parseMarketCap(one("[data-order-stop-mc]", box)?.value), stopSell = Number(one("[data-order-stop-sell]", box)?.value || 100); if (stop) orders.push({ side: "sell", targetMarketCapUsd: stop, sellPercent: stopSell });
       if (!orders.length) { toast("Add a buy target, profit target, or stop loss", true); return; }
       if (orders.some((order) => order.side === "sell" && (!(order.sellPercent >= 1) || order.sellPercent > 100))) { toast("Sell percentages must be 1–100%", true); return; }
       event.currentTarget.disabled = true; event.currentTarget.textContent = "Arming…";
       await request("/api/web/profile/automation", { method: "POST", body: JSON.stringify({ action: "enable" }) });
-      const currentMc = parseMarketCap(mcText), result = await request("/api/web/market-orders", { method: "POST", body: JSON.stringify({ token: context.token, symbol: context.symbol, walletIndex: String(wallet), currentMarketCapUsd: currentMc, orders }) });
+      const currentMc = parseMarketCap(mcText), result = await request("/api/web/market-orders", { method: "POST", body: JSON.stringify({ token: context.token, symbol: context.symbol, walletIndex: String(frozenWallet.index), walletPublicKey: frozenWallet.publicKey, currentMarketCapUsd: currentMc, clientRequestId: box.dataset.proOrderAttempt, orders }) });
       event.currentTarget.disabled = false; event.currentTarget.textContent = "Arm selected orders";
       if (!result.ok || !result.data?.ok) { toast(result.data?.message || result.data?.error || "Could not arm orders", true); return; }
       toast(`${result.data.armed?.length || orders.length} order${orders.length === 1 ? "" : "s"} armed`); await refreshOrders(context);
     });
     await refreshOrders(context);
+  }
+
+  let portfolioLoadSequence = 0;
+
+  function ensurePortfolioActivityStyles() {
+    if (one("#proPortfolioActivityStyles")) return;
+    const style = document.createElement("style");
+    style.id = "proPortfolioActivityStyles";
+    style.textContent = `
+      .proActivityShell{display:grid;gap:12px;max-width:1160px;margin:0 auto;padding:2px 0 30px}
+      .proActivityHero{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:18px;border:1px solid rgba(114,255,35,.22);border-radius:18px;background:linear-gradient(135deg,rgba(114,255,35,.075),rgba(8,14,9,.95) 46%,rgba(102,65,255,.08));box-shadow:inset 0 1px rgba(255,255,255,.035)}
+      .proActivityHero h2{margin:3px 0 5px;font-size:20px}.proActivityHero p{margin:0;color:var(--muted);font-size:12px;line-height:1.5}.proActivityEyebrow{color:var(--green);font-size:9px;font-weight:900;letter-spacing:.14em;text-transform:uppercase}
+      .proActivityScopes{display:flex;gap:7px;flex-wrap:wrap}.proActivityScopes button{border:1px solid var(--border);border-radius:999px;background:#0a100b;color:var(--muted);padding:8px 11px;font:800 10px var(--font);cursor:pointer}.proActivityScopes button.on{border-color:rgba(114,255,35,.55);color:#071006;background:var(--green)}
+      .proActivitySummary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.proActivitySummary article{padding:12px 14px;border:1px solid var(--border);border-radius:13px;background:rgba(8,13,9,.86)}.proActivitySummary span{display:block;color:var(--muted2);font-size:9px;text-transform:uppercase;letter-spacing:.08em}.proActivitySummary b{display:block;margin-top:4px;font-size:15px}
+      .proActivitySection{border:1px solid var(--border);border-radius:16px;background:rgba(7,12,8,.88);overflow:hidden}.proActivitySectionHead{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 15px;border-bottom:1px solid var(--border)}.proActivitySectionHead h3{margin:0;font-size:13px}.proActivitySectionHead span{font-size:10px;color:var(--muted)}
+      .proActivityList{display:grid}.proActivityRow{display:grid;grid-template-columns:minmax(155px,1.1fr) minmax(225px,1.5fr) minmax(130px,.8fr) auto;align-items:center;gap:12px;padding:13px 15px;border-bottom:1px solid var(--border2)}.proActivityRow:last-child{border-bottom:0}.proActivityAsset{display:flex;align-items:center;gap:10px;min-width:0}.proActivityAvatar{position:relative;display:grid;place-items:center;width:38px;height:38px;flex:0 0 38px;border-radius:12px;background:linear-gradient(145deg,#203423,#0a100b);border:1px solid rgba(114,255,35,.25);color:var(--green);font-size:12px;font-weight:900;overflow:hidden}.proActivityAvatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.proActivityAsset b,.proActivityWallet b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}.proActivityAsset small,.proActivityWallet small{display:block;margin-top:3px;color:var(--muted);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .proActivityLegs{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px}.proActivityLeg{min-width:0;padding:8px 9px;border:1px solid var(--border2);border-radius:10px;background:rgba(14,23,15,.7)}.proActivityLeg span{display:block;color:var(--muted2);font-size:8px;text-transform:uppercase;letter-spacing:.08em}.proActivityLeg b{display:block;margin-top:3px;font:800 11px var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.proActivityArrow{color:var(--green);font-size:15px}
+      .proActivityMeta{text-align:right}.proActivityMeta b{display:block;font-size:10px}.proActivityMeta span{display:block;margin-top:4px;color:var(--muted);font-size:9px}.proActivityLinks{display:flex;justify-content:flex-end;gap:6px}.proActivityLinks a,.proActivityLinks button{padding:7px 9px;border:1px solid var(--border);border-radius:9px;background:transparent;color:var(--text);font:800 9px var(--sans);text-decoration:none;cursor:pointer}.proActivityLinks a:hover,.proActivityLinks button:hover{border-color:var(--green);color:var(--green)}.proActivityLinks button:disabled{opacity:.55;cursor:wait}
+      .proActivityBadge{display:inline-flex!important;width:max-content;margin-top:4px!important;padding:2px 6px;border:1px solid rgba(114,255,35,.25);border-radius:999px;color:var(--green)!important;font-size:8px!important;text-transform:uppercase;letter-spacing:.05em}.proActivityBadge.history{border-color:var(--border);color:var(--muted)!important}.proActivityBadge.attention{border-color:rgba(255,190,60,.45);color:#d7bc78!important;background:rgba(255,190,60,.06)}.proActivityEmpty{padding:24px 16px;text-align:center;color:var(--muted);font-size:11px}.proActivityWarn{padding:10px 13px;border:1px solid rgba(255,190,60,.25);border-radius:11px;background:rgba(255,190,60,.055);color:#d7bc78;font-size:10px}
+      @media(max-width:760px){.proActivityHero{display:grid}.proActivitySummary{grid-template-columns:1fr 1fr}.proActivitySummary article:first-child{grid-column:1/-1}.proActivityRow{grid-template-columns:minmax(0,1fr) auto;gap:10px}.proActivityLegs{grid-column:1/-1;grid-row:2}.proActivityWallet{min-width:0}.proActivityLinks{grid-column:1/-1;justify-content:flex-start}.proActivityMeta{text-align:right}.proActivitySectionHead{align-items:flex-start}.proActivityAvatar{width:34px;height:34px;flex-basis:34px}}
+    `;
+    document.head.appendChild(style);
+  }
+
+  function compactAmount(value, fallback = "—") {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return value == null || value === "" ? fallback : String(value);
+    if (number === 0) return "0";
+    if (Math.abs(number) >= 1e9) return `${(number / 1e9).toFixed(2)}B`;
+    if (Math.abs(number) >= 1e6) return `${(number / 1e6).toFixed(2)}M`;
+    if (Math.abs(number) >= 1e3) return number.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    return number.toLocaleString(undefined, { maximumFractionDigits: 6 });
+  }
+
+  function activityTime(value) {
+    const timestamp = Date.parse(value || "");
+    if (!Number.isFinite(timestamp)) return { relative: "Time unavailable", exact: "" };
+    const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+    const relative = seconds < 45 ? "Just now" : seconds < 3600 ? `${Math.floor(seconds / 60)}m ago` : seconds < 86400 ? `${Math.floor(seconds / 3600)}h ago` : seconds < 604800 ? `${Math.floor(seconds / 86400)}d ago` : new Date(timestamp).toLocaleDateString();
+    return { relative, exact: new Date(timestamp).toLocaleString() };
+  }
+
+  function tokenMetaMap(pnl) {
+    const map = new Map();
+    for (const row of Array.isArray(pnl?.tokens) ? pnl.tokens : []) {
+      const token = String(row?.tokenMint || row?.address || "").toLowerCase();
+      if (token) map.set(token, row);
+    }
+    return map;
+  }
+
+  function activityAvatar(meta, symbol) {
+    const image = String(meta?.imageUrl || meta?.iconUrl || "");
+    const letter = String(symbol || "?").replace(/^\$+/, "").slice(0, 2).toUpperCase() || "?";
+    return `<span class="proActivityAvatar">${escapeHtml(letter)}${image ? `<img src="${escapeHtml(image)}" alt="" loading="lazy" onerror="this.remove()">` : ""}</span>`;
+  }
+
+  function explorerUrl(chain, signature, token) {
+    const rh = chain === "robinhood" || isRobinhood(token);
+    if (signature) return `${rh ? "https://robinhoodchain.blockscout.com/tx/" : "https://solscan.io/tx/"}${encodeURIComponent(signature)}`;
+    if (!token) return "";
+    return `${rh ? "https://robinhoodchain.blockscout.com/token/" : "https://solscan.io/token/"}${encodeURIComponent(token)}`;
+  }
+
+  function activityRowHtml(row, metaByToken) {
+    const token = String(row.tokenMint || row.tokenAddress || row.token || ""), meta = metaByToken.get(token.toLowerCase()) || {};
+    const symbol = String(row.symbol || meta.symbol || row.shortMint || row.shortToken || short(token) || "Token").replace(/^\$+/, ""), side = String(row.side || row.type || "").toLowerCase() === "sell" ? "sell" : "buy";
+    const left = row.leftText || (side === "buy" ? `${compactAmount(row.solAmount ?? row.amountSol)} SOL` : `${row.sellPercent ? `${compactAmount(row.sellPercent)}% ` : compactAmount(row.tokenAmount) + " "}$${symbol}`);
+    const right = row.rightText || (side === "buy" ? `${compactAmount(row.tokenAmount, "Token amount pending")} $${symbol}` : `${compactAmount(row.solAmount, "SOL pending")} SOL`);
+    const time = activityTime(row.timestamp || row.completedAt || row.triggeredAt || row.updatedAt || row.createdAt), walletKey = String(row.walletPublicKey || row.publicKey || ""), wallet = String(row.walletLabel || row.label || (row.walletIndex ? `Wallet ${row.walletIndex}` : "Managed wallet"));
+    const signature = String(row.signature || row.sellSignature || row.txHash || ""), explorer = String(row.explorerUrl || "") || explorerUrl(row.chain, signature, token), source = String(row.sourceLabel || row.source || "SlimeWire");
+    const status = String(row.statusLabel || row.status || "confirmed"), active = Boolean(row.isActive), chartHash = `${isRobinhood(token) ? "#rhtrade/" : "#trade/"}${encodeURIComponent(token)}`, title = String(row.displayName || `$${symbol}`);
+    const badgeClass = row.needsAttention ? " attention" : active ? "" : " history";
+    return `<article class="proActivityRow">
+      <div class="proActivityAsset">${activityAvatar(meta, symbol)}<div><b>${escapeHtml(title)}</b><small>${escapeHtml(short(token) || row.assetDetail || row.chain || "")}</small><span class="proActivityBadge${badgeClass}">${escapeHtml(row.kindLabel || (side === "sell" ? "Sell" : "Buy"))} · ${escapeHtml(status)}</span></div></div>
+      <div class="proActivityLegs"><div class="proActivityLeg"><span>${escapeHtml(row.leftLabel || (side === "buy" ? "Paid" : "Sold"))}</span><b>${escapeHtml(left)}</b></div><span class="proActivityArrow">→</span><div class="proActivityLeg"><span>${escapeHtml(row.rightLabel || "Received")}</span><b>${escapeHtml(right)}</b></div></div>
+      <div class="proActivityWallet"><b>${escapeHtml(wallet)}</b><small title="${escapeHtml(walletKey)}">${escapeHtml(short(walletKey) || "Wallet identity recorded")}</small><small>${escapeHtml(source)}</small></div>
+      <div class="proActivityMeta"><b title="${escapeHtml(time.exact)}">${escapeHtml(time.relative)}</b><span>${row.targetMarketCapUsd ? `Target ${escapeHtml(formatUsd(row.targetMarketCapUsd))}` : escapeHtml(row.detail || "")}</span><div class="proActivityLinks">${token ? `<a href="${chartHash}">Chart</a>` : ""}${explorer ? `<a href="${escapeHtml(explorer)}" target="_blank" rel="noopener noreferrer">Explorer ↗</a>` : ""}${row.canCancel ? `<button type="button" data-pro-cancel-global="${escapeHtml(row.id)}" data-chain="${escapeHtml(row.cancelChain || row.chain || "solana")}">Cancel</button>` : ""}</div></div>
+    </article>`;
+  }
+
+  function activitySection(title, subtitle, rows, metaByToken, emptyText) {
+    return `<section class="proActivitySection"><header class="proActivitySectionHead"><h3>${escapeHtml(title)}</h3><span>${escapeHtml(subtitle)}</span></header><div class="proActivityList">${rows.length ? rows.map((row) => activityRowHtml(row, metaByToken)).join("") : `<div class="proActivityEmpty">${escapeHtml(emptyText)}</div>`}</div></section>`;
+  }
+
+  function normalizeOrderRows(orders, plans, rhGuards) {
+    const market = (Array.isArray(orders) ? orders : []).map((order) => {
+      const status = String(order.status || "unknown").toLowerCase(), needsAttention = ["outcome_unknown", "needs_attention"].includes(status);
+      return { ...order, status, statusLabel: needsAttention ? "Needs attention" : status, needsAttention, isActive: Boolean(order.isActive) && !needsAttention, canCancel: Boolean(order.id) && ["armed", "active"].includes(status), cancelChain: order.chain || "solana", sourceLabel: order.chain === "robinhood" ? "Robinhood market order" : "Solana market order", kindLabel: "Market order", timestamp: order.completedAt || order.triggeredAt || order.createdAt, detail: needsAttention ? "Outcome unknown — check the explorer before retrying." : order.error || "" };
+    });
+    const planRows = (Array.isArray(plans) ? plans : []).flatMap((plan) => {
+      const wallets = Array.isArray(plan.wallets) && plan.wallets.length ? plan.wallets : [{}];
+      return wallets.map((wallet) => {
+        const planWatching = ["watching", "armed", "running"].includes(String(plan.status || "").toLowerCase());
+        const status = String(wallet.exitStatus || (planWatching ? plan.status : wallet.status || plan.status) || "watching"), needsAttention = ["outcome_unknown", "needs_attention"].includes(status.toLowerCase());
+        return { ...plan, ...wallet, id: `${plan.id || "plan"}:${wallet.publicKey || wallet.label || "wallet"}`, side: "sell", tokenMint: plan.tokenMint, walletLabel: wallet.label, walletPublicKey: wallet.publicKey, status, statusLabel: needsAttention ? "Needs attention" : status, needsAttention, isActive: !needsAttention && ["watching", "armed", "running", "retrying", "submitting", "waiting_next_loop", "timer-only", "price-unavailable"].includes(status.toLowerCase()), sellPercent: wallet.triggerSellPercent || plan.triggerSellPercent || plan.sellPercent || 100, signature: wallet.sellSignature || wallet.buySignature || "", timestamp: wallet.soldAt || wallet.triggeredAt || wallet.lastCheckedAt || plan.completedAt || plan.createdAt, sourceLabel: plan.source || "Automated exit", kindLabel: "Auto exit", detail: needsAttention ? "Outcome unknown — check the explorer before retrying." : [plan.takeProfitSummary, plan.stopLossSummary].filter(Boolean).join(" · "), dexUrl: plan.dexUrl };
+      });
+    });
+    // /market-orders already contains Robinhood limit-buy/limit-sell guards.
+    // Only true exit guards belong here, otherwise every RH limit appears twice.
+    const robinhoodExits = (Array.isArray(rhGuards) ? rhGuards : []).filter((guard) => String(guard?.kind || "exit").toLowerCase() === "exit").map((guard) => { const status = String(guard.status || "active").toLowerCase(), needsAttention = ["outcome_unknown", "needs_attention"].includes(status), txHashes = Array.isArray(guard.txHashes) ? guard.txHashes.filter(Boolean) : []; return { ...guard, chain: "robinhood", side: "sell", tokenMint: guard.tokenAddress, walletLabel: guard.walletLabel || (guard.walletIndex ? `Wallet ${guard.walletIndex}` : "Managed wallet"), status, statusLabel: needsAttention ? "Needs attention" : status, needsAttention, isActive: ["active", "armed", "retrying", "submitting"].includes(status), timestamp: guard.completedAt || guard.firedAt || guard.updatedAt || guard.createdAt, signature: guard.sellSignature || guard.txHash || txHashes[txHashes.length - 1] || "", sourceLabel: "Robinhood TP/SL", kindLabel: "Robinhood exit", detail: needsAttention ? (guard.lastError || "Check the explorer and wallet activity before retrying.") : [guard.takeProfitPct ? `TP +${guard.takeProfitPct}%` : "", guard.stopLossPct ? `SL -${guard.stopLossPct}%` : ""].filter(Boolean).join(" · ") }; });
+    const seen = new Set();
+    return [...market, ...planRows, ...robinhoodExits].filter((row) => { const key = `${row.kindLabel}:${row.id}:${row.walletPublicKey || row.walletIndex || ""}`; if (seen.has(key)) return false; seen.add(key); return true; }).sort((a, b) => Date.parse(b.timestamp || 0) - Date.parse(a.timestamp || 0));
+  }
+
+  function normalizeRhActivity(rows) {
+    return (Array.isArray(rows) ? rows : []).map((item) => {
+      const kind = String(item?.kind || item?.side || "activity").toLowerCase(), side = ["sell", "auto-sell", "cashout", "send"].includes(kind) ? "sell" : "buy";
+      const base = { ...item, chain: "robinhood", side, status: "confirmed", timestamp: item.at || item.timestamp, tokenMint: item.tokenAddress || "", signature: item.tx || "", explorerUrl: item.url || "", walletLabel: item.walletLabel || (item.walletIndex ? `Wallet ${item.walletIndex}` : "Robinhood wallet"), sourceLabel: item.source || "Robinhood activity", kindLabel: kind === "auto-sell" ? "Auto sell" : kind.charAt(0).toUpperCase() + kind.slice(1) };
+      if (kind === "buy") {
+        return { ...base, leftLabel: "Paid", leftText: item.amountSol ? `${compactAmount(item.amountSol)} SOL` : `${compactAmount(item.amountEth, "ETH pending")} ETH`, rightLabel: "Received", rightText: `${compactAmount(item.tokenAmount, "Token amount pending")} $${item.symbol || short(item.tokenAddress) || "TOKEN"}` };
+      }
+      if (kind === "sell" || kind === "auto-sell") {
+        return { ...base, leftLabel: "Sold", leftText: `${compactAmount(item.tokenAmount, "Token amount pending")} $${item.symbol || short(item.tokenAddress) || "TOKEN"}`, rightLabel: "Received", rightText: item.amountSol ? `${compactAmount(item.amountSol)} SOL` : `${compactAmount(item.amountEth ?? item.out, "ETH pending")} ETH`, detail: item.trigger ? `${item.trigger}${item.movePct !== "" && item.movePct != null ? ` · ${item.movePct}%` : ""}` : "" };
+      }
+      if (kind === "fund") return { ...base, displayName: "Fund Robinhood", symbol: "RH", assetDetail: "SOL to Robinhood ETH", leftLabel: "Sent", leftText: `${compactAmount(item.amountSol)} SOL`, rightLabel: "Received", rightText: `${compactAmount(item.quotedEth, "ETH pending")} ETH` };
+      if (kind === "cashout") return { ...base, displayName: "Cash out to SOL", symbol: "RH", assetDetail: "Robinhood ETH to SOL", leftLabel: "Sent", leftText: `${compactAmount(item.sentEth)} ETH`, rightLabel: "Received", rightText: `${compactAmount(item.outSol, "SOL pending")} SOL` };
+      if (kind === "send") return { ...base, displayName: "Send Robinhood ETH", symbol: "RH", assetDetail: item.destination ? `To ${short(item.destination)}` : "External wallet", leftLabel: "Sent", leftText: `${compactAmount(item.sentEth)} ETH`, rightLabel: "Destination", rightText: short(item.destination) || "External wallet" };
+      if (kind === "launch") return { ...base, displayName: "Robinhood launch", symbol: item.symbol || "RH", leftLabel: "Created", leftText: item.symbol ? `$${item.symbol}` : "Token contract", rightLabel: "Contract", rightText: short(item.tokenAddress) || "Confirmed" };
+      return { ...base, displayName: "Robinhood activity", symbol: "RH", leftLabel: "Action", leftText: kind, rightLabel: "Status", rightText: "Confirmed" };
+    });
+  }
+
+  function activityHero(mode) {
+    const activity = mode === "activity";
+    return `<header class="proActivityHero"><div><span class="proActivityEyebrow">Portfolio / Activity</span><h2>${activity ? "My activity" : "Orders & exits"}</h2><p>${activity ? "Confirmed transactions from your SlimeWire managed wallets — separate from public market trades." : "Server-side orders, automated exits, and their completed history across Solana and Robinhood Chain."}</p></div><div class="proActivityScopes"><button type="button" class="${activity ? "on" : ""}" data-pro-portfolio-tab="activity">My activity</button><button type="button" class="${activity ? "" : "on"}" data-pro-portfolio-tab="orders">Orders & exits</button><button type="button" data-pro-market-trades>Market trades ↗</button></div></header>`;
+  }
+
+  function wirePortfolioActivity(container) {
+    all("[data-pro-portfolio-tab]", container).forEach((button) => button.addEventListener("click", () => window.GG?.setPortfolioTab?.(button.dataset.proPortfolioTab)));
+    one("[data-pro-market-trades]", container)?.addEventListener("click", () => { toast("Open a coin to see its live market trades."); window.GG?.go?.("trending"); });
+    one("[data-pro-activity-refresh]", container)?.addEventListener("click", () => renderPortfolioActivity(container, container.dataset.proPortfolioMode || "activity"));
+    all("[data-pro-cancel-global]", container).forEach((button) => button.addEventListener("click", async () => {
+      button.disabled = true; button.textContent = "Cancelling…";
+      const result = await request("/api/web/market-orders/cancel", { method: "POST", body: JSON.stringify({ id: button.dataset.proCancelGlobal, chain: button.dataset.chain || "solana" }) });
+      toast(result.ok && result.data?.ok ? "Order cancelled" : (result.data?.message || result.data?.error || "Could not cancel order"), !(result.ok && result.data?.ok));
+      await renderPortfolioActivity(container, "orders");
+    }));
+  }
+
+  async function renderPortfolioActivity(container, mode = "activity") {
+    if (!container) return;
+    ensurePortfolioActivityStyles();
+    const loadId = String(++portfolioLoadSequence);
+    container.dataset.proPortfolioLoad = loadId;
+    container.dataset.proPortfolioMode = mode;
+    container.innerHTML = `<div class="proActivityShell">${activityHero(mode)}<div class="loading"><span class="spin"></span> Loading your ${mode === "activity" ? "activity" : "orders"}…</div></div>`;
+    wirePortfolioActivity(container);
+    const [pnlResult, rhActivityResult, ordersResult, plansResult, rhResult] = await Promise.all([
+      request("/api/web/pnl"),
+      request("/api/web/rh/activity"),
+      request("/api/web/market-orders?token="),
+      request("/api/web/trade/plans"),
+      request("/api/web/rh/guards")
+    ]);
+    if (!container.isConnected || container.dataset.proPortfolioLoad !== loadId) return;
+    const pnl = pnlResult.ok && pnlResult.data?.ok ? pnlResult.data.pnl || {} : {}, meta = tokenMetaMap(pnl);
+    let content = "", warnings = [];
+    if (mode === "activity") {
+      const solanaTrades = Array.isArray(pnl.trades) ? pnl.trades.map((trade) => ({ ...trade, side: trade.type, status: "confirmed", timestamp: trade.timestamp, sourceLabel: trade.source || "Solana SlimeWire trade", kindLabel: "My activity", explorerUrl: trade.signature ? explorerUrl("solana", trade.signature, trade.tokenMint) : trade.dexUrl })) : [];
+      const robinhoodTrades = rhActivityResult.ok && rhActivityResult.data?.ok ? normalizeRhActivity(rhActivityResult.data.activity || []) : [];
+      const trades = [...solanaTrades, ...robinhoodTrades].sort((a, b) => Date.parse(b.timestamp || 0) - Date.parse(a.timestamp || 0));
+      if (!pnlResult.ok) warnings.push("Transaction history could not refresh. Try again in a moment.");
+      if (!rhActivityResult.ok) warnings.push("Robinhood activity could not refresh.");
+      content = `<div class="proActivitySummary"><article><span>Scope</span><b>My wallets only</b></article><article><span>Transactions</span><b>${trades.length}</b></article><article><span>Networks</span><b>Solana + RH</b></article></div>${activitySection("Transaction history", `${trades.length} recent receipt${trades.length === 1 ? "" : "s"}`, trades, meta, "No SlimeWire wallet transactions yet.")}`;
+    } else {
+      const orders = ordersResult.ok && ordersResult.data?.ok ? ordersResult.data.orders || [] : [], plans = plansResult.ok && plansResult.data?.ok ? plansResult.data.plans || [] : [], rhGuards = rhResult.ok && rhResult.data?.ok ? rhResult.data.guards || [] : [];
+      if (!ordersResult.ok) warnings.push("Market orders could not refresh.");
+      if (!plansResult.ok) warnings.push("Solana exits could not refresh.");
+      if (!rhResult.ok) warnings.push("Robinhood exits could not refresh.");
+      const rows = normalizeOrderRows(orders, plans, rhGuards), open = rows.filter((row) => row.isActive), history = rows.filter((row) => !row.isActive), attention = history.filter((row) => row.needsAttention).length;
+      content = `<div class="proActivitySummary"><article><span>Open now</span><b>${open.length}</b></article><article><span>Order history</span><b>${history.length}</b></article><article><span>Needs attention</span><b>${attention}</b></article></div>${activitySection("Open orders & exits", `${open.length} active`, open, meta, "No open market orders or automated exits.")}${activitySection("Order history & needs attention", `${history.length} completed / cancelled / unknown`, history, meta, "Completed and cancelled orders will appear here.")}`;
+    }
+    container.innerHTML = `<div class="proActivityShell">${activityHero(mode)}${warnings.map((message) => `<div class="proActivityWarn">${escapeHtml(message)}</div>`).join("")}${content}<button class="wbtn ghost" type="button" data-pro-activity-refresh style="justify-self:start">Refresh activity</button></div>`;
+    wirePortfolioActivity(container);
   }
 
   function applyToolPrefill() {
@@ -631,6 +827,7 @@
   const observer = new MutationObserver(scheduleScan); observer.observe(document.documentElement, { childList: true, subtree: true });
   window.SlimeWirePro = {
     scan,
+    renderPortfolioActivity,
     syncIndicatorProvider: () => {
       const trade = one(location.hash.startsWith("#rhtrade/") ? "#v-rhtrade .trade" : "#v-trade .trade");
       if (!trade) return;

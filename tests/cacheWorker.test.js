@@ -154,7 +154,8 @@ test("backend worker retires speculative display warming and keeps TP/SL DB-back
   assert.match(serverSource, /processWebPortfolioExits/);
   assert.match(serverSource, /constantTimeStringEquals\(providedSecret, CONFIG\.workerSecret\)/);
   assert.match(workerSource, /fastTpSlEnabled/);
-  assert.match(workerSource, /runWebExitGuards: CONFIG\.runTradePlans && !CONFIG\.fastTpSlEnabled/);
+  assert.match(workerSource, /runWebExitGuards: false/);
+  assert.match(workerSource, /runWebExitGuards: CONFIG\.taskSet === "trade" \? CONFIG\.runTradePlans : false/);
   assert.match(workerSource, /runTimedTradePlans: CONFIG\.runTradePlans && !CONFIG\.fastTpSlEnabled/);
   assert.match(workerSource, /warmDisplayCaches: CONFIG\.warmDisplayCaches/);
   assert.match(workerSource, /displayCacheUserLimit: CONFIG\.displayCacheUserLimit/);

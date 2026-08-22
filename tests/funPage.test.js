@@ -44,12 +44,27 @@ function chartParentMarketBridgeWith(postMessage, token = "0x1111111111111111111
   return Function("window", "location", "CA", `"use strict";${chartLab.slice(start, end)};return { postParentMarket };`)(window, location, token);
 }
 
+function accountActivityNormalizerWith(overrides = {}) {
+  const start = js.indexOf("function firstActivityValue");
+  const end = js.indexOf("function activityActionLabel", start);
+  assert.ok(start >= 0 && end > start, "account activity normalizers should remain extractable");
+  const state = {
+    positions: [], recents: [], rhWalletPosition: null, wallets: [],
+    ...overrides
+  };
+  const short = (value) => {
+    const text = String(value || "");
+    return text.length > 10 ? `${text.slice(0, 5)}…${text.slice(-4)}` : text;
+  };
+  return Function("state", "short", `"use strict";${js.slice(start, end)};return normalizeAccountActivityRows;`)(state, short);
+}
+
 test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL support", () => {
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "91", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "92", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -103,7 +118,7 @@ test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH tr
   assert.match(html, /wallet-install-head[^>]+data-install-fun hidden[^>]+><span>Install<\/span>/);
   assert.match(js, /if \(routeParams\.get\("install"\) === "1"\) setTimeout\(showFunInstallGuide, 350\)/);
   assert.match(funWorker, /IS_WALLET_WORKER/);
-  assert.match(funWorker, /slimewallet-v31/);
+  assert.match(funWorker, /slimewallet-v32/);
   assert.match(JSON.stringify(walletManifest.icons), /slimewallet-icon-512\.png/);
   assert.match(js, /WALLET_BRAND_ASSET = "\/assets\/slimewire\/slimewallet-icon-192\.png"/);
   assert.match(css, /slimewallet-vault-bg\.webp/);
@@ -263,7 +278,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: IS_WALLET_ROUTE \? "\/wallet\/" : "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v88/);
+  assert.match(funWorker, /slimewire-fun-v89/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -330,9 +345,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=67/);
-  assert.match(funWorker, /slimewire-fun-v88/);
-  assert.match(funWorker, /fun\.css\?v=67/);
+  assert.match(html, /fun\.css\?v=68/);
+  assert.match(funWorker, /slimewire-fun-v89/);
+  assert.match(funWorker, /fun\.css\?v=68/);
   assert.match(css, /\.wallet-bottom-nav\[hidden\]\{display:none!important\}/);
   assert.match(js, /walletNav\.hidden = hideWalletNav/);
 });
@@ -343,8 +358,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=91/);
-  assert.match(funWorker, /fun\.js\?v=91/);
+  assert.match(html, /fun\.js\?v=92/);
+  assert.match(funWorker, /fun\.js\?v=92/);
 });
 
 test("Fun volume switches pasted contracts to their authoritative chain", () => {
@@ -410,7 +425,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /"slimewire-fun-v88"/);
+  assert.match(funWorker, /"slimewire-fun-v89"/);
   assert.doesNotMatch(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(js, /loadFunScript\("\/slimewire-funding\.js\?v=8"\)/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
@@ -531,6 +546,101 @@ test("Fun chart exposes server-side market-cap buy, ladder, and stop-loss orders
   assert.match(server, /webTradeSell\(o\.userId/);
   assert.match(server, /webRhArmGuard\(userId/);
   assert.match(server, /pathname === "\/api\/web\/market-orders"/);
+});
+
+test("wallet activity preserves exact Solana and Robinhood transaction legs", () => {
+  const solMint = "So11111111111111111111111111111111111111112";
+  const rhToken = "0x1111111111111111111111111111111111111111";
+  const normalize = accountActivityNormalizerWith({
+    rhWalletPosition: { tokens: [{ address: rhToken, symbol: "RHC", iconUrl: "/rh.png" }] }
+  });
+  const result = normalize({
+    pnl: {
+      tokens: [{ tokenMint: solMint, symbol: "PUF", name: "Pufcat", imageUrl: "/puf.png" }],
+      trades: [{
+        timestamp: "2026-08-21T12:00:00.000Z", type: "buy", tokenMint: solMint,
+        solAmount: "0.250000001", tokenAmount: "1234567890.123456", walletLabel: "Main",
+        source: "SlimeWire buy", signature: "solsig"
+      }]
+    }
+  }, {
+    activity: [
+      { at: 1_776_945_660, kind: "sell", tokenAddress: rhToken, tokenAmount: "50.125", amountEth: "0.02", amountSol: "0.019876543", walletLabel: "Trader", tx: "rhsell" },
+      { at: "2026-08-21T12:02:00.000Z", kind: "cashout", sentEth: "0.010001", outSol: "0.100009", tx: "rhcash" }
+    ]
+  }, []);
+
+  const solBuy = result.rows.find((row) => row.chain === "solana");
+  assert.equal(solBuy.side, "buy");
+  assert.equal(solBuy.at, "2026-08-21T12:00:00.000Z");
+  assert.equal(solBuy.input, "0.250000001 SOL");
+  assert.equal(solBuy.output, "1234567890.123456 PUF", "large token amounts must never be abbreviated in receipts");
+  assert.equal(solBuy.imageUrl, "/puf.png");
+  assert.equal(solBuy.url, "https://solscan.io/tx/solsig");
+
+  const rhSell = result.rows.find((row) => row.side === "sell");
+  assert.equal(rhSell.input, "50.125 RHC");
+  assert.equal(rhSell.output, "0.019876543 SOL", "a Robinhood sell should show the returned SOL rather than its intermediate ETH");
+  assert.equal(rhSell.imageUrl, "/rh.png");
+  assert.match(rhSell.at, /^2026-/i, "numeric Unix timestamps should normalize before sorting and display");
+  assert.equal(rhSell.url, "https://robinhoodchain.blockscout.com/tx/rhsell");
+
+  const cashout = result.rows.find((row) => row.side === "cashout");
+  assert.equal(cashout.input, "0.010001 ETH");
+  assert.equal(cashout.output, "0.100009 SOL");
+});
+
+test("wallet Activity exposes global open automation and completed order history", () => {
+  assert.match(js, /request\("\/api\/web\/market-orders"\)/);
+  assert.match(js, /request\("\/api\/web\/trade\/plans"\)/);
+  assert.match(js, /request\("\/api\/web\/exit-guards"\)/);
+  assert.match(js, /request\("\/api\/web\/rh\/guards"\)/);
+  assert.match(js, /data-activity-ledger-tab="transactions"/);
+  assert.match(js, /data-activity-ledger-tab="orders"/);
+  assert.match(js, /data-activity-ledger-tab="history"/);
+  assert.match(js, /Order history/);
+  assert.match(js, /if \(String\(guard\.kind \|\| "exit"\) !== "exit"\) continue/);
+  assert.match(js, /guard\.planId && planIds\.has/);
+  assert.match(js, /data-cancel-account-order/);
+  assert.match(js, /data-cancel-account-rh-guard/);
+  assert.match(css, /\.account-ledger-tabs/);
+  assert.match(css, /\.account-activity-row/);
+  assert.match(css, /\.account-order-row/);
+});
+
+test("asset exits come from server guards and are scoped to the selected wallet", () => {
+  const selectedExitSource = js.slice(js.indexOf("function selectedAssetExitState"), js.indexOf("function walletAssetMetrics"));
+  assert.match(selectedExitSource, /state\.accountOrderState/);
+  assert.match(selectedExitSource, /rows\.tradePlans/);
+  assert.match(selectedExitSource, /rows\.exitGuards/);
+  assert.match(selectedExitSource, /rows\.rhGuards/);
+  assert.match(selectedExitSource, /needsAttentionAutomationStatus/);
+  assert.match(selectedExitSource, /needsAttention/);
+  assert.doesNotMatch(selectedExitSource, /holding/);
+  assert.match(js, /data-open-exits/);
+  assert.match(js, /Needs attention · check Activity/);
+  assert.match(js, /CHECK RECEIPT FIRST/);
+  const armSource = js.slice(js.indexOf("async function armExits"), js.indexOf("function volumeWalletOptions"));
+  assert.match(armSource, /walletIndexes/);
+  assert.match(armSource, /walletPublicKeys/);
+  assert.match(armSource, /replaceExisting: true/);
+  assert.match(armSource, /walletPublicKey: wallet\?\.publicKey/);
+  assert.match(armSource, /loadAccountOrderState\(\{ force: true \}\)/);
+});
+
+test("Robinhood buys atomically request TP and SL with the trade", () => {
+  const payloadSource = js.slice(js.indexOf("function tradePayloadFromSheet"), js.indexOf("function transactionPreviewHtml"));
+  assert.match(payloadSource, /autoExit: true/);
+  assert.match(payloadSource, /takeProfitPct: tp/);
+  assert.match(payloadSource, /stopLossPct: sl/);
+  assert.match(payloadSource, /sellPercent: "100"/);
+  assert.match(payloadSource, /symbol: coin\.symbol/);
+  const submitSource = js.slice(js.indexOf("async function submitTrade"), js.indexOf("async function armExits"));
+  assert.match(submitSource, /post\("\/api\/web\/rh\/trade", body/);
+  assert.doesNotMatch(submitSource, /post\("\/api\/web\/rh\/guards"/, "a protected buy cannot leave a second-request protection window");
+  assert.match(submitSource, /pending\.guard\.takeProfitPct/);
+  assert.match(js, /trade\.autoExitArmed \?\? response\.autoExitArmed/);
+  assert.match(js, /trade\.autoExitError \|\| response\.autoExitError/);
 });
 
 test("speculative position and PnL cache warming remains disabled", () => {
@@ -693,7 +803,7 @@ test("Phantom and iPhone wallet backups use a save sheet instead of navigating t
     mobileSave.indexOf("if (mobileBackupSaveRequired())") < mobileSave.indexOf("URL.createObjectURL(blob)"),
     "mobile wallet browsers must exit into the save sheet before blob downloads are created"
   );
-  assert.match(html, /\/fun\.js\?v=91/, "the fixed wallet script must bypass Phantom's long-lived asset cache");
+  assert.match(html, /\/fun\.js\?v=92/, "the fixed wallet script must bypass Phantom's long-lived asset cache");
 });
 
 test("the root terminal also batches Phantom wallet backups behind a direct save tap", () => {
@@ -1028,7 +1138,7 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, MACD, and 
   assert.match(js, /loadFunScript\("\/vendor\/lightweight-charts\.standalone\.production\.js"\)/);
   assert.match(js, /loadFunScript\("\/fun-indicators\.js\?v=7"\)/);
   assert.doesNotMatch(funWorker, /fun-indicators\.js\?v=7/);
-  assert.match(funWorker, /fun\.css\?v=67/);
+  assert.match(funWorker, /fun\.css\?v=68/);
   assert.match(indicators, /new URLSearchParams\(\{ ca: key, tf: timeframe \}\)/);
   assert.match(indicators, /`\$\{API_BASE\}\/api\/chart\?\$\{query\.toString\(\)\}`/);
   assert.match(indicators, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/pools/);

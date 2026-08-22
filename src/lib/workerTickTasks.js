@@ -2,6 +2,8 @@ export function workerTickTaskFlags(body = {}, config = {}) {
   const requestedRole = String(config.taskSet || body.taskSet || "trade").trim().toLowerCase();
   const taskSet = ["data", "wallets", "cache", "feeds"].includes(requestedRole) ? "data" : "trade";
   const tradePlansEnabled = config.workerTickRunTradePlans !== false;
+  const rhGuardsEnabled = config.workerTickRunRhGuards !== false;
+  const limitOrdersEnabled = config.workerTickRunLimitOrders !== false;
   const tradeRole = taskSet === "trade";
 
   return {
@@ -18,7 +20,15 @@ export function workerTickTaskFlags(body = {}, config = {}) {
       && tradeRole
       && body.runTradePlans !== false
       && body.runTimedTradePlans !== false
-      && body.tradePlans !== false
+      && body.tradePlans !== false,
+    rhGuards: rhGuardsEnabled
+      && tradeRole
+      && body.runRhGuards !== false
+      && body.rhGuards !== false,
+    limitOrders: limitOrdersEnabled
+      && tradeRole
+      && body.runLimitOrders !== false
+      && body.limitOrders !== false
   };
 }
 

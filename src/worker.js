@@ -20,7 +20,7 @@ console.log(`Worker service role: ${CONFIG.serviceRole}. RUN_WORKER=${CONFIG.run
 if (CONFIG.tickUrls.length > 1) {
   console.log(`Worker fallback tick URLs: ${CONFIG.tickUrls.slice(1).join(", ")}`);
 }
-console.log(`Worker interval: ${CONFIG.intervalMs}ms. Task set: ${CONFIG.taskSet}. Feeds: ${CONFIG.warmFeeds ? "on" : "off"}. RH snapshots: ${CONFIG.warmRhPairs ? "on" : "off"}. Display cache: ${CONFIG.warmDisplayCaches ? "on" : "off"}. Trade plans: ${CONFIG.runTradePlans ? "on" : "off"}. Fast TP/SL: ${CONFIG.fastTpSlEnabled ? "on" : "off"}.`);
+console.log(`Worker interval: ${CONFIG.intervalMs}ms. Task set: ${CONFIG.taskSet}. Feeds: ${CONFIG.warmFeeds ? "on" : "off"}. RH snapshots: ${CONFIG.warmRhPairs ? "on" : "off"}. Display cache: ${CONFIG.warmDisplayCaches ? "on" : "off"}. Trade plans: ${CONFIG.runTradePlans ? "on" : "off"}. RH guards: ${CONFIG.runRhGuards ? "on" : "off"}. Limit orders: ${CONFIG.runLimitOrders ? "on" : "off"}. Fast TP/SL: ${CONFIG.fastTpSlEnabled ? "on" : "off"}.`);
 if (CONFIG.fastTpSlEnabled && CONFIG.taskSet === "trade") {
   console.log(`Fast TP/SL worker interval: ${CONFIG.tradePlanIntervalMs}ms.`);
   console.log(`Broad portfolio TP/SL fallback interval: ${CONFIG.portfolioExitIntervalMs}ms.`);
@@ -55,6 +55,8 @@ function loadWorkerConfig() {
   const buckets = normalizeList(process.env.WORKER_TICK_BUCKETS || "live,under1h,under3h,under1d");
   const sorts = normalizeList(process.env.WORKER_TICK_SORTS || "best,newest");
   const runTradePlansEnabled = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
+  const runRhGuardsEnabled = parseBoolean(process.env.WORKER_TICK_RUN_RH_GUARDS || "true");
+  const runLimitOrdersEnabled = parseBoolean(process.env.WORKER_TICK_RUN_LIMIT_ORDERS || "true");
   const serviceRole = normalizeServiceRole(process.env.SERVICE_ROLE || process.env.RENDER_SERVICE_ROLE || "worker");
   const workerDisabled = parseBoolean(process.env.WORKER_DISABLED || "false");
   const runWorker = serviceRole === "worker" && !workerDisabled;
@@ -82,6 +84,8 @@ function loadWorkerConfig() {
     timeoutMs,
     taskSet,
     runTradePlans: taskSet === "trade" && runTradePlansEnabled,
+    runRhGuards: taskSet === "trade" && runRhGuardsEnabled,
+    runLimitOrders: taskSet === "trade" && runLimitOrdersEnabled,
     fastTpSlEnabled: taskSet === "trade" && parseBoolean(process.env.WORKER_FAST_TP_SL_ENABLED || "true"),
     runDcaPlans: taskSet === "trade" && parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true"),
     warmFeeds: taskSet === "data" && parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true"),
@@ -147,7 +151,7 @@ async function tradePlanTick() {
   tradePlanTickCount += 1;
   const startedAt = Date.now();
   const controller = new AbortController();
-  const timeoutMs = Math.min(CONFIG.timeoutMs, 15_000);
+  const timeoutMs = CONFIG.timeoutMs;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
@@ -166,8 +170,13 @@ async function tradePlanTick() {
           runTradePlans: true,
           forceTradePlans: true,
           runPortfolioExits: false,
-          runWebExitGuards: true,
+          // Linked guards are UI mirrors of these authoritative plans. Keeping
+          // the legacy unlinked guard sweep off this 4s lane prevents it from
+          // consuming most of the request timeout before plans are checked.
+          runWebExitGuards: false,
           runTimedTradePlans: true,
+          runRhGuards: CONFIG.runRhGuards,
+          runLimitOrders: false,
           runDcaPlans: false,
           warmLivePairs: false
         }),
@@ -190,14 +199,18 @@ async function tradePlanTick() {
 
       const tradePlans = data?.tradePlans?.value || data?.tradePlans || {};
       const webExitGuards = data?.webExitGuards?.value || data?.webExitGuards || {};
+      const rhGuards = data?.rhGuards?.value || data?.rhGuards || {};
       const tradePlanSummary = tradePlans?.skipped
         ? `skipped:${tradePlans.reason || "unknown"}`
         : `checked:${tradePlans.checkedWallets ?? 0} triggered:${tradePlans.triggeredWallets ?? 0} sold:${tradePlans.soldWallets ?? 0} failed:${tradePlans.failedWallets ?? 0}`;
       const guardSummary = webExitGuards?.skipped
         ? `guards skipped:${webExitGuards.reason || "unknown"}`
         : `guards checked:${webExitGuards.checkedGuards ?? 0} triggered:${webExitGuards.triggeredGuards ?? 0} sold:${webExitGuards.soldGuards ?? 0} failed:${webExitGuards.failedGuards ?? 0}`;
+      const rhGuardSummary = rhGuards?.skipped
+        ? `RH guards skipped:${rhGuards.reason || "unknown"}`
+        : `RH guards checked:${rhGuards.checked ?? 0} triggered:${rhGuards.triggered ?? 0} executed:${rhGuards.executed ?? 0} failed:${rhGuards.failed ?? 0}`;
       const fallbackNote = lastFailure ? ` Recovered after ${lastFailure}.` : "";
-      console.log(`Fast TP/SL worker tick ${tradePlanTickCount} ok in ${Date.now() - startedAt}ms. ${guardSummary}. plans ${tradePlanSummary}.${fallbackNote}`);
+      console.log(`Fast TP/SL worker tick ${tradePlanTickCount} ok in ${Date.now() - startedAt}ms. ${guardSummary}. plans ${tradePlanSummary}. ${rhGuardSummary}.${fallbackNote}`);
       return;
     }
   } catch (error) {
@@ -240,8 +253,12 @@ async function tick() {
           runTradePlans: CONFIG.taskSet === "trade" ? CONFIG.runTradePlans && !CONFIG.fastTpSlEnabled : false,
           forceTradePlans: CONFIG.taskSet === "trade" ? CONFIG.runTradePlans : false,
           runPortfolioExits: CONFIG.taskSet === "trade" ? runPortfolioExits : false,
-          runWebExitGuards: CONFIG.runTradePlans && !CONFIG.fastTpSlEnabled,
+          // The broad lane keeps legacy/unlinked guards alive without slowing
+          // the authoritative fast plan monitor.
+          runWebExitGuards: CONFIG.taskSet === "trade" ? CONFIG.runTradePlans : false,
           runTimedTradePlans: CONFIG.runTradePlans && !CONFIG.fastTpSlEnabled,
+          runRhGuards: CONFIG.taskSet === "trade" ? CONFIG.runRhGuards && !CONFIG.fastTpSlEnabled : false,
+          runLimitOrders: CONFIG.taskSet === "trade" ? CONFIG.runLimitOrders : false,
           runDcaPlans: CONFIG.taskSet === "trade" ? CONFIG.runDcaPlans : false,
           warmLivePairs: CONFIG.taskSet === "data" ? CONFIG.warmFeeds : false,
           warmRhPairs: CONFIG.taskSet === "data" ? CONFIG.warmRhPairs : false,
@@ -274,6 +291,7 @@ async function tick() {
       const tradePlans = data?.tradePlans?.value || data?.tradePlans || {};
       const webExitGuards = data?.webExitGuards?.value || data?.webExitGuards || {};
       const portfolioExits = data?.portfolioExits?.value || data?.portfolioExits || {};
+      const limitOrders = data?.limitOrders?.value || data?.limitOrders || {};
       const tradePlanSummary = tradePlans?.skipped
         ? `TP/SL skipped:${tradePlans.reason || "unknown"}`
         : `TP/SL checked:${tradePlans.checkedWallets ?? 0} triggered:${tradePlans.triggeredWallets ?? 0} sold:${tradePlans.soldWallets ?? 0} failed:${tradePlans.failedWallets ?? 0}`;
@@ -283,6 +301,9 @@ async function tick() {
       const portfolioSummary = portfolioExits?.skipped
         ? `portfolio skipped:${portfolioExits.reason || "scheduled later"}`
         : `portfolio checked:${portfolioExits.checkedPositions ?? 0} triggered:${portfolioExits.triggeredPositions ?? 0} sold:${portfolioExits.soldPositions ?? 0} failed:${portfolioExits.sellFailures ?? 0}`;
+      const limitSummary = limitOrders?.skipped
+        ? `limits skipped:${limitOrders.reason || "scheduled later"}`
+        : `limits checked:${limitOrders.checkedOrders ?? 0}/${limitOrders.checkedMints ?? 0} triggered:${limitOrders.triggered ?? 0} filled:${limitOrders.filled ?? 0} failed:${limitOrders.failed ?? 0}`;
       const feeds = data?.feeds?.value?.warmed || data?.feeds?.warmed || [];
       const feedSummary = Array.isArray(feeds)
         ? feeds.map((item) => `${item.bucket}/${item.sort}:${item.rows}`).join(" ")
@@ -297,7 +318,7 @@ async function tick() {
         : `display-cache users:${displayCaches.users ?? 0} provider:${displayCaches.provider || "memory"}`;
       const fallbackNote = lastFailure ? ` Recovered after ${lastFailure}.` : "";
       const yieldNote = data?.yielded ? ` yielded:${data.yieldReason || "interactive-priority"}.` : "";
-      console.log(`Worker tick ${tickCount} ok in ${Date.now() - startedAt}ms. role:${CONFIG.taskSet}.${yieldNote} ${guardSummary}. ${tradePlanSummary}. ${portfolioSummary}. ${feedSummary}. ${rhSummary}. ${displayCacheSummary}${fallbackNote}`);
+      console.log(`Worker tick ${tickCount} ok in ${Date.now() - startedAt}ms. role:${CONFIG.taskSet}.${yieldNote} ${guardSummary}. ${tradePlanSummary}. ${portfolioSummary}. ${limitSummary}. ${feedSummary}. ${rhSummary}. ${displayCacheSummary}${fallbackNote}`);
       return;
     }
   } catch (error) {

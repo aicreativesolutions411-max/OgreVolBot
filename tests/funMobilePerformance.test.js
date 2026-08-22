@@ -136,7 +136,11 @@ test("mobile trades end on an honest, recoverable execution receipt", () => {
   assert.match(receiptHtml, /data-view-trade-activity/);
   assert.match(receiptHtml, /data-rh-wallet-tools/);
   assert.match(receiptHtml, /Open in explorer/);
-  assert.match(functionBody(funSource, "submitTrade"), /guardResult = await post\("\/api\/web\/rh\/guards"/);
+  const submitTrade = functionBody(funSource, "submitTrade");
+  assert.match(submitTrade, /protectionRequested/);
+  assert.match(submitTrade, /autoExit: true/);
+  assert.match(submitTrade, /result = await post\("\/api\/web\/rh\/trade", body/);
+  assert.doesNotMatch(submitTrade, /\/api\/web\/rh\/guards/);
   assert.match(funSource, /state\.profileTab = "activity"; closeSheet\(\); setView\("wallet"\); await loadWalletView\(\)/);
 });
 

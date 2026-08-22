@@ -188,8 +188,8 @@ test("desktop trade receipts preserve settlement, persistence, and server-exit t
   assert.match(gg, /trade\.recordError/);
   assert.match(gg, /trade\.autoExitError/);
   assert.match(gg, /trade\.explorerUrl\|\|trade\.explorerTx/);
-  assert.match(gg, /state\.portfolioTab="cards";closeModal\(\);go\("portfolio"\)/);
-  assert.match(gg, /autoExitArmed=Boolean\(guard&&guard\.ok&&guard\.d&&guard\.d\.ok\)/);
+  assert.match(gg, /state\.portfolioTab="activity";closeModal\(\);go\("portfolio"\)/);
+  assert.match(gg, /const autoExitArmed=Boolean\(d\.autoExitArmed\),autoExitError=String\(d\.autoExitError\|\|""\)/);
 });
 
 test("Telegram Slime Chart links land on the exact terminal coin route", () => {

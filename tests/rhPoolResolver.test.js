@@ -119,6 +119,32 @@ test("passes an ordinary RH token through unchanged", async () => {
   assert.equal(await resolveRhPoolToken(PHOOD, { fetchImpl }), PHOOD);
 });
 
+test("interactive resolution returns quickly, shares one probe, then caches the exact pool token", async () => {
+  let calls = 0;
+  const fetchImpl = async (url, options = {}) => {
+    calls += 1;
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    if (options.method === "POST") return response([]);
+    return response({ pairs: [{
+      chainId: "robinhood",
+      pairAddress: POOL,
+      baseToken: { address: PHOOD },
+      quoteToken: { address: VIRTUAL },
+    }] });
+  };
+  const startedAt = Date.now();
+  const [first, second] = await Promise.all([
+    resolveRhPoolToken(POOL, { fetchImpl, interactive: true, interactiveTimeoutMs: 10, timeoutMs: 200 }),
+    resolveRhPoolToken(POOL, { fetchImpl, interactive: true, interactiveTimeoutMs: 10, timeoutMs: 200 }),
+  ]);
+  assert.equal(first, POOL);
+  assert.equal(second, POOL);
+  assert.ok(Date.now() - startedAt < 160, "interactive Telegram path should not wait for every pool probe");
+  await new Promise((resolve) => setTimeout(resolve, 220));
+  assert.equal(await resolveRhPoolToken(POOL, { fetchImpl }), PHOOD);
+  assert.equal(calls, 3, "concurrent callers must share the pair/search/RPC probe set");
+});
+
 test("rejects malformed non-address input without provider calls", async () => {
   let calls = 0;
   const result = await resolveRhPoolToken("$PHOOD", { fetchImpl: async () => { calls += 1; return response({}); } });

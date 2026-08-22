@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifyRhAddress } from "../src/lib/rhAddressKind.js";
+import { classifyRhAddress, rhAddressScanRoute } from "../src/lib/rhAddressKind.js";
 
 const ADDRESS = "0x1111111111111111111111111111111111111111";
 const response = (status, json) => ({ ok: status >= 200 && status < 300, status, json: async () => json });
@@ -86,4 +86,11 @@ test("unavailable providers return unknown instead of guessing coin", async () =
   assert.deepEqual(await classifyRhAddress(ADDRESS, { fetchImpl, rpcUrl: "https://rpc.test" }), {
     isToken: null, source: "unavailable",
   });
+});
+
+test("Telegram routing keeps provider uncertainty distinct from a confirmed wallet", () => {
+  assert.equal(rhAddressScanRoute({ isToken: true }), "token");
+  assert.equal(rhAddressScanRoute({ isToken: false }), "wallet");
+  assert.equal(rhAddressScanRoute({ isToken: null }), "unknown");
+  assert.equal(rhAddressScanRoute(null), "unknown");
 });

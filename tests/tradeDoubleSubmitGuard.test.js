@@ -728,6 +728,8 @@ test("Robinhood Chain: every user sell automatically returns to SOL through the 
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/bridge-to-sol"/);
   assert.match(functionBody(serverSource, "webRhBridgeToSol"), /runIdempotentMoneyOp\("web-rh-bridge-sol"/);
   const out = functionBody(serverSource, "webRhBridgeToSolCore");
+  assert.match(out, /assertFrozenManagedWallet/);                 // stale wallet index can never sweep another wallet
+  assert.match(out, /body\.walletPublicKey/);
   assert.match(out, /rhBridgeEthToSol/);
   assert.match(out, /keypair\.publicKey\.toBase58\(\)/);        // recipient = the wallet's OWN SOL address
   assert.match(out, /SOLANA_USDC_MINT/);                         // fallback when native SOL has no solver
@@ -745,6 +747,7 @@ test("Robinhood Chain: every user sell automatically returns to SOL through the 
   assert.match(bridge, /solanaUsdc/);
   const trade = functionBody(serverSource, "webRhTradeCore");
   assert.match(trade, /side === "sell"[\s\S]*webRhBridgeToSolCore/);
+  assert.match(trade, /if \(side === "sell"\)[\s\S]*await settleHolderAndCreatorRewards\(\)/); // finish signer payouts before cash-out-all
   assert.match(trade, /toLowerCase\(\) !== "rh_volume"/);
   assert.match(trade, /solCashoutError/);
   // Client: ordinary trades remain automatic, while explicit recovery controls stay available.
@@ -1130,7 +1133,7 @@ test("RH power tools: TP/SL guards + bundle + volume bot, all through the safe t
   assert.match(tick, /rhImpliedPriceUsd/);
   assert.match(tick, /webRhTradeCore/);
   assert.match(tick, /failCount.*>= 3/s);
-  assert.match(serverSource, /setInterval\(rhGuardTick/);
+  assert.match(serverSource, /runWorkerTask\("rhGuards", \(\) => rhGuardTick\(\)/);
   // Bundle + volume both route every trade through webRhTradeCore (fees + gas-estimation inherited).
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/bundle"/);
   assert.match(functionBody(serverSource, "webRhBundle"), /runIdempotentMoneyOp\("web-rh-bundle"/);
@@ -1176,8 +1179,47 @@ test("Robinhood terminal exposes quick TP and executable market-cap limit orders
     assert.match(limit, /Buy at target MC/);
     assert.match(limit, /Sell at target MC/);
     assert.match(limit, /targetMarketCapUsd/);
-    assert.match(functionBody(src, "rhBuyAmount"), /rhArmQuickTakeProfit/);
+    assert.match(functionBody(src, "rhBuyAmount"), /autoExit:true/);
+    assert.match(functionBody(src, "rhBuyAmount"), /takeProfitPct/);
+    assert.match(functionBody(src, "rhBuyAmount"), /autoExitArmed/);
   }
+});
+
+test("Robinhood exits use live server pricing, atomic buy protection, and safe cancellation", () => {
+  const arm = functionBody(serverSource, "webRhArmGuard");
+  const trade = functionBody(serverSource, "webRhTrade");
+  const cancel = functionBody(serverSource, "webRhCancelGuard");
+  const reconcile = functionBody(serverSource, "reconcileStaleRhGuardSubmissions");
+  assert.match(arm, /rhImpliedPriceUsd\(tokenAddress/);
+  assert.match(arm, /implied\?\.priceUsd,[\s\S]*scanInfo\?\.priceUsd,[\s\S]*clientEntryPriceUsd/);
+  assert.doesNotMatch(arm, /entryPriceUsd > 0 \? Promise\.resolve\(null\)/);
+  assert.match(trade, /wantsAutoExit/);
+  assert.match(trade, /requireWebAutomationPermission\(userId, "Robinhood TP\/SL guard"\)/);
+  assert.match(trade, /webRhArmGuard\(userId/);
+  assert.match(trade, /lockMs: 30 \* 60_000/); // reward settlement cannot outlive the money-operation lease and replay a landed sell
+  assert.match(arm, /automationExitReplacementBlocked\(g\)/); // unresolved sell attempts cannot be replaced by a second active exit
+  assert.match(cancel, /status \|\| ""\)\.toLowerCase\(\) !== "active"/);
+  assert.match(cancel, /statusCode = 409/);
+  assert.match(reconcile, /web-rh-trade-result:rh-order-/);
+  assert.match(reconcile, /outcome_unknown/);
+  assert.match(reconcile, /Math\.max\(5 \* 60_000/); // never reconcile while the live submission lease may still be running
+  const tick = functionBody(serverSource, "rhGuardTick");
+  assert.match(tick, /lockMs: 30 \* 60_000/);
+  assert.match(tick, /let claimedForSubmission = false/);
+  assert.match(tick, /claimedForSubmission = true/);
+  assert.match(tick, /expectedStatus: claimedForSubmission \? "submitting" : "active"/); // pre-claim errors persist instead of retrying forever
+});
+
+test("editing Solana exits is serialized with the worker and refuses unresolved sells", () => {
+  const arm = functionBody(serverSource, "webArmExitsForExistingPositions");
+  const lease = functionBody(serverSource, "withWebExitReplacementLease");
+  const cancelMirrors = functionBody(serverSource, "cancelWebExitGuardsForReplacement");
+  assert.match(arm, /withWebExitReplacementLease\(commitExitPlan\)/);
+  assert.match(arm, /automationExitReplacementBlocked\(planWallet\)/);
+  assert.match(lease, /"worker-task:tradePlans"/);
+  assert.match(lease, /"worker-task:webExitGuards"/);
+  assert.match(cancelMirrors, /matching\.some\(automationExitReplacementBlocked\)/);
+  assert.match(cancelMirrors, /statusCode = 409/);
 });
 
 test("RH: auto-bundle-when-pool-opens + coin age everywhere + 75% sells", () => {
@@ -2366,8 +2408,8 @@ test("scan catches real pasted CAs in text without sentence false-positives", ()
   assert.match(serverSource, /function isLikelySolMint\(/);
   assert.match(functionBody(serverSource, "isLikelySolMint"), /toBytes\(\)\.length === 32/);
   assert.match(serverSource, /function hasExplicitScanAddressHint\(/);
-  assert.match(serverSource, /resolveExplicitScanTargetsFromText\(rawGroupText, \[\], 1\)/); // "thoughts on <CA>?"
-  assert.match(serverSource, /resolveExplicitScanTargetsFromText\(rawDmText, \[\], 1\)/);    // DM text + CA
+  assert.match(serverSource, /resolveExplicitScanTargetsFromText\(rawGroupText, \[\], 1, \{ interactive: true \}\)/); // "thoughts on <CA>?"
+  assert.match(serverSource, /resolveExplicitScanTargetsFromText\(rawDmText, \[\], 1, \{ interactive: true \}\)/);    // DM text + CA
   assert.match(serverSource, /isLikelySolMint\(caTok\)/);   // group trigger
   assert.match(serverSource, /isLikelySolMint\(caTokDm\)/); // DM trigger
   // The old space-stripping exec (which concatenated a sentence into a fake CA) is gone.
@@ -3132,14 +3174,20 @@ test("⏰ Limit orders: MC-triggered buy/sell, own-wallet, idempotent-claim, pau
   assert.match(serverSource, /function limitOrdersPath\(\)/);
   assert.match(serverSource, /writeJsonIfMissing\(limitOrdersPath\(\), \{ orders: \[\] \}\)/);
   // poller registered + core logic
-  assert.match(serverSource, /setInterval\(\(\) => \{ void pollLimitOrders\(\); \}/);
+  assert.match(serverSource, /runWorkerTask\("limitOrders", \(\) => pollLimitOrders\(\)/);
   const poll = functionBody(serverSource, "pollLimitOrders");
   assert.match(poll, /alphaRadarFetchMc\(/);                                        // free MC source (Dex→pump)
+  assert.match(poll, /rotatingLimitOrderMints\(mints, 12\)/);                      // every token eventually gets checked
+  assert.match(poll, /runWithConcurrency\(selectedMints, 4/);                      // bounded fast polling
+  assert.match(poll, /reconcileStaleLimitOrderSubmissions/);                        // crashes surface safely, never blind-retry
+  assert.match(functionBody(serverSource, "reconcileStaleLimitOrderSubmissions"), /Math\.max\(5 \* 60_000/); // never race a still-live submission lease
   assert.match(poll, /o\.dir === ">=" \? mc >= o\.triggerMc : mc <= o\.triggerMc/);  // trigger evaluation
   assert.match(poll, /settleLimitOrder\(o\.id, "filling"/);                          // CLAIM before executing = no double-fire
-  assert.match(poll, /tgExecuteQuickBuy\(o\.userId, o\.mint, o\.amountSol\)/);        // own-wallet buy money-path
-  assert.match(poll, /tgExecuteQuickSell\(o\.userId, o\.mint, o\.pct\)/);            // own-wallet sell money-path
-  assert.match(poll, /if \(!live\.length \|\| paused\) return/);                     // global pause = don't fire
+  assert.match(poll, /tgExecuteQuickBuy\(o\.userId, o\.mint, o\.amountSol, \{ idempotencyKey: `limit-order-\$\{o\.id\}`/); // own-wallet, stable-attempt buy
+  assert.match(poll, /tgExecuteQuickSell\(o\.userId, o\.mint, o\.pct, \{ idempotencyKey: `limit-order-\$\{o\.id\}`/);       // own-wallet, stable-attempt sell
+  assert.match(poll, /strictWallet: true/);                                          // web order never falls through to another wallet
+  assert.match(poll, /ambiguous \? "outcome_unknown" : "failed"/);                 // uncertain chain result is never blindly retried
+  assert.match(poll, /if \(!live\.length \|\| paused\)[\s\S]*return summary/);     // global pause = don't fire
   // direction auto-derived from MC at arm time (user never reasons about <= vs >=)
   assert.match(functionBody(serverSource, "applyLimitOrderInput"), /triggerMc >= ref \? ">=" : "<="/);
   // guards: per-user cap + expiry + sane SOL bounds
@@ -3154,6 +3202,18 @@ test("⏰ Limit orders: MC-triggered buy/sell, own-wallet, idempotent-claim, pau
   assert.match(functionBody(serverSource, "compactCardCategoryKeyboard"), /callback_data: `lo:new:\$\{target\}`/);
   // MC parser is fat-finger-safe (bare small number → $k, k/m suffix honored)
   assert.match(functionBody(serverSource, "parseMcInput"), /m\[2\] === "m"/);
+});
+
+test("web market-cap ladders persist atomically and freeze the selected wallet", () => {
+  const create = functionBody(serverSource, "webCreateMarketCapOrders");
+  const batch = functionBody(serverSource, "addLimitOrdersBatch");
+  assert.match(create, /assertFrozenManagedWallet/);
+  assert.match(create, /body\.walletPublicKey/);
+  assert.match(create, /addLimitOrdersBatch\(userId/);
+  assert.match(create, /mutateRhGuards/);
+  assert.match(batch, /mine\.length \+ specs\.length > LIMIT_MAX_PER_USER/);
+  assert.match(batch, /store\.orders\.push\(\.\.\.orders\)/);
+  assert.match(batch, /await writeLimitOrders\(store\)/);
 });
 test("trader wow-UX: rich receipts (live MC + realized PnL), price alerts, auto-TP ladder", () => {
   // buy receipt now shows live token data (symbol + MC/liq), not just the CA
@@ -3733,17 +3793,22 @@ test("scan Security fills from our own RPC when RugCheck returns null (no more n
 
 test("Robinhood address routing proves wallet versus ERC-20 before scan and tracking", () => {
   assert.match(serverSource, /import \{ resolveRhPoolToken, rhResolvedPoolHints \} from "\.\/lib\/rhPoolResolver\.js"/);
-  assert.match(functionBody(serverSource, "resolveScanTargetFromText"), /resolveRhPoolToken\(evm\[0\]\)/);
-  assert.match(functionBody(serverSource, "resolveExplicitScanTargetsFromText"), /resolveRhPoolToken\(m\)/);
+  assert.match(functionBody(serverSource, "resolveScanTargetFromText"), /resolveRhPoolToken\(evm\[0\], \{ interactive:/);
+  assert.match(functionBody(serverSource, "resolveExplicitScanTargetsFromText"), /resolveRhPoolToken\(m, \{ interactive:/);
   assert.match(functionBody(serverSource, "resolveAllScanTargetsFromText"), /resolveRhPoolToken\(m\)/);
   assert.match(functionBody(serverSource, "gatherRhScan"), /resolveRhPoolToken\(address\)/);
-  assert.match(functionBody(serverSource, "sendRhScanCard"), /address = await resolveRhPoolToken\(address\)/);
+  assert.match(functionBody(serverSource, "sendRhScanCard"), /resolveRhPoolToken\(requestedAddress, \{ interactive: true \}\)/);
   assert.match(functionBody(serverSource, "mergedDexMetadataForToken"), /filter\(\(pair\) => pairMatchesToken\(pair, tokenMint\)\)/);
   assert.match(functionBody(serverSource, "mergedDexMetadataForToken"), /dexPairCompleteness/);
   assert.match(functionBody(serverSource, "gatherSlimeScan"), /mergedDexMetadataForToken\(mint, pairs, best\)/);
   const look = functionBody(serverSource, "handleTelegramLookCommand");
-  assert.match(look, /await rhTokenContractProof\(rhAddr\)/);
+  assert.match(look, /classifyRhScanAddress\(rhAddr\)/);
+  assert.match(look, /preserveRhPoolBeforeWallet\(rhAddr, rhRoute, \{ provenTickerCoin \}\)/);
+  assert.match(look, /if \(rhRoute !== "wallet"\) await sendRhScanCard/);
   assert.match(look, /else await sendWalletScanCard\(chatId, rhAddr, message\?\.from\?\.id \|\| null\)/);
+  const preservePool = functionBody(serverSource, "preserveRhPoolBeforeWallet");
+  assert.match(preservePool, /route === "token" && provenTickerCoin/); // only an independently market-proven ticker may skip pool resolution
+  assert.match(preservePool, /await resolveRhPoolToken\(address\)/); // raw ERC-20 input fully resolves a delayed LP before any trade side effect
   const xReply = functionBody(serverSource, "buildXReply");
   assert.match(xReply, /const token = await rhTokenContractProof/);
   assert.match(xReply, /if \(!token\.contract\) return await buildXMapReply/);
@@ -4451,7 +4516,7 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "resolveXTargetMint"), /allowBareTickerHints: false/);
   assert.match(functionBody(serverSource, "resolveAllXTargets"), /allowBareTickerHints: false/);
   assert.doesNotMatch(functionBody(serverSource, "xReplyPollTick"), /extractBareTickerHints/);
-  assert.match(functionBody(serverSource, "handleTelegramLookCommand"), /resolveScanTargetFromText\(rawArgument, \[\], \{ chainHint \}\)/);
+  assert.match(functionBody(serverSource, "handleTelegramLookCommand"), /resolveScanTargetFromText\(rawArgument, \[\], \{ chainHint, interactive: true \}\)/);
   assert.match(functionBody(serverSource, "handleXScanCommand"), /allowBareTickerHints: false/);
   assert.match(functionBody(serverSource, "xReplyPollTick"), /no CA\/wallet found yet/);
   assert.match(functionBody(serverSource, "gatherSlimeScan"), /fetchSolanaTrackerTokenReport\(mint, \{ timeoutMs: 3_000 \}\)/);
@@ -4597,11 +4662,15 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
 
   const ticker = functionBody(serverSource, "resolveTickerToScanTarget");
   const chainHint = functionBody(serverSource, "tickerChainHintFromText");
-  assert.match(ticker, /return resolveCashtagToMint\(q\)/);        // unqualified tickers are deterministic Solana-only
+  const stripChainHint = functionBody(serverSource, "stripTickerChainHintWords");
+  assert.match(ticker, /const sol = await resolveCashtagToMint\(q\)/); // unqualified tickers keep Solana first
   assert.match(ticker, /chainHint === "solana"/);
   assert.match(ticker, /chainHint === "robinhood"/);
   assert.match(ticker, /resolveRhTickerCandidate\(q\)/);           // explicit RH wording preserves RH ticker lookup
-  assert.doesNotMatch(ticker, /Promise\.all|solPromise/);           // default lookup never waits on another chain
+  assert.match(ticker, /if \(solStrong\) return sol/);              // healthy Sol hits never start the RH universe lookup
+  assert.match(ticker, /sol \? 1_800 : 4_500/);                     // cold RH miss gets one bounded full first attempt
+  assert.match(ticker, /tickerRhClearlyDominates\(rh, solCandidate\)/);
+  assert.match(ticker, /rhLookup\?\.lookupComplete !== true/);      // dust + provider uncertainty fails closed
   assert.match(chainHint, /replace\(\/\\\$\[A-Za-z\]/);
   assert.match(chainHint, /return "robinhood"/);
   assert.match(chainHint, /return "solana"/);
@@ -4610,9 +4679,20 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.equal(chainHintFn("$CASHCOW rh"), "robinhood");
   assert.equal(chainHintFn("$SOL"), "", "a canonical $SOL ticker must not be mistaken for a Solana chain override");
   assert.equal(chainHintFn("SOL"), "", "a bare SOL ticker must remain canonical unless a separate chain hint is supplied");
+  const stripChainHintFn = new Function("text", "chainHint", stripChainHint);
+  assert.equal(stripChainHintFn("RH CASHCOW", "robinhood").trim(), "CASHCOW");
+  assert.equal(stripChainHintFn("CASHCOW RH", "robinhood").trim(), "CASHCOW");
+  assert.equal(stripChainHintFn("$SOL RH", "robinhood").trim(), "$SOL", "a cashtag must not be stripped as a chain word");
   assert.match(functionBody(serverSource, "tickerMarketLeadership"), /candidate\.liquidityUsd/);
   assert.doesNotMatch(functionBody(serverSource, "tickerRhClearlyDominates"), /holderDominatesDust/);
-  const rhTicker = functionBody(serverSource, "resolveRhTickerCandidate");
+  const rhTickerWrapper = functionBody(serverSource, "resolveRhTickerCandidate");
+  const rhTicker = functionBody(serverSource, "resolveRhTickerCandidateUncollapsed");
+  const rhBlockscout = functionBody(serverSource, "rhTickerBlockscoutSearch");
+  assert.match(rhBlockscout, /api\/v2\/tokens\?q=\$\{encoded\}&type=ERC-20/);
+  assert.match(rhBlockscout, /api\/v2\/tokens\?q=\$\{encoded\}/);
+  assert.match(rhBlockscout, /api\/v2\/search\?q=\$\{encoded\}/);
+  assert.match(rhBlockscout, /_rhContractProof: contractProof/);
+  assert.match(rhTickerWrapper, /rhTickerCandidateInFlight\.get\(key\)/);
   assert.match(rhTicker, /if \(chain === "robinhood"\)/);
   assert.match(rhTicker, /tickerMarketLeadership/);
   assert.match(rhTicker, /tickerMarketRowStrength/);                 // one real pair supplies MC+volume; no cross-pair Frankenstein maxima
