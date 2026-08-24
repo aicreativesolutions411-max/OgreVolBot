@@ -90753,25 +90753,35 @@ async function webSolTradePreview(userId, body = {}) {
   let priceImpactPct = null;
   let simulation = null;
   let positionAdd = null;
+  let unprotectedPositionAdd = null;
   let existingProtectionSummary = null;
   const warnings = [];
 
   if (side === "buy") {
+    const swapOnly = webAutoExitExplicitlyDisabled(body);
     const eligibleAdd = await assertManagedSolBuyReentryAllowed(userId, [wallet], tokenMint, {
-      // A Wallet Swap marked as swap-only must never silently inherit an old
-      // automatic exit. The user can use the protected Buy review to add to
-      // that exact plan, or finish/cancel the old protection first.
-      allowPositionAdd: !webAutoExitExplicitlyDisabled(body)
+      // Both reviewed choices reuse the one authoritative position record.
+      // A protected Buy merges into that record; Wallet Swap is explicitly
+      // unprotected and leaves its exact protected lot/basis untouched.
+      allowPositionAdd: true
     });
     if (eligibleAdd) {
-      positionAdd = {
-        planId: eligibleAdd.plan.id,
-        walletStateRevision: eligibleAdd.walletRevision,
-        protectedLotRevision: eligibleAdd.protectedLotRevision,
-        summary: eligibleAdd.existingProtectionSummary
-      };
       existingProtectionSummary = eligibleAdd.existingProtectionSummary;
-      warnings.push("This wallet already has one eligible protected position. Confirming will add the new tokens and cost basis to that position without changing its existing exit settings.");
+      if (swapOnly) {
+        unprotectedPositionAdd = {
+          planId: eligibleAdd.plan.id,
+          summary: "Swap only: these new tokens will stay manual. The existing automatic exit continues to cover only its previously protected token amount."
+        };
+        warnings.push("This coin already has protected tokens in this wallet. This swap will not inherit, replace, or restart that TP / SL, and it will not create a second exit plan.");
+      } else {
+        positionAdd = {
+          planId: eligibleAdd.plan.id,
+          walletStateRevision: eligibleAdd.walletRevision,
+          protectedLotRevision: eligibleAdd.protectedLotRevision,
+          summary: eligibleAdd.existingProtectionSummary
+        };
+        warnings.push("This wallet already has one eligible protected position. Confirming will add the new tokens and cost basis to that position without changing its existing exit settings.");
+      }
     }
     amountLamports = await webBuyAmountLamports(wallet, body);
     ({ feeLamports } = await calculateTradeFeeLamports(amountLamports, userId));
@@ -90874,6 +90884,7 @@ async function webSolTradePreview(userId, body = {}) {
       positionAdd,
       existingProtectionSummary
     } : {}),
+    ...(unprotectedPositionAdd ? { unprotectedPositionAdd } : {}),
     expiresAt: new Date(Date.now() + 30_000).toISOString()
   };
 }
@@ -91796,13 +91807,17 @@ async function webTradeBuyCore(userId, body = {}) {
   );
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const requestedPositionAdd = Boolean(String(body.addToProtectionPlanId || "").trim());
-  if (requestedPositionAdd && webAutoExitExplicitlyDisabled(body)) {
+  const unprotectedAddRequested = webAutoExitExplicitlyDisabled(body);
+  if (requestedPositionAdd && unprotectedAddRequested) {
     const error = new Error("A swap-only buy cannot join an automatic TP / SL plan. Review it from Buy with protection, or finish the existing exit first.");
     error.statusCode = 409;
     throw error;
   }
   const eligiblePositionAdd = await assertManagedSolBuyReentryAllowed(userId, [wallet], tokenMint, {
-    allowPositionAdd: requestedPositionAdd
+    // A swap-only add is allowed only through the same strict single-plan,
+    // idle-holder eligibility check as a protected add. The wallet+mint money
+    // lock is already held, so no automatic exit can race this broadcast.
+    allowPositionAdd: requestedPositionAdd || unprotectedAddRequested
   });
   if (requestedPositionAdd) {
     if (!eligiblePositionAdd) {
@@ -91979,6 +91994,7 @@ async function webTradeBuyCore(userId, body = {}) {
     recordError
   }).catch(() => {});
   const baseMessage = `${wallet.label} bought ${shortMint(tokenMint)} with ${lamportsToSol(result.amountLamports)} SOL.`;
+  const unprotectedPositionAdd = Boolean(unprotectedAddRequested && eligiblePositionAdd);
 
   return {
     type: "buy",
@@ -91999,9 +92015,17 @@ async function webTradeBuyCore(userId, body = {}) {
     autoExitArmed: Boolean(autoExitPlan),
     autoExitError,
     autoExitPlan,
+    unprotectedPositionAdd,
+    existingProtectionSummary: unprotectedPositionAdd
+      ? managedSolPositionAddSummary(eligiblePositionAdd.plan, eligiblePositionAdd.planWallet)
+      : null,
     message: autoExitPlan
       ? `${baseMessage} ${autoExitPlan.shortMessage}`
-      : autoExitError ? `${baseMessage} Auto-exit did not arm: ${autoExitError}` : baseMessage
+      : autoExitError
+        ? `${baseMessage} Auto-exit did not arm: ${autoExitError}`
+        : unprotectedPositionAdd
+          ? `${baseMessage} The new tokens remain manual; the existing TP / SL still covers only its original protected lot.`
+          : baseMessage
   };
 }
 

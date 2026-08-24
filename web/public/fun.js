@@ -4234,6 +4234,9 @@
     const positionAdd = preview.positionAdd && preview.positionAdd.planId
       ? `<div class="transaction-warning trade-receipt-notice success"><b>Add to existing protection</b><ul><li>${escapeHtml(preview.positionAdd.summary || "This buy joins the current protected position. Its existing automatic exits stay in control of the combined position.")}</li></ul></div>`
       : "";
+    const unprotectedPositionAdd = preview.unprotectedPositionAdd && preview.unprotectedPositionAdd.planId
+      ? `<div class="transaction-warning trade-receipt-notice"><b>Swap only · no automatic sell on this add</b><ul><li>${escapeHtml(preview.unprotectedPositionAdd.summary || "These new tokens stay manual. Existing automatic exits keep their original protected amount only.")}</li></ul></div>`
+      : "";
     const status = preview.simulation?.status === "passed" ? "SIMULATION PASSED" : "ROUTE PREFLIGHT PASSED";
     const confirmControl = preview.kind === "send"
       ? `<button class="submit-trade" type="button" data-confirm-sol-send>Confirm send</button>`
@@ -4241,7 +4244,7 @@
     return `<div class="sheet-title transaction-preview-title"><img src="${escapeHtml(preview.kind === "send" ? slimePfp(preview.walletPublicKey) : coinImage(state.selected || {}))}" alt=""><div><h2>Review ${escapeHtml(preview.side || "transaction")}</h2><p>${escapeHtml(preview.walletLabel || "Slime wallet")} · live quote</p></div></div>
       <div class="simulation-status ${preview.simulation?.status === "passed" ? "passed" : "verified"}"><span>✓</span><div><b>${status}</b><p>${escapeHtml(preview.simulation?.message || "Live route checks passed. Nothing was broadcast.")}</p></div></div>
       <section class="transaction-preview-card"><div><span>You send</span><b>${escapeHtml(preview.inputAmount)} ${escapeHtml(preview.inputLabel)}</b></div><div><span>Estimated receive</span><b>${escapeHtml(preview.estimatedOutput)} ${escapeHtml(preview.outputLabel)}</b></div><div><span>Minimum received</span><b>${escapeHtml(preview.minimumReceived)} ${escapeHtml(preview.outputLabel)}</b></div><div><span>Price impact</span><b>${escapeHtml(impactText)}</b></div><div><span>App fee</span><b>${escapeHtml(preview.appFee || "Included")}</b></div><div><span>Network fee</span><b>${escapeHtml(preview.networkFee || "Estimated at submit")}</b></div><div><span>Balance after</span><b>${escapeHtml(preview.balanceAfter || "Recalculated at submit")}</b></div><div><span>Route</span><b>${escapeHtml(preview.route || preview.chain || "Live route")}</b></div></section>
-      ${positionAdd}${warnings ? `<div class="transaction-warning"><b>Before you confirm</b><ul>${warnings}</ul></div>` : ""}
+      ${positionAdd}${unprotectedPositionAdd}${warnings ? `<div class="transaction-warning"><b>Before you confirm</b><ul>${warnings}</ul></div>` : ""}
       ${confirmControl}
       <button class="sheet-secondary" type="button" data-edit-trade-preview>Edit transaction</button><p class="fineprint">The quote and simulation do not move funds. SlimeWallet performs safety checks again immediately before submission.</p>`;
   }
@@ -4313,7 +4316,8 @@
       else if (autoExitError) notices.push({ tone: "danger", title: "Trade landed; TP / SL did not arm", message: `${String(autoExitError)} Open the position and arm exits manually; do not repeat the buy.` });
       else notices.push({ tone: "warning", title: "Verify TP / SL in Activity", message: "The buy was submitted, but the response did not confirm that automated exits were armed." });
     } else if (pending.chain !== "robinhood" && side === "buy") {
-      if (trade.positionAddApplied === true) notices.push({ tone: "success", title: "Added to existing TP / SL", message: trade.existingProtectionSummary || "The new tokens and cost basis were merged into the existing protected position. No second exit plan was created." });
+      if (trade.unprotectedPositionAdd === true) notices.push({ tone: "success", title: "Swap added as a manual balance", message: "These new tokens are not tied to an automatic sell. The existing TP / SL still covers only its original protected amount." });
+      else if (trade.positionAddApplied === true) notices.push({ tone: "success", title: "Added to existing TP / SL", message: trade.existingProtectionSummary || "The new tokens and cost basis were merged into the existing protected position. No second exit plan was created." });
       else if (trade.autoExitArmed === true) notices.push({ tone: "success", title: "TP / SL armed", message: "Your automated exit protection is active on the server." });
       else if (trade.autoExitError) notices.push({ tone: "danger", title: "Buy landed; TP / SL did not arm", message: `${String(trade.autoExitError)} Open the position and arm exits manually; do not repeat the buy.` });
       else if (protectionRequested) notices.push({ tone: "warning", title: "Verify TP / SL in Activity", message: "The buy was submitted, but the response did not confirm that automated exits were armed." });

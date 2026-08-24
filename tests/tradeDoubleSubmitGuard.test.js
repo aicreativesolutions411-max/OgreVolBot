@@ -867,12 +867,13 @@ test("reviewed protected-position adds reserve, checkpoint, and merge one exact 
   const preview = functionBody(serverSource, "webSolTradePreview");
   assert.match(preview, /positionAdd = \{[\s\S]*planId:[\s\S]*walletStateRevision:[\s\S]*protectedLotRevision:[\s\S]*summary:/);
   assert.match(preview, /existingProtectionSummary/);
-  assert.match(preview, /allowPositionAdd: !webAutoExitExplicitlyDisabled\(body\)/,
+  assert.match(preview, /const swapOnly = webAutoExitExplicitlyDisabled\(body\)/);
+  assert.match(preview, /unprotectedPositionAdd = \{[\s\S]*Swap only: these new tokens will stay manual/,
     "an explicit swap-only buy must not silently inherit an existing automatic exit");
 
   const core = functionBody(serverSource, "webTradeBuyCore");
   assert.match(core, /addToProtectionPlanId/);
-  assert.match(core, /requestedPositionAdd && webAutoExitExplicitlyDisabled\(body\)/);
+  assert.match(core, /requestedPositionAdd && unprotectedAddRequested/);
   assert.match(core, /A swap-only buy cannot join an automatic TP \/ SL plan/);
   assert.ok(core.indexOf("executeManagedSolPositionAdd") < core.indexOf("webCreateSingleTradeAutoExitPlan"));
   assert.ok(core.indexOf('requireWebAutomationPermission(userId, "protected position add")') < core.indexOf("executeManagedSolPositionAdd"));
@@ -911,6 +912,21 @@ test("reviewed protected-position adds reserve, checkpoint, and merge one exact 
   assert.match(apply, /bumpProtectedLotRevision/);
   assert.match(apply, /bumpTradePlanWalletStateRevision/);
   assert.doesNotMatch(apply, /sellAfterAt\s*=/, "a position add must preserve the original timer deadline");
+});
+
+test("wallet swap can add an explicitly manual lot beside one idle protected lot", () => {
+  const preview = functionBody(serverSource, "webSolTradePreview");
+  assert.match(preview, /const swapOnly = webAutoExitExplicitlyDisabled\(body\)/);
+  assert.match(preview, /allowPositionAdd: true/);
+  assert.match(preview, /unprotectedPositionAdd = \{/);
+  assert.match(preview, /will not inherit, replace, or restart that TP \/ SL/);
+
+  const buy = functionBody(serverSource, "webTradeBuyCore");
+  assert.match(buy, /const unprotectedAddRequested = webAutoExitExplicitlyDisabled\(body\)/);
+  assert.match(buy, /allowPositionAdd: requestedPositionAdd \|\| unprotectedAddRequested/);
+  assert.match(buy, /const unprotectedPositionAdd = Boolean\(unprotectedAddRequested && eligiblePositionAdd\)/);
+  assert.ok(buy.indexOf("assertManagedSolBuyReentryAllowed") < buy.indexOf("buyTokenForPlan"));
+  assert.match(buy, /new tokens remain manual; the existing TP \/ SL still covers only its original protected lot/);
 });
 
 test("protected-position add rejects stale/unreviewed states and reconciles signed ambiguity exactly once", () => {

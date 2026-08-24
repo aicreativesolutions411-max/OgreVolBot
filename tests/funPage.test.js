@@ -734,10 +734,14 @@ test("Fun only adds a buy to existing protection after the reviewed plan is froz
   const previewSource = js.slice(js.indexOf("function transactionPreviewHtml"), js.indexOf("function tradeReceiptData"));
   assert.match(previewSource, /Add to existing protection/);
   assert.match(previewSource, /positionAdd\.summary/);
+  assert.match(previewSource, /unprotectedPositionAdd\.summary/);
+  assert.match(previewSource, /Swap only · no automatic sell on this add/);
   assert.match(previewSource, /pending\.body\.addToProtectionPlanId = String\(positionAdd\.planId\)/);
   assert.match(previewSource, /Number\.isInteger\(walletStateRevision\)/);
   assert.match(previewSource, /pending\.body\.addToProtectionWalletRevision = walletStateRevision/);
   assert.match(js, /trade\.positionAddApplied === true/);
+  assert.match(js, /trade\.unprotectedPositionAdd === true/);
+  assert.match(js, /Swap added as a manual balance/);
   assert.match(js, /No second exit plan was created/);
   assert.match(js, /tap Confirm again to safely resume this exact attempt/);
   assert.match(js, /Retry same \$\{side\} safely/);
