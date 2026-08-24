@@ -339,6 +339,15 @@ async function fetchLeft4SolPageHtml(indexUrl) {
       + `<meta name="twitter:card" content="summary_large_image">`
       + `<meta name="description" content="LEFT4SOL — free browser zombie survival with a ten-chapter campaign, co-op, heists and kart racing.">`;
     html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${baseDir}">${ogTags}`);
+    // Unity's loader resolves streamingAssetsUrl against document.URL and
+    // IGNORES the <base> tag - so on this origin the runtime fetched
+    // left4sol.com/StreamingAssets/UnityServicesProjectConfiguration.json,
+    // got this portal's HTML back, and Unity Services (auth/relay/co-op)
+    // never initialized for any web player ("co-op doesn't seem to be
+    // online for users to join", owner 2026-08-24). Absolute URL fixes it.
+    html = html.replace(
+      /streamingAssetsUrl:\s*"StreamingAssets"/,
+      `streamingAssetsUrl: "${baseDir}StreamingAssets"`);
     left4solPageCache = { sourceUrl: indexUrl, html };
     return html;
   } catch (error) {
