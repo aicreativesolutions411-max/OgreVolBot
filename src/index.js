@@ -71,6 +71,18 @@ import {
 } from "./lib/tradeExecutionService.js";
 import { workerTickTaskFlags } from "./lib/workerTickTasks.js";
 import {
+  TREND_LAUNCH_RIGHTS_VERSION,
+  chooseTrendLaunchCandidate,
+  fallbackTrendLaunchConcept,
+  isBlockedTrendLaunchContent,
+  nextTrendLaunchAt,
+  normalizeTrendLaunchCampaign,
+  normalizeTrendLaunchCandidate,
+  trendLaunchDayKey,
+  trendLaunchDue,
+  trendLaunchRightsAccepted
+} from "./lib/trendLaunchCampaign.js";
+import {
   automationExitReplacementBlocked,
   automationOrderIsActivelyMonitored,
   rotatingUniqueWindow,
@@ -5748,6 +5760,7 @@ const PUBLIC_MENU = [
   [{ text: "👛 Wallet", callback_data: "wallet_menu" }, { text: "⚙️ Settings", callback_data: "settings_menu" }],
   [{ text: "🎯 Signals", callback_data: "dm_signals" }, { text: "👥 Copy Trade", callback_data: "copy_trade_start" }],
   [{ text: "🚀 Launch a Coin", callback_data: "launch_coin" }, { text: "📈 Volume Bot", callback_data: "volume_bot" }],
+  [{ text: "🔥 Trend Launch", callback_data: "trend_launch" }],
   [{ text: "💰 Portfolio & PnL", callback_data: "portfolio_menu" }, { text: "🔗 Links & More", callback_data: "links_menu" }],
   [{ text: "❓ How To Use", callback_data: "quick_start" }]
 ];
@@ -5769,6 +5782,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "settings_menu",
   "dm_signals",
   "launch_coin",
+  "trend_launch",
   "orders_hub",
   "copy_trade_start",
   "volume_bot",
@@ -6925,6 +6939,7 @@ async function registerTelegramBotCommands() {
     { command: "s", description: "Group bot settings (admins)" },
     { command: "verifyoff", description: "Turn off entry verification (admins)" },
     { command: "presets", description: "Your Quick Buy amount + TP/SL exits" },
+    { command: "trendlaunch", description: "Auto-launch eligible live X trends" },
     { command: "invite", description: "Create your tracked group invite link" },
     { command: "myinvites", description: "Your unique and active invite totals" },
     { command: "invites", description: "Group invite leaderboard (admins)" },
@@ -7279,6 +7294,10 @@ and is checked by an automated release audit before every upload.</p></div>
     if (request.method === "GET" && requestUrl.pathname === "/launch-coin") {
       response.writeHead(302, { Location: "/#launch", "Cache-Control": "no-store" });
       response.end();
+      return;
+    }
+    if (request.method === "GET" && ["/trend-launch", "/trend-launch/", "/trend-launch.html"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "trend-launch.html", "no-store, max-age=0");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/left4sol/download") {
@@ -11301,6 +11320,31 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/trend-launch") {
+      sendWebJson(request, response, 200, { ok: true, campaign: await trendLaunchCampaignForUser(auth.userId) });
+      return;
+    }
+
+    if (request.method === "POST" && [
+      "/api/web/trend-launch/save",
+      "/api/web/trend-launch/start",
+      "/api/web/trend-launch/stop",
+      "/api/web/trend-launch/single"
+    ].includes(pathname)) {
+      const body = await readJsonRequestBody(request, 12_000);
+      const action = pathname.split("/").pop();
+      try {
+        const campaign = await trendLaunchSaveCampaign(auth.userId, body, action);
+        if (["start", "single"].includes(action)) {
+          queueTrendLaunchWorker();
+        }
+        sendWebJson(request, response, 200, { ok: true, campaign });
+      } catch (error) {
+        sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) });
+      }
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/launch-os/projects") {
       sendWebJson(request, response, 200, { ok: true, projects: await launchOsProjectsForUser(auth.userId) });
       return;
@@ -14739,6 +14783,625 @@ async function ogreAgentXTrendRows(message = "") {
   return { configured: true, rows, error: "" };
 }
 
+// ===== TREND LAUNCH ==========================================================
+// A user-authorized, budgeted campaign that turns a current X media post into a
+// Pump launch. The selected managed wallet remains the real creator wallet;
+// SlimeWire never substitutes a platform wallet or silently accepts media rights.
+const TREND_LAUNCH_MAX_HISTORY = 800;
+const TREND_LAUNCH_PENDING_STALE_MS = 25 * 60_000;
+const TREND_LAUNCH_QUERY_ROTATION = [
+  "viral meme has:media -is:retweet lang:en",
+  "internet culture has:media -is:retweet lang:en",
+  "funny animals has:media -is:retweet lang:en",
+  "gaming viral has:media -is:retweet lang:en",
+  "sports meme has:media -is:retweet lang:en",
+  "music meme has:media -is:retweet lang:en"
+];
+
+async function readTrendLaunchStore() {
+  const store = await readJson(trendLaunchCampaignsPath());
+  if (!store.campaigns || typeof store.campaigns !== "object" || Array.isArray(store.campaigns)) store.campaigns = {};
+  if (!Array.isArray(store.history)) store.history = [];
+  return store;
+}
+
+async function mutateTrendLaunchStore(fn) {
+  return withFileLock(trendLaunchCampaignsPath(), async () => {
+    const store = await readTrendLaunchStore();
+    const result = await fn(store);
+    if (store.history.length > TREND_LAUNCH_MAX_HISTORY) store.history = store.history.slice(-TREND_LAUNCH_MAX_HISTORY);
+    await writeJsonFile(trendLaunchCampaignsPath(), store);
+    return result;
+  });
+}
+
+function trendLaunchCampaignId(userId) {
+  return `tl-${hashWebSecret(String(userId || "")).slice(0, 18)}`;
+}
+
+function trendLaunchPublicCampaign(campaign = {}, history = []) {
+  const rows = (Array.isArray(history) ? history : [])
+    .filter((item) => String(item?.campaignId || "") === String(campaign.id || ""))
+    .slice(-12)
+    .reverse()
+    .map((item) => ({
+      id: item.id,
+      status: item.status,
+      name: item.name,
+      symbol: item.symbol,
+      mint: item.mint,
+      sourceUrl: item.sourceUrl,
+      sourceUsername: item.sourceUsername,
+      trend: item.trend,
+      launchedAt: item.launchedAt,
+      error: item.error || ""
+    }));
+  return {
+    id: campaign.id || "",
+    enabled: Boolean(campaign.enabled),
+    status: campaign.status || "stopped",
+    walletIndex: Number(campaign.walletIndex || 1),
+    walletPublicKey: campaign.walletPublicKey || "",
+    walletLabel: campaign.walletLabel || "",
+    launchesPerHour: Number(campaign.launchesPerHour || 1),
+    maxLaunchesPerDay: Number(campaign.maxLaunchesPerDay || 24),
+    devBuySol: Number(campaign.devBuySol || 0),
+    maxDailyDevBuySol: Number(campaign.maxDailyDevBuySol || 0),
+    dailyDevBuySpent: Number(campaign.dailyDevBuySpent || 0),
+    launchedToday: Number(campaign.launchedToday || 0),
+    totalLaunched: Number(campaign.totalLaunched || 0),
+    region: campaign.region || "worldwide",
+    rightsAccepted: trendLaunchRightsAccepted(campaign),
+    rightsAttestedAt: campaign.rightsAttestedAt || "",
+    nextRunAt: Number(campaign.nextRunAt || 0),
+    lastRunAt: campaign.lastRunAt || "",
+    lastError: campaign.lastError || "",
+    xConfigured: Boolean(ogreAgentXBearerToken()),
+    history: rows
+  };
+}
+
+async function trendLaunchCampaignForUser(userId) {
+  const store = await readTrendLaunchStore();
+  const campaign = store.campaigns[String(userId)] || {};
+  return trendLaunchPublicCampaign(campaign, store.history);
+}
+
+async function trendLaunchSaveCampaign(userId, body = {}, action = "save") {
+  const walletIndex = Math.max(1, Math.round(Number(body.walletIndex) || 1));
+  let wallet = null;
+  if (action !== "stop") {
+    const walletStore = await readWalletStore();
+    wallet = assertServerTradeWalletReady(getWalletAt(walletStore, walletIndex, userId), "Trend Launch");
+  }
+  const now = Date.now();
+  return mutateTrendLaunchStore((store) => {
+    const current = store.campaigns[String(userId)] || { id: trendLaunchCampaignId(userId), userId: String(userId), createdAt: new Date(now).toISOString() };
+    const next = normalizeTrendLaunchCampaign(body, current, now);
+    next.id = current.id || trendLaunchCampaignId(userId);
+    next.userId = String(userId);
+    next.walletIndex = wallet ? walletIndex : Number(current.walletIndex || walletIndex);
+    next.walletPublicKey = wallet?.publicKey || current.walletPublicKey || "";
+    next.walletLabel = wallet?.label || current.walletLabel || `Wallet ${next.walletIndex}`;
+    next.maxDailyDevBuySol = Math.max(0, Math.min(50, Number(body.maxDailyDevBuySol ?? current.maxDailyDevBuySol) || 0));
+    next.dailyDevBuySpent = next.dayKey === current.dayKey ? Math.max(0, Number(current.dailyDevBuySpent) || 0) : 0;
+    if (body.rightsAccepted === true) {
+      next.rightsVersion = TREND_LAUNCH_RIGHTS_VERSION;
+      next.rightsAttestedAt = current.rightsAttestedAt || new Date(now).toISOString();
+    }
+    if (body.rightsAccepted === false && action !== "start") {
+      next.rightsVersion = "";
+      next.rightsAttestedAt = "";
+      next.enabled = false;
+      next.status = "stopped";
+    }
+    if (action === "start" || action === "single") {
+      if (!trendLaunchRightsAccepted(next)) throw Object.assign(new Error("Confirm the media-rights authorization before starting Trend Launch."), { statusCode: 400 });
+      if (!ogreAgentXBearerToken()) throw Object.assign(new Error("Trend Launch needs the configured X API bearer token before it can select live source posts."), { statusCode: 503 });
+      if (next.devBuySol > 0 && next.maxDailyDevBuySol <= 0) throw Object.assign(new Error("Set a daily dev-buy cap or leave dev buy at 0 SOL."), { statusCode: 400 });
+      next.enabled = true;
+      next.status = "running";
+      next.oneShotRequested = action === "single";
+      next.nextRunAt = now;
+      next.lastError = "";
+      if (next.pendingRun && now - Number(next.pendingRun.claimedAt || 0) > TREND_LAUNCH_PENDING_STALE_MS) delete next.pendingRun;
+    } else if (action === "stop") {
+      next.enabled = false;
+      next.status = "stopped";
+      next.oneShotRequested = false;
+      next.stoppedAt = new Date(now).toISOString();
+    }
+    store.campaigns[String(userId)] = next;
+    return trendLaunchPublicCampaign(next, store.history);
+  });
+}
+
+function trendLaunchTrendNames(data = {}) {
+  const rows = Array.isArray(data?.data?.[0]?.trends)
+    ? data.data[0].trends
+    : Array.isArray(data?.data)
+      ? data.data
+      : Array.isArray(data?.trends)
+        ? data.trends
+        : [];
+  return rows.map((row) => String(row?.trend_name || row?.name || row?.query || "").replace(/^#+/, "").trim())
+    .filter((name) => name.length >= 3 && name.length <= 80 && !isBlockedTrendLaunchContent(name))
+    .slice(0, 18);
+}
+
+function trendLaunchParseXSearch(data = {}, trend = "") {
+  const trendNames = (Array.isArray(trend) ? trend : [trend]).map((item) => String(item || "").trim()).filter(Boolean);
+  const mediaByKey = new Map((Array.isArray(data?.includes?.media) ? data.includes.media : []).map((row) => [String(row.media_key || ""), row]));
+  const usersById = new Map((Array.isArray(data?.includes?.users) ? data.includes.users : []).map((row) => [String(row.id || ""), row]));
+  const rows = [];
+  for (const tweet of (Array.isArray(data?.data) ? data.data : [])) {
+    const tweetText = String(tweet?.text || "");
+    const matchedTrend = trendNames.find((name) => tweetText.toLowerCase().includes(name.toLowerCase())) || trendNames[0] || "";
+    const author = usersById.get(String(tweet?.author_id || "")) || {};
+    const mediaKeys = Array.isArray(tweet?.attachments?.media_keys) ? tweet.attachments.media_keys : [];
+    for (const key of mediaKeys) {
+      const media = mediaByKey.get(String(key)) || {};
+      const mediaUrl = firstString(media.url, media.preview_image_url);
+      const normalized = normalizeTrendLaunchCandidate({
+        id: tweet.id,
+        trend: matchedTrend,
+        text: tweetText,
+        username: author.username,
+        authorId: tweet.author_id,
+        sourceUrl: author.username && tweet.id ? `https://x.com/${author.username}/status/${tweet.id}` : "",
+        mediaUrl,
+        mediaType: media.type,
+        createdAt: tweet.created_at,
+        metrics: tweet.public_metrics
+      });
+      if (normalized) rows.push(normalized);
+    }
+  }
+  return rows;
+}
+
+async function trendLaunchXSearch(query, trend = "") {
+  const bearer = ogreAgentXBearerToken();
+  if (!bearer) return [];
+  const params = new URLSearchParams({
+    query: String(query || "").slice(0, 450),
+    max_results: "50",
+    "tweet.fields": "created_at,public_metrics,attachments,author_id,lang",
+    expansions: "attachments.media_keys,author_id",
+    "media.fields": "media_key,type,url,preview_image_url,width,height",
+    "user.fields": "username,name,verified,public_metrics"
+  });
+  const data = await ogreAgentFetchJson(`https://api.x.com/2/tweets/search/recent?${params.toString()}`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${bearer}` }
+  }, 8_000);
+  return trendLaunchParseXSearch(data || {}, trend);
+}
+
+async function trendLaunchXCandidates(campaign = {}) {
+  const bearer = ogreAgentXBearerToken();
+  if (!bearer) return [];
+  const woeid = campaign.region === "us" ? "23424977" : "1";
+  const trendData = await ogreAgentFetchJson(`https://api.x.com/2/trends/by/woeid/${woeid}?max_trends=50`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${bearer}` }
+  }, 6_500);
+  const trendNames = trendLaunchTrendNames(trendData || {});
+  const recentTrendNames = new Set((campaign.recentTrendNames || []).map((item) => String(item || "").toLowerCase()));
+  const freshNames = trendNames.filter((name) => !recentTrendNames.has(name.toLowerCase())).slice(0, 6);
+  const names = freshNames.length ? freshNames : trendNames.slice(0, 6);
+  const query = names.length
+    ? `(${names.map((name) => `"${name.replace(/["\\]/g, "")}"`).join(" OR ")}) has:media -is:retweet lang:en`
+    : TREND_LAUNCH_QUERY_ROTATION[Math.abs(Number(campaign.queryCursor || 0)) % TREND_LAUNCH_QUERY_ROTATION.length];
+  let rows = await trendLaunchXSearch(query, names);
+  if (!rows.length && names.length) {
+    const fallbackQuery = TREND_LAUNCH_QUERY_ROTATION[(Math.abs(Number(campaign.queryCursor || 0)) + 1) % TREND_LAUNCH_QUERY_ROTATION.length];
+    rows = await trendLaunchXSearch(fallbackQuery, "");
+  }
+  return rows;
+}
+
+function trendLaunchCleanConcept(value = {}, candidate = {}, usedSymbols = []) {
+  const fallback = fallbackTrendLaunchConcept(candidate, usedSymbols);
+  const name = cleanLaunchText(value.name || fallback.name, 32) || fallback.name;
+  let symbol = String(value.symbol || fallback.symbol).replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 10) || fallback.symbol;
+  const used = new Set(usedSymbols.map((item) => String(item || "").toUpperCase()));
+  if (used.has(symbol)) symbol = fallbackTrendLaunchConcept({ ...candidate, trend: `${candidate.trend || name} ${Date.now() % 100}` }, usedSymbols).symbol;
+  return {
+    name,
+    symbol,
+    description: cleanLaunchText(value.description || fallback.description, 420) || fallback.description
+  };
+}
+
+async function trendLaunchGenerateConcept(candidate, usedSymbols = []) {
+  const fallback = fallbackTrendLaunchConcept(candidate, usedSymbols);
+  const apiKey = ogreAgentEnv("GEMINI_API_KEY") || ogreAgentEnv("GOOGLE_API_KEY");
+  if (!apiKey) return trendLaunchCleanConcept(fallback, candidate, usedSymbols);
+  const model = encodeURIComponent(ogreAgentEnv("GEMINI_SITE_TEXT_MODEL") || "gemini-flash-lite-latest");
+  const prompt = [
+    "Create a concise original memecoin identity inspired by the supplied current X post.",
+    "Return JSON only with name, symbol, description.",
+    "Do not imply endorsement, partnership, guaranteed value, utility, or investment returns.",
+    "Avoid the name of a private individual, child, tragedy, political event, protected brand, or public figure.",
+    "Name max 32 chars; ticker 2-10 letters/numbers; description max 280 chars.",
+    `Trend: ${candidate.trend || "current conversation"}`,
+    `Source post: ${candidate.text}`,
+    `Source: ${candidate.sourceUrl}`
+  ].join("\n");
+  const data = await ogreAgentFetchJson(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.85,
+        maxOutputTokens: 220,
+        responseMimeType: "application/json",
+        responseSchema: { type: "OBJECT", required: ["name", "symbol", "description"], properties: { name: { type: "STRING" }, symbol: { type: "STRING" }, description: { type: "STRING" } } }
+      }
+    })
+  }, 12_000);
+  const text = (data?.candidates || []).flatMap((row) => row?.content?.parts || []).map((part) => part?.text || "").join("");
+  let parsed = fallback;
+  try { parsed = JSON.parse(text); } catch {}
+  return trendLaunchCleanConcept(parsed, candidate, usedSymbols);
+}
+
+async function trendLaunchImageData(candidate, symbol) {
+  const source = await launchOsTrustedTokenImageBuffer(candidate.mediaUrl);
+  if (!source) throw new Error("The selected X media could not be verified or downloaded. A different trend will be tried next.");
+  const processed = await processLaunchImage({
+    buffer: source,
+    contentType: "image/jpeg",
+    reportedMime: "image/jpeg",
+    filename: `${String(symbol || "trend").toLowerCase()}-x-source.jpg`,
+    originalFilename: `${String(symbol || "trend").toLowerCase()}-x-source.jpg`
+  }, { outputSize: 1000, maxInputBytes: 8_000_000 });
+  return {
+    imageDataUrl: `data:${processed.contentType};base64,${processed.buffer.toString("base64")}`,
+    imageName: processed.filename
+  };
+}
+
+async function claimDueTrendLaunchCampaign(now = Date.now()) {
+  return mutateTrendLaunchStore((store) => {
+    const today = trendLaunchDayKey(now);
+    for (const stored of Object.values(store.campaigns || {})) {
+      if (stored?.enabled && stored?.status === "daily_limit" && String(stored.dayKey || "") !== today) {
+        stored.status = "running";
+        stored.nextRunAt = now;
+        stored.lastError = "";
+      }
+    }
+    const campaigns = Object.values(store.campaigns || {}).map((row) => normalizeTrendLaunchCampaign({}, row, now));
+    campaigns.sort((a, b) => Number(a.nextRunAt || 0) - Number(b.nextRunAt || 0));
+    for (const normalized of campaigns) {
+      const campaign = store.campaigns[String(normalized.userId)] || normalized;
+      Object.assign(campaign, normalized);
+      if (campaign.pendingRun?.slotId) {
+        if (now - Number(campaign.pendingRun.claimedAt || 0) > TREND_LAUNCH_PENDING_STALE_MS) {
+          campaign.enabled = false;
+          campaign.status = "needs_review";
+          campaign.lastError = "A prior launch result could not be confirmed automatically. Review launch history, then press Start again; no duplicate was submitted.";
+          delete campaign.pendingRun;
+        }
+        continue;
+      }
+      if (!trendLaunchDue(campaign, now)) continue;
+      if (campaign.devBuySol > 0 && Number(campaign.dailyDevBuySpent || 0) + campaign.devBuySol > Number(campaign.maxDailyDevBuySol || 0)) {
+        campaign.enabled = false;
+        campaign.status = "budget_paused";
+        campaign.lastError = "Daily dev-buy cap reached. Increase the cap or set dev buy to 0 SOL before restarting.";
+        continue;
+      }
+      const scheduledAt = Number(campaign.nextRunAt || now);
+      const slotId = `${campaign.id}-${trendLaunchDayKey(now).replace(/-/g, "")}-${Math.floor(scheduledAt / 1000)}`;
+      campaign.pendingRun = { slotId, claimedAt: now, scheduledAt };
+      campaign.lastRunAt = new Date(now).toISOString();
+      campaign.nextRunAt = nextTrendLaunchAt(now, campaign.launchesPerHour);
+      campaign.queryCursor = (Number(campaign.queryCursor || 0) + 1) % TREND_LAUNCH_QUERY_ROTATION.length;
+      store.campaigns[String(campaign.userId)] = campaign;
+      return JSON.parse(JSON.stringify(campaign));
+    }
+    return null;
+  });
+}
+
+async function finishTrendLaunchCampaign(campaign, outcome = {}) {
+  const now = Date.now();
+  return mutateTrendLaunchStore((store) => {
+    const current = store.campaigns[String(campaign.userId)];
+    if (!current || current.pendingRun?.slotId !== campaign.pendingRun?.slotId) return null;
+    current.walletIndex = Number(campaign.walletIndex || current.walletIndex || 1);
+    current.walletPublicKey = campaign.walletPublicKey || current.walletPublicKey || "";
+    current.walletLabel = campaign.walletLabel || current.walletLabel || `Wallet ${current.walletIndex}`;
+    const success = Boolean(outcome.mint);
+    const dayKey = trendLaunchDayKey(now);
+    if (current.dayKey !== dayKey) { current.dayKey = dayKey; current.launchedToday = 0; current.dailyDevBuySpent = 0; }
+    const historyRow = {
+      id: campaign.pendingRun.slotId,
+      campaignId: current.id,
+      userId: String(current.userId),
+      status: success ? "complete" : "failed",
+      name: outcome.concept?.name || "",
+      symbol: outcome.concept?.symbol || "",
+      mint: outcome.mint || "",
+      sourceId: outcome.candidate?.id || "",
+      sourceUrl: outcome.candidate?.sourceUrl || "",
+      sourceUsername: outcome.candidate?.username || "",
+      trend: outcome.candidate?.trend || "",
+      launchedAt: new Date(now).toISOString(),
+      error: success ? "" : String(outcome.error || "Launch did not complete.").slice(0, 300)
+    };
+    store.history.push(historyRow);
+    if (success) {
+      current.launchedToday = Number(current.launchedToday || 0) + 1;
+      current.totalLaunched = Number(current.totalLaunched || 0) + 1;
+      current.dailyDevBuySpent = Number(current.dailyDevBuySpent || 0) + Number(current.devBuySol || 0);
+      current.lastError = "";
+      current.consecutiveErrors = 0;
+      current.lastLaunch = historyRow;
+      current.recentSourceIds = [...(current.recentSourceIds || []), historyRow.sourceId].filter(Boolean).slice(-100);
+      current.recentTrendNames = [...(current.recentTrendNames || []), historyRow.trend].filter(Boolean).slice(-40);
+      if (current.oneShotRequested || current.launchedToday >= current.maxLaunchesPerDay) {
+        // A daily safety cap pauses automation until UTC rolls over; it does
+        // not silently turn off a campaign the user asked to keep running.
+        current.enabled = !current.oneShotRequested;
+        current.status = current.oneShotRequested ? "stopped" : "daily_limit";
+        current.oneShotRequested = false;
+      }
+    } else {
+      current.lastError = historyRow.error;
+      current.consecutiveErrors = Number(current.consecutiveErrors || 0) + 1;
+      current.nextRunAt = now + Math.min(30 * 60_000, 3 * 60_000 * current.consecutiveErrors);
+      if (current.oneShotRequested) { current.enabled = false; current.status = "stopped"; current.oneShotRequested = false; }
+    }
+    delete current.pendingRun;
+    current.updatedAt = new Date(now).toISOString();
+    return trendLaunchPublicCampaign(current, store.history);
+  });
+}
+
+async function trendLaunchSlotStillAuthorized(campaign) {
+  const store = await readTrendLaunchStore();
+  const current = store.campaigns[String(campaign.userId)];
+  return Boolean(
+    current?.enabled
+    && current?.status === "running"
+    && current?.pendingRun?.slotId
+    && current.pendingRun.slotId === campaign.pendingRun?.slotId
+    && trendLaunchRightsAccepted(current)
+  );
+}
+
+async function executeTrendLaunchCampaign(campaign) {
+  let candidate = null;
+  let concept = null;
+  try {
+    if (await isPausedActionBlocked("trend_launch")) {
+      throw new Error("Emergency stop is active. Trend Launch did not submit a coin.");
+    }
+    const freshCreator = await freshServerTradeWalletForOwner(campaign.userId, campaign.walletPublicKey, "Trend Launch");
+    campaign.walletIndex = freshCreator.walletIndex;
+    campaign.walletPublicKey = freshCreator.wallet.publicKey;
+    campaign.walletLabel = freshCreator.wallet.label || `Wallet ${freshCreator.walletIndex}`;
+    const store = await readTrendLaunchStore();
+    const campaignHistory = store.history.filter((row) => row.campaignId === campaign.id);
+    const candidates = await trendLaunchXCandidates(campaign);
+    candidate = chooseTrendLaunchCandidate(candidates, campaignHistory);
+    if (!candidate) throw new Error("No new eligible X media post was found. SlimeWire will rotate the search and try again.");
+    const usedSymbols = store.history.map((row) => row.symbol).filter(Boolean);
+    concept = await trendLaunchGenerateConcept(candidate, usedSymbols);
+    const image = await trendLaunchImageData(candidate, concept.symbol);
+    if (!(await trendLaunchSlotStillAuthorized(campaign))) {
+      throw new Error("Trend Launch was stopped before submission. No coin was sent.");
+    }
+    const result = await webLaunchPumpCoin(campaign.userId, {
+      ...concept,
+      x: candidate.sourceUrl,
+      twitter: candidate.sourceUrl,
+      ...image,
+      devBuySol: String(Number(campaign.devBuySol || 0)),
+      // Freeze the creator by public key. Wallet list order can change while a
+      // campaign is running; the key must not.
+      devWalletIndex: String(campaign.walletPublicKey),
+      selectedDevWalletId: String(campaign.walletPublicKey),
+      creatorFeeClaimMode: "manual",
+      rail: "pump",
+      launchAttemptId: campaign.pendingRun.slotId,
+      source: "trend_launch_campaign"
+    });
+    const mint = firstString(result?.tokenMint, result?.mint);
+    if (!mint) throw new Error("Pump returned without a confirmed mint. The campaign was not advanced.");
+    await upsertPumpLaunchAttempt({
+      id: campaign.pendingRun.slotId,
+      userId: campaign.userId,
+      tokenName: concept.name,
+      symbol: concept.symbol,
+      tokenMint: mint,
+      trendLaunch: { campaignId: campaign.id, sourceId: candidate.id, sourceUrl: candidate.sourceUrl, sourceUsername: candidate.username, trend: candidate.trend },
+      devWalletPublicKey: campaign.walletPublicKey,
+      creatorFeeClaimMode: "manual",
+      updatedAt: new Date().toISOString()
+    });
+    const summary = await finishTrendLaunchCampaign(campaign, { mint, candidate, concept });
+    await audit("trend_launch_complete", { userId: campaign.userId, campaignId: campaign.id, mint, symbol: concept.symbol, sourceUrl: candidate.sourceUrl, wallet: campaign.walletPublicKey });
+    if (/^\d+$/.test(String(campaign.userId))) {
+      await sayHtml(campaign.userId, [
+        `🔥 <b>Trend Launch completed</b>`,
+        `<b>${escapeTelegramHtml(concept.name)} ($${escapeTelegramHtml(concept.symbol)})</b>`,
+        `<code>${escapeTelegramHtml(mint)}</code>`,
+        `Creator wallet: <code>${escapeTelegramHtml(shortMint(campaign.walletPublicKey))}</code>`,
+        `Source: <a href="${escapeTelegramHtml(candidate.sourceUrl)}">@${escapeTelegramHtml(candidate.username)} on X</a>`,
+        "Creator fees accrue to this wallet and stay available in SlimeWire Creator Rewards."
+      ].join("\n"), { inline_keyboard: [[{ text: "Open coin", url: `${slimewireBaseUrl()}/fun?ca=${encodeURIComponent(mint)}` }, { text: "Creator rewards", url: `${slimewireBaseUrl()}/fun#launch` }]] }).catch(() => {});
+    }
+    return { launched: true, mint, campaign: summary };
+  } catch (error) {
+    const message = friendlyError(error);
+    await finishTrendLaunchCampaign(campaign, { candidate, concept, error: message });
+    await audit("trend_launch_failed", { userId: campaign.userId, campaignId: campaign.id, error: message }).catch(() => {});
+    return { launched: false, error: message };
+  }
+}
+
+async function processTrendLaunchCampaigns() {
+  const campaign = await claimDueTrendLaunchCampaign();
+  if (!campaign) return { processed: 0 };
+  const result = await executeTrendLaunchCampaign(campaign);
+  return { processed: 1, ...result };
+}
+
+function queueTrendLaunchWorker() {
+  setTimeout(() => {
+    void runWorkerTask("trendLaunches", () => processTrendLaunchCampaigns(), { leaseMs: 90_000 })
+      .catch((error) => console.warn(`[trend-launch] worker dispatch failed: ${friendlyError(error)}`));
+  }, 25);
+}
+
+function trendLaunchTelegramStatusText(campaign = {}) {
+  const running = campaign.enabled && campaign.status === "running";
+  const next = running && campaign.nextRunAt ? Math.max(0, Math.ceil((campaign.nextRunAt - Date.now()) / 60_000)) : null;
+  const last = campaign.history?.[0];
+  return [
+    "🔥 <b>Trend Launch</b>",
+    "SlimeWire finds a current eligible X media post, rotates the source, creates the identity, and launches through your creator wallet.",
+    "",
+    `Status: <b>${running ? "RUNNING" : escapeTelegramHtml(String(campaign.status || "stopped").replace(/_/g, " ").toUpperCase())}</b>`,
+    `Creator wallet: <b>${escapeTelegramHtml(campaign.walletLabel || `Wallet ${campaign.walletIndex || 1}`)}</b>${campaign.walletPublicKey ? ` · <code>${escapeTelegramHtml(shortMint(campaign.walletPublicKey))}</code>` : ""}`,
+    `Cadence: <b>${Number(campaign.launchesPerHour || 1)}/hour</b> · Daily max <b>${Number(campaign.maxLaunchesPerDay || 24)}</b>`,
+    `Today: <b>${Number(campaign.launchedToday || 0)}</b> · Total: <b>${Number(campaign.totalLaunched || 0)}</b>${next != null ? ` · Next check ~${next}m` : ""}`,
+    `Dev buy: <b>${Number(campaign.devBuySol || 0).toFixed(2)} SOL</b> · creator fees stay in your wallet`,
+    `Media authorization: <b>${campaign.rightsAccepted ? "confirmed" : "required"}</b>`,
+    campaign.lastError ? `\n⚠️ ${escapeTelegramHtml(campaign.lastError)}` : "",
+    last ? `\nLast: <b>$${escapeTelegramHtml(last.symbol || "COIN")}</b>${last.mint ? ` · <code>${escapeTelegramHtml(shortMint(last.mint))}</code>` : ""}` : "",
+    "",
+    "The automation blocks sensitive topics, avoids recently used posts/authors, and never replaces your selected wallet with a platform wallet."
+  ].filter(Boolean).join("\n");
+}
+
+function trendLaunchTelegramMarkup(campaign = {}) {
+  const rate = Number(campaign.launchesPerHour || 1);
+  const rightsButton = campaign.rightsAccepted
+    ? { text: "✅ Media rights confirmed", callback_data: "tl:rights" }
+    : { text: "☐ I confirm media rights", callback_data: "tl:rights" };
+  return { inline_keyboard: [
+    [{ text: `Rate ${rate}/hr · tap to change`, callback_data: "tl:rate" }, { text: `Wallet ${campaign.walletIndex || 1} · change`, callback_data: "tl:wallet" }],
+    [rightsButton],
+    [{ text: "▶ Start auto", callback_data: "tl:start" }, { text: "① Launch once", callback_data: "tl:single" }],
+    [{ text: "■ Stop", callback_data: "tl:stop" }, { text: "↻ Refresh", callback_data: "tl:refresh" }],
+    [{ text: "Creator rewards", callback_data: "tl:fees" }, { text: "Open full controls", url: `${slimewireBaseUrl()}/trend-launch` }],
+    [{ text: "🏠 Main Menu", callback_data: "main_menu" }]
+  ] };
+}
+
+async function showTrendLaunchCreatorRewards(query, userId, campaign) {
+  const chatId = query.message?.chat?.id;
+  const walletIndex = Number(campaign.walletIndex || 1);
+  const rewards = await webPumpRewards(userId, walletIndex, { force: true });
+  const wallet = rewards.wallets?.find((row) => Number(row.walletIndex) === walletIndex) || rewards.wallet;
+  const available = Number(wallet?.creator?.totalSol || 0);
+  await telegram("answerCallbackQuery", { callback_query_id: query.id }).catch(() => {});
+  await sayHtml(chatId, [
+    "<b>Creator rewards</b>",
+    `${escapeTelegramHtml(wallet?.label || campaign.walletLabel || `Wallet ${walletIndex}`)} · <code>${escapeTelegramHtml(shortMint(wallet?.publicKey || campaign.walletPublicKey))}</code>`,
+    `Available: <b>${available.toFixed(6)} SOL</b>`,
+    "Pump rewards accrue to the creator wallet and are claimed wallet-wide."
+  ].join("\n"), { inline_keyboard: [
+    [{ text: available > 0 ? `Claim ${available.toFixed(4)} SOL` : "Check again", callback_data: available > 0 ? "tl:claim" : "tl:fees" }],
+    [{ text: "Back to Trend Launch", callback_data: "tl:refresh" }]
+  ] });
+}
+
+async function showTrendLaunchTelegram(chatId, userId, messageId = null) {
+  const campaign = await trendLaunchCampaignForUser(userId);
+  const text = trendLaunchTelegramStatusText(campaign);
+  const reply_markup = trendLaunchTelegramMarkup(campaign);
+  if (messageId) {
+    await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup }).catch(async () => {
+      await sayHtml(chatId, text, reply_markup);
+    });
+  } else await sayHtml(chatId, text, reply_markup);
+  return campaign;
+}
+
+async function handleTrendLaunchCallback(query, userId) {
+  const data = String(query.data || "");
+  if (!data.startsWith("tl:")) return false;
+  const chatId = query.message?.chat?.id;
+  if (!isPrivateChat(query.message?.chat)) {
+    await telegram("answerCallbackQuery", { callback_query_id: query.id }).catch(() => {});
+    await say(chatId, "Open SlimeWireBot in DM to control unattended launches.");
+    return true;
+  }
+  try {
+    const current = await trendLaunchCampaignForUser(userId);
+    const action = data.slice(3);
+    if (action === "fees") {
+      await showTrendLaunchCreatorRewards(query, userId, current);
+      return true;
+    }
+    if (action === "claim") {
+      const claim = await webClaimCreatorFees(userId, {
+        walletIndex: current.walletIndex || 1,
+        rail: "pump",
+        tradeAttemptId: `tg-trend-claim-${userId}-${Date.now()}`
+      });
+      await telegram("answerCallbackQuery", { callback_query_id: query.id, text: claim?.claimed ? "Creator rewards claimed." : (claim?.message || "Nothing ready to claim."), show_alert: true }).catch(() => {});
+      await showTrendLaunchTelegram(chatId, userId, query.message?.message_id);
+      return true;
+    }
+    await telegram("answerCallbackQuery", { callback_query_id: query.id }).catch(() => {});
+    const base = {
+      walletIndex: current.walletIndex || 1,
+      launchesPerHour: current.launchesPerHour || 1,
+      maxLaunchesPerDay: current.maxLaunchesPerDay || 24,
+      devBuySol: current.devBuySol || 0,
+      maxDailyDevBuySol: current.maxDailyDevBuySol || 0
+    };
+    if (action === "rate") base.launchesPerHour = (Number(current.launchesPerHour || 1) % 4) + 1;
+    if (action === "wallet") {
+      const wallets = (await webWalletRows(userId)).filter((row) => !row.volumeBot);
+      if (!wallets.length) throw new Error("Create a managed SlimeWire wallet first.");
+      const at = Math.max(0, wallets.findIndex((row) => row.index === Number(current.walletIndex || 1)));
+      base.walletIndex = wallets[(at + 1) % wallets.length].index;
+    }
+    if (action === "rights") base.rightsAccepted = true;
+    const saveAction = action === "start" ? "start" : action === "single" ? "single" : action === "stop" ? "stop" : "save";
+    if (action !== "refresh") await trendLaunchSaveCampaign(userId, base, saveAction);
+    if (["start", "single"].includes(saveAction)) queueTrendLaunchWorker();
+    await showTrendLaunchTelegram(chatId, userId, query.message?.message_id);
+  } catch (error) {
+    await telegram("answerCallbackQuery", { callback_query_id: query.id, text: friendlyError(error).slice(0, 190), show_alert: true }).catch(() => {});
+  }
+  return true;
+}
+
+async function handleTrendLaunchCommand(message, userId) {
+  const parsed = parseCommandWithArgument(String(message?.text || ""), ["trendlaunch", "autolaunch"]);
+  if (!parsed) return false;
+  const chatId = message?.chat?.id;
+  if (!isPrivateChat(message.chat)) { await say(chatId, "Open SlimeWireBot in DM and send /trendlaunch so launch controls and wallets stay private."); return true; }
+  const argument = String(parsed.argument || "").trim().toLowerCase();
+  try {
+    const current = await trendLaunchCampaignForUser(userId);
+    if (/^(stop|off|halt)$/.test(argument)) await trendLaunchSaveCampaign(userId, { walletIndex: current.walletIndex || 1 }, "stop");
+    else if (/^(once|one|single|now)$/.test(argument)) {
+      await trendLaunchSaveCampaign(userId, { walletIndex: current.walletIndex || 1 }, "single");
+      queueTrendLaunchWorker();
+    } else if (/^(start|on)(?:\s+\d)?$/.test(argument) || /^\d$/.test(argument)) {
+      const rate = Number((argument.match(/\d/) || [current.launchesPerHour || 1])[0]);
+      await trendLaunchSaveCampaign(userId, { walletIndex: current.walletIndex || 1, launchesPerHour: rate }, "start");
+      queueTrendLaunchWorker();
+    }
+    await showTrendLaunchTelegram(chatId, userId);
+  } catch (error) {
+    await say(chatId, friendlyError(error));
+  }
+  return true;
+}
+
 function ogreAgentSocialIntent(message = "") {
   const text = String(message || "").toLowerCase();
   return /\b(x|twitter|tweet|tweets|post|posts|posting|mentions?|popular|viral|trending|trend|kols?|influencers?|callers?|community|socials?)\b/.test(text);
@@ -15862,6 +16525,7 @@ async function runInternalWorkerTick(body = {}) {
     limitOrders: { skipped: true },
     solExitHistoryBackfill: { skipped: true },
     dcaPlans: { skipped: true },
+    trendLaunches: { skipped: true },
     feeds: { skipped: true },
     rhPairs: { skipped: true },
     displayCaches: { skipped: true }
@@ -15921,6 +16585,14 @@ async function runInternalWorkerTick(body = {}) {
 
   if (includeTradeTasks && CONFIG.workerTickRunDcaPlans && body.runDcaPlans !== false) {
     result.dcaPlans = await runWorkerTask("dcaPlans", () => processDcaPlans(), { leaseMs: 30_000 });
+  }
+
+  // Trend Launch campaigns are deliberately worker-owned and globally leased.
+  // Dispatch after the response-critical trade checks. A launch can take much
+  // longer than a worker HTTP timeout, so never make TP/SL or order polling wait.
+  if (includeTradeTasks && body.runTrendLaunches !== false) {
+    result.trendLaunches = { queued: true };
+    queueTrendLaunchWorker();
   }
 
   if (includeDataTasks && CONFIG.workerTickWarmFeeds && body.warmLivePairs !== false) {
@@ -16498,6 +17170,10 @@ function pumpLaunchAttemptsPath() {
   return path.join(CONFIG.dataDir, "pump-launch-attempts.json");
 }
 
+function trendLaunchCampaignsPath() {
+  return path.join(CONFIG.dataDir, "trend-launch-campaigns.json");
+}
+
 function launchBundleInvitesPath() {
   return path.join(CONFIG.dataDir, "launch-bundle-invites.json");
 }
@@ -16737,7 +17413,7 @@ async function handleCallback(query, userId) {
   // Robinhood trades own their acknowledgement because the useful "bridging / buying" notice must
   // remain visible; Telegram silently ignores a second answer after this blank one.
   const callbackData = String(query.data || "");
-  const callbackOwnsAck = ["qbp:", "qb:", "rqbp:", "rqb:", "rqs:", "rd:"].some((prefix) => callbackData.startsWith(prefix));
+  const callbackOwnsAck = ["qbp:", "qb:", "rqbp:", "rqb:", "rqs:", "rd:", "tl:"].some((prefix) => callbackData.startsWith(prefix));
   if (!callbackOwnsAck) void telegram("answerCallbackQuery", { callback_query_id: query.id }).catch(() => {});
 
   // Polymarket outcome/amount tickets begin in Telegram but always finish on SlimeWire,
@@ -16752,6 +17428,9 @@ async function handleCallback(query, userId) {
     const view = await buildDailyMemeCallsView(chatId);
     await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: view.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: view.markup }).catch(() => {});
     return;
+  }
+  if (callbackData.startsWith("tl:")) {
+    if (await handleTrendLaunchCallback(query, userId).catch(() => false)) return;
   }
 
   // All-in-one group bot: module toggle buttons (gb:*) are handled here first.
@@ -17159,6 +17838,9 @@ async function handleCallback(query, userId) {
     }
     case "launch_coin":
       await showLaunchBuilder(chatId, userId);
+      break;
+    case "trend_launch":
+      await showTrendLaunchTelegram(chatId, userId, messageId);
       break;
     case "orders_hub":
       await showOrdersHub(chatId, userId, messageId);
@@ -18631,6 +19313,16 @@ async function handleMessage(message, userId) {
   // the prompt/input routers so asking for guidance never looks like a bad trade value.
   if (isPrivateChat(message.chat) && /^\/(?:help|commands)(?:@\w+)?\s*$/i.test(text)) {
     await sendTelegramHelp(chatId, dmBotHelpText());
+    return;
+  }
+
+  try {
+    if (await handleTrendLaunchCommand(message, userId)) return;
+  } catch (error) {
+    // A recognized command must never disappear into a false/no-op. Surface a
+    // plain-text fallback even if Telegram rejects the rich HTML menu.
+    console.warn(`[trend-launch] Telegram command failed for ${userId}: ${friendlyError(error)}`);
+    await say(chatId, `Trend Launch could not open: ${friendlyError(error)}`).catch(() => {});
     return;
   }
 
@@ -43530,6 +44222,8 @@ function defaultJsonForPath(filePath) {
       return { bundles: [] };
     case "holder-rewards.json":
       return { seen: {} };
+    case "trend-launch-campaigns.json":
+      return { campaigns: {}, history: [] };
     case "partner-rewards.json":
       return { programs: {}, tokenIndex: {}, receipts: [], processedFees: {} };
     case "web-auth.json":

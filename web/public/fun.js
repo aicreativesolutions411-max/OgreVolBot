@@ -3592,6 +3592,7 @@
       ${toolCard("snipe", "Launch snipe", "Watch ticker or name", "sniper")}
       ${toolCard("snipe", "Wallet launch snipe", "Watch creator or deployer", "walletLaunch")}
       ${toolCard("launch", "Launch", "Pump.fun coin", "launch")}
+      ${global ? toolCard("launch", "Trend Launch", "Auto-pick live X trends", "trendLaunch") : ""}
       ${toolCard("pnl", "Full portfolio", "PnL and receipts", "portfolio")}
       ${global ? toolCard("wallet", "Install SlimeWire Go", "Focused mobile layout", "install") : ""}
       ${creator && coin.chain === "robinhood" ? toolCard("health", "Creator liquidity", "Your launched coin", "liquidity") : ""}
@@ -4753,6 +4754,7 @@
     if (action === "telegram") { window.open(`https://t.me/${window.OGRE_PORTAL_CONFIG?.telegramBotUsername || "SlimeWiredBot"}?start=scan_${encodeURIComponent(key)}`, "_blank", "noopener"); return; }
     if (action === "install") { openFunInstall(); return; }
     if (action === "launch") { openFunLaunch(); return; }
+    if (action === "trendLaunch") { location.assign("/trend-launch"); return; }
     if (["copy", "sniper", "walletLaunch"].includes(action)) { openFunTool(action); return; }
   }
 

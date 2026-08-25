@@ -8,12 +8,14 @@ test("fast trade worker sends RH guards without duplicating broad limit-order po
   assert.match(workerSource, /runRhGuards: CONFIG\.runRhGuards,/);
   assert.match(workerSource, /runLimitOrders: false,/);
   assert.match(workerSource, /runWebExitGuards: false,/);
+  assert.match(workerSource, /runTrendLaunches: false,/);
 });
 
 test("broad trade worker owns limit orders and only falls back to RH guards when fast polling is disabled", () => {
   assert.match(workerSource, /runRhGuards: CONFIG\.taskSet === "trade" \? CONFIG\.runRhGuards && !CONFIG\.fastTpSlEnabled : false,/);
   assert.match(workerSource, /runLimitOrders: CONFIG\.taskSet === "trade" \? CONFIG\.runLimitOrders : false,/);
   assert.match(workerSource, /runWebExitGuards: CONFIG\.taskSet === "trade" \? CONFIG\.runTradePlans : false,/);
+  assert.match(workerSource, /runTrendLaunches: CONFIG\.taskSet === "trade",/);
 });
 
 test("trade worker task families can be disabled independently", () => {

@@ -178,6 +178,7 @@ async function tradePlanTick() {
           runRhGuards: CONFIG.runRhGuards,
           runLimitOrders: false,
           runDcaPlans: false,
+          runTrendLaunches: false,
           warmLivePairs: false
         }),
         signal: controller.signal
@@ -260,6 +261,7 @@ async function tick() {
           runRhGuards: CONFIG.taskSet === "trade" ? CONFIG.runRhGuards && !CONFIG.fastTpSlEnabled : false,
           runLimitOrders: CONFIG.taskSet === "trade" ? CONFIG.runLimitOrders : false,
           runDcaPlans: CONFIG.taskSet === "trade" ? CONFIG.runDcaPlans : false,
+          runTrendLaunches: CONFIG.taskSet === "trade",
           warmLivePairs: CONFIG.taskSet === "data" ? CONFIG.warmFeeds : false,
           warmRhPairs: CONFIG.taskSet === "data" ? CONFIG.warmRhPairs : false,
           warmDisplayCaches: CONFIG.warmDisplayCaches,
