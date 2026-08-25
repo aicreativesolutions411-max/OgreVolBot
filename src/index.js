@@ -44,6 +44,7 @@ import {
   authoritativeManagedPlanCoversPosition,
   confirmedExitNeedsHistoryBackfill,
   hasActionableExitSettings,
+  idleProtectionCanRetireAtConfirmedZero,
   isDefinitiveNoLiveTokenBalanceError,
   ladderSellAmountRaw,
   protectedLotAfterConfirmedBuy,
@@ -90772,7 +90773,10 @@ async function webSolTradePreview(userId, body = {}) {
       // Both reviewed choices reuse the one authoritative position record.
       // A protected Buy merges into that record; Wallet Swap is explicitly
       // unprotected and leaves its exact protected lot/basis untouched.
-      allowPositionAdd: true
+      allowPositionAdd: true,
+      // Preview is deliberately read-only. The confirmed-empty record is
+      // retired only by the serialized submit path after the user confirms.
+      persistEmptyRetirement: false
     });
     if (eligibleAdd) {
       existingProtectionSummary = eligibleAdd.existingProtectionSummary;
@@ -91046,14 +91050,9 @@ function managedSolPositionAddEligibility(userId, wallet, tokenMint, planStore, 
   };
 }
 
-async function assertManagedSolBuyReentryAllowed(userId, wallets = [], tokenMint = "", options = {}) {
-  const [planStore, guardStore, receiptStore] = await Promise.all([
-    readTradePlans(),
-    readWebExitGuards(),
-    readSolExitReceipts()
-  ]);
+function managedSolBuyProtectionExits(tokenMint, planStore, guardStore, receiptStore) {
   const exits = [];
-  const planTerminal = new Set(["canceled", "cancelled", "stopped", "closed"]);
+  const planTerminal = new Set(["canceled", "cancelled", "stopped", "closed", "completed"]);
   for (const plan of objectRows(planStore.plans)) {
     if (String(plan.tokenMint || "") !== String(tokenMint || "")) continue;
     if (planTerminal.has(String(plan.status || "").toLowerCase())) continue;
@@ -91068,13 +91067,92 @@ async function assertManagedSolBuyReentryAllowed(userId, wallets = [], tokenMint
     }
   }
   for (const guard of objectRows(guardStore.guards)) {
-    if (["canceled", "cancelled"].includes(String(guard.status || guard.exitStatus || "").toLowerCase())) continue;
+    if (["canceled", "cancelled", "completed"].includes(String(guard.status || guard.exitStatus || "").toLowerCase())) continue;
     exits.push(guard);
   }
   exits.push(...objectRows(receiptStore.receipts));
+  return exits;
+}
+
+async function retireConfirmedEmptyManagedSolProtection(wallet, tokenMint, decision, options = {}) {
+  if (!idleProtectionCanRetireAtConfirmedZero(decision)) return false;
+  let token = null;
+  try {
+    token = await getReliableTokenBalanceForMint(
+      new PublicKey(wallet.publicKey),
+      new PublicKey(tokenMint),
+      { throwOnError: true, priority: true }
+    );
+  } catch {
+    return false;
+  }
+  if (BigInt(token?.rawAmount || 0) !== 0n || token?.tokenBalanceConfirmedZero !== true) return false;
+  if (options.persist === false) return true;
+
+  const now = new Date().toISOString();
+  let retired = 0;
+  await mutateTradePlans((store) => {
+    for (const plan of objectRows(store.plans)) {
+      if (String(plan.tokenMint || "") !== String(tokenMint || "")) continue;
+      if (["canceled", "cancelled", "stopped", "closed", "completed"].includes(String(plan.status || "").toLowerCase())) continue;
+      for (const holder of objectRows(plan.wallets)) {
+        if (String(holder.publicKey || "") !== String(wallet.publicKey || "")) continue;
+        if (!idleProtectionCanRetireAtConfirmedZero({ blocked: true, reason: "exit_active", row: holder })) continue;
+        holder.status = "skipped";
+        holder.exitStatus = "skipped";
+        holder.triggerStatus = "no-live-token-balance";
+        holder.triggerReason = "confirmed empty before a new buy";
+        holder.noLiveTokenBalanceAt = now;
+        holder.retryAfterAt = null;
+        holder.nextRetryAt = null;
+        holder.error = null;
+        holder.lastError = null;
+        holder.updatedAt = now;
+        bumpTradePlanWalletStateRevision(holder, now);
+        retired += 1;
+      }
+      if (objectRows(plan.wallets).length && objectRows(plan.wallets).every((holder) => !isActiveTimedWalletStatus(holder.status))) {
+        plan.status = "completed";
+        plan.completedAt = plan.completedAt || now;
+        plan.updatedAt = now;
+      }
+    }
+    return retired;
+  });
+
+  await mutateWebExitGuards((store) => {
+    for (const guard of objectRows(store.guards)) {
+      if (String(guard.tokenMint || "") !== String(tokenMint || "")) continue;
+      if (String(guard.walletPublicKey || "") !== String(wallet.publicKey || "")) continue;
+      if (!idleProtectionCanRetireAtConfirmedZero({ blocked: true, reason: "exit_active", row: guard })) continue;
+      guard.status = "skipped";
+      guard.exitStatus = "skipped";
+      guard.triggerStatus = "no-live-token-balance";
+      guard.triggerReason = "confirmed empty before a new buy";
+      guard.noLiveTokenBalanceAt = now;
+      guard.retryAfterAt = null;
+      guard.nextRetryAt = null;
+      guard.error = null;
+      guard.lastError = null;
+      guard.updatedAt = now;
+      bumpTradePlanWalletStateRevision(guard, now);
+      retired += 1;
+    }
+    return retired;
+  });
+  return retired > 0;
+}
+
+async function assertManagedSolBuyReentryAllowed(userId, wallets = [], tokenMint = "", options = {}) {
+  let [planStore, guardStore, receiptStore] = await Promise.all([
+    readTradePlans(),
+    readWebExitGuards(),
+    readSolExitReceipts()
+  ]);
+  let exits = managedSolBuyProtectionExits(tokenMint, planStore, guardStore, receiptStore);
 
   for (const wallet of wallets) {
-    const decision = sameWalletTokenBuyBlockDecision({
+    let decision = sameWalletTokenBuyBlockDecision({
       walletPublicKey: wallet.publicKey,
       tokenMint
     }, exits, {
@@ -91085,6 +91163,24 @@ async function assertManagedSolBuyReentryAllowed(userId, wallets = [], tokenMint
       ? managedSolPositionAddEligibility(userId, wallet, tokenMint, planStore, guardStore, receiptStore)
       : null;
     if (positionAdd) return positionAdd;
+    if (await retireConfirmedEmptyManagedSolProtection(wallet, tokenMint, decision, {
+      persist: options.persistEmptyRetirement !== false
+    })) {
+      if (options.persistEmptyRetirement === false) continue;
+      [planStore, guardStore, receiptStore] = await Promise.all([
+        readTradePlans(),
+        readWebExitGuards(),
+        readSolExitReceipts()
+      ]);
+      exits = managedSolBuyProtectionExits(tokenMint, planStore, guardStore, receiptStore);
+      decision = sameWalletTokenBuyBlockDecision({
+        walletPublicKey: wallet.publicKey,
+        tokenMint
+      }, exits, {
+        stopClosedCooldownMs: CONFIG.stopLossReentryCooldownMs
+      });
+      if (!decision.blocked) continue;
+    }
     throw managedSolBuyReentryError(decision, wallet);
   }
   return null;

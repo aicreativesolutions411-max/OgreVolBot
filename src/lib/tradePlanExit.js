@@ -393,6 +393,35 @@ export function sameWalletTokenBuyBlockDecision(candidate = {}, exits = [], opti
   return { blocked: false, reason: "" };
 }
 
+export function idleProtectionCanRetireAtConfirmedZero(decision = {}) {
+  if (decision?.blocked !== true || decision?.reason !== "exit_active" || !decision?.row) return false;
+  const row = decision.row;
+  const statuses = normalizedExitStatuses(row);
+  if (!statuses.length) return false;
+  const idleStatuses = new Set([
+    "active",
+    "armed",
+    "watching",
+    "timer-only",
+    "price-unavailable",
+    "waiting_next_loop"
+  ]);
+  if (!statuses.every((status) => idleStatuses.has(status))) return false;
+
+  // A confirmed zero balance may retire an idle record, but it can never be
+  // used to erase a buy/sell that is signed, claimed, or awaiting resolution.
+  // Those transactions can still land after an RPC balance read.
+  return !Boolean(
+    row.preSellCheckpointAt
+      || row.submissionClaimToken
+      || row.submissionSignature
+      || row.buyReservationClaimToken
+      || row.buySubmissionSignature
+      || row.manualSellClaimToken
+      || row.manualSellSubmissionSignature
+  );
+}
+
 export function protectedPositionAddDecision(candidate = {}, plans = [], guards = [], receipts = [], options = {}) {
   const walletPublicKey = String(candidate.walletPublicKey || "").trim();
   const tokenMint = String(candidate.tokenMint || "").trim();

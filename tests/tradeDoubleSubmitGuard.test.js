@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { effectiveErc20SupplyRaw, tokenPriceInQuote } from "../src/lib/noxaLaunchpad.js";
+import { idleProtectionCanRetireAtConfirmedZero } from "../src/lib/tradePlanExit.js";
 
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const autopilotEngineSource = fs.readFileSync(new URL("../src/lib/autopilotEngine.js", import.meta.url), "utf8");
@@ -806,10 +807,33 @@ test("managed Sol buys fail closed when the same wallet and mint already has exi
   const blockedError = functionBody(serverSource, "managedSolBuyReentryError");
   assert.match(blockedError, /error\.statusCode = 409/);
   assert.match(blockedError, /two full-position plans cannot sell the same bag/);
+  assert.match(functionBody(serverSource, "managedSolBuyProtectionExits"), /"completed"/);
+  const retire = functionBody(serverSource, "retireConfirmedEmptyManagedSolProtection");
+  assert.match(retire, /getReliableTokenBalanceForMint/);
+  assert.match(retire, /tokenBalanceConfirmedZero !== true/);
+  assert.match(retire, /options\.persist === false/);
+  assert.match(retire, /idleProtectionCanRetireAtConfirmedZero/);
+  assert.match(retire, /triggerStatus = "no-live-token-balance"/);
+  assert.match(functionBody(serverSource, "webSolTradePreview"), /persistEmptyRetirement: false/);
   const quickBuy = functionBody(serverSource, "webTradeBuyCore");
   assert.ok(quickBuy.indexOf("assertManagedSolBuyReentryAllowed") < quickBuy.indexOf("buyTokenForPlan"));
   const managedPlan = functionBody(serverSource, "webCreateManagedBuyPlanCore");
   assert.ok(managedPlan.indexOf("assertManagedSolBuyReentryAllowed") < managedPlan.indexOf("runWithConcurrency"));
+});
+
+test("only idle protection can retire after an authoritative zero balance", () => {
+  const idle = (patch = {}) => ({
+    blocked: true,
+    reason: "exit_active",
+    row: { status: "watching", exitStatus: "watching", triggerStatus: "price-unavailable", ...patch }
+  });
+  assert.equal(idleProtectionCanRetireAtConfirmedZero(idle()), true);
+  assert.equal(idleProtectionCanRetireAtConfirmedZero(idle({ status: "retrying" })), false);
+  assert.equal(idleProtectionCanRetireAtConfirmedZero(idle({ triggerStatus: "triggered" })), false);
+  assert.equal(idleProtectionCanRetireAtConfirmedZero(idle({ submissionClaimToken: "claim" })), false);
+  assert.equal(idleProtectionCanRetireAtConfirmedZero(idle({ submissionSignature: "signature" })), false);
+  assert.equal(idleProtectionCanRetireAtConfirmedZero(idle({ buySubmissionSignature: "buy-signature" })), false);
+  assert.equal(idleProtectionCanRetireAtConfirmedZero({ ...idle(), reason: "exit_outcome_unknown" }), false);
 });
 
 test("protected Sol buys checkpoint the old bag and only arm the newly bought lot", () => {
