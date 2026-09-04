@@ -45620,11 +45620,15 @@ function telegramCommunityFooter() {
   return `📢 <a href="https://t.me/slimewireupdates">@slimewireupdates</a> · 💬 <a href="https://t.me/SlimeWireLounge">@SlimeWireLounge</a>`;
 }
 
-function telegramWithCommunityFooter(text) {
+function telegramWithCommunityFooter(text, options = {}) {
   const body = String(text || "").trimEnd();
-  if (!body) return telegramCommunityFooter();
+  const compact = options.compact === true;
+  const footer = compact
+    ? `⚡ <a href="https://www.slimewire.org">SlimeWire</a> · 📢 <a href="https://t.me/slimewireupdates">Updates</a> · 💬 <a href="https://t.me/SlimeWireLounge">Chat</a>`
+    : telegramCommunityFooter();
+  if (!body) return footer;
   if (body.includes("https://t.me/slimewireupdates") || body.includes("@slimewireupdates")) return body;
-  return `${body}\n\n${telegramCommunityFooter()}`;
+  return `${body}${compact ? "\n" : "\n\n"}${footer}`;
 }
 
 function tokenActionKeyboard(tokenMint) {
@@ -53113,20 +53117,12 @@ function formatRhScanCard(info, options = {}) {
   const railTag = info.source === "noxa" ? "Robinhood Chain · NOXA 🚀" : "Robinhood Chain";
   return [
     `🪶 <b>${esc(name)} ($${esc(sym)})</b> · <i>${railTag}</i>`,
-    `├ <code>${esc(a)}</code>`,
-    `└ 🌱 ${age}`,
-    "",
-    "📊 <b>Stats</b>",
-    `├ USD  <b>${price}</b> (${ch.title} ${chText})`,
-    `├ MC   <b>${info.mc > 0 ? scanFmtMoney(info.mc) : missingLabel}</b>`,
-    ...(info.athMc > 0 ? [`├ ATH  <b>${scanFmtMoney(info.athMc)}</b>${info.fromAthPct != null && info.fromAthPct < -1 ? ` <i>(${Math.round(info.fromAthPct)}% from ATH)</i>` : (info.fromAthPct != null && info.fromAthPct >= -1 ? " <i>(at ATH)</i>" : "")}`] : []),
-    `├ Vol  <b>${vol.value > 0 ? scanFmtMoney(vol.value) : missingLabel}</b> <i>24h</i>`,
-    `├ Holders <b>${info.holders > 0 ? scanFmtSupply(info.holders) : missingLabel}</b>`,
-    `└ Liq  <b>${info.liq > 0 ? scanFmtMoney(info.liq) : missingLabel}</b>`,
-    "",
-    `🛡 <b>Safety</b>`,
-    `└ ${safeLine}${reasons ? "\n" + reasons : ""}`,
-    soc.length ? "\n🔗 " + soc.join(" • ") : "",
+    `<code>${esc(a)}</code> · 🌱 ${age}`,
+    `📊 USD <b>${price}</b> (${ch.title} ${chText}) · MC <b>${info.mc > 0 ? scanFmtMoney(info.mc) : missingLabel}</b>`,
+    `Vol <b>${vol.value > 0 ? scanFmtMoney(vol.value) : missingLabel}</b> 24h · Holders <b>${info.holders > 0 ? scanFmtSupply(info.holders) : missingLabel}</b> · Liq <b>${info.liq > 0 ? scanFmtMoney(info.liq) : missingLabel}</b>`,
+    ...(info.athMc > 0 ? [`ATH <b>${scanFmtMoney(info.athMc)}</b>${info.fromAthPct != null && info.fromAthPct < -1 ? ` <i>(${Math.round(info.fromAthPct)}% from ATH)</i>` : (info.fromAthPct != null && info.fromAthPct >= -1 ? " <i>(at ATH)</i>" : "")}`] : []),
+    `🛡 ${safeLine}${reasons ? "\n" + reasons : ""}`,
+    soc.length ? "🔗 " + soc.join(" • ") : "",
     ...(options.trade === false ? [] : [`<a href="https://www.slimewire.org/#rhtrade/${esc(a)}">⚡ Trade $${esc(sym)} on SlimeWire</a> — Robinhood Chain`]),
   ].filter((l) => l !== "").join("\n");
 }
@@ -53154,7 +53150,8 @@ async function renderRhScanCardPng(info, seed = "", options = {}) {
     changeTitle: ch.title,
     logoBuffer: logo,
     bgDir: X_CARD_BG_DIR,
-    seed: seed || info?.symbol || address
+    seed: seed || info?.symbol || address,
+    layout: "telegram-compact"
   });
   // The full-resolution PNG includes intentional film grain and can be several megabytes. Telegram media
   // uploads occasionally timed out at 15s and forced a text-only scan. A high-quality JPEG preserves the
@@ -53166,7 +53163,7 @@ async function renderRhScanCardPng(info, seed = "", options = {}) {
   }
 }
 async function editRhScanTelegramCard(chatId, messageId, { hasPhoto = false, png = null, text = "", replyMarkup = null } = {}) {
-  text = telegramWithCommunityFooter(text);
+  text = telegramWithCommunityFooter(text, { compact: true });
   if (hasPhoto && png) {
     try {
       await editMessagePhotoBuffer(chatId, messageId, png, text, replyMarkup);
@@ -53226,7 +53223,7 @@ async function sendRhScanCard(chatId, address, options = {}) {
       explorer: `https://robinhoodchain.blockscout.com/token/${address}`,
       ...(cachedScan?.v || {})
     }, fastCandidate, address);
-    const quickText = telegramWithCommunityFooter([String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo, { trade: verified }), verified ? "⏳ <i>Loading full safety, holders, ATH and socials…</i>" : "⏳ <i>Verifying this Robinhood address as an ERC-20 token…</i>"].filter(Boolean).join("\n\n"));
+    const quickText = telegramWithCommunityFooter([String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo, { trade: verified }), verified ? "⏳ <i>Loading full safety, holders, ATH and socials…</i>" : "⏳ <i>Verifying this Robinhood address as an ERC-20 token…</i>"].filter(Boolean).join("\n"), { compact: true });
     let kb = verified ? compactTradeCardKeyboard(address, "s") : rhPendingScanKeyboard(address);
     const markVerified = (info = null) => {
       const provenAddress = String(info?.address || address || "").trim();
@@ -53268,7 +53265,7 @@ async function sendRhScanCard(chatId, address, options = {}) {
         let activeHasPhoto = quickHasPhoto;
         const promoteToPhoto = async (png, text) => {
           if (activeHasPhoto || !png) return false;
-          text = telegramWithCommunityFooter(text);
+          text = telegramWithCommunityFooter(text, { compact: true });
           const promoted = await sendPhoto(chatId, "rh-scan.jpg", png, text, kb, "HTML").catch((error) => {
             console.warn(`[tg-scan] RH card promotion failed ${address.slice(0, 10)}: ${friendlyError(error)}`);
             return null;
@@ -53357,7 +53354,7 @@ async function sendRhScanCard(chatId, address, options = {}) {
   const message = options.message || null;
   if (message?.chat && !isPrivateChat(message.chat)) await recordTelegramCall(message, address, info.mc, info.symbol).catch(() => {});
   const callerLine = await buildScanCallerFooter(chatId, address, info.mc, message).catch(() => "");
-  const text = telegramWithCommunityFooter([String(options.contextHtml || "").trim(), formatRhScanCard(info), callerLine].filter(Boolean).join("\n\n"));
+  const text = telegramWithCommunityFooter([String(options.contextHtml || "").trim(), formatRhScanCard(info), callerLine].filter(Boolean).join("\n"), { compact: true });
   const kb = compactTradeCardKeyboard(address, "s");
   const png = await scanFastTimeout(renderRhScanCardPng(info, info.symbol || address), 1_800, null);
   // Telegram applies the caption limit after HTML entity parsing; slicing the raw HTML could cut off the
@@ -56097,7 +56094,7 @@ async function rebuildScanCardInPlace(chatId, messageId, mint, isPhoto) {
   let text = null;
   if (scan && (scan.meta || scan.bonding || scan.shield)) { try { text = formatSlimeScanCard({ mint, ...scan, callerLine }); } catch {} }
   if (!text) return false;
-  text = telegramWithCommunityFooter(text);
+  text = telegramWithCommunityFooter(text, { compact: true });
   scanCardStash.set(String(messageId), { text, at: Date.now() });   // keep Back instant after a refresh too
   if (isPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: text.slice(0, 1024), parse_mode: "HTML", reply_markup: slimeScanKeyboard(mint) });
   else await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: slimeScanKeyboard(mint) });
@@ -60650,7 +60647,8 @@ async function renderSolScanCardPng(scan = {}, mint, seed = "") {
     changeTone: Number.isFinite(stats.ch1) ? (stats.ch1 >= 0 ? "up" : "down") : "",
     logoBuffer: logo,
     bgDir: X_CARD_BG_DIR,
-    seed: seed || symbol || mint
+    seed: seed || symbol || mint,
+    layout: "telegram-compact"
   });
 }
 
@@ -60781,39 +60779,23 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
 
   const lines = [
     contextHtml || null,
-    contextHtml ? "" : null,
     `💊 <b>${esc(name)} ($${esc(sym)} / ${esc(quoteSymbol)})</b>`,
-    `├ <code>${esc(mint)}</code>`,
-    `└ ${headerTail}`,
-    "",
-    `📊 <b>Stats</b>`,
-    `├ USD  <b>${price}</b> (${scanFmtPct(ch24)})`,
-    `├ MC   <b>${mc > 0 ? scanFmtMoney(mc) : "checking"}</b>`,
-    `├ Vol  <b>${volume24h > 0 ? scanFmtMoney(volume24h) : "checking"}</b> <i>24h</i>`,
-    `├ LP   <b>${liq > 0 ? scanFmtMoney(liq) : "checking"}</b>`,
-    `├ Sup  <b>${supply ? scanFmtSupply(supply) : "checking"}</b>`,
-    `${showAth ? "├" : "└"} 1H   <b>${scanFmtPct(ch1)}</b>  🟢 ${buys1}  🔴 ${sells1}`,
-    showAth ? `└ ATH  <b>${scanFmtMoney(ath.mc)}</b>${athTail}` : null,
-    "",
-    `🔗 <b>Socials</b>`,
-    `└ ${socialBits.join(" • ")}`,
-    "",
-    dexVisibilityRows.length ? `📣 <b>DEX Visibility</b>` : null,
-    ...dexVisibilityRows.map((row, index) => `${index === dexVisibilityRows.length - 1 ? "└" : "├"} ${row}`),
-    dexVisibilityRows.length ? "" : null,
-    `🔒 <b>Security</b>`,
-    `├ Shield   <b>${shieldStr}</b>`,
-    `├ Top 10   <b>${top10}</b>${holders}`,
-    `├ TH       <b>${th}</b>`,
-    `├ Dev Sold <b>${devSold}</b>`,
-    `└ Mint <b>${mintAuth}</b> | Freeze <b>${freezeAuth}</b>`,
-    "",
+    `<code>${esc(mint)}</code>`,
+    headerTail,
+    `📊 USD <b>${price}</b> (${scanFmtPct(ch24)}) · MC <b>${mc > 0 ? scanFmtMoney(mc) : "checking"}</b>`,
+    `Vol <b>${volume24h > 0 ? scanFmtMoney(volume24h) : "checking"}</b> <i>24h</i> · LP <b>${liq > 0 ? scanFmtMoney(liq) : "checking"}</b> · Sup <b>${supply ? scanFmtSupply(supply) : "checking"}</b>`,
+    `1H <b>${scanFmtPct(ch1)}</b> · 🟢 ${buys1} buys · 🔴 ${sells1} sells`,
+    showAth ? `ATH <b>${scanFmtMoney(ath.mc)}</b>${athTail}` : null,
+    `🔗 ${socialBits.join(" • ")}`,
+    dexVisibilityRows.length ? `📣 <b>DEX Visibility</b> · ${dexVisibilityRows.join(" · ")}` : null,
+    `🔒 Shield <b>${shieldStr}</b> · Top 10 <b>${top10}</b>${holders}`,
+    `TH <b>${th}</b> · Dev Sold <b>${devSold}</b>`,
+    `Mint <b>${mintAuth}</b> · Freeze <b>${freezeAuth}</b>`,
     // CALLER INTEL: who first called it here, the MC then, the move since, and how long ago.
     callerLine || null,
     // Compact quick-links row (matches scanner-bot style) — SlimeWire chart first.
-    `🔗 <a href="${links.site}">Chart</a> • <a href="${dex}">DS</a> • <a href="https://www.geckoterminal.com/solana/tokens/${mint}">GT</a> • <a href="https://rugcheck.xyz/tokens/${mint}">Rug</a> • <a href="https://solscan.io/token/${mint}">Sol</a> • <a href="${links.proof}">Proof</a>`,
-    `<a href="https://www.slimewire.org">⚡ Powered by SlimeWire</a> — Quick Buy below`
-  ].filter((l) => l != null); // keep intentional "" section separators; drop omitted (null) lines
+    `🔎 <a href="${links.site}">Chart</a> • <a href="${dex}">DS</a> • <a href="https://www.geckoterminal.com/solana/tokens/${mint}">GT</a> • <a href="https://rugcheck.xyz/tokens/${mint}">Rug</a> • <a href="https://solscan.io/token/${mint}">Sol</a> • <a href="${links.proof}">Proof</a>`
+  ].filter((l) => l != null);
   return lines.join("\n");
 }
 
@@ -60840,9 +60822,9 @@ async function deliverTelegramSolScan({ chatId, message, mint, tickerSymbol = ""
     try { text = formatSlimeScanCard({ mint, ...scan, contextHtml: scanContextLine, callerLine }); } catch { text = null; }
   }
   if (text && statusHtml) text = `${text}\n\n${statusHtml}`;
-  if (text) text = telegramWithCommunityFooter(text);
+  if (text) text = telegramWithCommunityFooter(text, { compact: true });
   if (!text) {
-    const failed = telegramWithCommunityFooter(`Could not pull a clean read on <code>${escapeTelegramHtml(mint)}</code> right now. Tap Refresh in More.`);
+    const failed = telegramWithCommunityFooter(`Could not pull a clean read on <code>${escapeTelegramHtml(mint)}</code> right now. Tap Refresh in More.`, { compact: true });
     let failedSent = null;
     if (messageId && isPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: failed, parse_mode: "HTML", reply_markup: replyMarkup }).catch(() => {});
     else if (messageId) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: failed, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: replyMarkup }).catch(() => {});
@@ -60986,7 +60968,7 @@ async function settleTelegramSolScanCard({
           "This address did not resolve to an exact token pair. Solana CAs are case-sensitive — copy the CA again from the token's official Dex or Pump page, then rescan.",
           "",
           "<i>No trade controls are shown for an unverified pair.</i>"
-        ].join("\n"));
+        ].join("\n"), { compact: true });
         const unresolvedMarkup = { inline_keyboard: [[
           { text: "🔎 Check exact CA", url: `https://solscan.io/account/${mint}` },
           { text: "📊 Search pair", url: `https://dexscreener.com/solana/${mint}` }

@@ -58,7 +58,7 @@ function railChip(x, y, railLabel, accent) {
   </g>`;
 }
 
-async function pickBg(bgDir, r) {
+async function pickBg(bgDir, r, width = W, height = H) {
   try {
     const files = (await fs.readdir(bgDir)).filter((f) => /\.(png|jpe?g|webp)$/i.test(f));
     if (!files.length) return null;
@@ -68,13 +68,87 @@ async function pickBg(bgDir, r) {
     const brightness = 0.9 + r() * 0.2;                  // 0.90–1.10
     const saturation = 0.85 + r() * 0.35;                // 0.85–1.20
     return await sharp(path.join(bgDir, files[idx]))
-      .resize(W, H, { fit: "cover", position: "center" })
+      .resize(width, height, { fit: "cover", position: "center" })
       .modulate({ hue, brightness, saturation })
       .toBuffer();
   } catch { return null; }
 }
 
-export async function renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel, volumeLabel, holderLabel, verdict, verdictTone = "ok", changeLabel, changeTone, changeTitle = "1H", logoBuffer, bgDir, seed }) {
+// Telegram shows scan photos above a full caption and keyboard. Reusing the 16:9 X card made every
+// scan occupy most of a phone screen, so Telegram gets a shallower purpose-built layout. The type sizes
+// stay at the readable X-card sizes; space is saved by moving the coin image into the top identity row
+// and putting all six market facts on one row.
+async function renderTelegramCompactScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel, volumeLabel, holderLabel, verdict, verdictTone = "ok", changeLabel, changeTone, changeTitle = "1H", logoBuffer, bgDir, seed }) {
+  const width = 1200, height = 390;
+  const r = makeRng(seed != null ? seed : symbol || "slime");
+  const vColor = verdictColor(verdictTone);
+  const chColor = changeTone === "up" ? "#54e000" : changeTone === "down" ? "#ff5b5b" : "#8aff6b";
+  const accent = ACCENTS[Math.floor(r() * ACCENTS.length) % ACCENTS.length];
+  const footer = FOOTERS[Math.floor(r() * FOOTERS.length) % FOOTERS.length];
+  const sym = String(symbol || "?").replace(/^\$+/, "").slice(0, 12) || "?";
+  const verdictText = String(verdict || "Scanned").slice(0, 30);
+  const verdictSize = Math.max(22, 29 - Math.max(0, verdictText.length - 18) * 0.55);
+  const grainSeed = Math.floor(r() * 100000);
+  const logoCx = 118, logoCy = 112, ringR = 76;
+  const chipW = 174, chipGap = 14, chipX = 43, chipY = 220;
+  const chipOpts = { h: 82, labelSize: 15, valueSize: 27 };
+
+  const bg = bgDir ? await pickBg(bgDir, r, width, height) : null;
+  const base = bg
+    ? sharp(bg)
+    : sharp({ create: { width, height, channels: 3, background: { r: 6, g: 16, b: 9 } } });
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+    <defs>
+      <linearGradient id="scrim" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#020704" stop-opacity="0.94"/><stop offset="0.7" stop-color="#020704" stop-opacity="0.76"/><stop offset="1" stop-color="#020704" stop-opacity="0.9"/></linearGradient>
+      <linearGradient id="slime" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e8ff8a"/><stop offset="1" stop-color="${accent}"/></linearGradient>
+      <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="8" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      <filter id="soft" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="20"/></filter>
+      <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="${grainSeed}" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter>
+    </defs>
+    <rect width="${width}" height="${height}" fill="url(#scrim)"/>
+    <rect x="0" y="0" width="${width}" height="7" fill="url(#slime)"/>
+
+    <circle cx="${logoCx}" cy="${logoCy}" r="${ringR + 14}" fill="${accent}" opacity="0.24" filter="url(#soft)"/>
+    <circle cx="${logoCx}" cy="${logoCy}" r="${ringR}" fill="#06120b" fill-opacity="0.9" stroke="url(#slime)" stroke-width="8" filter="url(#glow)"/>
+
+    <text x="220" y="51" font-family="Arial Black, Arial" font-weight="900" font-size="24" letter-spacing="2" fill="url(#slime)">SLIMEWIRE SCAN</text>
+    <text x="218" y="119" font-family="Arial Black, Arial" font-weight="900" font-size="62" fill="#ffffff" filter="url(#glow)">$${esc(sym)}</text>
+    <text x="220" y="154" font-family="Arial" font-size="25" fill="#b6e6bd">${esc((name || "").slice(0, 42))}</text>
+    ${railChip(220, 168, railLabel, accent)}
+
+    <rect x="650" y="70" width="507" height="88" rx="22" fill="#04110a" fill-opacity="0.92" stroke="${vColor}" stroke-width="3"/>
+    <circle cx="690" cy="114" r="13" fill="${vColor}"/>
+    <text x="718" y="124" font-family="Arial Black, Arial" font-weight="900" font-size="${verdictSize.toFixed(1)}" fill="${vColor}">${esc(verdictText)}</text>
+
+    <line x1="43" y1="204" x2="1157" y2="204" stroke="${accent}" stroke-opacity="0.35" stroke-width="2"/>
+    ${chip(chipX, chipY, chipW, "MC", mcLabel, accent, chipOpts)}
+    ${chip(chipX + (chipW + chipGap), chipY, chipW, "LIQ", liqLabel, accent, chipOpts)}
+    ${chip(chipX + (chipW + chipGap) * 2, chipY, chipW, "VOL", volumeLabel, accent, chipOpts)}
+    ${chip(chipX + (chipW + chipGap) * 3, chipY, chipW, String(changeTitle || "1H").slice(0, 7).toUpperCase(), changeLabel, changeLabel ? chColor : accent, chipOpts)}
+    ${chip(chipX + (chipW + chipGap) * 4, chipY, chipW, "HOLDERS", holderLabel, accent, chipOpts)}
+    ${chip(chipX + (chipW + chipGap) * 5, chipY, chipW, "AGE", ageLabel, accent, chipOpts)}
+
+    <text x="43" y="362" font-family="Arial Black, Arial" font-weight="900" font-size="22" fill="#cdeacf">${esc(footer)}</text>
+    <rect width="${width}" height="${height}" filter="url(#grain)" opacity="0.055"/>
+  </svg>`;
+
+  const layers = [{ input: Buffer.from(svg), top: 0, left: 0 }];
+  if (logoBuffer) {
+    try {
+      const size = ringR * 2 - 12;
+      const round = Buffer.from(`<svg width="${size}" height="${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${size / 2}" fill="#fff"/></svg>`);
+      const logo = await sharp(logoBuffer).resize(size, size, { fit: "cover" }).composite([{ input: round, blend: "dest-in" }]).png().toBuffer();
+      layers.push({ input: logo, left: Math.round(logoCx - size / 2), top: Math.round(logoCy - size / 2) });
+    } catch { /* the branded ring is still a clean fallback */ }
+  }
+  return base.composite(layers).png().toBuffer();
+}
+
+export async function renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel, volumeLabel, holderLabel, verdict, verdictTone = "ok", changeLabel, changeTone, changeTitle = "1H", logoBuffer, bgDir, seed, layout = "social" }) {
+  if (layout === "telegram-compact") {
+    return renderTelegramCompactScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel, volumeLabel, holderLabel, verdict, verdictTone, changeLabel, changeTone, changeTitle, logoBuffer, bgDir, seed });
+  }
   const r = makeRng(seed != null ? seed : symbol || "slime");
   const vColor = verdictColor(verdictTone);
   const chColor = changeTone === "up" ? "#54e000" : changeTone === "down" ? "#ff5b5b" : "#8aff6b";
