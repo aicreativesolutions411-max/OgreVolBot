@@ -60393,9 +60393,8 @@ async function buildScanCallerFooter(chatId, mint, currentMc, message) {
     if (!rec) return "";
     const entry = Number(rec.entryMc) || 0;
     const ago = alphaAgeLabel(Math.max(0, Date.now() - Number(rec.firstAt || Date.now())));
-    // Scanner-bot footer the user asked for: WHO first called it · the MC then · the move since
-    // (green/red %), plus the peak if it ran. e.g. "📣 First called by @x at $12k · 🟢 +340% · 2h ago".
-    const atMc = entry > 0 ? ` at ${scanFmtMoney(entry)} MC` : " at MC pending";
+    // Keep the attribution scannable on a narrow Telegram card: caller · entry MC · move · age.
+    const atMc = entry > 0 ? ` · at ${scanFmtMoney(entry)} MC` : " · at MC pending";
     // Live MC to measure the move: prefer the current scan's MC, else the freshest stored value.
     const liveMc = mc > 0 ? mc : (Number(rec.lastMc) || 0);
     let bracket = "";
@@ -60408,7 +60407,7 @@ async function buildScanCallerFooter(chatId, mint, currentMc, message) {
     // Name the room it was first called in when that's somewhere other than here (informative in DM).
     const sameChat = chatId && String(rec.chatId || "") === String(chatId);
     const where = !sameChat && rec.chatTitle ? ` in ${escapeTelegramHtml(String(rec.chatTitle).slice(0, 28))}` : "";
-    return `📣 First called by <b>${escapeTelegramHtml(rec.callerName || "someone")}</b>${where}${atMc}${bracket}${peakStr} · ${ago}`;
+    return `📣 <b>First call</b> · <b>${escapeTelegramHtml(rec.callerName || "someone")}</b>${where}${atMc}${bracket}${peakStr} · ${ago}`;
   } catch { return ""; }
 }
 
@@ -60727,9 +60726,7 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
     : (meta?.graduated ? "(Migrated)" : "");
   // AGE + holders come from the aggregator now (all sources + sticky cache) so they always populate.
   const createdMs = Number(stats.createdAt) || 0;
-  const headerTail = [`#SOL${headStatus ? ` ${headStatus}` : ""}`, `🌱 ${scanFmtAge(createdMs)}`]
-    .concat(stats.holders ? [`∞ ${scanFmtSupply(stats.holders)}`] : [])
-    .join(" | ");
+  const headerTail = [`#SOL${headStatus ? ` ${headStatus}` : ""}`, `🌱 ${scanFmtAge(createdMs)}`].join(" · ");
 
   // socials: REAL links only — X, website, Telegram, Pump.fun. (Dropped the generic "about";
   // show only what the token actually has, with a chart/Pump link always present.)
@@ -60748,7 +60745,13 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
   // security (RugCheck full)
   const light = (b, onYes) => b === true ? (onYes ? "🟢" : "🔴") : b === false ? (onYes ? "🔴" : "🟢") : "⚪";
   const top10 = rug?.top10Pct != null ? `${Math.round(rug.top10Pct)}%` : "n/a";
-  const holders = stats.holders ? ` | ${stats.holders} (total)` : "";
+  const holderCount = stats.holders > 0
+    ? Math.round(Number(stats.holders)).toLocaleString("en-US")
+    : "n/a";
+  const activityCount = (value) => {
+    const count = Math.max(0, Math.round(Number(value) || 0));
+    return count >= 10_000 ? scanFmtSupply(count) : count.toLocaleString("en-US");
+  };
   const th = rug?.topHolders?.length ? rug.topHolders.map((p) => (Number(p) || 0).toFixed(1)).join("|") : "n/a";
   const devSold = rug ? `${light(rug.devSold, false)} ${rug.devSold === true ? "Yes" : rug.devSold === false ? "No" : "n/a"}` : "⚪ n/a";
   const activeBoosts = dexPromotion?.activeBoosts !== null && dexPromotion?.activeBoosts !== undefined
@@ -60759,9 +60762,9 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
   // Unknown provider state is omitted during the instant preview rather than shown as "checking";
   // the progressive scan edit inserts the verified rows as soon as the exact-CA reads finish.
   const dexVisibilityRows = [
-    typeof dexPaid === "boolean" ? `DEX Paid <b>${dexPaid ? "✅ Yes" : "⚪ No"}</b>` : null,
+    typeof dexPaid === "boolean" ? `Paid <b>${dexPaid ? "✅ Yes" : "⚪ No"}</b>` : null,
     activeBoosts != null
-      ? `Active Boosts <b>${activeBoosts > 0 ? `⚡ ${activeBoosts.toLocaleString("en-US")}${dexPromotion?.goldenTicker ? " • 🟡 Golden Ticker" : ""}` : "⚪ None"}</b>`
+      ? `Boosts <b>${activeBoosts > 0 ? `⚡ ${activeBoosts.toLocaleString("en-US")}${dexPromotion?.goldenTicker ? " • 🟡 Golden Ticker" : ""}` : "⚪ None"}</b>`
       : null
   ].filter(Boolean);
   const shieldVerdict = String(shield?.verdict || "").trim().toUpperCase();
@@ -60777,26 +60780,45 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
   const mintAuth = authKnown ? (rug.mintAuthority ? "🔴 active" : "🟢 none") : (rug && rug.mintAuthority ? "🔴 active" : "⚪ n/a");
   const freezeAuth = authKnown ? (rug.freezeAuthority ? "🔴 active" : "🟢 none") : (rug && rug.freezeAuthority ? "🔴 active" : "⚪ n/a");
 
-  const lines = [
+  const identityBlock = [
     contextHtml || null,
     `💊 <b>${esc(name)} ($${esc(sym)} / ${esc(quoteSymbol)})</b>`,
     `<code>${esc(mint)}</code>`,
-    headerTail,
-    `📊 USD <b>${price}</b> (${scanFmtPct(ch24)}) · MC <b>${mc > 0 ? scanFmtMoney(mc) : "checking"}</b>`,
-    `Vol <b>${volume24h > 0 ? scanFmtMoney(volume24h) : "checking"}</b> <i>24h</i> · LP <b>${liq > 0 ? scanFmtMoney(liq) : "checking"}</b> · Sup <b>${supply ? scanFmtSupply(supply) : "checking"}</b>`,
-    `1H <b>${scanFmtPct(ch1)}</b> · 🟢 ${buys1} buys · 🔴 ${sells1} sells`,
-    showAth ? `ATH <b>${scanFmtMoney(ath.mc)}</b>${athTail}` : null,
-    `🔗 ${socialBits.join(" • ")}`,
-    dexVisibilityRows.length ? `📣 <b>DEX Visibility</b> · ${dexVisibilityRows.join(" · ")}` : null,
-    `🔒 Shield <b>${shieldStr}</b> · Top 10 <b>${top10}</b>${holders}`,
+    headerTail
+  ].filter(Boolean).join("\n");
+
+  const marketRows = [
+    `USD <b>${price}</b> · 24H <b>${scanFmtPct(ch24)}</b>`,
+    `MC <b>${mc > 0 ? scanFmtMoney(mc) : "checking"}</b> · LP <b>${liq > 0 ? scanFmtMoney(liq) : "checking"}</b>`,
+    `Vol <b>${volume24h > 0 ? scanFmtMoney(volume24h) : "checking"}</b> <i>24h</i> · Sup <b>${supply ? scanFmtSupply(supply) : "checking"}</b>`,
+    `1H <b>${scanFmtPct(ch1)}</b> · 🟢 B ${activityCount(buys1)} · 🔴 S ${activityCount(sells1)}`,
+    showAth ? `ATH <b>${scanFmtMoney(ath.mc)}</b>${athTail}` : null
+  ].filter(Boolean);
+  const marketBlock = [
+    `📊 <b>Market</b>`,
+    ...marketRows.map((row, index) => `${index === marketRows.length - 1 ? "└" : "├"} ${row}`)
+  ].join("\n");
+
+  const securityRows = [
+    `Top 10 <b>${top10}</b> · Holders <b>${holderCount}</b>`,
     `TH <b>${th}</b> · Dev Sold <b>${devSold}</b>`,
     `Mint <b>${mintAuth}</b> · Freeze <b>${freezeAuth}</b>`,
-    // CALLER INTEL: who first called it here, the MC then, the move since, and how long ago.
-    callerLine || null,
-    // Compact quick-links row (matches scanner-bot style) — SlimeWire chart first.
-    `🔎 <a href="${links.site}">Chart</a> • <a href="${dex}">DS</a> • <a href="https://www.geckoterminal.com/solana/tokens/${mint}">GT</a> • <a href="https://rugcheck.xyz/tokens/${mint}">Rug</a> • <a href="https://solscan.io/token/${mint}">Sol</a> • <a href="${links.proof}">Proof</a>`
-  ].filter((l) => l != null);
-  return lines.join("\n");
+    dexVisibilityRows.length ? `DEX · ${dexVisibilityRows.join(" · ")}` : null
+  ].filter(Boolean);
+  const securityBlock = [
+    `🛡 <b>Security</b> · Shield <b>${shieldStr}</b>`,
+    ...securityRows.map((row, index) => `${index === securityRows.length - 1 ? "└" : "├"} ${row}`)
+  ].join("\n");
+
+  const linksBlock = [
+    `🔗 ${socialBits.join(" • ")}`,
+    `📈 <a href="${links.site}">Chart</a> • <a href="${dex}">DS</a> • <a href="https://www.geckoterminal.com/solana/tokens/${mint}">GT</a> • <a href="https://rugcheck.xyz/tokens/${mint}">Rug</a> • <a href="https://solscan.io/token/${mint}">Sol</a> • <a href="${links.proof}">Proof</a>`
+  ].join("\n");
+
+  // Blank lines separate information types without making the mobile card materially taller.
+  return [identityBlock, marketBlock, securityBlock, callerLine || null, linksBlock]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 async function deliverTelegramSolScan({ chatId, message, mint, tickerSymbol = "", contextHtml = "", statusHtml = "", keyboard, scan, messageId = null, isPhoto = false, preferText = false, photoOnly = false }) {

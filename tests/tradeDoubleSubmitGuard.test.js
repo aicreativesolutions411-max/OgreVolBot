@@ -2622,6 +2622,21 @@ test("Telegram Buy is CA-first and scan/buy cards recover explicit 24h volume", 
   assert.match(functionBody(serverSource, "postGroupBuyRh"), /24h Vol/);
 });
 
+test("Telegram Sol scan cards use a compact Phanes-style information hierarchy", () => {
+  const card = functionBody(serverSource, "formatSlimeScanCard");
+  assert.match(card, /📊 <b>Market<\/b>/);
+  assert.match(card, /🛡 <b>Security<\/b> · Shield <b>/);
+  assert.match(card, /Top 10 <b>[\s\S]*Holders <b>/);
+  assert.match(card, /DEX ·/);
+  assert.match(card, /📈 <a href=/);
+  assert.match(card, /marketRows\.map[\s\S]*securityRows\.map/);
+  assert.match(card, /\[identityBlock, marketBlock, securityBlock, callerLine \|\| null, linksBlock\]/);
+  assert.match(card, /\.join\("\\n\\n"\)/);
+  assert.doesNotMatch(card, /`📊 USD/);
+  const caller = functionBody(serverSource, "buildScanCallerFooter");
+  assert.match(caller, /📣 <b>First call<\/b>/);
+});
+
 test("Telegram scans separate paid Dex profiles from currently active boosts", () => {
   const normalize = functionBody(serverSource, "normalizeDexPromotionOrders");
   assert.match(normalize, /status === "approved"/);
@@ -2683,9 +2698,9 @@ test("Telegram scans separate paid Dex profiles from currently active boosts", (
   assert.match(settle, /fetchDexActiveBoosts\(mint\)/); // repeat scans refresh visibility behind the instant card
   assert.match(settle, /No ticker, market, safety, or RPC fan-out is repeated here/);
   const card = functionBody(serverSource, "formatSlimeScanCard");
-  assert.match(card, /DEX Visibility/);
-  assert.match(card, /DEX Paid/);
-  assert.match(card, /Active Boosts/);
+  assert.match(card, /DEX ·/);
+  assert.match(card, /Paid <b>/);
+  assert.match(card, /Boosts <b>/);
   assert.match(card, /Golden Ticker/);
   assert.match(card, /activeBoosts\.toLocaleString/);
   assert.doesNotMatch(card, /dexBoostPacks|Pending <b>|Products <b>/); // no expired packs/history clutter
