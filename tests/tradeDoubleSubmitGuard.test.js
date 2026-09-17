@@ -4899,6 +4899,24 @@ test("Rose captcha offers a quiet pre-entry Telegram verification portal", () =>
   assert.match(functionBody(serverSource, "handleGroupRose"), /cfg\.captcha/); // old/public links remain safely muted
 });
 
+test("Rose trusts a member manually added by an admin without leaving verification timers armed", () => {
+  const wasAdminAdded = new Function("message", "member", "actorIsAdmin", functionBody(serverSource, "roseJoinWasAdminAdded"));
+  const admin = { id: 100, first_name: "Admin" };
+  const member = { id: 200, first_name: "Friend" };
+  assert.equal(wasAdminAdded({ from: admin }, member, true), true);
+  assert.equal(wasAdminAdded({ from: member }, member, true), false, "a normal self-join still verifies");
+  assert.equal(wasAdminAdded({ from: admin }, member, false), false, "a non-admin inviter cannot bypass verification");
+
+  const rose = functionBody(serverSource, "handleGroupRose");
+  assert.match(rose, /joinActorIsAdmin[\s\S]*isGroupBotAdmin\(chatId, joinActorId, message\)/);
+  assert.match(rose, /roseJoinWasAdminAdded\(message, m, joinActorIsAdmin\)/);
+  assert.match(rose, /roseClearCaptchaPending\(verificationKey\)/);
+  assert.match(rose, /clearWebVerifyPending\(verificationKey\)/);
+  const bypassAt = rose.indexOf("roseJoinWasAdminAdded(message, m, joinActorIsAdmin)");
+  assert.ok(bypassAt >= 0 && bypassAt < rose.indexOf("groupNeedsWebVerify(entry)"), "admin-added bypass must run before every entry gate");
+  assert.ok(bypassAt < rose.indexOf("if (cfg.captcha)"), "admin-added members must never enter the captcha branch");
+});
+
 test("group admins can brand the Verify Portal name and permanent Telegram link", () => {
   assert.match(serverSource, /portalName:\s*"", portalSlug:\s*"", portalAliases:\s*\[\]/);
   assert.match(serverSource, /function rosePortalIdentityInput/);

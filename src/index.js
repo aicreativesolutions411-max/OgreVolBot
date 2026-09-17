@@ -68533,6 +68533,18 @@ function roseClearCaptchaPending(key) {
   roseCaptchaPending.delete(key);
   return pend;
 }
+// A normal invite-link/self join is emitted with the joining member as message.from. When a
+// different, current group admin is the service-message actor, that admin explicitly vouched for
+// the member by adding them. Only that narrow case bypasses entry verification.
+function roseJoinWasAdminAdded(message, member, actorIsAdmin) {
+  const actorId = message?.from?.id;
+  return Boolean(
+    actorIsAdmin
+    && actorId !== null && actorId !== undefined
+    && member?.id !== null && member?.id !== undefined
+    && String(actorId) !== String(member.id)
+  );
+}
 // Antiflood: rolling per-user message-rate window. key = `${chatId}:${userId}`.
 const roseFloodState = new Map();
 // Ping the group's admins (for /report). Returns an HTML mention string, capped.
@@ -69457,6 +69469,9 @@ async function handleGroupRose(message, userId) {
   // New members → CAPTCHA (mute + verify button) or welcome (with fillings).
   if (Array.isArray(message.new_chat_members) && message.new_chat_members.length) {
     const humans = message.new_chat_members.filter((m) => m && !m.is_bot);
+    const joinActorId = message?.from?.id;
+    const joinActorIsAdmin = Boolean(joinActorId)
+      && await isGroupBotAdmin(chatId, joinActorId, message).catch(() => false);
     if (cfg.captcha || cfg.cleanService) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch {} }
     for (const m of humans.slice(0, 8)) {
       // 🛡️ Shield: drop ghost (deleted) accounts + admin-impersonators on entry.
@@ -69475,6 +69490,20 @@ async function handleGroupRose(message, userId) {
       if (cfg.knownScammers && await shieldIsKnownScammer(m.id).catch(() => false)) {
         try { await telegram("banChatMember", { chat_id: chatId, user_id: m.id }); } catch {}
         await say(chatId, `🛡️ Blocked a join flagged as a known scammer.`).catch(() => {});
+        continue;
+      }
+      // An admin manually adding a different user is an explicit approval. Skip captcha, web,
+      // fingerprint and token-hold gates, and cancel any old timer so it cannot kick them later.
+      if (roseJoinWasAdminAdded(message, m, joinActorIsAdmin)) {
+        const verificationKey = `${chatId}:${m.id}`;
+        const staleCaptcha = roseClearCaptchaPending(verificationKey);
+        const staleWeb = clearWebVerifyPending(verificationKey);
+        for (const promptMsgId of [staleCaptcha?.promptMsgId, staleCaptcha?.reminderMsgId, staleWeb?.promptMsgId].filter(Boolean)) {
+          await telegram("deleteMessage", { chat_id: chatId, message_id: promptMsgId }).catch(() => {});
+        }
+        await telegram("restrictChatMember", { chat_id: chatId, user_id: m.id, permissions: ROSE_UNMUTE_PERMS }).catch(() => {});
+        const tmpl = cfg.welcome || "👋 Welcome {mention}! Read /rules and enjoy the swamp. ⚡ slimewire.org";
+        await sendRoseWelcome(chatId, cfg, tmpl, m, chat, chat.members_count).catch(() => {});
         continue;
       }
       // Web verification (human/fingerprint and/or whales holdings) supersedes captcha.
