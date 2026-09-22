@@ -6,6 +6,18 @@ const listeners = {};
 const context = vm.createContext({ window: {}, URLSearchParams, document: { addEventListener: (name, fn) => { listeners[name] = fn; } } });
 vm.runInContext(readFileSync(new URL('../web/public/launch-utility.js', import.meta.url), 'utf8'), context);
 const ui = context.window.SlimeLaunchUtility;
+
+test('utility availability uses the configured API origin, not the static-site HTML fallback', async () => {
+  const urls = [];
+  const c = vm.createContext({
+    window: { OGRE_PORTAL_CONFIG: { apiBase: 'https://app.slimewire.org/' } },
+    document: { addEventListener() {} }, URLSearchParams, AbortController, setTimeout, clearTimeout,
+    fetch: async url => { urls.push(url); return { ok: true, json: async () => ({ usepaid: { available: true }, nftFloor: { available: false } }) }; }
+  });
+  vm.runInContext(readFileSync(new URL('../web/public/launch-utility.js', import.meta.url), 'utf8'), c);
+  await Promise.all([c.window.SlimeLaunchUtility.capabilities(), c.window.SlimeLaunchUtility.capabilities()]);
+  assert.deepEqual(urls, ['https://app.slimewire.org/api/web/launch/utility/capabilities']);
+});
 test('Telegram deep-link prefills utility but can never imply launch consent', () => {
   const draft = ui.prefill('?lc_n=Test&lc_s=TST&lc_dev=0.5&lc_nft=1&lc_utility=usepaid&lc_xpay=alice&consentVersion=2026-09-22&launchAttemptId=other');
   assert.equal(draft.name, 'Test'); assert.equal(draft.devBuySol, '0.5'); assert.equal(draft.nftEnabled, true);

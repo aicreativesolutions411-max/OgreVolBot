@@ -13,6 +13,7 @@ param(
 #   powershell -ExecutionPolicy Bypass -File scripts\render-release.ps1 -IncludeWorkers
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'lib/render-deploy.ps1')
 $apiKey = $env:RENDER_API_KEY
 if (-not $apiKey) {
   Write-Host "FAIL  RENDER_API_KEY is not set."
@@ -61,12 +62,22 @@ foreach ($service in $services) {
     -Uri "https://api.render.com/v1/services/$($service.Id)/deploys?limit=20" `
     -Headers $headers `
     -Method Get
-  $live = @($recent | ForEach-Object { if ($_.deploy) { $_.deploy } else { $_ } } |
+  $deploys = @($recent | ForEach-Object { Resolve-RenderDeploy -Response $_ })
+  $live = @($deploys |
     Where-Object { $_.status -eq "live" } |
     Select-Object -First 1)
 
   if ($live.Count -gt 0 -and $live[0].commit.id -eq $Commit) {
     Write-Host ("SKIP  {0} is already live on {1}." -f $service.Name, $Commit.Substring(0, 8))
+    continue
+  }
+
+  $inFlight = @($deploys | Where-Object {
+    $_.commit.id -eq $Commit -and $_.status -in @('created', 'queued', 'build_in_progress', 'pre_deploy_in_progress', 'update_in_progress')
+  } | Select-Object -First 1)
+  if ($inFlight.Count -gt 0) {
+    Write-Host ("WATCH {0} existing deploy {1} for {2}." -f $service.Name, $inFlight[0].id, $Commit.Substring(0, 8))
+    $pending += @{ Name = $service.Name; Id = $service.Id; DeployId = $inFlight[0].id }
     continue
   }
 
@@ -76,6 +87,7 @@ foreach ($service in $services) {
     -Headers $headers `
     -Method Post `
     -Body $body
+  $deploy = Resolve-RenderDeploy -Response $deploy -ExpectedCommit $Commit
   Write-Host ("START {0} deploy {1} for {2}." -f $service.Name, $deploy.id, $Commit.Substring(0, 8))
   $pending += @{ Name = $service.Name; Id = $service.Id; DeployId = $deploy.id }
 }
@@ -94,7 +106,7 @@ while ($pending.Count -gt 0 -and (Get-Date) -lt $deadline) {
       -Uri "https://api.render.com/v1/services/$($item.Id)/deploys/$($item.DeployId)" `
       -Headers $headers `
       -Method Get
-    if ($deploy.deploy) { $deploy = $deploy.deploy }
+    $deploy = Resolve-RenderDeploy -Response $deploy -ExpectedId $item.DeployId -ExpectedCommit $Commit
 
     if ($deploy.status -eq "live") {
       Write-Host ("LIVE  {0} on {1}." -f $item.Name, $Commit.Substring(0, 8))

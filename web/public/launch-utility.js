@@ -4,7 +4,20 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const at = (prefix, key) => document.getElementById(prefix + key);
   let capabilitiesPromise;
-  const capabilities = () => capabilitiesPromise || (capabilitiesPromise = fetch('/api/web/launch/utility/capabilities').then(r => { if (!r.ok) throw new Error('Utility availability could not be checked.'); return r.json(); }).catch(e => { capabilitiesPromise = null; throw e; }));
+  function capabilities() {
+    if (capabilitiesPromise) return capabilitiesPromise;
+    // The public site can be static while the API lives on app.slimewire.org.
+    // Match the host application's configuration; never parse its SPA fallback as API data.
+    const base = String(window.OGRE_PORTAL_CONFIG?.apiBase || '').trim().replace(/\/+$/, '');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    capabilitiesPromise = fetch(base + '/api/web/launch/utility/capabilities', { signal: controller.signal })
+      .then(r => { if (!r.ok) throw new Error('Utility availability could not be checked.'); return r.json(); })
+      .then(c => { if (!c?.usepaid || !c?.nftFloor) throw new Error('Utility availability is temporarily unavailable.'); return c; })
+      .catch(e => { capabilitiesPromise = null; throw e.name === 'AbortError' ? new Error('Availability check timed out. Try again shortly.') : e; })
+      .finally(() => clearTimeout(timer));
+    return capabilitiesPromise;
+  }
   function render(prefix, policy = {}) {
     const mode = policy.mode || 'creator';
     return `<section class="launch-utility" data-utility-prefix="${esc(prefix)}" aria-label="Creator fee utility">
@@ -97,5 +110,5 @@
     const get = (key, max) => (q.get(key) || '').slice(0, max);
     return { name: get('lc_n', 64), symbol: get('lc_s', 12), description: get('lc_d', 800), x: get('lc_x', 200), telegram: get('lc_tg', 200), website: get('lc_web', 200), devBuySol: /^\d+(?:\.\d{1,9})?$/.test(q.get('lc_dev') || '') ? q.get('lc_dev') : '0', nftEnabled: q.get('lc_nft') === '1', launchUtility: ['creator', 'usepaid', 'nft_floor'].includes(q.get('lc_utility')) ? { mode: q.get('lc_utility'), xHandle: get('lc_xpay', 16), collectionSymbol: get('lc_collection', 100) } : { mode: 'creator' } };
   }
-  window.SlimeLaunchUtility = { render, read, wire, prepare, resultHtml, configureRecovery, prefill };
+  window.SlimeLaunchUtility = { render, read, wire, prepare, resultHtml, configureRecovery, prefill, capabilities };
 })();
