@@ -12,6 +12,7 @@ import {
 } from "./liveTerminalUi.js";
 
 const config = window.OGRE_PORTAL_CONFIG || {};
+window.SlimeLaunchUtility?.configureRecovery(body => api('/api/web/launch/utility/retry', { method: 'POST', body: JSON.stringify(body), timeoutMs: 90_000 }));
 const featureFlags = config.featureFlags || {};
 function featureEnabled(name, fallback = true) {
   const direct = featureFlags?.[name];
@@ -231,6 +232,8 @@ function getStoredLaunchCoinDraft() {
       const map = { lc_n: "name", lc_s: "symbol", lc_d: "description", lc_x: "x", lc_tg: "telegram", lc_web: "website" };
       for (const k in map) { const v = q.get(k); if (v) d[map[k]] = k === "lc_s" ? v.toUpperCase().slice(0, 12) : v; }
       const dev = q.get("lc_dev"); if (dev && Number(dev) > 0) { d.devBuySol = String(dev); d.devBuyEnabled = true; }
+      const prefill = window.SlimeLaunchUtility?.prefill(window.location.search);
+      if (prefill) { d.launchUtility = prefill.launchUtility; d.nftCollection = { enabled: prefill.nftEnabled, supplyMode: 'expandable', supplyCap: 500, royaltyBps: 500, useCoinArt: true }; }
       try { setStoredLaunchCoinDraft(d); } catch { /* quota */ }
       try { window.history.replaceState(null, "", window.location.pathname + window.location.hash); } catch { /* ok */ }
     }
@@ -6311,7 +6314,13 @@ function renderTabs() {
   if (state.activeTab === "slimeScope") panel.innerHTML = slimeScopeHtml();
   if (state.activeTab === "watchlist") panel.innerHTML = watchlistHtml();
   if (state.activeTab === "smartChart") panel.innerHTML = safeSmartChartHtml();
-  if (state.activeTab === "launchCoin") panel.innerHTML = launchCoinHtml();
+  if (state.activeTab === "launchCoin") {
+    panel.innerHTML = launchCoinHtml();
+    window.SlimeLaunchUtility?.wire('appLaunchUtility', {
+      request: body => api('/api/web/launch/utility/review', { method: 'POST', body: JSON.stringify(body) }),
+      context: () => readLaunchCoinDraft()
+    });
+  }
   if (state.activeTab === "launch") panel.innerHTML = launchHtml();
   if (state.activeTab === "walletLaunch") panel.innerHTML = launchHtml({ walletLaunchFirst: true });
   if (state.activeTab === "kol") panel.innerHTML = kolHtml();
@@ -10610,6 +10619,7 @@ function launchShareKitHtml() {
       ${kit.nftCollection ? `<p class="trade-status">${escapeHtml(kit.nftCollection.status === "COMPLETE"
         ? `${kit.nftCollection.name || "NFT collection"} is linked on-chain to ${shortAddress(kit.tokenMint)}.`
         : kit.nftCollection.error || "The coin is live; its NFT collection is still finishing.")}</p>` : ""}
+      ${kit.launchUtility ? (window.SlimeLaunchUtility?.resultHtml({ launchUtility: kit.launchUtility }) || "") : ""}
     </section>
   `;
 }
@@ -11165,8 +11175,9 @@ function launchCoinHtml() {
           </div>`
     },
     {
-      key: "nft", label: "NFT", hint: "Linked collection", title: "Linked NFT Collection (optional)",
+      key: "nft", label: "NFT & Fees", hint: "Optional utility", title: "NFT & fee utility (optional)",
       html: `
+          ${window.SlimeLaunchUtility?.render("appLaunchUtility", draft.launchUtility) || ""}
           <div class="volume-grid">
             <label class="switch-row full-span">
               <input data-launch-coin-nft-enabled type="checkbox" ${draft.nftCollection?.enabled ? "checked" : ""}>
@@ -11390,7 +11401,7 @@ function launchCoinHtml() {
       key: "live", label: "Live", hint: "Status feed", title: "Live Launch Status",
       html: pumpLivePanelHtml(draft)
     }
-  ].filter((section) => section.key !== "nft");
+  ];
   const launchFocus = window.location.pathname.includes("/launch-coin");
   const focusBar = launchFocus ? `
     <div class="launch-focus-bar">
@@ -11475,7 +11486,16 @@ function readLaunchCoinDraft() {
       minWalletPayoutSol: 0.0001,
       weighting: "balance"
     },
-    nftCollection: { enabled: false },
+    nftCollection: {
+      enabled: Boolean($('[data-launch-coin-nft-enabled]')?.checked),
+      name: $('[data-launch-coin-nft-name]')?.value || '',
+      description: $('[data-launch-coin-nft-description]')?.value || '',
+      supplyMode: $('[data-launch-coin-nft-supply-mode]')?.value || 'expandable',
+      supplyCap: Number($('[data-launch-coin-nft-supply-cap]')?.value || 500),
+      royaltyBps: Number($('[data-launch-coin-nft-royalty]')?.value ?? 500),
+      useCoinArt: true
+    },
+    launchUtility: window.SlimeLaunchUtility?.read('appLaunchUtility') || { mode: 'creator' },
     // A positive amount always enables the dev buy. Do not make users also keep a
     // separate switch in sync or let a stale unchecked draft silently drop the buy.
     devBuyEnabled: Number(devBuySol) > 0,
@@ -11898,6 +11918,10 @@ async function submitLaunchCoin() {
     const draft = saveLaunchCoinDraft({ silent: true });
     if (!draft.name || String(draft.name).trim().length < 2) throw new Error("Enter a token name (2+ characters) before launching.");
     if (!draft.symbol || String(draft.symbol).trim().length < 2) throw new Error("Enter a ticker (2+ characters) before launching.");
+    draft.launchUtility = await window.SlimeLaunchUtility.prepare(draft.launchUtility, draft,
+      body => api('/api/web/launch/utility/review', { method: 'POST', body: JSON.stringify(body) }),
+      lines => slimeConfirm({ title: 'Permanent creator-fee destination', lines, confirmLabel: 'Accept terms & continue', cancelLabel: 'Go back' }));
+    if (draft.nftCollection?.enabled && !(await slimeConfirm({ title: 'Create a linked NFT collection?', lines: ['The selected creator wallet pays additional Solana rent and network fees after the coin confirms.', 'If NFT setup needs a retry, resume the same collection. Do not launch another coin.'], confirmLabel: 'Create collection after launch', cancelLabel: 'Go back' }))) return;
     if (draft.pumpCashback) {
       const enableNativeCashback = await slimeConfirm({
         title: "Enable Pump Cash back permanently?",
@@ -11992,6 +12016,7 @@ async function submitLaunchCoin() {
     }
     const tokenMint = String(launch.tokenMint || launch.mint || launch.ca || launch.contractAddress || "").trim();
     const signature = launch.signature ? ` Signature: ${shortAddress(launch.signature)}.` : "";
+    if (launch.launchUtility) state.launchCoinStatus = `Coin launched. UsePaid fee routing: ${launch.launchUtility.status}; cash payouts are managed separately by UsePaid.`;
     const collectionNote = launch.nftCollection?.status === "COMPLETE"
       ? ` NFT collection linked: ${shortAddress(launch.nftCollection.address)}.`
       : launch.nftCollection?.status === "FAILED"
@@ -12015,6 +12040,7 @@ async function submitLaunchCoin() {
       name: draft.name || "",
       launchAttemptId: launch.launchAttemptId || launchAttemptId,
       nftCollection: launch.nftCollection || null,
+      launchUtility: launch.launchUtility || null,
       at: Date.now()
     };
     // The sheet did its job - reset it (state + stored draft) so the next launch

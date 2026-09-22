@@ -64,6 +64,8 @@
 <meta name="apple-mobile-web-app-title" content="SlimeWire">
 <link rel="apple-touch-icon" sizes="180x180" href="/assets/slimewire/png/apple-touch-icon.png">
 <script src="/config.js"></script>
+<link rel="stylesheet" href="/launch-utility.css?v=20260922">
+<script src="/launch-utility.js?v=20260922"></script>
 <style>
   :root{
     --bg:#050705;--bg2:#070b07;--panel:#0a0f0b;--panel2:#0c130d;--row:#0b110c;--row-hover:#10180f;
@@ -796,6 +798,13 @@
     scoutQueue:(function(){try{const q=JSON.parse(localStorage.getItem(SCOUT_QUEUE_KEY)||"[]");return Array.isArray(q)?q.slice(0,24):[];}catch(e){return [];}})(),
     alertRules:(function(){const d={kol:true,scout:true,launch:true,receipts:true};try{return Object.assign(d,JSON.parse(localStorage.getItem(ALERT_RULE_KEY)||"{}"));}catch(e){return d;}})()};
   let launchDraftSaveTimer=null;
+  const incomingLaunch=SlimeLaunchUtility.prefill(location.search);
+  if(incomingLaunch&&!state.launchActiveAttemptId){
+    const d=incomingLaunch;state.launchForm={lcName:d.name,lcSym:d.symbol,lcDesc:d.description,lcX:d.x,lcTg:d.telegram,lcWeb:d.website,lcDevBuy:d.devBuySol,lcNftEnabled:d.nftEnabled,lcUtilityMode:d.launchUtility.mode,lcUtilityHandle:d.launchUtility.xHandle||"",lcUtilityCollection:d.launchUtility.collectionSymbol||""};
+    state.launchImg=null;state.launchBanner=null;state.launchRail="pump";state.launchTab="coin";persistLaunchDraftNow();
+    const clean=new URL(location.href);for(const key of [...clean.searchParams.keys()])if(key.startsWith("lc_"))clean.searchParams.delete(key);clean.hash="launch";history.replaceState(null,"",clean.pathname+clean.search+clean.hash);
+  }
+  SlimeLaunchUtility.configureRecovery(async body=>{const {ok,d}=await jpost("/api/web/launch/utility/retry",body);if(!ok)throw new Error(apiMessage(d,"Original fee setup could not be checked."));return d;});
   function persistLaunchDraftNow(){const draft={form:state.launchForm||{},image:state.launchImg||null,banner:state.launchBanner||null,tab:state.launchTab||"coin",rail:state.launchPumpOnly?"pump":(state.launchRail||"pump"),activeAttemptId:state.launchActiveAttemptId||"",activeAttemptStartedAt:state.launchActiveAttemptStartedAt||0,updatedAt:new Date().toISOString()};try{localStorage.setItem(LAUNCH_DRAFT_KEY,JSON.stringify(draft));}catch(e){try{localStorage.setItem(LAUNCH_DRAFT_KEY,JSON.stringify({...draft,image:null,banner:null}));}catch(_e){}}}
   function persistLaunchDraftSoon(){clearTimeout(launchDraftSaveTimer);launchDraftSaveTimer=setTimeout(persistLaunchDraftNow,180);}
   function clearSavedLaunchDraft(){clearTimeout(launchDraftSaveTimer);state.launchForm=null;state.launchImg=null;state.launchBanner=null;state.launchTab="coin";state.launchActiveAttemptId="";state.launchActiveAttemptStartedAt=0;state.launchProgressPolling="";if(state.launchPumpOnly)state.launchRail="pump";try{localStorage.removeItem(LAUNCH_DRAFT_KEY);}catch(e){}}
@@ -3784,7 +3793,7 @@
     openModal('<h3>Your launches &amp; rewards</h3><p class="sub mut" style="font-size:12px">Pump rewards are shown by wallet because a claim can include activity from several coins.</p><div id="lchSimple"><div class="loading"><span class="spin"></span></div></div>');
     const body=$("#lchSimple");if(!body)return;
     const [launchResult]=await Promise.all([api("/api/web/launches").catch(()=>({})),loadPumpRewards(false)]),ok=launchResult&&launchResult.ok,d=launchResult&&launchResult.d,coins=(ok&&d&&d.coins)||[];state.launchCoins=coins;
-    const list=coins.length?coins.map(c=>{const rh=c.rail==="robinhood",pump=!rh&&c.rail!=="meteora",manual=pump&&c.creatorFeeClaimMode==="manual",cashback=pump&&!!(c.pumpCashback||c.cashback||c.isCashbackCoin),status=String(c.status||"live").toLowerCase();const actions='<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="wbtn ghost" style="padding:7px 10px" onclick="'+(rh?'GG.rhTrade':'GG.open')+'(\''+esc(c.mint)+'\')">Open</button><button class="wbtn ghost" style="padding:7px 10px" onclick="GG.dexProfileReview(\''+esc(c.mint)+'\')">Update DEX profile</button>'+(pump&&c.devWalletIndex?'<button class="wbtn ghost" style="padding:7px 10px" onclick="GG.exportPumpCreatorWallet('+Number(c.devWalletIndex)+',\''+esc(c.devWallet||'')+'\')">Backup wallet</button>':'')+'</div>';const rewardLabel=cashback?'Pump / Cash back permanent':manual?'Pump / creator fees accumulating':'Pump / creator rewards';return '<div class="walletrow" style="align-items:center;margin-bottom:7px;flex-wrap:wrap"><div class="ico">'+(rh?'RH':'P')+'</div><div class="info" style="min-width:150px"><b>'+esc(c.symbol||c.name||short(c.mint))+' '+(cashback?'<span class="cashback-badge">Cash back</span>':'')+'</b><div class="addr mut">'+esc(rh?'Robinhood Chain':rewardLabel)+' / '+esc(c.devWalletShort||"creator wallet")+' / '+esc(status)+'</div></div>'+actions+'</div>';}).join(""):'<div class="launch-summary"><span class="mark">+</span><div><b>No launches yet.</b><br><span class="mut">Complete the launch tabs and your coins will appear here.</span></div></div>';
+    const list=coins.length?coins.map(c=>{const rh=c.rail==="robinhood",pump=!rh&&c.rail!=="meteora",manual=pump&&c.creatorFeeClaimMode==="manual",cashback=pump&&!!(c.pumpCashback||c.cashback||c.isCashbackCoin),status=String(c.status||"live").toLowerCase();const actions='<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="wbtn ghost" style="padding:7px 10px" onclick="'+(rh?'GG.rhTrade':'GG.open')+'(\''+esc(c.mint)+'\')">Open</button><button class="wbtn ghost" style="padding:7px 10px" onclick="GG.dexProfileReview(\''+esc(c.mint)+'\')">Update DEX profile</button>'+(pump&&c.devWalletIndex?'<button class="wbtn ghost" style="padding:7px 10px" onclick="GG.exportPumpCreatorWallet('+Number(c.devWalletIndex)+',\''+esc(c.devWallet||'')+'\')">Backup wallet</button>':'')+'</div>';const rewardLabel=c.launchUtility?'Pump / UsePaid · '+c.launchUtility.status:cashback?'Pump / Cash back permanent':manual?'Pump / creator fees accumulating':'Pump / creator rewards';return '<div class="walletrow" style="align-items:center;margin-bottom:7px;flex-wrap:wrap"><div class="ico">'+(rh?'RH':'P')+'</div><div class="info" style="min-width:150px"><b>'+esc(c.symbol||c.name||short(c.mint))+' '+(cashback?'<span class="cashback-badge">Cash back</span>':'')+'</b><div class="addr mut">'+esc(rh?'Robinhood Chain':rewardLabel)+' / '+esc(c.devWalletShort||"creator wallet")+' / '+esc(status)+'</div></div>'+actions+SlimeLaunchUtility.resultHtml(c)+'</div>';}).join(""):'<div class="launch-summary"><span class="mark">+</span><div><b>No launches yet.</b><br><span class="mut">Complete the launch tabs and your coins will appear here.</span></div></div>';
     body.innerHTML=pumpRewardsCardHtml()+'<div class="launch-section-title" style="margin-top:14px">Coins launched through SlimeWire</div>'+list+'<div class="launch-summary" style="margin-top:10px;margin-bottom:0"><span class="mark">Key</span><div><b>Rewards stay under the receiving wallet.</b><br><span class="mut">Use the wallet-wide buttons above. Backups contain private recovery keys; never share them.</span></div></div>';
   }
   function dexProfileDrafts(){try{const d=JSON.parse(localStorage.getItem("ggDexProfileDrafts")||"{}");return d&&typeof d==="object"?d:{};}catch(e){return{};}}
@@ -5122,7 +5131,9 @@
         const out=currentOut();
         if(out&&cashbackLaunch){const box=out.querySelector(".wbox");if(box)box.insertAdjacentHTML("beforeend",'<div class="launch-summary" style="margin-top:9px;margin-bottom:0"><span class="mark">%</span><div><b><span class="cashback-badge">Cash back</span> permanently enabled</b><br><span class="mut">Eligible trader rewards build by volume. Wallet-wide claimable Cash back appears in Wallet.</span></div></div>');}
         if(out&&mint){const actions=out.querySelector(".wbox div[style*='display:flex']");if(actions)actions.insertAdjacentHTML("beforeend",'<button class="wbtn ghost" onclick="GG.dexProfileReview(\''+esc(mint)+'\')">Update DEX profile</button>');}
-        clearLaunchInviteLastLink();clearSavedLaunchDraft();setButton("Launch complete",true);const clear=$("#lcClearDraft");if(clear)clear.disabled=false;toast("Token launched!");refreshWallets();return;
+        clearLaunchInviteLastLink();clearSavedLaunchDraft();setButton("Launch complete",true);const clear=$("#lcClearDraft");if(clear)clear.disabled=false;toast("Token launched!");refreshWallets();
+        if(out)out.insertAdjacentHTML("beforeend",SlimeLaunchUtility.resultHtml(pr.launch||{}));
+        return;
       }
       if(pr.status==="FAILED"){state.launchProgressPolling="";state.launchActiveAttemptId="";state.launchActiveAttemptStartedAt=0;persistLaunchDraftNow();setButton("Review & launch",false);const clear=$("#lcClearDraft");if(clear)clear.disabled=false;setOutput('<div class="mut" style="color:var(--red);font-size:12px">Launch failed: '+esc(pr.failureReason||"unknown error")+' · Your draft is still here to edit and retry.</div>');return;}
       if(status===404&&unknown404s>=3&&Date.now()-state.launchActiveAttemptStartedAt>=30000){state.launchProgressPolling="";state.launchActiveAttemptId="";state.launchActiveAttemptStartedAt=0;persistLaunchDraftNow();setButton("Review & launch",false);const clear=$("#lcClearDraft");if(clear)clear.disabled=false;setOutput('<div class="mut" style="color:var(--red);font-size:12px">No submitted launch was found for the saved attempt. Your draft is unchanged and ready for a fresh review.</div>');return;}
@@ -5268,17 +5279,17 @@
   async function renderLaunch(){
     if(state.launchInviteToken){await renderLaunchBundleInvite();return;}
     setActiveView("v-launch");subbarTool("🚀 Launch a Coin");if(state.token)await Promise.all([refreshWallets(),loadLaunchBundleInvites()]);if(state.route!=="launch")return;
-    const pumpOnly=state.launchPumpOnly===true;const tab=["coin","social","dev"].includes(state.launchTab)?state.launchTab:"coin";const mint=state.launchedMint||"";const rail=pumpOnly?"pump":(["pump","robinhood"].includes(state.launchRail)?state.launchRail:"pump");
+    const pumpOnly=state.launchPumpOnly===true;const tab=["coin","social","nft","dev"].includes(state.launchTab)?state.launchTab:"coin";const mint=state.launchedMint||"";const rail=pumpOnly?"pump":(["pump","robinhood"].includes(state.launchRail)?state.launchRail:"pump");
     state.launchTab=tab;state.launchRail=rail;
     const tb=(id,lab)=>'<button data-ltab="'+id+'" class="'+(tab===id?"on":"")+'">'+lab+'</button>';
     const show=(id)=>tab===id?"":' style="display:none"';
     const railChoices='<button type="button" data-rail="pump"'+(rail==="pump"?' class="on"':'')+'><b>💊 Pump.fun</b><span>Solana · largest launch crowd</span></button>'+(pumpOnly?'':'<button type="button" data-rail="robinhood"'+(rail==="robinhood"?' class="on"':'')+'><b>🪶 Robinhood</b><span>Robinhood Chain · pay with SOL</span></button>');
     $("#v-launch").innerHTML='<div class="wgrid"><div class="wbox launch-card" style="grid-column:1/-1"><div class="launch-head"><div><h3>'+(pumpOnly?'Launch on Pump.fun':'Launch a coin')+'</h3><p class="sub">Coin art, banner, socials, rewards, bundles and participant invites save on this device until launch.</p></div><div style="display:flex;gap:7px;flex-wrap:wrap"><button class="wbtn ghost" type="button" id="lcClearDraft"'+(state.launchActiveAttemptId?' disabled':'')+'>Clear draft</button><button class="wbtn ghost" type="button" onclick="GG.launchesModal()">Your launches</button></div></div>'+
-      '<div class="tabs launch-tabs">'+tb("coin","Coin")+tb("social","Socials")+tb("dev","Dev &amp; Bundle")+'</div>'+
+      '<div class="tabs launch-tabs">'+tb("coin","Coin")+tb("social","Socials")+tb("nft","NFT &amp; Fees")+tb("dev","Dev &amp; Bundle")+'</div>'+
       '<div data-lpanel="coin"'+show("coin")+'>'+
         '<div class="launch-section-title">Launch network</div><div class="field"><div class="railsel" id="lcRails">'+
           railChoices+
-        '</div><div class="mut" style="font-size:11px;margin-top:7px"><b>You stay the creator.</b> Fees are assigned to your selected launch wallet automatically.</div><div id="lcRhSetup" style="margin-top:9px"></div></div>'+
+        '</div><div class="mut" style="font-size:11px;margin-top:7px"><b>You stay the creator.</b> Creator fees use your chosen reward settings. Optional external routing is reviewed separately in NFT &amp; Fees.</div><div id="lcRhSetup" style="margin-top:9px"></div></div>'+
         '<div class="launch-section-title">Media</div><div class="launch-media">'+
           '<label class="launch-upload"><b>Coin image</b><span>Square image shown in feeds and on the coin page.</span><input id="lcImg" type="file" accept="image/*"><div id="lcImgPrev" class="mut" style="font-size:10px;margin-top:6px">PNG, JPG, WEBP, GIF or HEIC</div></label>'+
           '<label class="launch-upload"><b>Banner <span>(optional)</span></b><span>Wide 3:1 cover shown behind your coin profile.</span><input id="lcBanner" type="file" accept="image/*"><div id="lcBannerPrev" class="mut" style="font-size:10px;margin-top:6px">Large photos auto-compress</div></label></div>'+
@@ -5290,7 +5301,7 @@
         '<div class="field"><label>Telegram</label><input id="lcTg" placeholder="https://t.me/yourcoin"></div>'+
         '<div class="field"><label>Website</label><input id="lcWeb" placeholder="https://yourcoin.com"></div>'+
       '</div>'+
-      '<div data-lpanel="nft"'+show("nft")+'><div class="launch-summary"><span class="mark">◆</span><div><b>Link an official NFT collection to this coin.</b><br><span class="mut">SlimeWire creates a marketplace-ready Solana collection after the coin launches. Start small and expand later, or set a fixed cap.</span></div></div>'+
+      '<div data-lpanel="nft"'+show("nft")+'>'+SlimeLaunchUtility.render("lcUtility")+'<div class="launch-summary"><span class="mark">◆</span><div><b>Create your coin’s NFT collection.</b><br><span class="mut">Optional · Solana only. Your creator wallet controls it. Marketplace indexing and sales are not guaranteed. A collection does not automatically redirect creator fees.</span></div></div>'+
         '<label class="lcheck"><input type="checkbox" id="lcNftEnabled"> <span><b>Create and link an NFT collection</b> — funded from the selected creator wallet.</span></label>'+
         '<div id="lcNftSetup" class="feebox" style="display:none;margin-top:8px">'+
           '<div class="field"><label>Collection name <span style="text-transform:none">(optional)</span></label><input id="lcNftName" maxlength="64" placeholder="Defaults to Coin Name NFT Collection"></div>'+
@@ -5299,11 +5310,11 @@
           '<div class="field"><label>Marketplace royalty</label><select id="lcNftRoyalty"><option value="0">0%</option><option value="250">2.5%</option><option value="500" selected>5%</option><option value="750">7.5%</option><option value="1000">10%</option></select></div>'+
           '<div class="lcnote">Uses the coin image as collection art. The collection is linked on-chain and can appear on compatible NFT marketplaces. Individual NFT art and rarity can be added after launch.</div>'+
         '</div>'+
-        '<div class="launch-section-title" style="margin-top:14px">Already launched?</div>'+
+        '<details class="launch-advanced" style="margin-top:14px"><summary>Manage an existing coin’s NFT collection</summary><div>'+
         '<div class="launch-summary"><span class="mark">+</span><div><b>Add NFTs to an existing SlimeWire launch.</b><br><span class="mut">Paste the Solana coin CA. SlimeWire verifies that this account still has the original dev wallet before creating or linking anything.</span></div></div>'+
         '<div class="field"><label>Launched coin CA</label><input id="lcNftExistingMint" placeholder="Paste Solana coin CA" value="'+esc(state.lcNftMint||'')+'"></div>'+
         '<button class="wbtn" type="button" id="lcNftManagerLoad" style="width:100%">Open NFT manager</button>'+
-        '<div id="lcNftManagerOut" style="margin-top:10px">'+lcNftManagerHtml(state.lcNftOverview)+'</div>'+
+        '<div id="lcNftManagerOut" style="margin-top:10px">'+lcNftManagerHtml(state.lcNftOverview)+'</div></div></details>'+
       '</div>'+
       '<div data-lpanel="dev"'+show("dev")+'>'+
         '<div class="field"><label>Creator / dev wallet</label>'+walletSelectHtml("lcDevWallet")+'<span class="mut" style="font-size:10px">This wallet creates the coin, receives creator fees, and pays launch costs.</span></div><div id="lcDevRhNote" style="display:none"></div>'+
@@ -5353,10 +5364,20 @@
     // delegated handler on the container survives innerHTML swaps and never double-binds (property, not addEventListener).
     const lroot=$("#v-launch");if(lroot){lroot.oninput=lcSnapshot;lroot.onchange=lcSnapshot;}
     lcRestore();syncNft();   // re-fill fields + image previews from state right after the rebuild
+    const utilityRequest=async(body)=>{const r=await jpost("/api/web/launch/utility/review",body);if(!r.ok||!r.d?.ok)throw new Error(r.d?.message||r.d?.error||"Connect your SlimeWire account to review this utility.");return r.d;};
+    const utilityContext=()=>({rail:state.launchRail||"pump",pumpCashback:lcRewardMode()==="cashback",holderRewards:lcReadHolderRewards("lc"),creatorFeeSplit:$("#lcPromo")?.checked?[{enabled:true}]:[]});
+    const syncUtilityHints=()=>{const on=SlimeLaunchUtility.read("lcUtility").mode==="usepaid";$("#v-launch").classList.toggle("usepaid-route",on);const host=$("#lcDevSol");let note=$("#lcUsePaidHint");if(host&&!note){note=document.createElement("div");note.id="lcUsePaidHint";note.className="launch-summary";host.prepend(note);}if(note){note.hidden=!on;note.textContent="UsePaid: 100% of creator fees go to the reviewed provider account, not this wallet. Keep Creator rewards selected; Cash back / holder rewards cannot be combined. Dev and bundle buys run after fee setup confirms, not atomically with the mint.";}const bundle=$("#lcBundle");if(bundle)bundle.disabled=on;};
+    SlimeLaunchUtility.wire("lcUtility",{request:utilityRequest,context:utilityContext,onChange:()=>{lcSnapshot();syncUtilityHints();}});syncUtilityHints();
     $("#lcGo").onclick=async()=>{
       if(state.launchActiveAttemptId){pollLaunchProgress(state.launchActiveAttemptId,$("#lcGo"));return;}
       const name=$("#lcName").value.trim(),sym=$("#lcSym").value.trim();
       if(!name||!sym){toast("Name and ticker are required (Coin tab).",true);state.launchTab="coin";renderLaunch();return;}
+      let reviewedUtility={mode:"creator"};
+      const selectedUtility=SlimeLaunchUtility.read("lcUtility");
+      const requestedNft={enabled:!!$("#lcNftEnabled")?.checked,name:$("#lcNftName")?.value||"",description:$("#lcNftDescription")?.value||"",supplyMode:$("#lcNftSupplyMode")?.value||"expandable",supplyCap:Number($("#lcNftSupplyCap")?.value||500),royaltyBps:Number($("#lcNftRoyalty")?.value??500),useCoinArt:true};
+      if((state.launchRail||"pump")==="robinhood"&&(requestedNft.enabled||selectedUtility.mode!=="creator")){toast("NFT collections and these fee utilities are Solana-only. Turn them off or switch to Pump.",true);return;}
+      try{reviewedUtility=await SlimeLaunchUtility.prepare(selectedUtility,utilityContext(),utilityRequest,(lines)=>confirmModal("<h3>Review permanent fee destination</h3>"+lines.map(line=>"<p>"+esc(line)+"</p>").join(""),"Accept terms & continue","Go back"));}catch(e){toast(e.message,true);return;}
+      if(requestedNft.enabled&&!(await confirmModal("<h3>Create a linked NFT collection?</h3><p>Your selected creator wallet will pay additional Solana rent and network costs after the coin confirms. The collection is separate from the coin. If creation needs a retry, resume the same collection without launching another coin.</p>","Create collection after launch","Go back")))return;
       // Automatic Robinhood rail: token + locked Sushi V3 market in one action.
       // A missing factory safely falls back to the legacy deploy/open-trading path.
       if((state.launchRail||"pump")==="robinhood"){
@@ -5420,6 +5441,7 @@
       const creatorFeeBps="1000";
       const rewardMode=lcRewardMode();
       const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps,pumpCashback:rewardMode==="cashback",creatorFeeClaimMode:($("#lcCreatorFeesManual")&&$("#lcCreatorFeesManual").checked&&rewardMode==="creator")?"manual":"auto",holderRewards:lcReadHolderRewards("lc"),rail:state.launchRail||"pump",nftCollection:{enabled:false}};
+      body.nftCollection=requestedNft;body.launchUtility=reviewedUtility;
       if(devW&&devW.publicKey)body.creatorFeeRecipient=devW.publicKey;
       // Promoter fee-split (up to 4 wallets + %) stored on the coin; paid out via "Pay promoters".
       if($("#lcPromo")&&$("#lcPromo").checked){const sp=[0,1,2,3].map(i=>({wallet:(($("#lcPmW"+i)||{}).value||"").trim(),pct:Number((($("#lcPmP"+i)||{}).value||"").trim())})).filter(r=>r.wallet&&r.pct>0);if(sp.length)body.creatorFeeSplit=sp;}

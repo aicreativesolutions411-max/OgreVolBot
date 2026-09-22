@@ -280,7 +280,7 @@ function sharingConfigStatusName(status) {
 }
 
 /** Decode and validate an authoritative Pump Fees sharing-config account. */
-export function decodePumpFeeSharingConfig({ mint, accountInfo } = {}) {
+export function decodePumpFeeSharingConfig({ mint, accountInfo, allowSingleRecipient = false } = {}) {
   const addresses = getPumpFeeSharingAddresses({ mint });
   if (!accountInfo) {
     throw new Error(`Pump fee-sharing config ${addresses.sharingConfig.toBase58()} does not exist.`);
@@ -330,7 +330,7 @@ export function decodePumpFeeSharingConfig({ mint, accountInfo } = {}) {
     finalized: version !== 1
       && status === "active"
       && raw.adminRevoked === true
-      && shareholders.length === 2,
+      && (shareholders.length === 2 || (allowSingleRecipient && shareholders.length === 1)),
     shareholders,
     totalShareBps: shareholders.reduce((sum, row) => sum + row.shareBps, 0),
     raw,
@@ -343,7 +343,8 @@ export async function readPumpFeeSharingConfig({
   connection,
   mint,
   commitment = "confirmed",
-  required = false
+  required = false,
+  allowSingleRecipient = false
 } = {}) {
   if (!connection?.getAccountInfo) {
     throw new Error("A Solana connection is required to read Pump fee sharing.");
@@ -365,7 +366,21 @@ export async function readPumpFeeSharingConfig({
       addresses
     };
   }
-  return decodePumpFeeSharingConfig({ mint: addresses.mint, accountInfo });
+  return decodePumpFeeSharingConfig({ mint: addresses.mint, accountInfo, allowSingleRecipient });
+}
+
+/** Opt-in single-recipient route. Does not relax the holder-reward profile. */
+export async function buildPumpSingleRecipientFeeUpdate({ creator, mint, recipient } = {}) {
+  const authority = asPublicKey(creator, "Pump creator");
+  const destination = asPublicKey(recipient, "Pump permanent fee recipient");
+  if (authority.equals(destination)) throw new Error("External fee recipient must differ from the creator.");
+  return PUMP_SDK.updateFeeSharesV2({
+    authority, mint: asPublicKey(mint, "Pump mint"),
+    currentShareholders: [authority],
+    newShareholders: [{ address: destination, shareBps: 10000 }],
+    quoteMint: PUMP_FEE_SHARING_QUOTE_MINT,
+    quoteTokenProgram: PUMP_FEE_SHARING_QUOTE_TOKEN_PROGRAM
+  });
 }
 
 /** Build the permissionless PumpSwap -> Pump WSOL creator-fee sweep. */

@@ -567,6 +567,7 @@
     return result;
   }
   function post(path, body, options = {}) { return request(path, { ...options, method: "POST", headers: { ...(options.headers || {}), "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }); }
+  window.SlimeLaunchUtility?.configureRecovery(async body => { const result = await post('/api/web/launch/utility/retry', body, { noRetry: true, timeout: 90_000 }); if (!result.ok) throw new Error(apiMessage(result.data, 'Original fee setup could not be checked.')); return result.data; });
   function apiMessage(data, fallback) { return String(data?.message || data?.error || fallback || "Something went wrong."); }
   function setToken(token, options = {}) {
     const next = token || "";
@@ -2936,17 +2937,19 @@
     const feeCard = pumpLaunches.length ? `<div class="read-card account-status"><span>PUMP CREATOR FEES</span><h3>${lastClaim ? `${Number(lastClaim.creatorFeeClaimedSol).toFixed(6)} SOL claimed last` : "Accruing on-chain"}</h3><p>${manualLaunches.length ? `${manualLaunches.length} launch${manualLaunches.length === 1 ? " is" : "es are"} set to accumulate until you claim.` : "Auto-claim watches new activity."} ${pendingVolume > 0 ? `${pendingVolume.toFixed(3)} SOL of new trade volume is waiting for the next automatic check.` : "An empty claim is never shown as earnings."}</p></div>` : "";
     panel.innerHTML = feeCard + state.launches.map((coin) => {
       const key = coin.mint || coin.tokenAddress || coin.address || "", rh = ["robinhood", "rh"].includes(String(coin.rail || "").toLowerCase()) || isRh(key);
-      const feeStatus = rh ? ({ claimed: "Sushi fees sent to creator", watching: "Sushi fees auto-collecting", nothing_to_claim: "No Sushi fees yet", failed: "Sushi fee retry queued", creator_wallet_missing: "Creator wallet unavailable" }[String(coin.rhPoolFeeStatus || "watching")] || "Sushi fees auto-collecting") : coin.pumpCashback ? "Pump Cash back enabled · trader rewards" : ({ claimed: "Claimed", accruing: "Accumulating until claimed", watching: "Watching", nothing_to_claim: "No fees yet", failed: "Claim retry available", activity_unavailable: "Checking activity" }[String(coin.creatorFeeStatus || "watching")] || "Watching");
+      const feeStatus = coin.launchUtility ? "UsePaid fee routing · " + coin.launchUtility.status : rh ? ({ claimed: "Sushi fees sent to creator", watching: "Sushi fees auto-collecting", nothing_to_claim: "No Sushi fees yet", failed: "Sushi fee retry queued", creator_wallet_missing: "Creator wallet unavailable" }[String(coin.rhPoolFeeStatus || "watching")] || "Sushi fees auto-collecting") : coin.pumpCashback ? "Pump Cash back enabled · trader rewards" : ({ claimed: "Claimed", accruing: "Accumulating until claimed", watching: "Watching", nothing_to_claim: "No fees yet", failed: "Claim retry available", activity_unavailable: "Checking activity" }[String(coin.creatorFeeStatus || "watching")] || "Watching");
       const holderStatus = !rh && coin.holderRewards?.enabled
         ? Number(coin.holderRewardPendingSol || 0) > 0
           ? `${Number(coin.holderRewardPendingSol).toFixed(4)} SOL pending for holders`
           : Number(coin.holderRewardPaidSol || 0) > 0 ? `${Number(coin.holderRewardPaidSol).toFixed(4)} SOL paid to holders` : "Holder rewards accruing"
         : "";
-      const claim = !rh && !coin.pumpCashback && coin.devWalletIndex ? `<button class="recovery-button" type="button" data-claim-creator-fees="${Number(coin.devWalletIndex)}" data-claim-creator-mint="${escapeHtml(key)}">Claim fees</button>` : "";
+      const claim = !rh && !coin.pumpCashback && !coin.launchUtility && coin.devWalletIndex ? `<button class="recovery-button" type="button" data-claim-creator-fees="${Number(coin.devWalletIndex)}" data-claim-creator-mint="${escapeHtml(key)}">Claim fees</button>` : "";
       const backup = !rh && coin.devWalletIndex ? `<button class="recovery-button" type="button" data-pump-wallet-backup data-wallet-index="${Number(coin.devWalletIndex)}" data-wallet-key="${escapeHtml(coin.devWallet || "")}">Pump wallet backup</button>` : "";
       return `<div class="created-coin-wrap"><button class="coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="${rh ? "rh" : "sol"}"><span class="coin-avatar"><img src="${escapeHtml(coin.imageUri || mascot(key))}" alt=""></span><span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span></span><span class="coin-meta"><i>${escapeHtml(coin.rail || "Solana")}</i><i>${escapeHtml(feeStatus)}</i>${holderStatus ? `<i>${escapeHtml(holderStatus)}</i>` : ""}</span></span><span class="coin-value"><b>Open</b><span>CREATOR</span></span></button>${claim}${backup}</div>`;
     }).join("");
     panel.querySelectorAll(".created-coin-wrap").forEach((wrap, index) => {
+      const utility = state.launches[index]?.launchUtility;
+      if (utility || state.launches[index]?.nftCollection) wrap.insertAdjacentHTML('beforeend', window.SlimeLaunchUtility?.resultHtml(state.launches[index]) || '');
       if (!state.launches[index]?.pumpCashback) return;
       wrap.querySelector(".coin-title")?.insertAdjacentHTML("beforeend", '<i class="pump-cashback-badge">Cash back</i>');
     });

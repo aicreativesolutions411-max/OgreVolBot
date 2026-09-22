@@ -71,9 +71,7 @@ test("fee-sharing setup persists a signed intent before broadcast and reconciles
   assert.match(submit, /backupConnection\.sendRawTransaction\(raw/);
 
   const disposition = functionBody(server, "pumpFeeSharingSubmissionDisposition");
-  assert.match(disposition, /getSignatureStatus\(signature, \{ searchTransactionHistory: true \}\)/);
-  assert.match(disposition, /getBlockHeight\("confirmed"\)/);
-  assert.match(disposition, /expired_unseen/);
+  assert.match(disposition, /feeSetupSubmissionDisposition\(state, connection\)/);
 
   const reconcile = functionBody(server, "reconcilePumpHolderRewardFeeSharing");
   const legacyGuardIndex = reconcile.indexOf("!pumpUsesOfficialHolderFeeSharing(attempt)");

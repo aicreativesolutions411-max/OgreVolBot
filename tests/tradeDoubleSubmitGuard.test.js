@@ -3252,7 +3252,7 @@ test("RH creator fee: pump-style venue-side, automatic at launch, NOT baked into
     const render = functionBody(src, "renderLaunch");
     assert.doesNotMatch(render, /lcRhCreatorFee/);
     assert.match(render, /creatorFeeEnabled:true/);
-    assert.match(render, /Fees are assigned to your selected launch wallet automatically/);
+    assert.match(render, /Creator fees use your chosen reward settings/);
   }
 });
 
@@ -3290,13 +3290,14 @@ test("positive launch dev buy amount is authoritative across both web launchers 
   assert.match(server, /amountSol: devBuyAmountSol/);
 });
 
-test("launch UI is Pump-simple, hides NFT creation, and keeps dormant tools off-page", () => {
+test("launch UI keeps NFT and fee utility optional while preserving the simple launch and bundle controls", () => {
   for (const src of [ggSource, indexSource]) {
     const render = functionBody(src, "renderLaunch");
-    assert.match(render, /tb\("coin","Coin"\)\+tb\("social","Socials"\)\+tb\("dev","Dev &amp; Bundle"\)/);
+    assert.match(render, /tb\("coin","Coin"\)\+tb\("social","Socials"\)\+tb\("nft","NFT &amp; Fees"\)\+tb\("dev","Dev &amp; Bundle"\)/);
     assert.doesNotMatch(render, /tb\("nft","NFT Collection"\)/);
     assert.match(render, /const pumpOnly=state\.launchPumpOnly===true/);
-    assert.match(render, /nftCollection:\{enabled:false\}/);
+    assert.match(render, /body\.nftCollection=requestedNft;body\.launchUtility=reviewedUtility/);
+    assert.match(render, /SlimeLaunchUtility\.prepare/);
     assert.match(render, /data-rail="pump"/);
     assert.match(render, /data-rail="robinhood"/);
     assert.doesNotMatch(render, /data-rail="bonk"|data-rail="meteora"/);
