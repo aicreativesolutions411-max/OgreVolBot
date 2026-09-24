@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import bs58 from "bs58";
 import sharp from "sharp";
+import { createScanPfpLoader, scanPhotoContent } from "./lib/telegramScanPfp.js";
 import ffmpegPath from "ffmpeg-static";
 import { WebSocketServer, WebSocket } from "ws";
 import nacl from "tweetnacl";
@@ -17446,6 +17447,19 @@ async function handleCallback(query, userId) {
   const callbackData = String(query.data || "");
   const callbackOwnsAck = ["qbp:", "qb:", "rqbp:", "rqb:", "rqs:", "rd:", "tl:"].some((prefix) => callbackData.startsWith(prefix));
   if (!callbackOwnsAck) void telegram("answerCallbackQuery", { callback_query_id: query.id }).catch(() => {});
+
+  if (callbackData === "scantext:full" && messageId) {
+    const entry = telegramScanFullText.get(`${chatId}:${messageId}`);
+    if (tgCommandOnCooldown(chatId, `scantext:${messageId}`, 10_000)) return;
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      ...(query.message?.message_thread_id ? { message_thread_id: query.message.message_thread_id } : {}),
+      reply_parameters: { message_id: messageId, allow_sending_without_reply: true },
+      text: entry?.text || "This scan detail cache has expired. Rescan the coin to load the latest complete report.",
+      parse_mode: "HTML", disable_web_page_preview: true
+    }).catch(() => {});
+    return;
+  }
 
   // Polymarket outcome/amount tickets begin in Telegram but always finish on SlimeWire,
   // where the user's login, live region check and one-time execution guard are available.
@@ -43955,6 +43969,7 @@ async function sendPhoto(chatId, filename, buffer, caption = "", replyMarkup = n
     if (markup) form.append("reply_markup", JSON.stringify(markup));
     const replyToMessageId = Number(options?.replyToMessageId) || 0;
     if (replyToMessageId > 0) form.append("reply_parameters", JSON.stringify({ message_id: replyToMessageId, allow_sending_without_reply: true }));
+    if (Number(options?.messageThreadId) > 0) form.append("message_thread_id", String(options.messageThreadId));
     return telegramApiFetchJson(`https://api.telegram.org/bot${CONFIG.telegramToken}/sendPhoto`, {
       method: "POST",
       body: form,
@@ -53332,47 +53347,58 @@ function formatRhScanCard(info, options = {}) {
     ...(options.trade === false ? [] : [`<a href="https://www.slimewire.org/#rhtrade/${esc(a)}">⚡ Trade $${esc(sym)} on SlimeWire</a> — Robinhood Chain`]),
   ].filter((l) => l !== "").join("\n");
 }
-async function renderRhScanCardPng(info, seed = "", options = {}) {
-  const address = info?.address || seed;
-  const missingLabel = options.pending === false ? "n/a" : "checking";
-  const liveLogo = await scanFastTimeout(rhScanLogo(info), 1_200, null);
-  const logo = liveLogo || await xFallbackLogoBuffer(info?.symbol || shortMint(address), seed || address);
-  const { verdict, tone } = rhVerdictTone(info?.safety);
-  const vol = rhVolumeInfo(info);
-  const ch = rhChangeInfo(info);
-  const card = await renderXScanCard({
-    symbol: info?.symbol || "RH",
-    name: info?.name || "Robinhood token",
-    mcLabel: info?.mc > 0 ? scanFmtMoney(info.mc) : "—",
-    liqLabel: info?.liq > 0 ? scanFmtMoney(info.liq) : missingLabel,
-    ageLabel: info?.createdAt > 0 ? xAgeLabel(Date.now() - info.createdAt) : missingLabel,
-    railLabel: "Robinhood",
-    volumeLabel: vol.value > 0 ? `${scanFmtMoney(vol.value)}${vol.title ? " " + vol.title : ""}` : missingLabel,
-    holderLabel: info?.holders > 0 ? scanFmtSupply(info.holders) : missingLabel,
-    verdict,
-    verdictTone: tone,
-    changeLabel: Number.isFinite(ch.value) ? `${ch.value >= 0 ? "+" : ""}${ch.value.toFixed(1)}%` : missingLabel,
-    changeTone: Number.isFinite(ch.value) ? (ch.value >= 0 ? "up" : "down") : "",
-    changeTitle: ch.title,
-    logoBuffer: logo,
-    bgDir: X_CARD_BG_DIR,
-    seed: seed || info?.symbol || address,
-    layout: "telegram-compact"
-  });
-  // The full-resolution PNG includes intentional film grain and can be several megabytes. Telegram media
-  // uploads occasionally timed out at 15s and forced a text-only scan. A high-quality JPEG preserves the
-  // coin PFP/card appearance at a fraction of the size, making the photo path reliably fast.
+const loadTelegramScanPfp = createScanPfpLoader();
+const telegramScanFullText = new Map();
+function rememberTelegramScanText(chatId, messageId, text) {
+  if (!messageId) return;
+  const key = `${chatId}:${messageId}`;
+  telegramScanFullText.delete(key);
+  telegramScanFullText.set(key, { text });
+  while (telegramScanFullText.size > 2000) telegramScanFullText.delete(telegramScanFullText.keys().next().value);
+}
+async function sendTelegramScanPhoto(chatId, filename, image, text, markup, options = {}) {
+  const content = scanPhotoContent(text, markup);
+  const sent = await sendPhoto(chatId, filename, image, content.caption, content.replyMarkup, "HTML", options);
+  rememberTelegramScanText(chatId, sent?.message_id, text);
+  return sent;
+}
+async function editTelegramScanPhoto(chatId, messageId, image, text, markup) {
+  const content = scanPhotoContent(text, markup);
+  let edited;
   try {
-    return await sharp(card).jpeg({ quality: 88, chromaSubsampling: "4:4:4", mozjpeg: true }).toBuffer();
-  } catch {
-    return card;
+    edited = await editMessagePhotoBuffer(chatId, messageId, image, content.caption, content.replyMarkup);
+  } catch (error) {
+    if (!/message is not modified/i.test(friendlyError(error))) throw error;
+    edited = { message_id: messageId, photo: [{}] };
   }
+  rememberTelegramScanText(chatId, messageId, text);
+  return edited;
+}
+async function editTelegramScanCaption(chatId, messageId, text, markup) {
+  const content = scanPhotoContent(text, markup);
+  const result = await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: content.caption, parse_mode: "HTML", reply_markup: content.replyMarkup });
+  rememberTelegramScanText(chatId, messageId, text);
+  return result;
+}
+async function renderRhScanCardPng(info = {}, seed = "", options = {}) {
+  const address = String(info?.address || seed).toLowerCase();
+  let knownBuffer = rhScanLogoCache.get(address)?.buf || null;
+  const local = firstString(info?.localImagePath, (/^\/api\/web\/rh\/token-image\//.test(String(info?.imageUrl || "")) ? rhTokenImagePath(address) : ""));
+  if (!knownBuffer && local) {
+    try {
+      const stat = await fs.stat(local);
+      if (stat.size > 0 && stat.size < 6_000_000) knownBuffer = await fs.readFile(local);
+    } catch { /* public metadata image is the fallback */ }
+  }
+  return loadTelegramScanPfp("rh:" + address, [
+    info?.imageUrl, info?.iconUrl, info?.logoUrl, info?.metaImageUrl
+  ], knownBuffer);
 }
 async function editRhScanTelegramCard(chatId, messageId, { hasPhoto = false, png = null, text = "", replyMarkup = null } = {}) {
   text = telegramWithCommunityFooter(text, { compact: true });
   if (hasPhoto && png) {
     try {
-      await editMessagePhotoBuffer(chatId, messageId, png, text, replyMarkup);
+      await editTelegramScanPhoto(chatId, messageId, png, text, replyMarkup);
       return true;
     } catch (error) {
       if (/message is not modified/i.test(friendlyError(error))) return true;
@@ -53382,7 +53408,7 @@ async function editRhScanTelegramCard(chatId, messageId, { hasPhoto = false, png
     }
   }
   try {
-    if (hasPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: text, parse_mode: "HTML", reply_markup: replyMarkup });
+    if (hasPhoto) await editTelegramScanCaption(chatId, messageId, text, replyMarkup);
     else await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: replyMarkup });
     return true;
   } catch (error) {
@@ -53438,8 +53464,7 @@ async function sendRhScanCard(chatId, address, options = {}) {
       kb = compactTradeCardKeyboard(address, "s");
       queueVerifiedCopy();
     };
-    // Ordinary scans acknowledge with text immediately, then the background load replaces that shell
-    // with the branded image card. Source-attributed Smart Calls may render the branded shell up front.
+    // Acknowledge immediately. Background artwork attaches to the same message; no delete/repost.
     const quickMediaAllowed = options.brandedMedia === true;
     const quickPng = quickMediaAllowed
       ? await scanFastTimeout(renderRhScanCardPng(quickInfo, `quick:${address}`, { pending: true }), 900, null)
@@ -53448,14 +53473,14 @@ async function sendRhScanCard(chatId, address, options = {}) {
     let quickHasPhoto = false;
     if (quickPng) {
       try {
-        sent = await sendPhoto(chatId, "rh-scan.jpg", quickPng, quickText, kb, "HTML");
+        sent = await sendTelegramScanPhoto(chatId, "rh-scan.jpg", quickPng, quickText, kb, { replyToMessageId: options.message?.message_id, messageThreadId: options.message?.message_thread_id });
         quickHasPhoto = Boolean(sent?.message_id);
       } catch (error) {
         console.warn(`[tg-scan] quick RH photo failed ${address.slice(0, 10)}…: ${friendlyError(error)}`);
       }
     }
     if (!sent) {
-      sent = await telegram("sendMessage", { chat_id: chatId, text: quickText, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb }).catch((error) => {
+      sent = await telegram("sendMessage", { chat_id: chatId, ...(options.message?.message_thread_id ? { message_thread_id: options.message.message_thread_id } : {}), ...(options.message?.message_id ? { reply_parameters: { message_id: options.message.message_id, allow_sending_without_reply: true } } : {}), text: quickText, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb }).catch((error) => {
         console.warn(`[tg-scan] quick RH text failed ${address.slice(0, 10)}…: ${friendlyError(error)}`);
         return null;
       });
@@ -53472,13 +53497,11 @@ async function sendRhScanCard(chatId, address, options = {}) {
         const promoteToPhoto = async (png, text) => {
           if (activeHasPhoto || !png) return false;
           text = telegramWithCommunityFooter(text, { compact: true });
-          const promoted = await sendPhoto(chatId, "rh-scan.jpg", png, text, kb, "HTML").catch((error) => {
+          const promoted = await editTelegramScanPhoto(chatId, activeMessageId, png, text, kb).catch((error) => {
             console.warn(`[tg-scan] RH card promotion failed ${address.slice(0, 10)}: ${friendlyError(error)}`);
             return null;
           });
           if (!promoted?.message_id) return false;
-          await telegram("deleteMessage", { chat_id: chatId, message_id: activeMessageId }).catch(() => {});
-          activeMessageId = promoted.message_id;
           activeHasPhoto = true;
           console.info(JSON.stringify({ event: "tg_scan_card", chain: "robinhood", status: "promoted", chat_id: String(chatId), scan_message_id: activeMessageId }));
           return true;
@@ -53542,7 +53565,8 @@ async function sendRhScanCard(chatId, address, options = {}) {
           const settledMissing = rhScanMissingCardFields(settledInfo);
           const settledText = [String(options.contextHtml || "").trim(), formatRhScanCard(settledInfo, { pending: !settledComplete }), settledCaller, settledComplete ? "" : `⏳ <i>Still finishing ${escapeTelegramHtml(settledMissing.join(", "))}…</i>`].filter(Boolean).join("\n\n");
           const settledPng = await renderRhScanCardPng(settledInfo, settledInfo.symbol || address, { pending: !settledComplete }).catch(() => null);
-          await editRhScanTelegramCard(chatId, activeMessageId, { hasPhoto: activeHasPhoto, png: settledPng, text: settledText, replyMarkup: kb });
+          const settledPromoted = await promoteToPhoto(settledPng, settledText);
+          if (!settledPromoted) await editRhScanTelegramCard(chatId, activeMessageId, { hasPhoto: activeHasPhoto, png: settledPng, text: settledText, replyMarkup: kb });
         }
       })().catch((error) => console.warn(`[tg-scan] RH background upgrade failed ${address.slice(0, 10)}…: ${friendlyError(error)}`));
       return;
@@ -53562,12 +53586,18 @@ async function sendRhScanCard(chatId, address, options = {}) {
   const callerLine = await buildScanCallerFooter(chatId, address, info.mc, message).catch(() => "");
   const text = telegramWithCommunityFooter([String(options.contextHtml || "").trim(), formatRhScanCard(info), callerLine].filter(Boolean).join("\n"), { compact: true });
   const kb = compactTradeCardKeyboard(address, "s");
-  const png = await scanFastTimeout(renderRhScanCardPng(info, info.symbol || address), 1_800, null);
-  // Telegram applies the caption limit after HTML entity parsing; slicing the raw HTML could cut off the
-  // caller footer (or split a link tag). Let Telegram accept the complete compact card, then fall back to text.
+  const sendText = () => telegram("sendMessage", {
+    chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb,
+    ...(message?.message_id ? { reply_parameters: { message_id: message.message_id, allow_sending_without_reply: true } } : {}),
+    ...(message?.message_thread_id ? { message_thread_id: message.message_thread_id } : {})
+  }).catch(() => null);
+  const pngPromise = renderRhScanCardPng(info, info.symbol || address);
+  const png = await scanFastTimeout(pngPromise, 700, null);
+  // A slow image never delays the scan text. Attach late artwork to that same message.
   let sent = null;
-  if (png) sent = await sendPhoto(chatId, "rh-scan.jpg", png, text, kb, "HTML").catch(async () => sayHtml(chatId, text, kb).catch(() => null));
-  else sent = await sayHtml(chatId, text, kb).catch(() => null);
+  if (png) sent = await sendTelegramScanPhoto(chatId, "rh-scan.jpg", png, text, kb, { replyToMessageId: message?.message_id, messageThreadId: message?.message_thread_id }).catch(sendText);
+  else sent = await sendText();
+  if (sent?.message_id && !sent?.photo) void pngPromise.then((latePfp) => latePfp ? editTelegramScanPhoto(chatId, sent.message_id, latePfp, text, kb) : null).catch(() => {});
   if (sent?.message_id) console.info(JSON.stringify({ event: "tg_scan_ack", chain: "robinhood", mode: "full", duration_ms: Date.now() - scanStartedAt }));
 }
 
@@ -56253,7 +56283,7 @@ async function handleScanCallback(query, chatId, messageId) {
   if (action === "ai" || action === "funds" || action === "alpha") {
     const cur = String(query.message?.caption || query.message?.text || "");
     if (cur && !/^\s*(🧠|💸|🕵️)/.test(cur)) {
-      scanCardStash.set(String(messageId), { text: cur, at: Date.now() });
+      scanCardStash.set(String(messageId), { text: telegramScanFullText.get(`${chatId}:${messageId}`)?.text || cur, at: Date.now() });
       if (scanCardStash.size > 400) scanCardStash.delete(scanCardStash.keys().next().value);
     }
   }
@@ -56269,14 +56299,16 @@ async function handleScanCallback(query, chatId, messageId) {
     } else if (action === "alpha") {
       await handleScanAlphaRadar(chatId, mint, messageId, isPhoto);   // 🕵️ network-backed long-term-runner read
     } else if (action === "back") {
-      await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: slimeScanKeyboard(mint) });
+      const fullText = telegramScanFullText.get(`${chatId}:${messageId}`)?.text || "";
+      const markup = isPhoto ? scanPhotoContent(fullText, slimeScanKeyboard(mint)).replyMarkup : slimeScanKeyboard(mint);
+      await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: markup });
     } else if (action === "cat") {
       await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: scanCategoryKeyboard(mint, parts[2]) });
     } else if (action === "card") {
       // ⬅ Back to card — restore the stashed card text INSTANTLY (no re-fetch); rebuild only if missing.
       const stash = scanCardStash.get(String(messageId));
       if (stash && stash.text && Date.now() - stash.at < 10 * 60 * 1000) {
-        if (isPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: stash.text.slice(0, 1024), parse_mode: "HTML", reply_markup: slimeScanKeyboard(mint) });
+        if (isPhoto) await editTelegramScanCaption(chatId, messageId, stash.text, slimeScanKeyboard(mint));
         else await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: stash.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: slimeScanKeyboard(mint) });
       } else {
         await rebuildScanCardInPlace(chatId, messageId, mint, isPhoto);
@@ -56302,8 +56334,11 @@ async function rebuildScanCardInPlace(chatId, messageId, mint, isPhoto) {
   if (!text) return false;
   text = telegramWithCommunityFooter(text, { compact: true });
   scanCardStash.set(String(messageId), { text, at: Date.now() });   // keep Back instant after a refresh too
-  if (isPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: text.slice(0, 1024), parse_mode: "HTML", reply_markup: slimeScanKeyboard(mint) });
-  else await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: slimeScanKeyboard(mint) });
+  const markup = slimeScanKeyboardForResult(mint, "", scan);
+  if (isPhoto) await editTelegramScanCaption(chatId, messageId, text, markup).catch(() => {});
+  else await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: markup }).catch(() => {});
+  // Refresh also upgrades older text-only/stats-image posts without creating another call.
+  void renderSolScanCardPng(scan, mint).then((pfp) => pfp ? editTelegramScanPhoto(chatId, messageId, pfp, text, markup) : null).catch(() => {});
   return true;
 }
 
@@ -60817,44 +60852,12 @@ function detectFlexBragMint(raw) {
 }
 
 async function renderSolScanCardPng(scan = {}, mint, seed = "") {
-  const { meta, bonding, best, shield, rug, onchain } = scan || {};
-  const stats = scanMarketStatsFromSources({ meta, bonding, best, rug, supply: scan?.supply, mint });
-  const bondPct = firstMeaningfulNumber(bonding?.bondingProgressPct);
-  const onCurve = typeof stats.onCurve === "boolean"
-    ? stats.onCurve
-    : Boolean(bonding && bondPct != null && !meta?.graduated);
-  const identity = slimeScanPairIdentity({ meta, bonding, best, onchain }, mint, { preferBonding: onCurve });
-  const symbol = String(identity.symbol || shortMint(mint)).replace(/^\$+/, "").slice(0, 12);
-  const name = String(identity.name || "Solana pair").slice(0, 40);
-  const createdAt = Number(stats.createdAt) || 0;
-  const rail = xRailLabel(mint, best, bonding);
-  const { verdict, tone } = xVerdict(shield, rug, stats.liq, stats.mc, seed || mint);
-  // The text acknowledgement is already visible before this render runs, so let a cold image CDN finish.
-  // The former 1.2s cap routinely threw away valid metadata PFPs on Render.
-  const liveLogo = scan?.pending ? null : await scanFastTimeout(
-    xCoinLogo(scan, mint),
-    Math.max(1_500, Number(process.env.TG_SCAN_PFP_TIMEOUT_MS || 3_500)),
-    null
-  );
-  const logo = liveLogo || await xFallbackLogoBuffer(symbol || shortMint(mint), seed || mint);
-  return renderXScanCard({
-    symbol,
-    name,
-    mcLabel: stats.mc > 0 ? scanFmtMoney(stats.mc) : "—",
-    liqLabel: stats.liq > 0 ? scanFmtMoney(stats.liq) : "—",
-    ageLabel: createdAt > 0 ? xAgeLabel(Date.now() - createdAt) : "checking",
-    railLabel: rail,
-    volumeLabel: stats.volume24h > 0 ? `${scanFmtMoney(stats.volume24h)} 24H` : "checking 24H",
-    holderLabel: stats.holders > 0 ? scanFmtSupply(stats.holders) : "checking",
-    verdict,
-    verdictTone: tone,
-    changeLabel: Number.isFinite(stats.ch1) ? `${stats.ch1 >= 0 ? "+" : ""}${stats.ch1.toFixed(1)}%` : "checking",
-    changeTone: Number.isFinite(stats.ch1) ? (stats.ch1 >= 0 ? "up" : "down") : "",
-    logoBuffer: logo,
-    bgDir: X_CARD_BG_DIR,
-    seed: seed || symbol || mint,
-    layout: "telegram-compact"
-  });
+  const { meta, bonding, best, onchain } = scan || {};
+  return loadTelegramScanPfp(`sol:${mint}`, [
+    scanImageUrlFromScan(scan), meta?.imageUrl, meta?.imageUri, meta?.image, meta?.icon,
+    best?.info?.imageUrl, best?.baseToken?.imageUrl, bonding?.imageUrl,
+    bonding?.image_uri, bonding?.image, onchain?.imageUrl, onchain?.image
+  ], xLogoCache.get(mint)?.buf || null);
 }
 
 function slimeScanHardTradeRisk(scan = null) {
@@ -61059,35 +61062,37 @@ async function deliverTelegramSolScan({ chatId, message, mint, tickerSymbol = ""
     else if (!photoOnly) failedSent = await sayHtml(chatId, failed, replyMarkup).catch(() => null);
     return { ok: false, messageId: messageId || failedSent?.message_id || null, isPhoto };
   }
-  const captionVisibleLen = text.replace(/<[^>]+>/g, "").length;
-  // A message that began as the instant text shell stays text while it is progressively edited. Rendering
-  // and uploading a PNG before editMessageText added no value and could hold every market/security update
-  // behind a cold image host or Telegram media timeout.
-  const shouldRenderPng = (!messageId && !preferText) || isPhoto;
-  const renderTimeoutMs = photoOnly
-    ? Math.max(6_000, Number(process.env.TG_SCAN_LOGO_TIMEOUT_MS || 0))
-    : Math.max(3_800, Number(process.env.TG_SCAN_LOGO_TIMEOUT_MS || 0));
+  // Fast text first; background promotion attaches actual artwork to this message.
+  // Caption-only updates do not fetch/reupload the same PFP over and over.
+  const shouldRenderPng = photoOnly || (!messageId && !preferText);
+  const renderTimeoutMs = Math.max(5_000, Number(process.env.TG_SCAN_LOGO_TIMEOUT_MS || 0));
   const png = shouldRenderPng
     ? await scanFastTimeout(renderSolScanCardPng(scan, mint, tickerSymbol || mint), renderTimeoutMs, null)
     : null;
   if (messageId) {
-    if (isPhoto && png && captionVisibleLen <= 1024) await editMessagePhotoBuffer(chatId, messageId, png, text, replyMarkup).catch(() => {});
-    else if (isPhoto && captionVisibleLen <= 1024) await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: text, parse_mode: "HTML", reply_markup: replyMarkup }).catch(() => {});
-    else if (!isPhoto) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: replyMarkup }).catch(() => {});
-    else {
-      const shortCaption = `🐸 <b>$${escapeTelegramHtml(firstString(scan?.meta?.symbol, scan?.bonding?.symbol, shortMint(mint)))}</b> · full scan below`;
-      if (png) await editMessagePhotoBuffer(chatId, messageId, png, shortCaption, replyMarkup).catch(() => {});
-      await sayHtml(chatId, text, replyMarkup).catch(() => {});
+    if (png) {
+      const promoted = await editTelegramScanPhoto(chatId, messageId, png, text, replyMarkup).catch((error) => {
+        console.warn("[tg-scan] PFP attachment failed; keeping scan text:", friendlyError(error));
+        return null;
+      });
+      if (promoted) return { ok: true, messageId, isPhoto: true };
     }
+    if (isPhoto) await editTelegramScanCaption(chatId, messageId, text, replyMarkup).catch(() => {});
+    else await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: replyMarkup }).catch(() => {});
     return { ok: true, messageId, isPhoto };
   }
+  const sendText = () => telegram("sendMessage", {
+    chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: replyMarkup,
+    ...(message?.message_id ? { reply_parameters: { message_id: message.message_id, allow_sending_without_reply: true } } : {}),
+    ...(message?.message_thread_id ? { message_thread_id: message.message_thread_id } : {})
+  }).catch(() => null);
   let sent = null;
-  if (png && captionVisibleLen <= 1024) {
-    sent = await sendPhoto(chatId, "scan.png", png, text, replyMarkup, "HTML").catch(async () => (
-      photoOnly ? null : sayHtml(chatId, text, replyMarkup).catch(() => null)
-    ));
-  } else if (!photoOnly) sent = await sayHtml(chatId, text, replyMarkup).catch(() => null);
-  return { ok: Boolean(sent), messageId: sent?.message_id || null, isPhoto: Boolean(png && captionVisibleLen <= 1024 && sent?.photo) };
+  if (png) {
+    sent = await sendTelegramScanPhoto(chatId, "scan-pfp.jpg", png, text, replyMarkup, {
+      replyToMessageId: message?.message_id, messageThreadId: message?.message_thread_id
+    }).catch(() => photoOnly ? null : sendText());
+  } else if (!photoOnly) sent = await sendText();
+  return { ok: Boolean(sent), messageId: sent?.message_id || null, isPhoto: Boolean(sent?.photo) };
 }
 
 function slimeScanProgressHtml(missing = [], final = false) {
@@ -61124,11 +61129,9 @@ async function settleTelegramSolScanCard({
     if (!activeIsPhoto && activeMessageId && scanImageUrlFromScan(accumulated)) {
       const promoted = await deliverTelegramSolScan({
         chatId, message, mint, tickerSymbol, contextHtml, keyboard, scan: accumulated,
-        statusHtml, photoOnly: true
+        messageId: activeMessageId, statusHtml, photoOnly: true
       }).catch(() => null);
       if (promoted?.isPhoto && promoted?.messageId) {
-        await telegram("deleteMessage", { chat_id: chatId, message_id: activeMessageId }).catch(() => {});
-        activeMessageId = promoted.messageId;
         activeIsPhoto = true;
         return;
       }
@@ -61174,6 +61177,9 @@ async function settleTelegramSolScanCard({
     missing = slimeScanRetryMissingFields(accumulated, mint);
     await updateCard(slimeScanProgressHtml(missing));
   }
+  // A known image URL can still have had a transient CDN/upload failure. Retry the
+  // attachment once without repeating any market, safety or RPC reads.
+  if (!activeIsPhoto && scanImageUrlFromScan(accumulated)) await updateCard(slimeScanProgressHtml(missing));
   if (!missing.length) return accumulated;
 
   // A just-launched pool and a rate-limited provider are both normal. Keep filling the exact same card
@@ -61295,7 +61301,7 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
       try {
         const quickPng = await scanFastTimeout(renderSolScanCardPng(quickScan, mint, `quick:${mint}`), 900, null);
         if (quickPng) {
-          sent = await sendPhoto(chatId, "scan.png", quickPng, quickText, quickKeyboard, "HTML");
+          sent = await sendTelegramScanPhoto(chatId, "scan-pfp.jpg", quickPng, quickText, quickKeyboard, { replyToMessageId: message?.message_id, messageThreadId: message?.message_thread_id });
           quickHasPhoto = Boolean(sent?.message_id);
         }
       } catch (error) {
@@ -61310,7 +61316,9 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
         text: quickText,
         parse_mode: "HTML",
         disable_web_page_preview: true,
-        reply_markup: quickKeyboard
+        reply_markup: quickKeyboard,
+        ...(message?.message_id ? { reply_parameters: { message_id: message.message_id, allow_sending_without_reply: true } } : {}),
+        ...(message?.message_thread_id ? { message_thread_id: message.message_thread_id } : {})
       }).catch((error) => {
         console.warn(`[tg-scan] quick Sol text failed ${shortMint(mint)}: ${friendlyError(error)}`);
         return null;
@@ -61336,11 +61344,10 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
             keyboard,
             scan: loaded,
             statusHtml: slimeScanProgressHtml(slimeScanRetryMissingFields(loaded, mint)),
+            messageId: activeMessageId,
             photoOnly: true
           });
           if (promoted.isPhoto && promoted.messageId) {
-            await telegram("deleteMessage", { chat_id: chatId, message_id: activeMessageId }).catch(() => {});
-            activeMessageId = promoted.messageId;
             activeIsPhoto = true;
             console.info(JSON.stringify({ event: "tg_scan_card", chain: "solana", status: "promoted", chat_id: String(chatId), scan_message_id: activeMessageId }));
           }

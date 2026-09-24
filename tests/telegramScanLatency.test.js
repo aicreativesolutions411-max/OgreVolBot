@@ -56,24 +56,26 @@ test("ordinary cold scan acknowledgement never waits on rendering or a Telegram 
   assert.match(look, /const quickMediaAllowed = Boolean\(String\(options\.contextHtml/);
   assert.match(look, /if \(quickMediaAllowed\)[\s\S]*renderSolScanCardPng\(quickScan/);
   assert.match(look, /Normal \/look and pasted-CA scans[\s\S]*send text first/);
-  assert.match(deliver, /const shouldRenderPng = \(!messageId && !preferText\) \|\| isPhoto/);
+  assert.match(deliver, /const shouldRenderPng = photoOnly \|\| \(!messageId && !preferText\)/);
   assert.match(deliver, /shouldRenderPng\s*\?\s*await scanFastTimeout\(renderSolScanCardPng/);
   assert.match(functionBody(serverSource, "slimeScanKeyboardForResult"), /slimeScanSafetyProofReady/);
 });
 
-test("ordinary scans promote the fast text shell into a branded card", () => {
+test("ordinary scans attach the PFP to the fast text shell without replacing the call", () => {
   const look = functionBody(serverSource, "handleTelegramLookCommand");
   const deliver = functionBody(serverSource, "deliverTelegramSolScan");
   const rh = functionBody(serverSource, "sendRhScanCard");
 
   assert.match(look, /preferText:\s*true/);
   assert.match(look, /photoOnly:\s*true/);
-  assert.match(look, /telegram\("deleteMessage"/);
-  assert.match(deliver, /photoOnly \? null : sayHtml/);
+  assert.doesNotMatch(look, /telegram\("deleteMessage"/);
+  assert.match(deliver, /photoOnly \? null : sendText/);
+  assert.match(deliver, /editTelegramScanPhoto\(chatId, messageId/);
   assert.match(rh, /const quickMediaAllowed = options\.brandedMedia === true/);
   assert.match(rh, /quickMediaAllowed\s*\?\s*await scanFastTimeout\(renderRhScanCardPng/);
   assert.match(rh, /const promoteToPhoto = async/);
-  assert.match(rh, /telegram\("deleteMessage"/);
+  assert.doesNotMatch(rh, /telegram\("deleteMessage"/);
+  assert.match(rh, /editTelegramScanPhoto\(chatId, activeMessageId/);
   assert.doesNotMatch(rh, /const fullMediaAllowed = options\.brandedMedia === true/);
 });
 
@@ -109,7 +111,7 @@ test("fresh exact-mint fallback fills identity, PFP, market facts, and audit bef
   assert.match(gather, /meta = mergeTokenMarketMetadata\(meta, scanJupiterTokenMetadata\(jupiterReport\)\)/);
   assert.match(settle, /scanImageUrlFromScan\(accumulated\)/);
   assert.match(settle, /photoOnly: true/);
-  assert.match(settle, /telegram\("deleteMessage"/);
+  assert.doesNotMatch(settle, /telegram\("deleteMessage"/);
 });
 
 test("Jupiter scan normalization preserves real 24h flow and exact artwork", () => {

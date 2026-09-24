@@ -2609,10 +2609,10 @@ test("Telegram Buy is CA-first and scan/buy cards recover explicit 24h volume", 
   assert.match(solCard, /\$\$\{esc\(sym\)\} \/ \$\{esc\(quoteSymbol\)\}/); // real TOKEN / SOL pair identity, never a synthetic launch label
   assert.doesNotMatch(solCard, /Fresh Launch/);
   const solPng = functionBody(serverSource, "renderSolScanCardPng");
-  assert.match(solPng, /slimeScanPairIdentity/);
+  assert.match(solPng, /loadTelegramScanPfp/);
   assert.doesNotMatch(solPng, /Fresh Launch/);
   assert.match(solCard, /volume24h > 0[\s\S]*<i>24h<\/i>/);
-  assert.match(functionBody(serverSource, "renderSolScanCardPng"), /typeof stats\.onCurve === "boolean"/);
+  assert.doesNotMatch(solPng, /renderXScanCard/); // Telegram photo is artwork only; stats stay in the caption
   const solBuyCard = functionBody(serverSource, "postGroupBuy");
   assert.match(solBuyCard, /cardVol24/);
   assert.match(solBuyCard, /24h Vol/);
@@ -6629,7 +6629,7 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "buildXRhReply"), /rhVolumeInfo\(info\)/);
   assert.match(functionBody(serverSource, "buildXRhReply"), /holderLabel: holdersLabel/);
   assert.match(functionBody(serverSource, "buildXRhReply"), /changeTitle: ch\.title/);
-  assert.match(functionBody(serverSource, "renderRhScanCardPng"), /rhScanLogo\(info\)/);
+  assert.match(functionBody(serverSource, "renderRhScanCardPng"), /loadTelegramScanPfp/);
   assert.match(functionBody(serverSource, "recordTelegramCall"), /\^0x\[0-9a-fA-F\]\{40\}\$/);
   assert.match(functionBody(serverSource, "sendRhScanCard"), /recordTelegramCall\(message, address, info\.mc, info\.symbol\)/);
   assert.match(functionBody(serverSource, "sendRhScanCard"), /buildScanCallerFooter\(chatId, address, info\.mc, message\)/);
@@ -7085,7 +7085,7 @@ test("Ticker Truth favors the dominant exact market and explains same-symbol clo
   const rhSend = functionBody(serverSource, "sendRhScanCard");
   assert.match(rhSend, /rhTickerCandidateForTarget/);
   assert.match(rhSend, /Loading full safety, holders, ATH and socials/);
-  assert.match(rhSend, /sendPhoto\(chatId, "rh-scan\.jpg", quickPng/); // compressed circular-PFP card avoids Telegram upload timeout
+  assert.match(rhSend, /sendTelegramScanPhoto\(chatId, "rh-scan\.jpg", quickPng/); // clean compressed PFP, with caption limits handled centrally
   assert.match(rhSend, /editRhScanTelegramCard/);                    // same card upgrades even when Telegram rejects a media replacement
   assert.match(rhSend, /const cachedComplete = Boolean/);            // only a complete cached card can skip progressive enrichment
   assert.match(rhSend, /mergeRhScanWithTickerCandidate/);             // ticker market facts survive a thin full refresh
@@ -7119,9 +7119,9 @@ test("Ticker Truth favors the dominant exact market and explains same-symbol clo
   assert.match(rhSend, /Live providers did not return/);              // exhausted retries end honestly instead of saying "checking" forever
   assert.match(rhSend, /await sleep\(5_000\)/);                       // a settling pass refreshes late PFP + provider fields on the same card
   const rhEdit = functionBody(serverSource, "editRhScanTelegramCard");
-  assert.match(rhEdit, /editMessagePhotoBuffer/);
-  assert.match(rhEdit, /editMessageCaption/);                          // failed image edits still replace the caption's placeholders
-  assert.match(functionBody(serverSource, "renderRhScanCardPng"), /jpeg\(\{ quality: 88/); // high-grain PNG is compressed before TG upload
+  assert.match(rhEdit, /editTelegramScanPhoto/);
+  assert.match(rhEdit, /editTelegramScanCaption/);                      // failed image edits still replace the caption's placeholders
+  assert.match(functionBody(serverSource, "renderRhScanCardPng"), /loadTelegramScanPfp/); // shared bounded/cache-backed JPEG artwork loader
   assert.match(functionBody(serverSource, "sendPhoto"), /telegramPhotoUpload/);              // MIME/extension match JPEG bytes
   const geckoPool = new Function("firstString", "firstMeaningfulNumber", "rhFiniteNumber", `return function(data, address) {${functionBody(serverSource, "rhGeckoPoolForToken")}}`)(
     (...values) => String(values.find((value) => String(value || "").trim()) || ""),
@@ -7166,7 +7166,7 @@ test("Ticker Truth favors the dominant exact market and explains same-symbol clo
   assert.match(deliverSol, /slimeScanSafetyProofReady\(scan\) && !slimeScanHardTradeRisk\(scan\)[\s\S]*queueScanCopyFromResolvedScan/);
   const lookSol = functionBody(serverSource, "handleTelegramLookCommand");
   assert.doesNotMatch(lookSol, /queueScanCopyFromResolvedScan\(message, mint/);
-  assert.match(functionBody(serverSource, "renderSolScanCardPng"), /xFallbackLogoBuffer/); // every Sol card gets a circular PFP shell
+  assert.doesNotMatch(functionBody(serverSource, "renderSolScanCardPng"), /xFallbackLogoBuffer/); // never substitute a badge for the coin's real PFP
 });
 
 test("X growth engine: broadcast-gated proactive posts + receipts + KOL responder + scorecard, tracking always on", () => {
