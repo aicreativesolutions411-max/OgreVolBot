@@ -11,6 +11,7 @@ import {feeSetupSubmissionDisposition} from '../src/lib/launchUtilityRecovery.js
 import {pumpFeeSharingSetupFundingTarget} from '../src/lib/pumpRewardDurability.js';
 import {normalizeHolderAlliance,allocateHolderCycle,HOLDER_CADENCE_MS,HOLDER_MIN_PAYOUT,HOLDER_VAULT_RESERVE,HOLDER_ALLIANCE_CONSENT_VERSION} from '../src/lib/holderAlliance.js';
 import {settleHolderBatch} from '../src/lib/holderAllianceSettlement.js';
+import {readHolderCommunities} from '../src/lib/holderAllianceSnapshot.js';
 const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
 const code=source.slice(source.indexOf('async function reconcileLaunchAlliance('),source.indexOf('function pumpHolderRewardEffectiveShareBps('));
 
@@ -57,6 +58,7 @@ function fixture({auto=true,active=true}={}) {
     buildPumpFeeSharingDistributionInstructions:async()=>({sharingConfig:config,instructions:[SystemProgram.transfer({fromPubkey:creator.publicKey,toPubkey:partner,lamports:1})]}),
     audit:async()=>{}
   };
+  context.readHolderCommunities=(mint,policy,options)=>readHolderCommunities(mint,policy,{...options,read:(...args)=>context.readHolderSnapshot(...args)});
   const sandbox=vm.createContext(context);vm.runInContext(code,sandbox);
   return {creator,partner,connection,calls,context:sandbox,get record(){return record;},set record(value){record=value;},set config(value){config=value;},get config(){return config;},setup:()=>sandbox.reconcileLaunchAlliance(record),distribute:options=>sandbox.distributeLaunchAlliance(record,options)};
 }
@@ -77,6 +79,15 @@ test('actual holder integration pays both community allocations once and respect
   const f=holderFixture();await f.distribute({force:true});assert.equal(f.calls.sends,1);assert.equal(f.record.holderAllianceLedger.paidLamports,'8000000');
   assert.equal(f.record.holderAllianceLedger.lastSnapshot.own.count,1);assert.equal(f.record.holderAllianceLedger.lastSnapshot.partner.count,1);
   await f.distribute({force:true});assert.equal(f.calls.sends,1,'manual refresh must not create an early snapshot');
+});
+
+test('actual own-community integration pays without querying a partner and retains finalized receipts',async()=>{
+  const f=holderFixture();f.record.launchUtility=normalizeHolderAlliance({...f.record.launchUtility,ownHolderShareBps:8000,partnerHolderShareBps:0,partnerMint:''});
+  const calls=[];f.context.readHolderSnapshot=async mint=>{calls.push(mint);return {slot:100,priceUsd:'1',capturedAt:Date.now(),holders:[{wallet:f.creator.publicKey.toBase58(),amount:'1'}]};};
+  await f.distribute({force:true});
+  assert.equal(calls.length,1);assert.equal(f.calls.sends,1);assert.equal(f.record.holderAllianceLedger.paidLamports,'8000000');
+  assert.equal(f.record.holderAllianceLedger.lastSnapshot.partner,null);
+  await f.distribute({force:true});assert.equal(f.calls.sends,1);
 });
 test('actual holder integration fails closed before allocation when either snapshot fails',async()=>{
   const f=holderFixture();let calls=0;f.context.readHolderSnapshot=async()=>{if(++calls===2)throw Error('incomplete partner');return {holders:[{wallet:f.creator.publicKey.toBase58(),amount:'1'}],capturedAt:Date.now()};};

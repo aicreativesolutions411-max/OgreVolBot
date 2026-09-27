@@ -14,7 +14,7 @@ test('launch cards escape user metadata, retain ticker, reject unsafe images and
   const card = ui.cardHtml(c);
   assert.ok(card.includes('&lt;img')); assert.ok(card.includes('$BOUNCE'));
   assert.ok(!card.includes('<img src=x')); assert.ok(!card.includes('javascript:'));
-  assert.ok(card.includes('/t?ca=' + mint)); assert.ok(card.includes('data-copy="' + mint + '"'));
+  assert.ok(card.includes('https://dexscreener.com/solana/' + mint)); assert.ok(card.includes('data-copy="' + mint + '"'));
   assert.equal(ui.coinModel({ mint: 'not-a-contract' }), null);
   assert.equal(ui.chartUrl('"><script>'), '');
 });
@@ -83,6 +83,14 @@ function boot({ hash = '', token = '', response = { ok: true, launches: [] }, st
   return { nodes, requests, storageReads, events, sandbox };
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('saved launch templates contain identity and route only, never wallet or spending approval',()=>{
+  const result=ui.templateDraft({name:'Saved',symbol:'SAVE',mode:'holder_self',wallet:'secret',consentVersion:'approved',amount:100,launchAttemptId:'original'});
+  assert.deepEqual(Object.keys(result),['name','symbol','description','mode']);
+  assert.equal(result.mode,'holder_self');
+  assert.equal(new URL(ui.draftUrl(result),'https://slimewire.org').searchParams.get('lc_utility'),'holder_self');
+  assert.equal(ui.coinModel({mint,launchUtility:{mode:'holder_alliance'}}).rewardMode,'holder_alliance');
+});
 test('public explore loads once without touching account or paid RPC endpoints', async () => {
   const b = boot({ response: { ok: true, launches: [{ mint, name: 'Bounce', symbol: 'BOUNCE' }] } }); await settle();
   assert.equal(b.requests.length, 1); assert.equal(b.storageReads.length, 0);

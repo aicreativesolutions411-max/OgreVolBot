@@ -4433,7 +4433,7 @@ test("min buy zero keeps every observed Solana and Robinhood buy in an ordered T
   assert.match(functionBody(serverSource, "groupBuyAlertRetryMs"), /telegramRetryAfterMs/);
   assert.match(queue, /groupBuyPacingDelayMs/);
   assert.match(queue, /dueGroupBuyOutboxItem/);
-  assert.match(rhPost, /tap Slime Chart below to open signed in/);
+  assert.match(rhPost, /charts open on DexScreener/);
 });
 
 test("Pump buy polling is fast, cursor-safe, and does not swallow a new coin's first buy", () => {
@@ -5589,11 +5589,11 @@ test("Sol/RH scan cards surface an in-chat Slime Chart, TG Buy, Web Buy, and cat
   assert.match(functionBody(serverSource, "funnelNoWallet"), /callback_data: "create_wallets"/);
   assert.match(functionBody(serverSource, "handleQuickBuyCallback"), /noWalletAckText\(await funnelNoWallet\(userId\)\)/);
   assert.match(functionBody(serverSource, "handleQuickBuyPresetCallback"), /noWalletAckText\(await funnelNoWallet\(userId\)\)/);
-  assert.match(functionBody(serverSource, "postGroupBuy"), /tap Slime Chart below to open signed in/);
+  assert.match(functionBody(serverSource, "postGroupBuy"), /charts open on DexScreener/);
   const rhBuy = functionBody(serverSource, "postGroupBuyRh");
   assert.match(rhBuy, /compactTradeCardKeyboard\(address, "b"\)/);
   assert.match(functionBody(serverSource, "sendRhScanCard"), /compactTradeCardKeyboard\(address, "s"\)/);
-  assert.match(rhBuy, /tap Slime Chart below to open signed in/);
+  assert.match(rhBuy, /charts open on DexScreener/);
   assert.doesNotMatch(serverSource, /function queueTelegramAutoScanChart/);
   assert.doesNotMatch(functionBody(serverSource, "handleTelegramLookCommand"), /tokenChartSnapshot|sendTokenChart/);
   assert.doesNotMatch(functionBody(serverSource, "sendRhScanCard"), /tokenChartSnapshot|sendTokenChart/);
@@ -7872,7 +7872,7 @@ test("launch participant invites are non-custodial, durable, idempotent, and res
 
 test("Pump launches can keep creator fees accrued for a later SlimeWire or wallet claim", () => {
   assert.match(serverSource, /function normalizeCreatorFeeClaimMode/);
-  assert.match(serverSource, /const creatorFeeClaimMode = normalizeCreatorFeeClaimMode\(body\.creatorFeeClaimMode\)/);
+  assert.match(serverSource, /const creatorFeeClaimMode = normalizeCreatorFeeClaimMode\(body\.creatorFeeClaimMode \?\? "manual"\)/);
   assert.match(serverSource, /creatorFeeClaimMode,/);
   const autoClaim = functionBody(serverSource, "processCreatorFeeAutoClaims");
   assert.match(autoClaim, /normalizeCreatorFeeClaimMode\(attempt\.creatorFeeClaimMode\) === "manual"/);

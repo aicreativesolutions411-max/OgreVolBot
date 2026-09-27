@@ -11,10 +11,10 @@
   <meta property="og:title" content="SlimeWire / Launch">
   <meta property="og:description" content="Your idea. Your community. Your launch.">
   <meta property="og:image" content="https://slimewire.org/assets/slimewire/launch/liquid-obsidian-v1.png">
-  <link rel="stylesheet" href="/launch-pad.css?v=20260927c">
+  <link rel="stylesheet" href="/launch-pad.css?v=20260928a">
   <link rel="preload" as="image" href="/assets/slimewire/launch/liquid-obsidian-v1.webp" fetchpriority="high">
   <script src="/config.js"></script>
-  <script src="/launch-pad.js?v=20260927d" defer></script>
+  <script src="/launch-pad.js?v=20260928a" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#explore">Skip to launches</a>
@@ -26,8 +26,7 @@
         <a href="#explore" data-view="explore" aria-current="page">Explore</a>
         <button type="button" data-dialog="create">Create</button>
         <a href="#mine" data-view="mine">My launches</a>
-        <button type="button" data-dialog="recipients">Recipients</button>
-        <button type="button" data-dialog="payments">Payments</button>
+        <button type="button" data-dialog="payments">Rewards</button>
       </nav>
       <a class="button button-outline wallet-link" href="/wallet"><span aria-hidden="true">▣</span> Open wallet <span class="arrow" aria-hidden="true">↗</span></a>
     </header>
@@ -42,10 +41,9 @@
       </section>
       <section class="discovery-bar" aria-label="Recipient routes and launch search">
         <div class="recipient-shortcuts">
-          <button class="route-chip active" type="button" data-route="wallet"><span aria-hidden="true">▣</span> Wallets</button>
-          <button class="route-chip" type="button" data-route="alliance"><span aria-hidden="true">◈</span> Community Alliance</button>
-          <button class="route-chip" type="button" data-route="holder_alliance"><span aria-hidden="true">◎</span> Holder Alliance · 3 shares</button>
-          <button class="route-chip" type="button" data-route="project"><span aria-hidden="true">◈</span> Projects</button>
+          <button class="route-chip active" type="button" data-start-mode="creator"><span aria-hidden="true">▣</span> Keep my fees</button>
+          <button class="route-chip" type="button" data-start-mode="holder_self"><span aria-hidden="true">◈</span> My community</button>
+          <button class="route-chip" type="button" data-start-mode="holder_alliance"><span aria-hidden="true">◎</span> Two communities</button>
         </div>
         <label class="search"><span aria-hidden="true">⌕</span><input type="search" id="launch-search" placeholder="Search coins or paste a CA" aria-label="Search launches by name, ticker or contract address" autocomplete="off"></label>
       </section>
@@ -55,27 +53,27 @@
           <p class="section-description" id="directory-description">Real Solana coins launched through SlimeWire. Listing is not an endorsement.</p>
           <div id="launch-status" class="feed-status" role="status" aria-live="polite">Loading launches…</div>
           <div class="coin-grid" id="coin-grid" aria-busy="true"></div>
-          <div class="feed-actions"><button class="button button-outline" id="show-more" type="button" hidden>Show more launches <span aria-hidden="true">↓</span></button><a class="text-link" href="/#trending">Explore all markets ↗</a></div>
+          <div class="feed-actions"><button class="button button-outline" id="show-more" type="button" hidden>Show more launches <span aria-hidden="true">↓</span></button><a class="text-link" href="https://dexscreener.com/solana" target="_blank" rel="noopener noreferrer">Explore markets on DexScreener ↗</a></div>
         </section>
         <aside class="rewards-column" aria-label="Creator rewards">
           <section class="glass-panel reward-panel">
             <div class="panel-heading"><span class="reward-icon" aria-hidden="true">↗</span><span>Creator rewards</span><span class="small-tag">SOL</span></div>
             <h2>Built to<br><span>give back.</span></h2>
-            <p>Keep creator fees in your wallet, or review the reward options when you launch.</p>
+            <p>Claim your creator fees when you want. Or share with your holders and another community, twice daily.</p>
             <ol class="reward-steps"><li><span>01</span><div><b>Launch your idea</b><small>Choose the creator wallet</small></div></li><li><span>02</span><div><b>Fees accrue from trading</b><small>Actual activity, not promised returns</small></div></li><li><span>03</span><div><b>Review &amp; claim</b><small>Balances and receipts in your wallet</small></div></li></ol>
             <a class="button button-primary" href="/wallet">Open rewards <span class="arrow" aria-hidden="true">↗</span></a>
-            <p class="panel-note">Rewards are wallet-wide. A claim may include fees from more than one coin.</p>
+            <p class="panel-note">Creator claims can cover multiple coins. Holder rewards have coin-specific receipts. No guaranteed returns.</p>
           </section>
-          <button type="button" class="provider-note" data-route="alliance"><span class="provider-x" aria-hidden="true">◈</span><span><b>Community Alliance</b><small>Two wallets. One permanent fee split.</small></span><span aria-hidden="true">↗</span></button>
+          <button type="button" class="provider-note" data-dialog="recipients"><span class="provider-x" aria-hidden="true">◈</span><span><b>Your community. Your split.</b><small>Simple choices. Transparent rewards.</small></span><span aria-hidden="true">↗</span></button>
         </aside>
       </div>
       <section class="feature-rail" aria-label="Launch tools">
-        <button type="button" data-feature="rewards"><span class="feature-icon" aria-hidden="true">◔</span><span><b>Reward options</b><small>Creator, Alliance &amp; holders</small></span><span class="feature-arrow" aria-hidden="true">↗</span></button>
+        <button type="button" data-dialog="recipients"><span class="feature-icon" aria-hidden="true">◔</span><span><b>Reward options</b><small>You, your holders &amp; another community</small></span><span class="feature-arrow" aria-hidden="true">↗</span></button>
         <button type="button" data-feature="bundle"><span class="feature-icon" aria-hidden="true">◇</span><span><b>Bundle buys</b><small>Wallets &amp; participant invites</small></span><span class="feature-arrow" aria-hidden="true">↗</span></button>
         <button type="button" data-feature="nft"><span class="feature-icon" aria-hidden="true">▱</span><span><b>Linked collections</b><small>Connect your coin &amp; community</small></span><span class="feature-arrow" aria-hidden="true">↗</span></button>
         <a href="/prelaunch"><span class="feature-icon" aria-hidden="true">↗</span><span><b>Build the anticipation</b><small>Prelaunch page &amp; allowlist</small></span><span class="feature-arrow" aria-hidden="true">↗</span></a>
       </section>
-      <details class="launch-faq"><summary>What can I launch with today? <span aria-hidden="true">+</span></summary><p>Launch a SOL-paired Pump coin with artwork and socials, creator rewards, SlimeWire holder rewards or a Community Alliance split, managed-wallet buys, participant invites and an optional NFT collection. Alliance buys run after the fee split confirms. All costs and irreversible choices are reviewed before launch.</p><p>X cash payouts, identity payments, stock/custom quote pairs, NFT floor buying and new Cashback coins are not enabled. They are removed from new launch choices. Existing coins, fee assignments and recovery records remain intact. An Alliance is a direct wallet split, not proof of partnership or individual-holder payments.</p></details>
+      <details class="launch-faq"><summary>What can I launch with today? <span aria-hidden="true">+</span></summary><p>Launch a SOL-paired Pump coin with artwork, socials, bundles, participant invites and an optional NFT collection. Keep your creator fees, reward your own community, or reward yours and another coin’s community. Holder snapshots run every 12 hours, with proportional rewards for wallets holding strictly more than $20. Missing data can delay payouts; small balances accumulate. A Community Alliance treasury wallet split remains an advanced option.</p><p>All fees and rewards here are in SOL. Another recipient community does not change the trading pair. Other crypto pairs, restricted stock-token pairs, X cash payouts, NFT floor buying and new Cashback coins are not enabled. Existing claims and recovery records remain intact. Naming a community is not proof of partnership.</p></details>
     </main>
     <footer><a class="footer-brand" href="/">SLIMEWIRE</a><p>Create deliberately. Trade responsibly. No guaranteed earnings.</p><div><a href="https://t.me/slimewireupdates" target="_blank" rel="noopener noreferrer">Updates ↗</a><a href="https://t.me/SlimeWireLounge" target="_blank" rel="noopener noreferrer">Community ↗</a><a href="/launch-on-slimewire-guide">Launch guide ↗</a></div></footer>
   </div>

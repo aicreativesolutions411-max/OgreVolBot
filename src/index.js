@@ -117,7 +117,9 @@ import { allianceShareholders, allianceConfigMatches } from "./lib/launchAllianc
 import { settleLaunchAlliance, publicAllianceSettlement } from "./lib/launchAllianceSettlement.js";
 import { normalizeHolderAlliance, allocateHolderCycle, publicHolderLedger, HOLDER_CADENCE_MS, HOLDER_MIN_PAYOUT, HOLDER_VAULT_RESERVE } from "./lib/holderAlliance.js";
 import { settleHolderBatch } from "./lib/holderAllianceSettlement.js";
-import { readHolderSnapshot } from "./lib/holderAllianceSnapshot.js";
+import { readHolderSnapshot, readHolderCommunities } from "./lib/holderAllianceSnapshot.js";
+import { buildLaunchRewardReport, holderEligibilityReport } from "./lib/launchRewardReport.js";
+import { hasManualCreatorFees } from "./lib/creatorClaimPolicy.js";
 import {
   PUMP_TOKEN_PROGRAM_ID,
   PUMP_WRAPPED_SOL_MINT,
@@ -10139,6 +10141,20 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/launch/rewards") {
+      try {
+        const mint = new PublicKey(requestUrl.searchParams.get("mint") || "").toBase58();
+        const wallet = requestUrl.searchParams.get("wallet") || "";
+        if (wallet) new PublicKey(wallet); // Validate before storage reads; no RPC.
+        const store = await readPumpLaunchAttempts();
+        const attempt = [...(store.attempts || [])].reverse().find(a => a.tokenMint === mint && a.status === "COMPLETE");
+        const report = buildLaunchRewardReport(attempt);
+        if (!report) { sendWebJson(request, response, 404, { ok: false, error: "No completed SlimeWire launch found for this coin." }); return; }
+        sendCachedWebJson(request, response, 200, { ok: true, report, ...(wallet ? { eligibility: holderEligibilityReport(attempt, wallet) } : {}) }, wallet ? "private, no-store" : "public, max-age=30");
+      } catch { sendWebJson(request, response, 400, { ok: false, error: "Rewards unavailable. Check the coin and optional Solana wallet address, then retry." }); }
+      return;
+    }
+
     // PUBLIC: wallet NFT -> playable Swamp champions. Only public wallet
     // metadata is read, and the response is capped/lightweight for game UX.
     if (request.method === "GET" && pathname === "/api/web/swamp-nfts") {
@@ -12681,7 +12697,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         if (body.feeRecipient === selected.wallet.publicKey) delete body.feeRecipient;
       }
       const review = reviewLiveLaunchUtility(body.launchUtility, body);
-      if (review.policy.mode === "holder_alliance" && review.available) {
+      if (review.policy.mode === "holder_alliance" && review.policy.partnerHolderShareBps > 0 && review.available) {
         try { await readHolderSnapshot(review.policy.partnerMint); }
         catch (error) { review.available = false; review.blockers.push(friendlyError(error)); }
       }
@@ -32450,12 +32466,12 @@ function launchUtilityPublic(attempt = {}) {
   if (!utilityRequiresFeeSharing(attempt)) return null;
   const state = attempt.pumpFeeSharing || {};
   if (attempt.launchUtility.mode === "holder_alliance") return {
-    ...normalizeHolderAlliance(attempt.launchUtility), launchAttemptId: pumpFeeSharingAttemptId(attempt),
+    ...normalizeHolderAlliance(attempt.launchUtility), launchAttemptId: pumpFeeSharingAttemptId(attempt), mint: pumpFeeSharingMint(attempt),
     status: state.status || "PENDING_SETUP", creatorAddress: attempt.devWalletPublicKey || "",
     vaultAddress: state.vaultAddress || "", signature: state.setupSignature || "", error: state.lastError || "",
     autoDistribute: attempt.allianceDistribution?.automaticPaused !== true, autoDistributionAuthorized: true,
     distribution: { ...publicHolderLedger(attempt.holderAllianceLedger), error: attempt.holderLastError || attempt.holderAllianceLedger?.lastError || "" }, feeDistribution: publicAllianceSettlement(attempt.allianceDistribution),
-    note: "Launcher + own holders + partner holders. Holder snapshots every 12 hours, strictly over $20; proportional SOL credits. Small payouts accumulate."
+    note: "Creator + selected communities. Holder snapshots every 12 hours, strictly over $20; proportional SOL credits. Small payouts accumulate."
   };
   if (attempt.launchUtility.mode === "alliance") return {
     mode: "alliance", launchAttemptId: pumpFeeSharingAttemptId(attempt), status: state.status || "PENDING_SETUP",
@@ -32741,9 +32757,7 @@ async function distributeHolderAlliance(initial) {
     const vault = attempt.pumpFeeSharing.vaultAddress;
     const balance = await connection.getBalance(new PublicKey(vault), "finalized");
     if (BigInt(balance) <= HOLDER_VAULT_RESERVE) return launchUtilityPublic(attempt);
-    const startedAt = Date.now();
-    const snapshots = { own: await readHolderSnapshot(mint, { excluded: [vault] }), partner: await readHolderSnapshot(policy.partnerMint, { excluded: [vault] }) };
-    if (Date.now() - startedAt > 60000 || Date.now() - snapshots.own.capturedAt > 60000) throw new Error("Holder snapshots took too long. Retrying without allocating partial data.");
+    const snapshots = await readHolderCommunities(mint, policy, { excluded: [vault] });
     ledger = allocateHolderCycle(ledger, { policy, balance: String(balance), snapshots });
     await save(ledger);
     await settleHolderBatch({ load, save, prepare, connection, paused: false });
@@ -34049,6 +34063,7 @@ async function processCreatorFeeAutoClaims() {
       const id = String(attempt.id || attempt.launchAttemptId || "");
       if (!mint || !userId || !walletKey || !id) continue;
       const groupKey = `${userId}:${walletKey}`;
+      if (hasManualCreatorFees(launchStore.attempts, userId, walletKey)) continue;
       if (claimedWallets.has(groupKey)) continue;
       const lastClaimAt = Date.parse(firstString(attempt.creatorFeesAutoClaimAt) || "") || 0;
       if (lastClaimAt && now - lastClaimAt < CONFIG.creatorFeesAutoClaimIntervalMs) continue;
@@ -35187,9 +35202,9 @@ const LAUNCH_FIELDS = {
   utilityPartnerName: { emoji: "◈", ask: "Send a community name for this Alliance (display label only, not verified affiliation).", max: 64 },
   utilityPartnerPercent: { emoji: "%", ask: "Send the community share of creator fees as a percentage from 1 to 99. Your creator wallet keeps the remainder. This split is permanent.", num: true },
   utilityPartnerMint: { emoji: "◈", ask: "Paste the other community’s Solana coin contract address. Holder Alliance pays its eligible holders, not the coin’s developer wallet.", max: 44 },
-  utilityCreatorPercent: { emoji: "%", ask: "Launcher share, whole percent (1–98). All three allocations must total 100%.", num: true },
-  utilityOwnPercent: { emoji: "%", ask: "Your new coin’s holder share, whole percent (1–98). All three allocations must total 100%.", num: true },
-  utilityHolderPartnerPercent: { emoji: "%", ask: "Other community’s holder share, whole percent (1–98). All three allocations must total 100%.", num: true },
+  utilityCreatorPercent: { emoji: "%", ask: "Your creator share, whole percent (1–99). All allocations must total 100%.", num: true },
+  utilityOwnPercent: { emoji: "%", ask: "Your new coin’s holder share, whole percent (0–99; 0 skips this community). All three allocations must total 100%.", num: true },
+  utilityHolderPartnerPercent: { emoji: "%", ask: "Other community’s holder share, whole percent (0–99; 0 skips this community). All three allocations must total 100%.", num: true },
   utilityXHandle: { emoji: "𝕏", ask: "Send the X handle for UsePaid payouts (for example @creator). This requires permanent 100% fee routing; it will be reviewed before launch.", max: 16 },
   utilityCollection: { emoji: "◆", ask: "Send the Magic Eden collection symbol (for example okay_bears). This is a read-only floor preview, not a purchase.", max: 100 },
   name: { emoji: "📝", ask: "Send your coin's NAME (e.g. Ogre Mode):", max: 32 },
@@ -35211,16 +35226,16 @@ function launchUtilityFromDraft(d) {
 async function showLaunchUtilityMenu(chatId, userId, messageId) {
   const d = launchDraftFor(chatId), caps = liveLaunchUtilityCapabilities();
   const mode = d.utilityMode || "creator";
-  const lines = ["◆ NFT & creator fees", "", `Fee choice: ${mode === "creator" ? "keep creator fees" : mode === "holder_alliance" ? "Holder Alliance · three shares" : mode === "alliance" ? "Community Alliance" : "saved route unavailable · select a supported option"}`,
-    ...(mode === "holder_alliance" ? [`${d.utilityCreatorPercent ?? 20}% launcher · ${d.utilityOwnPercent ?? 40}% own holders · ${d.utilityHolderPartnerPercent ?? 40}% partner holders`, `Partner: ${d.utilityPartnerName || "not set"}`, `Coin CA: ${d.utilityPartnerMint || "not set"}`, "Every 12 hours · holdings strictly over $20 · weighted by token balance. Rewards below 0.001 SOL accumulate. Complete snapshots required; max 2,000 eligible wallets per community. Launcher pays network costs; permanent percentages reviewed before launch."] : []),
+  const lines = ["◆ NFT & creator fees", "", `Fee choice: ${mode === "creator" ? "keep creator fees" : mode === "holder_alliance" ? (Number(d.utilityHolderPartnerPercent??40)>0?"Reward two communities":"Reward my community") : mode === "alliance" ? "Community Alliance" : "saved route unavailable · select a supported option"}`,
+    ...(mode === "holder_alliance" ? [`${d.utilityCreatorPercent ?? 20}% launcher · ${d.utilityOwnPercent ?? 40}% own holders · ${d.utilityHolderPartnerPercent ?? 40}% partner holders`, ...(Number(d.utilityHolderPartnerPercent??40)>0?[`Partner: ${d.utilityPartnerName || "not set"}`, `Coin CA: ${d.utilityPartnerMint || "not set"}`]:[]), "Every 12 hours · holdings strictly over $20 · weighted by token balance. Rewards below 0.001 SOL accumulate. Complete snapshots required; max 2,000 eligible wallets per community. Launcher pays network costs; permanent percentages reviewed before launch."] : []),
     `Create linked collection: ${d.nftEnabled ? "yes · coin art · up to 500 items · 5% royalty" : "no"}`,
     "", "Creating a collection does not redirect fees. Your launch wallet controls the collection and pays its extra rent/network costs. Add NFT items later in the NFT manager.",
     "", "Community Alliance permanently splits creator fees between your creator wallet and a community SOL wallet. It does not pay individual holders or X cash.",
     ...(mode === "alliance" ? [`${100-Number(d.utilityPartnerPercent || 50)}% creator / ${Number(d.utilityPartnerPercent || 50)}% community`, `Community: ${d.utilityPartnerName || "not set"}`, `Wallet: ${d.utilityPartnerWallet || "not set"}`, `Distribution: ${d.utilityAutoDistribute ? "daily when at least 0.001 SOL accrued" : "manual in My launches"}`, "Creator wallet pays network costs (max 0.0001 SOL per distribution) and needs a 0.003 SOL rent reserve."] : [])];
   await sendOrEditMessage(chatId, messageId, withBrandFooter(lines.join("\n")), { inline_keyboard: [
-    [{ text: "Keep creator fees", callback_data: "lb_utility:creator" }],
+    [{ text: "Keep my fees · claim when I want", callback_data: "lb_utility:creator" }],
     ...(caps.alliance.available ? [[{ text: "Community Alliance", callback_data: "lb_utility:alliance" }]] : []),
-    ...(caps.holderAlliance.available ? [[{ text: "Holder Alliance · me + both communities", callback_data: "lb_utility:holder_alliance" }]] : []),
+    ...(caps.holderAlliance.available ? [[{ text: "Reward my community", callback_data: "lb_utility:holder_self" }], [{ text: "Reward two communities", callback_data: "lb_utility:holder_alliance" }]] : []),
     ...(mode === "holder_alliance" ? [[{ text: "Partner coin CA", callback_data: "lb_edit:utilityPartnerMint" }, { text: "Community name", callback_data: "lb_edit:utilityPartnerName" }], [{ text: "My %", callback_data: "lb_edit:utilityCreatorPercent" }, { text: "Own holders %", callback_data: "lb_edit:utilityOwnPercent" }, { text: "Partner holders %", callback_data: "lb_edit:utilityHolderPartnerPercent" }]] : []),
     [{ text: d.nftEnabled ? "✓ Linked collection · turn off" : "+ Create linked collection", callback_data: "lb_nft_toggle" }],
     ...(mode === "alliance" ? [[{ text: "Community name", callback_data: "lb_edit:utilityPartnerName" }, { text: "Community wallet", callback_data: "lb_edit:utilityPartnerWallet" }], [{ text: "Fee split %", callback_data: "lb_edit:utilityPartnerPercent" }], ...(caps.alliance.autoDistributeAvailable ? [[{ text: d.utilityAutoDistribute ? "Daily payouts ✓ · change to manual" : "Enable daily distributions", callback_data: "lb_alliance_auto" }]] : [])] : []),
@@ -35315,7 +35330,7 @@ async function handleLaunchBuilder(chatId, userId, data, messageId) {
     return;
   }
   if (data === "lb_utility_menu") { await showLaunchUtilityMenu(chatId, userId, messageId); return; }
-  if (data.startsWith("lb_utility:")) { const mode = data.split(":")[1]; if (["creator", "alliance", "holder_alliance"].includes(mode)) launchDraftFor(chatId).utilityMode = mode; else await say(chatId, "That fee route is currently unavailable. Select creator fees or an Alliance."); await showLaunchUtilityMenu(chatId, userId, messageId); return; }
+  if (data.startsWith("lb_utility:")) { const mode = data.split(":")[1]; if (["creator", "alliance", "holder_alliance", "holder_self"].includes(mode)) { const draft=launchDraftFor(chatId);draft.utilityMode=mode==='holder_self'?'holder_alliance':mode; if(mode==='holder_self'){draft.utilityCreatorPercent=20;draft.utilityOwnPercent=80;draft.utilityHolderPartnerPercent=0;draft.utilityPartnerMint='';draft.utilityPartnerName='';}else if(mode==='holder_alliance'&&Number(draft.utilityHolderPartnerPercent||0)===0){draft.utilityCreatorPercent=20;draft.utilityOwnPercent=40;draft.utilityHolderPartnerPercent=40;} } else await say(chatId, "That fee route is currently unavailable. Select creator fees or community rewards."); await showLaunchUtilityMenu(chatId, userId, messageId); return; }
   if (data === "lb_alliance_auto") { const d = launchDraftFor(chatId); d.utilityAutoDistribute = !d.utilityAutoDistribute; await showLaunchUtilityMenu(chatId, userId, messageId); return; }
   if (data === "lb_nft_toggle") { const d = launchDraftFor(chatId); d.nftEnabled = !d.nftEnabled; await showLaunchUtilityMenu(chatId, userId, messageId); return; }
   if (data === "lb_utility_preview") {
@@ -35451,6 +35466,7 @@ async function executeBotLaunchReviewed(chatId, userId, messageId, confirmationI
     imageDataUrl: d.imageDataUrl || "", imageName: d.imageName || "",
     devBuyEnabled: Number(d.devBuySol) > 0, devBuySol: String(d.devBuySol || "0"),
     devExitStrategy: telegramLaunchExitStrategy(d.autoExitX),
+    creatorFeeClaimMode: "manual",
     launchUtility: { ...launchUtilityFromDraft(d), consentVersion: utilityReview.consentVersion },
     nftCollection: { enabled: d.nftEnabled === true, supplyMode: "expandable", supplyCap: 500, royaltyBps: 500, useCoinArt: true },
     selectedDevWalletId: wid, slippageBps: 300, launchAttemptId: d.confirmation.id, source: "slimewire_tg"
@@ -46047,9 +46063,9 @@ function slimewireTokenLinks(tokenMint) {
   const receipts = slimewirePublicUrl("/receipts", { ca: tokenMint, source: "telegram" });
   const symbolText = shortMint(tokenMint);
   return {
-    site: slimewireCoinRouteUrl(tokenMint),
+    site: dexScreenerUrl(tokenMint),
     siteBuy: slimewireCoinRouteUrl(tokenMint, { buy: true }),
-    telegramSiteLogin: slimewireTelegramLoginUrl(tokenMint),
+    telegramSiteLogin: "", // External charts do not need a SlimeWire login; buys still do.
     telegramSiteBuyLogin: slimewireTelegramLoginUrl(tokenMint, { buy: true }),
     telegramQuickLogin: slimewireTelegramLoginUrl(tokenMint, { buy: true, quick: true }),
     // `/fun?quick=1` is an existing static-host route, so Telegram never falls through
@@ -66069,7 +66085,7 @@ async function postGroupBuy(mint, { eventKey = "", eventAlias = "", detectedAt =
       ].filter(Boolean);
     }
     if (e.customText) lines.unshift(`<b>${escapeTelegramHtml(String(e.customText).slice(0, 160))}</b>`);
-    lines.push(`<b>SLIMEWIRE</b> · tap Slime Chart below to open signed in`);
+    lines.push(`<b>SLIMEWIRE</b> · charts open on DexScreener · trading stays in SlimeWire`);
     const queued = queueGroupBuyAlert(
       chatId,
       groupAlertMediaFor(e, defImg),
@@ -66219,7 +66235,7 @@ async function postGroupBuyRh(address, { ethAmount = 0, quoteAmount = 0, spotPri
       `🏷 Price <b>${priceUsd > 0 ? fmtPx(priceUsd) : "n/a"}</b>${Number.isFinite(info?.ch24) ? ` · ${info.ch24 >= 0 ? "🟢 +" : "🔴 "}${Math.round(info.ch24)}% 24h` : " · 24h n/a"}`,
       `〽️ MC <b>${marketCapUsd > 0 ? fmtUsd0(marketCapUsd) : "checking"}</b> · Liq <b>${info?.liq > 0 ? fmtUsd0(info.liq) : "checking"}</b> · 24h Vol <b>${info?.vol24 > 0 ? fmtUsd0(info.vol24) : "checking"}</b>`,
       holderLine,
-      `<b>SLIMEWIRE</b> · tap Slime Chart below to open signed in`,
+      `<b>SLIMEWIRE</b> · charts open on DexScreener · trading stays in SlimeWire`,
     ].filter(Boolean);
     if (e.customText) lines.unshift(`<b>${escapeTelegramHtml(String(e.customText).slice(0, 160))}</b>`);
     const queued = queueGroupBuyAlert(
@@ -77302,6 +77318,9 @@ async function webClaimCreatorFeesCore(userId, body = {}) {
     };
   }
   if (rail === "pump") {
+    if (body.autoClaim === true && hasManualCreatorFees((await readPumpLaunchAttempts()).attempts, userId, wallet.publicKey)) {
+      throw new Error("Automatic claim paused: this creator wallet also has a manual-claim coin. Claim its wallet-wide fees manually in Wallet.");
+    }
     const claim = await webClaimPumpRewardsCore(userId, {
       walletIndex: parseWebWalletIndex(body.walletIndex),
       kind: "creator"
@@ -104586,7 +104605,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
   }
 
   const creatorFeeBps = cleanLaunchNumber(body.creatorFeeBps, 0, 0, 1000);
-  const creatorFeeClaimMode = normalizeCreatorFeeClaimMode(body.creatorFeeClaimMode);
+  const creatorFeeClaimMode = normalizeCreatorFeeClaimMode(body.creatorFeeClaimMode ?? "manual");
   const devBuyAmountSol = cleanLaunchNumber(body.devBuySol, 0, 0, 1000);
   // The amount is authoritative. Older/newer clients may omit or desync the UI
   // enable flag, but a positive amount must never become a launch without a dev buy.
@@ -104642,7 +104661,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
     if (creatorFeeRecipient === selected.wallet.publicKey) { delete utilityContext.creatorFeeRecipient; delete utilityContext.feeRecipient; }
     // Verify complete free holder enumeration and pricing BEFORE minting or
     // spending anything. Never substitute a top-holder list on quota failure.
-    await readHolderSnapshot(body.launchUtility.partnerMint);
+    if (body.launchUtility.partnerHolderShareBps > 0) await readHolderSnapshot(body.launchUtility.partnerMint);
   }
   const utilityReview = assertLaunchUtilityReady(body.launchUtility, utilityContext);
   const liveUtilityReview = reviewLiveLaunchUtility(body.launchUtility, utilityContext);

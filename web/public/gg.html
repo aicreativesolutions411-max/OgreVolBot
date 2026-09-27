@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script src="/chart-links.js?v=20260928a"></script>
 <script>
   (() => {
     const match = location.pathname.match(/^\/ca\/([^/?#]+)/i);
@@ -14,6 +15,7 @@
   // links (/?ref=CODE) and deep links keep working on /fun.
   (() => {
     try {
+      if(window.__slimeExternalChartRedirect)return;
       const q = new URLSearchParams(location.search);
       if (q.get("bundleInvite")) return; // focused invite flow is already phone-friendly
       // Fun hands mobile users to this full launcher explicitly. Let that one
@@ -4948,8 +4950,8 @@
     return '<div class="launch-section-title">Pump reward mode</div><div class="reward-mode-grid" role="radiogroup" aria-label="Pump reward mode">'+
       '<label class="reward-mode"><input type="radio" name="lcRewardMode" id="lcRewardCreator" value="creator" checked><span><b>Creator rewards</b><small>Default. Pump creator fees accrue to the selected dev wallet.</small></span></label>'+
       '<label class="reward-mode" hidden><input type="radio" name="lcRewardMode" id="lcRewardCashback" value="cashback" disabled><span><b>Pump Cash back</b><small>Permanent at creation. Traders earn by eligible trading volume.</small></span></label>'+
-      '<label class="reward-mode"><input type="radio" name="lcRewardMode" id="lcRewardHolders" value="holders"><span><b>SlimeWire holder rewards</b><small>Batch a chosen share of creator fees to eligible holders.</small></span></label></div>'+
-      '<div id="lcCreatorRewardFields"><div class="launch-summary"><span class="mark">%</span><div><b>Creator fees are automatic by default.</b><br><span class="mut">They accrue to this wallet. Claimable Pump and PumpSwap balances appear wallet-wide in Wallet and Your launches.</span></div></div><label class="lcheck"><input type="checkbox" id="lcCreatorFeesManual"> <span><b>Let Pump creator fees accumulate</b> - skip automatic claims for this launch. Claim later in SlimeWire, or use the backed-up creator wallet directly.</span></label></div>'+
+      '<label class="reward-mode" hidden><input type="radio" name="lcRewardMode" id="lcRewardHolders" value="holders"><span><b>SlimeWire holder rewards</b><small>Batch a chosen share of creator fees to eligible holders.</small></span></label></div>'+
+      '<div id="lcCreatorRewardFields"><div class="launch-summary"><span class="mark">%</span><div><b>Your creator fees. Claim when you want.</b><br><span class="mut">They accrue to this wallet. Claimable Pump and PumpSwap balances appear wallet-wide in Wallet and Your launches.</span></div></div><label class="lcheck"><input type="checkbox" id="lcCreatorFeesManual" checked> <span><b>Let Pump creator fees accumulate</b> - skip automatic claims for this launch. Claim later in SlimeWire, or use the backed-up creator wallet directly.</span></label></div>'+
       '<div id="lcCashbackRewardFields" class="feebox" style="display:none"><b>Pump Cash back is permanent for this coin.</b><div class="ln mut">Eligible traders earn from volume through Pump. The creator cannot switch this coin back later or manually claim the fees redirected to Cash back.</div></div>'+
       '<div id="lcHolderRewardFields" class="feebox" style="display:none"><b>SlimeWire holder rewards</b><div class="field row2" style="margin-top:8px"><div><label style="font-size:11px">Fee split</label><select id="lcHolderRewardShare"><option value="5000">Half to holders</option><option value="10000">All to holders</option></select></div><div><label style="font-size:11px">Hold rule</label><input id="lcHolderRewardMinHours" inputmode="numeric" value="4" placeholder="hours"></div><div><label style="font-size:11px">Minimum tokens</label><input id="lcHolderRewardMinTokens" inputmode="numeric" value="3000000"></div><div><label style="font-size:11px">Holders per payout</label><input id="lcHolderRewardMax" inputmode="numeric" value="18" max="18"></div><div><label style="font-size:11px">Distribute after rewards reach (SOL)</label><input id="lcHolderRewardMinPayout" inputmode="decimal" value="0.01" min="0.005" step="0.005"></div></div><div class="ln mut" style="font-size:10px">Fees accrue until one economical holder payout is ready. No token tax or transfer trap.</div></div>';
   }
@@ -5366,7 +5368,7 @@
     lcRestore();syncNft();   // re-fill fields + image previews from state right after the rebuild
     const utilityRequest=async(body)=>{const r=await jpost("/api/web/launch/utility/review",body);if(!r.ok||!r.d?.ok)throw new Error(r.d?.message||r.d?.error||"Connect your SlimeWire account to review this utility.");return r.d;};
     const utilityContext=()=>({devWalletIndex:$("#lcDevWallet")?.value||state.activeWallet,rail:state.launchRail||"pump",pumpCashback:lcRewardMode()==="cashback",holderRewards:lcReadHolderRewards("lc"),creatorFeeSplit:$("#lcPromo")?.checked?[{enabled:true}]:[]});
-    const syncUtilityHints=()=>{const on=["usepaid","alliance"].includes(SlimeLaunchUtility.read("lcUtility").mode);$("#v-launch").classList.toggle("usepaid-route",on);const host=$("#lcDevSol");let note=$("#lcUsePaidHint");if(host&&!note){note=document.createElement("div");note.id="lcUsePaidHint";note.className="launch-summary";host.prepend(note);}if(note){note.hidden=!on;note.textContent="Community Alliance: fees follow the reviewed permanent wallet split. Keep Creator rewards selected; holder rewards and promoter shares cannot be combined. Dev and bundle buys run after fee setup confirms, not atomically with the mint.";}const bundle=$("#lcBundle");if(bundle)bundle.disabled=on;};
+    const syncUtilityHints=()=>{const on=["usepaid","alliance","holder_alliance"].includes(SlimeLaunchUtility.read("lcUtility").mode);$("#v-launch").classList.toggle("usepaid-route",on);const host=$("#lcDevSol");let note=$("#lcUsePaidHint");if(host&&!note){note=document.createElement("div");note.id="lcUsePaidHint";note.className="launch-summary";host.prepend(note);}if(note){note.hidden=!on;note.textContent="Community rewards: fees follow the reviewed permanent split. Legacy holder rewards and promoter shares cannot be combined. Dev and bundle buys run after fee setup confirms, not atomically with the mint.";}const bundle=$("#lcBundle");if(bundle)bundle.disabled=on;const creatorFields=$("#lcCreatorRewardFields");if(creatorFields)creatorFields.hidden=on;};
     SlimeLaunchUtility.wire("lcUtility",{request:utilityRequest,context:utilityContext,onChange:()=>{lcSnapshot();syncUtilityHints();}});syncUtilityHints();
     $("#lcGo").onclick=async()=>{
       if(state.launchActiveAttemptId){pollLaunchProgress(state.launchActiveAttemptId,$("#lcGo"));return;}

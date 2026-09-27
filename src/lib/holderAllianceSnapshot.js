@@ -4,6 +4,17 @@ import { eligibleHolderBalances } from './holderAlliance.js';
 const {PUMP_SDK,PUMP_PROGRAM_ID,bondingCurvePda}=createRequire(import.meta.url)('@pump-fun/pump-sdk');
 const SOL='So11111111111111111111111111111111111111112';
 const PROGRAMS=new Set(['TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA','TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb']);
+// Never spend RPC on an unused community. Both active snapshots must finish
+// successfully and be fresh before callers may allocate any funds.
+export async function readHolderCommunities(mint,policy,{read=readHolderSnapshot,excluded=[],now=Date.now}={}){
+  const started=now();
+  const [own,partner]=await Promise.all([
+    policy.ownHolderShareBps>0?read(mint,{excluded}):null,
+    policy.partnerHolderShareBps>0?read(policy.partnerMint,{excluded}):null
+  ]);
+  if(now()-started>60000||[own,partner].some(s=>s&&(!Number.isFinite(s.capturedAt)||now()-s.capturedAt>60000)))throw new Error('Holder snapshots took too long. Retrying without allocating partial data.');
+  return {own,partner};
+}
 export function pumpCurveUsdPrice(curve,decimals,solUsd){
   if(!curve||curve.complete||curve.isMayhemMode||!Number.isInteger(decimals)||decimals<0||decimals>18)throw new Error('No supported active Pump curve price.');
   if(!curve.quoteMint?.equals(PublicKey.default)&&curve.quoteMint?.toBase58()!==SOL)throw new Error('Only SOL-quoted Pump curves are supported.');

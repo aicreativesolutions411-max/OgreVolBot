@@ -4,12 +4,16 @@ export const HOLDER_CADENCE_MS=12*60*60*1000;
 export const HOLDER_MIN_PAYOUT=1000000n;
 export const HOLDER_VAULT_RESERVE=1000000n;
 export function normalizeHolderAlliance(input={}) {
-  let mint;try{mint=new PublicKey(input.partnerMint);}catch{throw new Error('Enter the partner community’s Solana coin address.');}
-  if(mint.equals(PublicKey.default)||mint.toBase58()==='So11111111111111111111111111111111111111112')throw new Error('Choose a community token, not native SOL or a burn address.');
   const keys=['creatorShareBps','ownHolderShareBps','partnerHolderShareBps'];
   const shares=keys.map(k=>Number(input[k]));
-  if(shares.some(v=>!Number.isSafeInteger(v)||v<100||v>9800||v%100!==0)||shares.reduce((a,b)=>a+b,0)!==10000)throw new Error('Launcher, own holders and partner holders must each receive at least 1%, in whole percentages totaling 100%.');
-  return {version:1,mode:'holder_alliance',partnerMint:mint.toBase58(),partnerName:String(input.partnerName||'Partner community').trim().slice(0,64),...Object.fromEntries(keys.map((k,i)=>[k,shares[i]])),minimumUsd:20,cadenceMs:HOLDER_CADENCE_MS,autoDistribute:true,consentVersion:String(input.consentVersion||'')};
+  if(shares.some(v=>!Number.isSafeInteger(v)||v<0||v>9900||v%100!==0)||shares[0]<100||shares.reduce((a,b)=>a+b,0)!==10000)throw new Error('Use whole percentages totaling 100%. Keep at least 1% for the creator and 1% for holders; an unused community can receive 0%.');
+  let partnerMint='';
+  if(shares[2]>0){
+    let mint;try{mint=new PublicKey(input.partnerMint);}catch{throw new Error('Enter the partner community’s Solana coin address.');}
+    if(mint.equals(PublicKey.default)||mint.toBase58()==='So11111111111111111111111111111111111111112')throw new Error('Choose a community token, not native SOL or a burn address.');
+    partnerMint=mint.toBase58();
+  }
+  return {version:1,mode:'holder_alliance',partnerMint,partnerName:partnerMint?String(input.partnerName||'Partner community').trim().slice(0,64):'',...Object.fromEntries(keys.map((k,i)=>[k,shares[i]])),minimumUsd:20,cadenceMs:HOLDER_CADENCE_MS,autoDistribute:true,consentVersion:String(input.consentVersion||'')};
 }
 function fraction(value){
   const m=String(value).match(/^(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i);
@@ -36,6 +40,7 @@ export function allocateHolderCycle(state,{policy,balance,snapshots,now=Date.now
   policy=normalizeHolderAlliance(policy);
   if(state.lastSnapshotAt&&now-state.lastSnapshotAt<HOLDER_CADENCE_MS)throw new Error('Holder snapshots are at least 12 hours apart.');
   if(state.pending||state.retryRows)throw new Error('Reconcile the previous payout before a new snapshot.');
+  if((!policy.ownHolderShareBps&&BigInt(state.carryOwn||0)>0n)||(!policy.partnerHolderShareBps&&BigInt(state.carryPartner||0)>0n))throw new Error('An inactive allocation has reserved rewards. Reconcile the original policy first.');
   const available=BigInt(balance)-holderLiabilities(state)-HOLDER_VAULT_RESERVE;
   if(available<0n)throw new Error('Vault balance does not cover its reserved holder rewards. No new allocation made.');
   const combined=BigInt(policy.ownHolderShareBps+policy.partnerHolderShareBps);
@@ -51,10 +56,12 @@ export function allocateHolderCycle(state,{policy,balance,snapshots,now=Date.now
       if(award){credits[row.wallet]=String(BigInt(credits[row.wallet]||0)+award);left-=award;}
     }return String(left);
   };
-  const carryOwn=distribute(own+BigInt(state.carryOwn||0),snapshots.own);
-  const carryPartner=distribute(partner+BigInt(state.carryPartner||0),snapshots.partner);
+  const carryOwn=policy.ownHolderShareBps?distribute(own+BigInt(state.carryOwn||0),snapshots.own):'0';
+  const carryPartner=policy.partnerHolderShareBps?distribute(partner+BigInt(state.carryPartner||0),snapshots.partner):'0';
+  const summary=s=>s?{slot:s.slot,priceUsd:s.priceUsd,count:s.holders.length}:null;
   return {...state,version:1,credits,carryOwn,carryPartner,lastSnapshotAt:now,status:'ALLOCATED',lastError:'',
     allocatedLamports:String(BigInt(state.allocatedLamports||0)+available),
-    lastSnapshot:{at:new Date(now).toISOString(),newLamports:String(available),own:{slot:snapshots.own.slot,priceUsd:snapshots.own.priceUsd,count:snapshots.own.holders.length},partner:{slot:snapshots.partner.slot,priceUsd:snapshots.partner.priceUsd,count:snapshots.partner.holders.length}}};
+    lastEligibility:{own:policy.ownHolderShareBps?snapshots.own.holders.map(r=>r.wallet):[],partner:policy.partnerHolderShareBps?snapshots.partner.holders.map(r=>r.wallet):[]},
+    lastSnapshot:{at:new Date(now).toISOString(),newLamports:String(available),own:policy.ownHolderShareBps?summary(snapshots.own):null,partner:policy.partnerHolderShareBps?summary(snapshots.partner):null}};
 }
 export function publicHolderLedger(state={}){return {status:state.status||'ACCUMULATING',error:state.lastError||'',paidLamports:state.paidLamports||'0',owedLamports:String(holderLiabilities(state)),lastSnapshot:state.lastSnapshot||null,nextSnapshotAt:state.lastSnapshotAt?new Date(state.lastSnapshotAt+HOLDER_CADENCE_MS).toISOString():'',receiptCount:state.receiptCount||0,receipts:(state.receipts||[]).slice(-20),signature:state.pending?.signature||state.receipts?.at(-1)?.signature||''};}

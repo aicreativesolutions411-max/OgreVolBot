@@ -109,3 +109,4 @@ body[data-sw-surface="terminal"]:has(#v-launch.on) #v-launch .wbtn.ghost{border:
 body.fun-launch-embed .sw-launch-navigation,body.fun-tool-embed .sw-launch-navigation{display:none!important}
 body.fun-launch-embed #v-launch .launch-card{margin:0!important;max-width:none!important}
 @media(prefers-reduced-motion:reduce){.sw-wallet-link,.sw-site-nav a{transition:none;animation:none}}
+html[data-sw-design="launch-workspace"] #v-launch .reward-mode[hidden]{display:none!important}
