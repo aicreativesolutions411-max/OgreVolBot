@@ -10,8 +10,9 @@ import {
 test("Alliance and legacy UsePaid intent and receipts survive ordinary launch-history compaction", () => {
   const alliance = {id:'alliance',launchUtility:{mode:'alliance'},allianceDistribution:{pending:{signature:'signed'},receipts:[{signature:'paid'}]}};
   const paid = {id:'paid',launchUtility:{mode:'usepaid'}};
-  const result=compactPumpRewardStore({attempts:[alliance,paid,{id:'ordinary'}]}, {launchHistoryLimit:1});
-  assert.deepEqual(result.attempts,[alliance,paid,{id:'ordinary'}]);
+  const holders = {id:'holders',launchUtility:{mode:'holder_alliance'},holderAllianceLedger:{credits:{wallet:'1000'},pending:{signature:'pending'}}};
+  const result=compactPumpRewardStore({attempts:[alliance,paid,holders,{id:'ordinary'}]}, {launchHistoryLimit:1});
+  assert.deepEqual(result.attempts,[alliance,paid,holders,{id:'ordinary'}]);
 });
 
 test("fee-sharing setup funding target includes rent plus a bounded fee reserve", () => {

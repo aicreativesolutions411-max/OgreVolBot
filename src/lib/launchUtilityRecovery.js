@@ -33,7 +33,8 @@ export async function feeSetupSubmissionDisposition(state, connection) {
 export function launchDraftFingerprint(draft, creatorAddress, treasury = '') {
   const keys = ['name', 'symbol', 'description', 'imageDataUrl', 'imageName', 'devBuySol',
     'x', 'telegram', 'website', 'autoExitX', 'nftEnabled', 'utilityMode', 'utilityXHandle', 'utilityCollection',
-    'utilityPartnerWallet', 'utilityPartnerName', 'utilityPartnerPercent', 'utilityAutoDistribute'];
+    'utilityPartnerWallet', 'utilityPartnerName', 'utilityPartnerPercent', 'utilityAutoDistribute',
+    'utilityPartnerMint', 'utilityCreatorPercent', 'utilityOwnPercent', 'utilityHolderPartnerPercent'];
   const payload = Object.fromEntries(keys.map(key => [key, draft[key] ?? null]));
   return createHash('sha256').update(JSON.stringify({ payload, creatorAddress, treasury })).digest('hex');
 }

@@ -137,7 +137,7 @@ export function isOfficialPumpHolderFeeSharingAttempt(attempt = {}, minimumVersi
 export function pumpLaunchAttemptRequiresDurableRetention(attempt = {}) {
   // Keep immutable utility intent, pending signatures and payout history even
   // before setup completes or when the launch ages out of the recent list.
-  if (["alliance", "usepaid"].includes(attempt.launchUtility?.mode)) return true;
+  if (["alliance", "holder_alliance", "usepaid"].includes(attempt.launchUtility?.mode)) return true;
   // An immutable Pump split can continue directing fees to this vault forever,
   // so the worker mapping must outlive the ordinary launch-history window.
   if (isOfficialPumpHolderFeeSharingAttempt(attempt)) return true;

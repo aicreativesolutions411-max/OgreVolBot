@@ -9,13 +9,15 @@ import {assertLaunchUtilityReady} from '../src/lib/launchUtility.js';
 import {settleLaunchAlliance} from '../src/lib/launchAllianceSettlement.js';
 import {feeSetupSubmissionDisposition} from '../src/lib/launchUtilityRecovery.js';
 import {pumpFeeSharingSetupFundingTarget} from '../src/lib/pumpRewardDurability.js';
+import {normalizeHolderAlliance,allocateHolderCycle,HOLDER_CADENCE_MS,HOLDER_MIN_PAYOUT,HOLDER_VAULT_RESERVE,HOLDER_ALLIANCE_CONSENT_VERSION} from '../src/lib/holderAlliance.js';
+import {settleHolderBatch} from '../src/lib/holderAllianceSettlement.js';
 const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
 const code=source.slice(source.indexOf('async function reconcileLaunchAlliance('),source.indexOf('function pumpHolderRewardEffectiveShareBps('));
 
 // Evaluate only the two application functions with fully offline dependencies.
 // Never import/start the bot or use a funded/network wallet in tests.
 function fixture({auto=true,active=true}={}) {
-  const creator=Keypair.generate(),partner=Keypair.generate().publicKey,mint=Keypair.generate().publicKey,configAddress=Keypair.generate().publicKey;
+  const creator=Keypair.generate(),partnerSigner=Keypair.generate(),partner=partnerSigner.publicKey,mint=Keypair.generate().publicKey,configAddress=Keypair.generate().publicKey;
   let record={id:'attempt',userId:'owner',tokenMint:mint.toBase58(),devWalletPublicKey:creator.publicKey.toBase58(),launchUtility:{mode:'alliance',partnerName:'Community',partnerWallet:partner.toBase58(),partnerShareBps:3000,autoDistribute:auto,consentVersion:ALLIANCE_CONSENT_VERSION},pumpFeeSharing:{status:active?'ACTIVE':'PENDING_SETUP'}};
   let config={exists:active,finalized:active,address:configAddress,shareholders:active?allianceShareholders(record.launchUtility,creator.publicKey):[]};
   const calls={sends:0,setup:0,balances:0,resume:0,locks:[]};
@@ -30,8 +32,12 @@ function fixture({auto=true,active=true}={}) {
     getSignatureStatus:async()=>({value:{confirmationStatus:'confirmed'}})
   };
   const context={connection,Keypair,PublicKey,SystemProgram,Transaction,bs58,Buffer,allianceShareholders,allianceConfigMatches,assertLaunchUtilityReady,settleLaunchAlliance,pumpFeeSharingSetupFundingTarget,
+    normalizeHolderAlliance,allocateHolderCycle,HOLDER_CADENCE_MS,HOLDER_MIN_PAYOUT,HOLDER_VAULT_RESERVE,settleHolderBatch,
+    pumpHolderRewardVaultWallet:async()=>({keypair:partnerSigner}),
+    readHolderSnapshot:async()=>({slot:100,priceUsd:'1',capturedAt:Date.now(),holders:[{wallet:creator.publicKey.toBase58(),amount:'1'}]}),
     PUMP_HOLDER_REWARD_CONFIG_RENT_SPACE:1024,
     LockService:{withLock:async(key,_ttl,fn)=>{calls.locks.push(key);return fn();}},
+    withMoneyCacheLock:async(key,_ttl,fn)=>{calls.locks.push(key);return fn();},
     pumpFeeSharingAttemptId:a=>a.id,pumpFeeSharingMint:a=>a.tokenMint,
     freshPumpFeeSharingAttempt:async()=>record,
     readPumpFeeSharingConfig:async()=>config,
@@ -59,6 +65,35 @@ test('actual Alliance setup verifies exact on-chain shares before resuming buys 
   const f=fixture({active:false});
   await f.setup();assert.equal(f.record.pumpFeeSharing.status,'ACTIVE');assert.equal(f.calls.setup,1);assert.equal(f.calls.resume,2);
   await f.setup();assert.equal(f.calls.setup,1);
+});
+
+function holderFixture(){
+  const f=fixture();f.record={...f.record,launchUtility:normalizeHolderAlliance({mode:'holder_alliance',partnerMint:Keypair.generate().publicKey.toBase58(),creatorShareBps:2000,ownHolderShareBps:4000,partnerHolderShareBps:4000,consentVersion:HOLDER_ALLIANCE_CONSENT_VERSION}),pumpFeeSharing:{...f.record.pumpFeeSharing,vaultAddress:f.partner.toBase58()},allianceDistribution:{lastCheckedAt:new Date().toISOString()}};
+  f.config={...f.config,shareholders:allianceShareholders({partnerWallet:f.partner.toBase58(),partnerShareBps:8000},f.creator.publicKey)};
+  f.connection.getBalance=async key=>key.equals(f.partner)?9000000:100000000;
+  return f;
+}
+test('actual holder integration pays both community allocations once and respects 12-hour cadence',async()=>{
+  const f=holderFixture();await f.distribute({force:true});assert.equal(f.calls.sends,1);assert.equal(f.record.holderAllianceLedger.paidLamports,'8000000');
+  assert.equal(f.record.holderAllianceLedger.lastSnapshot.own.count,1);assert.equal(f.record.holderAllianceLedger.lastSnapshot.partner.count,1);
+  await f.distribute({force:true});assert.equal(f.calls.sends,1,'manual refresh must not create an early snapshot');
+});
+test('actual holder integration fails closed before allocation when either snapshot fails',async()=>{
+  const f=holderFixture();let calls=0;f.context.readHolderSnapshot=async()=>{if(++calls===2)throw Error('incomplete partner');return {holders:[{wallet:f.creator.publicKey.toBase58(),amount:'1'}],capturedAt:Date.now()};};
+  await assert.rejects(f.distribute(),/incomplete partner/);assert.equal(f.calls.sends,0);assert.equal(f.record.holderAllianceLedger,undefined);
+});
+test('actual holder integration pause preserves credits and prevents new signing',async()=>{
+  const f=holderFixture();f.record={...f.record,holderAllianceLedger:{credits:{[f.creator.publicKey.toBase58()]:'2000000'}}};
+  await f.context.setAllianceDistributionPaused(f.record,true);await f.distribute({force:true});assert.equal(f.calls.sends,0);assert.equal(f.record.holderAllianceLedger.credits[f.creator.publicKey.toBase58()],'2000000');
+  await f.context.setAllianceDistributionPaused(f.record,false);await f.distribute();assert.equal(f.calls.sends,1);
+});
+test('actual holder fee setup uses the unique vault for the combined holder share before enabling buys',async()=>{
+  const f=holderFixture();f.record={...f.record,pumpFeeSharing:{...f.record.pumpFeeSharing,status:'PENDING_SETUP'}};f.config={...f.config,exists:false,finalized:false,shareholders:[]};
+  let ensured=0,built=0;
+  f.context.ensurePumpHolderRewardVault=async()=>{ensured++;};
+  f.context.buildPumpFeeSharingOneTimeUpdateInstruction=async args=>{built++;assert.equal(args.holderRewardsVault,f.partner.toBase58());assert.equal(args.holderRewardsShareBps,8000);return {};};
+  f.context.submitPumpFeeSharingSetupTransaction=async()=>{f.config={...f.config,exists:true,finalized:true,shareholders:allianceShareholders({partnerWallet:f.partner.toBase58(),partnerShareBps:8000},f.creator.publicKey)};};
+  await f.setup();assert.equal(ensured,1);assert.equal(built,1);assert.equal(f.record.pumpFeeSharing.status,'ACTIVE');assert.equal(f.calls.resume,2);
 });
 test('actual Alliance setup refuses conflicting shares, untrusted recipient accounts and missing rent',async()=>{
   const conflict=fixture({active:false});conflict.config={...conflict.config,exists:true,finalized:true,shareholders:[]};await conflict.setup();assert.equal(conflict.record.pumpFeeSharing.status,'CONFLICT');assert.equal(conflict.calls.setup,0);

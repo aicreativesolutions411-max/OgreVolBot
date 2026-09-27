@@ -12015,7 +12015,7 @@ async function submitLaunchCoin() {
     }
     const tokenMint = String(launch.tokenMint || launch.mint || launch.ca || launch.contractAddress || "").trim();
     const signature = launch.signature ? ` Signature: ${shortAddress(launch.signature)}.` : "";
-    if (launch.launchUtility) state.launchCoinStatus = `Coin launched. ${launch.launchUtility.mode === "alliance" ? "Community Alliance" : "UsePaid fee routing"}: ${launch.launchUtility.status}. ${launch.launchUtility.note || ""}`;
+    if (launch.launchUtility) state.launchCoinStatus = `Coin launched. ${launch.launchUtility.mode === "holder_alliance" ? "Holder Alliance" : launch.launchUtility.mode === "alliance" ? "Community Alliance" : "UsePaid fee routing"}: ${launch.launchUtility.status}. ${launch.launchUtility.note || ""}`;
     const collectionNote = launch.nftCollection?.status === "COMPLETE"
       ? ` NFT collection linked: ${shortAddress(launch.nftCollection.address)}.`
       : launch.nftCollection?.status === "FAILED"

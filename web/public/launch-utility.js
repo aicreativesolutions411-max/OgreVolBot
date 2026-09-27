@@ -23,8 +23,17 @@
     return `<section class="launch-utility" data-utility-prefix="${esc(prefix)}" aria-label="Creator fee utility">
       <div class="launch-utility-heading"><span>CREATOR FEE UTILITY</span><small>Optional · existing rewards stay available</small></div>
       <label for="${prefix}Mode">Where should future creator fees go?</label>
-      <select id="${prefix}Mode"><option value="creator" ${mode === 'creator' ? 'selected' : ''}>Keep my creator / holder reward settings</option><option value="alliance" ${mode === 'alliance' ? 'selected' : ''}>Community Alliance · share fees with a community wallet</option><option value="nft_floor" hidden disabled ${mode === 'nft_floor' ? 'selected' : ''}>Saved NFT floor route · unavailable</option><option value="usepaid" hidden disabled ${mode === 'usepaid' ? 'selected' : ''}>Saved X payout route · unavailable</option></select>
+      <select id="${prefix}Mode"><option value="creator" ${mode === 'creator' ? 'selected' : ''}>Keep my creator / holder reward settings</option><option value="holder_alliance" ${mode === 'holder_alliance' ? 'selected' : ''}>Holder Alliance · me + my holders + another community</option><option value="alliance" ${mode === 'alliance' ? 'selected' : ''}>Community Alliance · share fees with a community wallet</option><option value="nft_floor" hidden disabled ${mode === 'nft_floor' ? 'selected' : ''}>Saved NFT floor route · unavailable</option><option value="usepaid" hidden disabled ${mode === 'usepaid' ? 'selected' : ''}>Saved X payout route · unavailable</option></select>
       <div data-utility-mode="creator"><p class="launch-utility-note">No new fee recipient. Your creator wallet or holder-reward choice stays in place. Creating an NFT collection below does not redirect fees.</p></div>
+      <div data-utility-mode="holder_alliance" hidden>
+        <p class="launch-utility-note"><b>One launch. Three shares.</b> Keep your share and reward both communities automatically in SOL. Choose the percentages once, before launch.</p>
+        <label for="${prefix}HolderPartnerName">Partner community name · not verified affiliation</label><input id="${prefix}HolderPartnerName" maxlength="64" value="${esc(policy.partnerName || '')}" placeholder="Community name">
+        <label for="${prefix}PartnerMint">Partner coin · Solana contract address</label><input id="${prefix}PartnerMint" maxlength="44" autocomplete="off" spellcheck="false" value="${esc(policy.partnerMint || '')}" placeholder="Paste the other community’s coin CA">
+        <div class="launch-utility-grid">${[['CreatorShare','Launcher',policy.creatorShareBps ?? 2000],['OwnHolderShare','My coin’s holders',policy.ownHolderShareBps ?? 4000],['PartnerHolderShare','Partner holders',policy.partnerHolderShareBps ?? 4000]].map(([id,label,value])=>`<label>${label} · %<input id="${prefix}${id}" type="number" min="1" max="98" step="1" value="${esc(value/100)}"></label>`).join('')}</div>
+        <p class="launch-utility-note" data-holder-split role="status"></p>
+        <p class="launch-utility-note"><b>Every 12 hours · holdings over $20.</b> Each community’s share is proportional to its eligible holders’ token balances. Up to 2,000 eligible wallets per community; complete free snapshots plus a verified active Pump curve or an indexed market with $1,000+ liquidity are required. Unavailable data delays payouts, never pays a partial list.</p>
+        <p class="launch-utility-note">Small rewards accumulate to 0.001 SOL per wallet. A dedicated encrypted SlimeWire vault retains a 0.001 SOL reserve; the launcher pays network fees (up to 0.0001 SOL per batch of 8) and keeps 0.003 SOL available. Receipts and pause/resume live in Your launches. The permanent split cannot be edited. This is SlimeWire-managed distribution, not Pump’s native holder program.</p>
+      </div>
       <div data-utility-mode="alliance" hidden>
         <p class="launch-utility-note"><b>Launch together. Share the creator fees.</b> A permanent Pump split between your creator wallet and one community wallet. SOL pairs only.</p>
         <label for="${prefix}PartnerName">Community name · a label, not verified affiliation</label><input id="${prefix}PartnerName" maxlength="64" value="${esc(policy.partnerName || '')}" placeholder="e.g. Nightshift community">
@@ -47,6 +56,7 @@
   }
   function read(prefix) {
     const mode = at(prefix, 'Mode')?.value || 'creator';
+    if (mode === 'holder_alliance') return { mode, partnerName: (at(prefix, 'HolderPartnerName')?.value || '').trim(), partnerMint: (at(prefix, 'PartnerMint')?.value || '').trim(), creatorShareBps: Number(at(prefix, 'CreatorShare')?.value)*100, ownHolderShareBps: Number(at(prefix, 'OwnHolderShare')?.value)*100, partnerHolderShareBps: Number(at(prefix, 'PartnerHolderShare')?.value)*100 };
     if (mode === 'alliance') return { mode, partnerName: (at(prefix, 'PartnerName')?.value || '').trim(), partnerWallet: (at(prefix, 'PartnerWallet')?.value || '').trim(), partnerShareBps: Math.round(Number(at(prefix, 'PartnerShare')?.value) * 100), autoDistribute: at(prefix, 'AutoDistribute')?.checked === true };
     if (mode === 'usepaid') return { mode, xHandle: (at(prefix, 'Handle')?.value || '').trim() };
     if (mode === 'nft_floor') return { mode, collectionSymbol: (at(prefix, 'Collection')?.value || '').trim(), feeShareBps: Number(at(prefix, 'Share')?.value) * 100, maxPriceSol: at(prefix, 'Max')?.value, dailyBudgetSol: at(prefix, 'Daily')?.value };
@@ -67,10 +77,10 @@
       const label = at(prefix, 'Availability');
       if (mode !== 'creator') {
         label.textContent = 'Checking availability…';
-        capabilities().then(c => { if (at(prefix, 'Mode')?.value !== mode) return; const route = mode === 'alliance' ? c.alliance : mode === 'usepaid' ? c.usepaid : c.nftFloor; label.textContent = route?.available ? 'Available · review required' : route?.reason || 'Unavailable on this deployment.'; }).catch(e => { label.textContent = e.message; });
+        capabilities().then(c => { if (at(prefix, 'Mode')?.value !== mode) return; const route = mode === 'holder_alliance' ? c.holderAlliance : mode === 'alliance' ? c.alliance : mode === 'usepaid' ? c.usepaid : c.nftFloor; label.textContent = route?.available ? 'Available · review required' : route?.reason || 'Unavailable on this deployment.'; }).catch(e => { label.textContent = e.message; });
       }
     };
-    const split = () => { const value = Number(at(prefix, 'PartnerShare')?.value); const line = root.querySelector('[data-alliance-split]'); if (line) line.textContent = value > 0 && value < 100 ? `${100-value}% creator · ${value}% community` : 'Choose a community share from 1% to 99%.'; };
+    const split = () => { const value = Number(at(prefix, 'PartnerShare')?.value); const line = root.querySelector('[data-alliance-split]'); if (line) line.textContent = value > 0 && value < 100 ? `${100-value}% creator · ${value}% community` : 'Choose a community share from 1% to 99%.'; const sum=['CreatorShare','OwnHolderShare','PartnerHolderShare'].reduce((a,key)=>a+Number(at(prefix,key)?.value||0),0); const holderLine=root.querySelector('[data-holder-split]'); if(holderLine) holderLine.textContent=sum===100?'100% allocated · permanent after launch':`${sum}% allocated · must total 100%`; };
     root.addEventListener('input', () => { at(prefix, 'Review').hidden = true; split(); onChange(); });
     at(prefix, 'Mode').addEventListener('change', sync);
     at(prefix, 'Preview').onclick = async () => {
@@ -85,7 +95,7 @@
     if (!policy || policy.mode === 'creator') return { mode: 'creator' };
     const review = await request({ ...context, launchUtility: policy });
     if (!review.available) throw new Error((review.blockers || ['This utility is unavailable.']).join(' '));
-    const approved = await confirm([review.summary, ...review.warnings, 'Permanent destination: ' + review.treasury, policy.mode === 'alliance' ? 'I checked the full community wallet address and approve this permanent split and the selected distribution schedule.' : 'I have read and accept the UsePaid terms and disclosures for this launch.']);
+    const approved = await confirm([review.summary, ...review.warnings, ...(review.treasury ? ['Permanent destination: ' + review.treasury] : []), policy.mode === 'holder_alliance' ? 'I verified the partner coin CA and approve the permanent percentages, managed holder vault, eligibility rules and automatic network costs.' : policy.mode === 'alliance' ? 'I checked the full community wallet address and approve this permanent split and the selected distribution schedule.' : 'I have read and accept the UsePaid terms and disclosures for this launch.']);
     if (!approved) throw new Error('Launch paused. No coin was created.');
     return { ...review.policy, consentVersion: review.consentVersion };
   }
@@ -93,6 +103,10 @@
     const utility = launch.launchUtility, nft = launch.nftCollection;
     const warning = launch.warning ? `<p class="launch-utility-blocker">${esc(launch.warning)}</p>` : '';
     if (!utility && !nft && !warning) return '';
+    if (utility?.mode === 'holder_alliance') {
+      const d=utility.distribution||{}, receipt=s=>`<a href="https://solscan.io/tx/${encodeURIComponent(s)}" target="_blank" rel="noopener noreferrer">Receipt ↗</a>`;
+      return `<div class="launch-utility-review">${warning}<b data-utility-status>Holder Alliance · ${esc(utility.status)}</b><p>${esc(utility.creatorShareBps/100)}% launcher · ${esc(utility.ownHolderShareBps/100)}% own holders · ${esc(utility.partnerHolderShareBps/100)}% partner holders</p><p>Partner: ${esc(utility.partnerName)}<br><code style="overflow-wrap:anywhere">${esc(utility.partnerMint)}</code></p><p>${utility.autoDistribute?'Automatic · every 12 hours':'Automatic payouts paused'} · holdings over $20<br>Paid: ${esc(Number(d.paidLamports||0)/1e9)} SOL · Reserved rewards: ${esc(Number(d.owedLamports||0)/1e9)} SOL</p><p>Holder payout: ${esc(d.status)}${d.nextSnapshotAt?' · Next snapshot '+esc(new Date(d.nextSnapshotAt).toLocaleString()):''}</p><p data-utility-error>${esc(utility.error||d.error||utility.feeDistribution?.error||'')}</p>${utility.signature?`<p>Fee setup: ${receipt(utility.signature)}</p>`:''}<button type="button" data-alliance-daily="${esc(utility.launchAttemptId)}" data-daily-action="${utility.autoDistribute?'pause_daily':'resume_daily'}">${utility.autoDistribute?'Pause':'Resume'} automatic payouts</button>${utility.status==='ACTIVE'?`<button type="button" data-alliance-distribute="${esc(utility.launchAttemptId)}">Check / retry due payouts</button>`:`<button type="button" data-launch-utility-retry="${esc(utility.launchAttemptId)}">Retry fee setup · same coin</button>`}<details><summary>${esc(d.receiptCount||0)} confirmed holder batches</summary>${(d.receipts||[]).slice().reverse().map(r=>`<p>${esc(r.confirmedAt)} · ${esc(Number(r.lamports)/1e9)} SOL · ${esc(r.recipients)} wallets · ${receipt(r.signature)}</p>`).join('')}</details></div>`;
+    }
     if (utility?.mode === 'alliance') {
       const d = utility.distribution || {};
       const receipt = signature => `<a href="https://solscan.io/tx/${encodeURIComponent(signature)}" target="_blank" rel="noopener noreferrer">View transaction ↗</a>`;
@@ -112,7 +126,7 @@
       const response = await recoveryRequest({ launchAttemptId: button.dataset.launchUtilityRetry || button.dataset.allianceDistribute || button.dataset.allianceDaily, ...(button.dataset.allianceDistribute ? { action: 'distribute' } : button.dataset.allianceDaily ? { action: button.dataset.dailyAction } : {}) });
       if (!response?.ok || !response.utility) throw new Error(response?.error || 'Fee setup could not be checked. No new coin was launched.');
       const utility = response.utility;
-      if (utility.mode === 'alliance') { box.outerHTML = resultHtml({ launchUtility: utility }); return; }
+      if (['alliance','holder_alliance'].includes(utility.mode)) { box.outerHTML = resultHtml({ launchUtility: utility }); return; }
       box.querySelector('[data-utility-status]').textContent = 'UsePaid routing: ' + utility.status;
       box.querySelector('[data-utility-error]').textContent = utility.error || (utility.status === 'ACTIVE' ? 'The original fee route is active on-chain.' : 'The original setup is still pending. Do not launch this coin again.');
       if (['ACTIVE', 'CONFLICT'].includes(utility.status)) button.hidden = true;
@@ -125,7 +139,7 @@
     const q = new URLSearchParams(search);
     if (!q.has('lc_n') && !q.has('lc_s')) return null;
     const get = (key, max) => (q.get(key) || '').slice(0, max);
-    return { name: get('lc_n', 64), symbol: get('lc_s', 12), description: get('lc_d', 800), x: get('lc_x', 200), telegram: get('lc_tg', 200), website: get('lc_web', 200), devBuySol: /^\d+(?:\.\d{1,9})?$/.test(q.get('lc_dev') || '') ? q.get('lc_dev') : '0', nftEnabled: q.get('lc_nft') === '1', launchUtility: ['creator', 'alliance', 'usepaid', 'nft_floor'].includes(q.get('lc_utility')) ? { mode: q.get('lc_utility'), xHandle: get('lc_xpay', 16), collectionSymbol: get('lc_collection', 100), partnerName: get('lc_community',64) } : { mode: 'creator' } };
+    return { name: get('lc_n', 64), symbol: get('lc_s', 12), description: get('lc_d', 800), x: get('lc_x', 200), telegram: get('lc_tg', 200), website: get('lc_web', 200), devBuySol: /^\d+(?:\.\d{1,9})?$/.test(q.get('lc_dev') || '') ? q.get('lc_dev') : '0', nftEnabled: q.get('lc_nft') === '1', launchUtility: ['creator', 'alliance', 'holder_alliance', 'usepaid', 'nft_floor'].includes(q.get('lc_utility')) ? { mode: q.get('lc_utility'), xHandle: get('lc_xpay', 16), collectionSymbol: get('lc_collection', 100), partnerName: get('lc_community',64) } : { mode: 'creator' } };
   }
   window.SlimeLaunchUtility = { render, read, wire, prepare, resultHtml, configureRecovery, prefill, capabilities };
 })();
