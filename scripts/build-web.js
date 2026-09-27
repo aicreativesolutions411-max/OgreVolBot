@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 
 import { transform } from "esbuild";
+import { applyLaunchSiteDesign } from "./lib/launch-site-design.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const publicDir = path.join(rootDir, "web", "public");
@@ -156,6 +157,22 @@ try {
   console.warn(`Could not fully clear ${path.relative(rootDir, distDir)} (${error.code}); copying over existing files.`);
 }
 await copyDir(publicDir, distDir);
+
+// Shared design only on the launch family. The wallet app and main site stay
+// unchanged; within the terminal this theme activates only on its launch view.
+async function applySiteDesign(directory, prefix = "") {
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    const name = prefix + entry.name;
+    if (entry.isDirectory()) await applySiteDesign(target, name + "/");
+    else if (entry.isFile() && entry.name.endsWith(".html")) {
+      const source = await fs.readFile(target, "utf8");
+      const themed = applyLaunchSiteDesign(source, name);
+      if (themed !== source) await fs.writeFile(target, themed, "utf8");
+    }
+  }
+}
+await applySiteDesign(distDir);
 
 const buildId = String(process.env.WEB_BUILD_ID || new Date().toISOString().replace(/[-:.TZ]/g, "")).slice(0, 14);
 const brandedApiBase = "https://app.slimewire.org";
