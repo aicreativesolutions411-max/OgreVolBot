@@ -34,6 +34,12 @@ test('Telegram launch consent binds the whole draft, wallet, recipient and user'
   assert.equal(check({}), true);
   for (const overrides of [{ id: 'stale' }, { userId: 7 }, { fingerprint: launchDraftFingerprint({ ...d, devBuySol: '10' }, 'wallet-a', 'treasury-a') }, { fingerprint: launchDraftFingerprint(d, 'wallet-b', 'treasury-a') }, { fingerprint: launchDraftFingerprint(d, 'wallet-a', 'treasury-b') }]) assert.equal(check(overrides), false);
 });
+
+test('changing any Alliance choice invalidates the reviewed Telegram confirmation', () => {
+  const draft = {name:'Alliance',symbol:'ALLY',utilityMode:'alliance',utilityPartnerWallet:'wallet',utilityPartnerName:'Community',utilityPartnerPercent:'30',utilityAutoDistribute:false};
+  const before = launchDraftFingerprint(draft,'creator','wallet');
+  for (const [key,value] of [['utilityPartnerWallet','different'],['utilityPartnerName','other'],['utilityPartnerPercent','75'],['utilityAutoDistribute',true]]) assert.notEqual(launchDraftFingerprint({...draft,[key]:value},'creator','wallet'),before);
+});
 test('all recovery entry points use the hardened disposition and stable launch confirmation', () => {
   const server = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
   assert.match(server, /return feeSetupSubmissionDisposition\(state, connection\)/);

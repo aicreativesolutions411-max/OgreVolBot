@@ -34,17 +34,18 @@
     return { mint, name: clean(row.name, 64) || clean(row.symbol, 16) || mint.slice(0, 5) + '…' + mint.slice(-4), symbol: clean(row.symbol, 16),
       description: clean(row.description, 180), imageUrl: safeImage(row.imageUrl) || safeImage(row.imageUri), createdAt: clean(row.createdAt, 40),
       chain: /^0x/i.test(mint) ? 'Robinhood' : 'Solana', status: clean(row.status, 40) || 'COMPLETE',
-      rewardMode: row.rewardMode || (row.launchUtility ? 'external' : row.pumpCashback ? 'cashback' : row.holderRewards?.enabled ? 'holders' : 'creator') };
+      rewardMode: row.rewardMode || (row.launchUtility?.mode === 'alliance' ? 'alliance' : row.launchUtility ? 'external' : row.pumpCashback ? 'cashback' : row.holderRewards?.enabled ? 'holders' : 'creator') };
   }
   function chartUrl(mint) { return isMint(mint) ? '/t?ca=' + encodeURIComponent(mint) : ''; }
   function draftUrl(draft) {
-    const q = new URLSearchParams({ from: 'fun', lc_n: clean(draft.name, 64), lc_s: clean(draft.symbol, 12), lc_d: clean(draft.description, 800) });
+    const q = new URLSearchParams({ from: 'fun', lc_n: clean(draft.name, 32), lc_s: clean(draft.symbol, 10), lc_d: clean(draft.description, 800) });
+    if (draft.mode === 'alliance') q.set('lc_utility', 'alliance');
     // Draft-only handoff to the existing reviewed launcher. No wallet, funds,
     // consent, fee recipient or execution identifier can be set by this page.
     return '/?' + q.toString() + '#launch';
   }
   function dateLabel(value) { const d = new Date(value); return Number.isFinite(d.getTime()) ? d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'Date unavailable'; }
-  const rewardLabels = { creator: 'Creator wallet', cashback: 'Cash back', holders: 'Holder rewards', external: 'External fee route' };
+  const rewardLabels = { creator: 'Creator wallet', cashback: 'Cash back', holders: 'Holder rewards', alliance: 'Community Alliance', external: 'External fee route' };
   function cardHtml(coin) {
     const symbol = coin.symbol ? '$' + coin.symbol : 'Ticker unavailable';
     const status = coin.status === 'COMPLETE' ? coin.chain.toUpperCase() : coin.status.replace(/_/g, ' ');
@@ -68,7 +69,7 @@
     $('coin-grid').querySelectorAll('img[data-image-sources]').forEach(img => imageObserver ? imageObserver.observe(img.parentElement) : start(img));
   }
   let previousFocus;
-  const draft = { name: '', symbol: '', description: '' };
+  const draft = { name: '', symbol: '', description: '', mode: 'creator' };
   function openDialog(title, content) {
     if (!dialog.open) previousFocus = document.activeElement;
     $('dialog-body').innerHTML = '<h2 class="dialog-title" id="dialog-title">' + esc(title) + '</h2>' + content;
@@ -82,31 +83,29 @@
   function routeDialog(route) {
     const routes = {
       wallet: ['Wallet rewards', 'Available in launch setup', 'Choose your managed creator wallet when launching. Creator fees accrue to that wallet unless you deliberately choose a different reward mode. Review wallet-wide balances and claim from the Wallet app. Manual recipient splits remain in the existing launch workspace; this page does not silently assign a new fee wallet.'],
-      x: ['X creator payouts', 'Provider paused', 'UsePaid currently reports that X Money payouts are paused. Its fee route is permanent and sends 100% of creator fees to the provider, not your creator wallet. On-chain routing is not proof that someone received cash. No X cash claim is offered here.'],
-      business: ['Business recipients', 'Not enabled yet', 'The planned flow starts with a business profile and verifies who controls its payout destination. A Google listing alone is not payment authorization. Business search, ownership verification and cash payout providers still need to be connected.'],
-      linkedin: ['LinkedIn recipients', 'Not enabled yet', 'The planned recipient flow will require identity verification and a supported payout account. Adding a profile link is not enough to pay that person, and does not make them an endorser of a token.'],
-      telegram: ['Telegram recipients', 'Not enabled yet', 'Telegram-linked payout identities are planned. Today you can launch and manage wallets with the SlimeWire bot, but a Telegram handle is not yet an automatic cash or wallet payout destination.'],
+      alliance: ['Community Alliance', 'Permanent on-chain split', 'Give a community a direct share of your coin’s creator fees. Choose its SOL wallet and percentage; your creator wallet keeps the remainder. Review both recipients, then launch. Fees accrue in a per-coin Pump sharing account, with manual or daily distributions and transaction receipts. This is a wallet split—not individual-holder rewards, stock exposure or an endorsement.'],
       project: ['Projects & communities', 'Wallet route available', 'Create a coin for your project and choose its creator wallet. You can include project socials and add an optional NFT collection. Verified project profiles and multi-platform identity payments are not enabled yet.']
     };
-    const r = routes[route] || routes.wallet, paused = route === 'x';
-    openDialog(r[0], '<span class="dialog-status ' + (paused ? 'paused' : '') + '">' + esc(r[1]) + '</span><p class="dialog-copy">' + esc(r[2]) + '</p>' + (paused ? '<p class="dialog-copy">Status checked September 27, 2026. <a href="https://usepaid.app/docs" target="_blank" rel="noopener noreferrer">Check the provider’s latest update ↗</a></p>' : '') + '<div class="dialog-actions">' + (['wallet', 'project'].includes(route) ? launchLink : '<button type="button" class="button button-outline" data-route="wallet">View wallet rewards ↗</button>') + '</div>');
+    const r = routes[route] || routes.wallet;
+    openDialog(r[0], '<span class="dialog-status">' + esc(r[1]) + '</span><p class="dialog-copy">' + esc(r[2]) + '</p>' + (route === 'alliance' ? '<ol class="reward-steps"><li><span>01</span><div><b>Choose your community</b><small>Name + community-controlled SOL wallet</small></div></li><li><span>02</span><div><b>Review the permanent split</b><small>Verify the full address and both percentages</small></div></li><li><span>03</span><div><b>Launch & track distributions</b><small>Same-coin recovery and on-chain receipts</small></div></li></ol><p class="dialog-copy">Distributions need at least 0.001 SOL accrued. The creator wallet pays network costs, capped at 0.0001 SOL per distribution, and keeps a 0.003 SOL account-rent reserve.</p>' : '') + '<div class="dialog-actions">' + (route === 'alliance' ? '<button type="button" class="button button-primary" data-start-alliance>Start an Alliance ↗</button>' : launchLink) + '</div>');
   }
   function recipientsDialog() {
-    openDialog('Choose where it goes.', '<p class="dialog-copy">Start with a supported reward route. Other recipient types are visible here with their actual availability.</p><div class="route-list">' + [['wallet', 'Creator wallet', 'SOL creator rewards in your selected wallet', 'AVAILABLE'], ['x', 'X creators', 'Cash payouts through an external provider', 'PAUSED'], ['business', 'Google businesses', 'Verified business and payout destination', 'PLANNED'], ['linkedin', 'LinkedIn', 'Verified professional identity', 'PLANNED'], ['telegram', 'Telegram', 'Account-linked recipient payments', 'PLANNED'], ['project', 'Projects', 'Launch with your project’s creator wallet', 'WALLET ROUTE']].map(r => '<button class="route-option" type="button" data-route="' + r[0] + '"><span><b>' + r[1] + '</b><small>' + r[2] + '</small></span><em>' + r[3] + ' ↗</em></button>').join('') + '</div>');
+    openDialog('Choose where it goes.', '<p class="dialog-copy">Only supported launch paths are offered. Review recipients and costs before signing.</p><div class="route-list">' + [['wallet', 'Creator wallet', 'SOL creator rewards in your selected wallet', 'SOLO'], ['alliance', 'Community Alliance', 'Permanent creator + community wallet split', 'TOGETHER'], ['project', 'Projects', 'Launch with your project’s creator wallet', 'PROJECT']].map(r => '<button class="route-option" type="button" data-route="' + r[0] + '"><span><b>' + r[1] + '</b><small>' + r[2] + '</small></span><em>' + r[3] + ' ↗</em></button>').join('') + '</div>');
   }
   function paymentsDialog() {
-    openDialog('Fees. Not guesswork.', '<p class="dialog-copy">Creator rewards are shown in the receiving wallet. Pump claims can cover multiple coins, so this page does not invent per-coin earnings or combine them into an unsupported dollar total.</p><div class="route-list"><a class="route-option" href="/wallet"><span><b>SOL creator rewards</b><small>Open your wallet for balances, claims and receipts.</small></span><em>OPEN ↗</em></a><button class="route-option" data-route="x" type="button"><span><b>X Money / UsePaid</b><small>Provider payouts paused. No cash claim available here.</small></span><em>STATUS ↗</em></button></div><p class="dialog-copy">Cash payment integrations and custom quote pairs are not activated by this redesign. Existing fee assignments and recovery records are unchanged.</p>');
+    openDialog('Fees. Not guesswork.', '<p class="dialog-copy">Standard Pump claims can cover multiple coins; they remain wallet-wide. Alliance distributions use the coin’s own sharing account and show confirmed transaction receipts. We do not invent per-coin dollar earnings.</p><div class="route-list"><a class="route-option" href="/wallet"><span><b>SOL creator rewards</b><small>Balances, claims and receipts in your wallet.</small></span><em>OPEN ↗</em></a><a class="route-option" href="/?from=fun#launch"><span><b>Alliance distributions</b><small>Open Your launches to distribute or check receipts.</small></span><em>MANAGE ↗</em></a></div>');
   }
   function createDialog() {
-    openDialog('Make it yours.', '<p class="dialog-copy">Give your coin an identity. Next, add artwork, choose your wallet and review rewards, bundles and launch costs.</p><form class="create-form" id="create-form"><div class="form-row"><div><label for="coin-name">Coin name</label><input id="coin-name" name="name" maxlength="64" required placeholder="Your next idea" autocomplete="off" value="' + esc(draft.name) + '"></div><div><label for="coin-ticker">Ticker</label><input id="coin-ticker" name="symbol" maxlength="12" required placeholder="TICKER" autocomplete="off" value="' + esc(draft.symbol) + '"></div></div><label for="coin-description">Description <span>· optional</span></label><textarea id="coin-description" name="description" maxlength="800" placeholder="What is this coin about?">' + esc(draft.description) + '</textarea><p class="form-note"><strong>Nothing launches on this step.</strong> The next screen uses your existing SlimeWire launch setup. You will review all costs, recipients and irreversible choices before confirming.</p><button type="submit" class="button button-primary">Continue to launch setup <span class="arrow" aria-hidden="true">↗</span></button></form>');
-    $('create-form').addEventListener('input', () => { draft.name = $('coin-name').value; draft.symbol = $('coin-ticker').value; draft.description = $('coin-description').value; });
+    openDialog('Make it yours.', '<p class="dialog-copy">Give your coin an identity. Next, add artwork, choose your wallet and review rewards, bundles and launch costs.</p><form class="create-form" id="create-form"><div class="form-row"><div><label for="coin-name">Coin name</label><input id="coin-name" name="name" maxlength="32" required placeholder="Your next idea" autocomplete="off" value="' + esc(draft.name) + '"></div><div><label for="coin-ticker">Ticker</label><input id="coin-ticker" name="symbol" minlength="2" maxlength="10" pattern="[A-Za-z0-9]+" required placeholder="TICKER" autocomplete="off" value="' + esc(draft.symbol) + '"></div></div><label for="coin-description">Description <span>· optional</span></label><textarea id="coin-description" name="description" maxlength="800" placeholder="What is this coin about?">' + esc(draft.description) + '</textarea><p class="form-note"><strong>Nothing launches on this step.</strong> The next screen uses your existing SlimeWire launch setup. You will review all costs, recipients and irreversible choices before confirming.</p><button type="submit" class="button button-primary">Continue to launch setup <span class="arrow" aria-hidden="true">↗</span></button></form>');
+    $('create-form').querySelector('.form-note').insertAdjacentHTML('beforebegin', '<label for="coin-launch-mode">Launch path</label><select id="coin-launch-mode"><option value="creator" '+(draft.mode === 'creator' ? 'selected' : '')+'>Standard · creator / holder rewards</option><option value="alliance" '+(draft.mode === 'alliance' ? 'selected' : '')+'>Community Alliance · creator + community wallet</option></select><p class="dialog-copy">The next screen collects and reviews the community wallet and split. No recipient or payment is pre-approved here.</p>');
+    $('create-form').addEventListener('input', () => { draft.name = $('coin-name').value; draft.symbol = $('coin-ticker').value; draft.description = $('coin-description').value; draft.mode = $('coin-launch-mode').value; });
     $('create-form').addEventListener('submit', event => { event.preventDefault(); if (!draft.name.trim() || !draft.symbol.trim()) return; location.assign(draftUrl(draft)); });
   }
   function featureDialog(key) {
     const features = {
-      rewards: ['Reward options', 'Keep creator rewards, choose Pump Cash back, or configure supported holder rewards in launch setup. These modes have different ownership and claim rules. Permanent choices are explicitly reviewed before launch.'],
+      rewards: ['Reward options', 'Keep creator rewards, configure SlimeWire holder rewards, or choose a Community Alliance wallet split in NFT & Fees. These are separate alternatives—not overlapping promises for the same fees. Review permanent choices before launch. Existing Cashback coins retain their claims; new Cashback creation is unavailable.'],
       bundle: ['Launch together.', 'Choose managed wallets and amounts, then add participant invites where needed. The existing launcher shows which buys can be bundled and which run after confirmation. A participant must approve their own entry; no purchase happens from this page.'],
-      nft: ['A coin. A collection.', 'Add an optional Metaplex Core collection under NFT & Fees in launch setup. Your creator wallet controls it. A collection does not automatically redirect creator fees. NFT floor purchases are preview-only, and marketplace indexing is not guaranteed.']
+      nft: ['A coin. A collection.', 'Add an optional Metaplex Core collection under NFT & Fees in launch setup. Your creator wallet controls it. A collection does not automatically redirect creator fees or buy NFTs. Marketplace indexing is not guaranteed.']
     };
     const f = features[key]; if (!f) return;
     openDialog(f[0], '<p class="dialog-copy">' + esc(f[1]) + '</p><div class="dialog-actions">' + launchLink + '</div>');
@@ -150,6 +149,7 @@
   }
   document.addEventListener('click', async event => {
     const button = event.target.closest('button,a'); if (!button) return;
+    if (button.hasAttribute('data-start-alliance')) { draft.mode = 'alliance'; createDialog(); }
     if (button.dataset.dialog) ({ create: createDialog, recipients: recipientsDialog, payments: paymentsDialog }[button.dataset.dialog])?.();
     if (button.dataset.route) routeDialog(button.dataset.route);
     if (button.dataset.feature) featureDialog(button.dataset.feature);

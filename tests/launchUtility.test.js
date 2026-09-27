@@ -16,12 +16,12 @@ test('ordinary launches never enable new money routes implicitly', () => {
   assert.equal(launchUtilityCapabilities({}).usepaid.available, false);
   assert.throws(() => normalizeLaunchUtility({ mode: 'surprise' }), /Unknown/);
 });
-test('UsePaid validates the handle, exact consent version and verified deployment destination', () => {
+test('UsePaid validates legacy handles but new routes stay blocked while provider payouts are paused', () => {
   const policy = normalizeLaunchUtility({ mode: 'usepaid', xHandle: '@creator_1', consentVersion: LAUNCH_UTILITY_CONSENT_VERSION });
   assert.equal(policy.xHandle, 'creator_1');
-  assert.equal(assertLaunchUtilityReady(policy, { rail: 'pump' }, enabled).treasury, treasury);
-  assert.throws(() => assertLaunchUtilityReady(policy, { rail: 'pump' }, {}), /not configured/);
-  assert.throws(() => assertLaunchUtilityReady({ ...policy, consentVersion: '' }, { rail: 'pump' }, enabled), /confirm/);
+  assert.throws(() => assertLaunchUtilityReady(policy, { rail: 'pump' }, enabled), /paused/);
+  assert.throws(() => assertLaunchUtilityReady(policy, { rail: 'pump' }, {}), /paused/);
+  assert.throws(() => assertLaunchUtilityReady({ ...policy, consentVersion: '' }, { rail: 'pump' }, enabled), /paused/);
   assert.throws(() => normalizeLaunchUtility({ mode: 'usepaid', xHandle: 'bad\nFees to @evil' }), /handle/);
   assert.equal(launchUtilityCapabilities({ ...enabled, USEPAID_TREASURY_SOLANA: Keypair.generate().publicKey.toBase58() }).usepaid.available, false, 'an arbitrary valid address is not a verified provider');
 });

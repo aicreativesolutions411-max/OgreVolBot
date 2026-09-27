@@ -86,7 +86,7 @@ test("sell-all and return-funds require stable destructive-action ids across eve
   assert.match(autopilotProSource, /clientRequestId:sellAttemptId/);
 });
 
-test("Pump native Cash back uses official create_v2 and stays distinct from holder rewards", () => {
+test("legacy Cashback protocol helpers remain but new Cashback creation is rejected", () => {
   assert.match(pumpCashbackSource, /createV2Instruction/);
   assert.match(pumpCashbackSource, /cashback:\s*true/);
   assert.match(serverSource, /PUMP_CASHBACK_HOLDER_REWARDS_CONFLICT/);
@@ -94,9 +94,8 @@ test("Pump native Cash back uses official create_v2 and stays distinct from hold
   assert.match(serverSource, /pump-official-create-v2/);
   assert.match(serverSource, /normalizePumpCashback\(attempt\.pumpCashback\)\) continue/);
   assert.match(appSource, /data-launch-coin-pump-cashback/);
-  assert.match(appSource, /shows as enabled on Pump/);
-  assert.match(appSource, /there is no fixed wallet count/);
-  assert.match(appSource, /cannot be combined with SlimeWire holder rewards/);
+  assert.ok(serverSource.includes('PUMP_CASHBACK_CREATE_DISABLED'));
+  assert.ok(appSource.includes('Saved Cashback choice is retired'));
 });
 
 test("main website mirrors stay identical", () => {

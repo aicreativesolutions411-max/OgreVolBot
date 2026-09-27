@@ -1,4 +1,5 @@
 import { PublicKey } from '@solana/web3.js';
+import { normalizeLaunchAlliance, ALLIANCE_CONSENT_VERSION } from './launchAlliance.js';
 
 // Consent is intentionally not a persistent/global checkbox. It accompanies one
 // reviewed launch and is versioned whenever the irreversible provider terms change.
@@ -7,7 +8,7 @@ export const LAUNCH_UTILITY_CONSENT_VERSION = '2026-09-22';
 // This is public protocol configuration, not a private key. A changed provider
 // address requires a code review as well as deployment configuration.
 export const USEPAID_VERIFIED_TREASURY = 'FfLpuH4WPn2MR8Lqn1MpwQc1HtAPPqL3qvMWZjnFHGpv';
-const MODES = new Set(['creator', 'nft_floor', 'usepaid']);
+const MODES = new Set(['creator', 'alliance', 'nft_floor', 'usepaid']);
 const fail = (message) => { const error = new Error(message); error.statusCode = 400; error.code = 'LAUNCH_UTILITY_INVALID'; throw error; };
 export function normalizeXRecipient(value) {
   const handle = String(value || '').trim().replace(/^@/, '');
@@ -23,6 +24,7 @@ export function normalizeLaunchUtility(input = {}) {
   const mode = String(input?.mode || 'creator').toLowerCase();
   if (!MODES.has(mode)) fail('Unknown launch fee utility.');
   if (mode === 'creator') return { version: 1, mode };
+  if (mode === 'alliance') return normalizeLaunchAlliance(input);
   if (mode === 'usepaid') return { version: 1, mode, xHandle: normalizeXRecipient(input.xHandle), consentVersion: String(input.consentVersion || '') };
   const collectionSymbol = String(input.collectionSymbol || '').trim();
   if (!/^[a-zA-Z0-9_-]{1,100}$/.test(collectionSymbol)) fail('Enter the Magic Eden collection symbol, not a wallet address or URL.');
@@ -36,13 +38,16 @@ export function normalizeLaunchUtility(input = {}) {
 export function launchUtilityCapabilities(env = process.env) {
   let treasury = '';
   try { const key = new PublicKey(String(env.USEPAID_TREASURY_SOLANA || '')); if (!key.equals(PublicKey.default)) treasury = key.toBase58(); } catch { /* no guessed recipient */ }
-  const usepaidAvailable = env.USEPAID_ROUTING_ENABLED === 'true' && treasury === USEPAID_VERIFIED_TREASURY && env.USEPAID_TERMS_REVIEWED_VERSION === LAUNCH_UTILITY_CONSENT_VERSION;
+  // Provider cash payouts are paused. Old deployment env must NOT authorize
+  // new irreversible routing. Existing finalized routes remain readable.
+  const usepaidAvailable = false;
   return {
     version: 1, consentVersion: LAUNCH_UTILITY_CONSENT_VERSION,
     linkedCollection: { available: true, chains: ['solana'], standard: 'metaplex-core' },
+    alliance: { available: true, chains: ['solana'], rail: 'pump', quote: 'SOL', recipients: 2, consentVersion: ALLIANCE_CONSENT_VERSION },
     nftFloor: { available: false, previewAvailable: true, reason: 'NFT floor purchases need a verified marketplace execution adapter; preview only. No fees will be redirected.', custody: 'A separate vault per coin is required before activation.' },
     usepaid: { available: usepaidAvailable, treasury: usepaidAvailable ? treasury : '',
-      reason: usepaidAvailable ? '' : 'UsePaid routing is not configured with a verified treasury and reviewed terms.',
+      reason: 'X cash payouts are unavailable. New UsePaid routing is disabled while provider payouts are paused.',
       creatorFeeShareBps: 10000, recipientShareBps: 8000, providerBuybackBps: 2000,
       verifiedAt: '2026-09-22', sourceUrl: 'https://usepaid.app/launch',
       docsUrl: 'https://usepaid.app/docs', termsUrl: 'https://usepaid.app/legal/terms', disclosuresUrl: 'https://usepaid.app/legal/disclosures' }
@@ -64,17 +69,23 @@ export function reviewLaunchUtility(input, context = {}, env = process.env) {
     warnings.push('You give up creator-fee claims for this coin. This cannot be reversed after the Pump sharing config is finalized.', 'UsePaid is a third-party custodian, not SlimeWire or X. Payout timing and X Money eligibility are controlled by the provider; cash receipt is not guaranteed.', 'UsePaid reports that unclaimed payments can expire and return to its treasury. Review its current terms before confirming.');
     warnings.push('UsePaid does not publish its operator’s legal identity in its terms. Naming an X account does not mean that person endorses your coin.');
   }
+  if (policy.mode === 'alliance') {
+    summary = `Community Alliance: permanently route ${policy.partnerShareBps / 100}% of future creator fees to ${policy.partnerName} (${policy.partnerWallet}); ${100 - policy.partnerShareBps / 100}% stays with the creator wallet.`;
+    warnings.push('This is a direct wallet split, not individual holder rewards, NFT purchases or X cash payouts.', 'The finalized Pump fee recipients and percentages cannot be changed. Verify the full destination address before signing.', 'A community name is supplied by the launcher; it is not independent proof of endorsement or control.', policy.autoDistribute ? 'Daily distribution is authorized from collected creator fees. The creator wallet pays network costs; small balances accumulate until economical to distribute.' : 'Fees accrue on-chain. Use Distribute fees to pay both recipients; the creator wallet pays network costs.');
+    warnings.push('The creator wallet also pays fee-sharing account rent and setup network costs. The pre-launch balance check reserves these costs plus 0.003 SOL for later distribution account rent. Distribution requires at least 0.001 SOL accrued and caps its network fee at 0.0001 SOL.');
+  }
   if (policy.mode === 'nft_floor') {
     blockers.push(capabilities.nftFloor.reason);
     summary = `${policy.feeShareBps / 100}% of creator fees proposed for ${policy.collectionSymbol}; maximum ${policy.maxPriceSol} SOL per NFT and ${policy.dailyBudgetSol} SOL per day. Preview only.`;
     warnings.push('A marketplace collection name is not proof of authenticity or affiliation. On-chain collection verification is required before any purchase.', 'The preview never spends money, redirects fees, burns NFTs or runs a lottery.');
   }
-  return { policy, available: !blockers.length, summary, blockers, warnings, treasury: policy.mode === 'usepaid' ? capabilities.usepaid.treasury : '', consentVersion: capabilities.consentVersion };
+  return { policy, available: !blockers.length, summary, blockers, warnings, treasury: policy.mode === 'usepaid' ? capabilities.usepaid.treasury : policy.mode === 'alliance' ? policy.partnerWallet : '', consentVersion: policy.mode === 'alliance' ? ALLIANCE_CONSENT_VERSION : capabilities.consentVersion };
 }
 export function assertLaunchUtilityReady(input, context = {}, env = process.env) {
   const review = reviewLaunchUtility(input, context, env);
   if (!review.available) fail(review.blockers.join(' '));
   if (review.policy.mode === 'usepaid' && review.policy.consentVersion !== LAUNCH_UTILITY_CONSENT_VERSION) fail('Review and confirm the permanent UsePaid fee destination for this launch.');
+  if (review.policy.mode === 'alliance' && review.policy.consentVersion !== ALLIANCE_CONSENT_VERSION) fail('Review and confirm the permanent Community Alliance fee split for this launch.');
   return review;
 }
 export function usePaidDescription(description, handle, limit = 800) {
@@ -83,7 +94,7 @@ export function usePaidDescription(description, handle, limit = 800) {
   const body = clean.slice(0, Math.max(0, limit - directive.length - 2)).trimEnd();
   return body ? `${body}\n\n${directive}` : directive;
 }
-export function utilityRequiresFeeSharing(attempt = {}) { return attempt.launchUtility?.mode === 'usepaid'; }
+export function utilityRequiresFeeSharing(attempt = {}) { return ['usepaid', 'alliance'].includes(attempt.launchUtility?.mode); }
 export function utilityFeeSharingMatches(config, treasury) {
   return !!(config?.finalized && config.shareholders?.length === 1 && config.shareholders[0].address.toBase58() === treasury && config.shareholders[0].shareBps === 10000);
 }

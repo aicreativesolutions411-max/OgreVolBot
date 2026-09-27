@@ -109,10 +109,12 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { buildPumpCashbackCreateTransaction, normalizePumpCashback } from "./lib/pumpCashback.js";
-import { LAUNCH_UTILITY_CONSENT_VERSION, normalizeLaunchUtility, launchUtilityCapabilities, reviewLaunchUtility, assertLaunchUtilityReady, usePaidDescription, utilityRequiresFeeSharing, utilityFeeSharingMatches } from "./lib/launchUtility.js";
+import { normalizeLaunchUtility, launchUtilityCapabilities, reviewLaunchUtility, assertLaunchUtilityReady, usePaidDescription, utilityRequiresFeeSharing, utilityFeeSharingMatches } from "./lib/launchUtility.js";
 import { createNftMarketReader } from "./lib/nftFloorPlanner.js";
 import { feeSetupSubmissionDisposition, launchDraftFingerprint, launchConfirmationMatches, telegramLaunchExitStrategy } from "./lib/launchUtilityRecovery.js";
 import { verifyUsePaidRecipient } from "./lib/usePaidRecipient.js";
+import { allianceShareholders, allianceConfigMatches } from "./lib/launchAlliance.js";
+import { settleLaunchAlliance, publicAllianceSettlement } from "./lib/launchAllianceSettlement.js";
 import {
   PUMP_TOKEN_PROGRAM_ID,
   PUMP_WRAPPED_SOL_MINT,
@@ -8878,7 +8880,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     if (request.method === "GET" && pathname === "/api/web/launch/utility/capabilities") {
-      sendWebJson(request, response, 200, { ok: true, ...launchUtilityCapabilities() });
+      sendWebJson(request, response, 200, { ok: true, ...liveLaunchUtilityCapabilities() });
       return;
     }
     if (request.method === "GET" && pathname === "/api/web/config") {
@@ -12668,7 +12670,14 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
     if (request.method === "POST" && pathname === "/api/web/launch/utility/review") {
       const body = await readJsonRequestBody(request, 16000);
-      const review = reviewLaunchUtility(body.launchUtility, body);
+      body.launchUtility = normalizeLaunchUtility(body.launchUtility);
+      if (body.launchUtility?.mode === "alliance" && (body.devWalletIndex || body.selectedDevWalletId || body.devWalletPublicKey)) {
+        const selected = selectPumpLaunchWallet(await readWalletStore(), auth.userId, firstString(body.devWalletIndex, body.selectedDevWalletId, body.devWalletPublicKey));
+        allianceShareholders(body.launchUtility, selected.wallet.publicKey);
+        if (body.creatorFeeRecipient === selected.wallet.publicKey) delete body.creatorFeeRecipient;
+        if (body.feeRecipient === selected.wallet.publicKey) delete body.feeRecipient;
+      }
+      const review = reviewLiveLaunchUtility(body.launchUtility, body);
       let listings = [], marketError = "";
       if (review.policy.mode === "nft_floor") {
         try { listings = await launchNftMarketReader.listings(review.policy.collectionSymbol); }
@@ -12681,7 +12690,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const body = await readJsonRequestBody(request, 4000);
       const attempt = await freshPumpFeeSharingAttempt(String(body.launchAttemptId || ""));
       if (!attempt || String(attempt.userId) !== String(auth.userId)) throw new Error("That launch is not owned by this account.");
-      const result = await reconcileUsePaidLaunch(attempt);
+      const result = body.action === "pause_daily" || body.action === "resume_daily"
+        ? await setAllianceDistributionPaused(attempt, body.action === "pause_daily")
+        : body.action === "distribute" ? await distributeLaunchAlliance(attempt, { force: true }) : await reconcileUsePaidLaunch(attempt);
       sendWebJson(request, response, 200, { ok: true, utility: result });
       return;
     }
@@ -20457,7 +20468,8 @@ async function continueFlow(chatId, text, session) {
       case "lb_field": {
         const field = session.data.field; const f = LAUNCH_FIELDS[field] || {}; const d = launchDraftFor(chatId);
         let val = String(text || "").trim();
-        if (f.num) { const n = Number(val); d[field] = (Number.isFinite(n) && n > 0) ? String(Math.min(50, n)) : ""; }
+        if (field === "utilityPartnerPercent") { const n = Number(val); if (!Number.isInteger(n) || n < 1 || n > 99) { await say(chatId, "Enter a whole percentage from 1 to 99. The creator keeps the remainder."); return; } d[field] = String(n); }
+        else if (f.num) { const n = Number(val); d[field] = (Number.isFinite(n) && n > 0) ? String(Math.min(50, n)) : ""; }
         else { if (val === "-" || /^skip$/i.test(val)) val = ""; if (f.up) val = val.toUpperCase().replace(/[^A-Za-z0-9]/g, ""); d[field] = val.slice(0, f.max || 120); }
         clearSession(chatId);
         await showLaunchBuilder(chatId, session.userId);
@@ -32407,9 +32419,36 @@ const PUMP_HOLDER_REWARD_FORCE_CRANK_MS = 6 * 60 * 60 * 1000;
 
 const launchNftMarketReader = createNftMarketReader({ apiKey: process.env.MAGIC_EDEN_API_KEY || "" });
 
+function liveLaunchUtilityCapabilities() {
+  const caps = launchUtilityCapabilities();
+  caps.alliance.available = !!(CONFIG.pumpLaunchEnabled && isPumpPortalLocalLaunch());
+  caps.alliance.autoDistributeAvailable = CONFIG.creatorFeesAutoClaimEnabled === true;
+  if (!caps.alliance.available) caps.alliance.reason = "Community Alliances need the enabled local signed Pump launcher.";
+  return caps;
+}
+function reviewLiveLaunchUtility(input, context = {}) {
+  const review = reviewLaunchUtility(input, context);
+  const caps = liveLaunchUtilityCapabilities();
+  if (review.policy.mode === "alliance") {
+    if (!caps.alliance.available) review.blockers.push(caps.alliance.reason);
+    if (review.policy.autoDistribute && !caps.alliance.autoDistributeAvailable) review.blockers.push("Daily distribution is unavailable on this deployment. Choose manual distribution.");
+    review.available = review.blockers.length === 0;
+  }
+  return review;
+}
 function launchUtilityPublic(attempt = {}) {
   if (!utilityRequiresFeeSharing(attempt)) return null;
   const state = attempt.pumpFeeSharing || {};
+  if (attempt.launchUtility.mode === "alliance") return {
+    mode: "alliance", launchAttemptId: pumpFeeSharingAttemptId(attempt), status: state.status || "PENDING_SETUP",
+    creatorAddress: attempt.devWalletPublicKey || "", partnerWallet: attempt.launchUtility.partnerWallet,
+    partnerName: attempt.launchUtility.partnerName, partnerShareBps: attempt.launchUtility.partnerShareBps,
+    autoDistribute: attempt.launchUtility.autoDistribute === true && attempt.allianceDistribution?.automaticPaused !== true,
+    autoDistributionAuthorized: attempt.launchUtility.autoDistribute === true, signature: state.setupSignature || "",
+    configAddress: state.configAddress || "", error: state.lastError || "",
+    distribution: publicAllianceSettlement(attempt.allianceDistribution),
+    note: "Permanent creator/community wallet split. This is not individual-holder distribution or an endorsement."
+  };
   return { mode: "usepaid", launchAttemptId: pumpFeeSharingAttemptId(attempt), xHandle: attempt.launchUtility.xHandle, status: state.status || "PENDING_SETUP",
     treasury: attempt.launchUtility.treasury, configAddress: state.configAddress || "",
     signature: state.setupSignature || "", error: state.lastError || "", cashPayoutStatus: "provider_managed",
@@ -32417,6 +32456,7 @@ function launchUtilityPublic(attempt = {}) {
 }
 
 async function reconcileUsePaidLaunch(initial) {
+  if (initial?.launchUtility?.mode === "alliance") return reconcileLaunchAlliance(initial);
   if (!utilityRequiresFeeSharing(initial)) throw new Error("This launch does not use UsePaid.");
   const id = pumpFeeSharingAttemptId(initial), mint = pumpFeeSharingMint(initial);
   if (!mint) throw new Error("Waiting for this launch's confirmed coin address; do not launch again.");
@@ -32470,7 +32510,7 @@ async function reconcileUsePaidLaunch(initial) {
 }
 
 async function attachLaunchUtility(userId, payload, result) {
-  if (payload.launchUtility?.mode !== "usepaid" || !result.tokenMint || String(result.status).toUpperCase() !== "COMPLETE") return result;
+  if (!utilityRequiresFeeSharing(payload) || !result.tokenMint || String(result.status).toUpperCase() !== "COMPLETE") return result;
   const id = payload.clientRequestId;
   try {
     const selected = selectPumpLaunchWallet(await readWalletStore(), userId, firstString(payload.devBuy?.walletIndex));
@@ -32480,8 +32520,108 @@ async function attachLaunchUtility(userId, payload, result) {
   } catch (error) {
     await patchPumpFeeSharingState(id, { lastError: friendlyError(error).slice(0, 300) }).catch(() => {});
     const latest = await freshPumpFeeSharingAttempt(id).catch(() => null);
-    return { ...result, launchUtility: launchUtilityPublic(latest || {}), warning: "Coin is live. UsePaid setup needs a retry; do not launch a second coin. " + friendlyError(error) };
+    return { ...result, launchUtility: launchUtilityPublic(latest || {}), warning: "Coin is live. Fee setup needs a retry; do not launch a second coin. " + friendlyError(error) };
   }
+}
+
+async function reconcileLaunchAlliance(initial) {
+  const id = pumpFeeSharingAttemptId(initial), mint = pumpFeeSharingMint(initial);
+  if (!mint) throw new Error("Waiting for the original coin address; do not launch again.");
+  return LockService.withLock(`pump-holder-fee-setup:${mint}`, 120000, async () => {
+    let attempt = await freshPumpFeeSharingAttempt(id);
+    const policy = assertLaunchUtilityReady(attempt.launchUtility, { rail: "pump" }).policy;
+    const creatorAddress = attempt.devWalletPublicKey;
+    allianceShareholders(policy, creatorAddress);
+    let config = await readPumpFeeSharingConfig({ connection, mint });
+    const active = async () => {
+      attempt = await patchPumpFeeSharingState(id, { status: "ACTIVE", setupConfirmedAt: attempt.pumpFeeSharing?.setupConfirmedAt || new Date().toISOString(), configAddress: config.address.toBase58(), warning: "", lastError: "" });
+      void resumeLaunchBundleInvitesAfterFeeSharing(attempt).catch(() => {});
+      void resumePumpPostLaunchBuysAfterFeeSharing(attempt).catch(() => {});
+      return launchUtilityPublic(attempt);
+    };
+    if (allianceConfigMatches(config, policy, creatorAddress)) return active();
+    if (config.exists && !pumpFeeSharingInitialCreatorConfig(config, creatorAddress)) {
+      attempt = await patchPumpFeeSharingState(id, { status: "CONFLICT", lastError: "On-chain fee shares differ from this launch's reviewed Alliance. No changes submitted." });
+      return launchUtilityPublic(attempt);
+    }
+    const disposition = await pumpFeeSharingSubmissionDisposition(attempt.pumpFeeSharing || {});
+    if (!disposition.rebuild) return launchUtilityPublic(attempt);
+    const wallet = walletsForOwner(await readWalletStore(), attempt.userId).find(row => row.publicKey === creatorAddress);
+    if (!wallet) throw new Error("Restore the original creator wallet to finish this Alliance. No new coin is needed.");
+    const [recipient, rent, balance] = await Promise.all([
+      connection.getAccountInfo(new PublicKey(policy.partnerWallet), "confirmed"),
+      config.exists ? 0 : connection.getMinimumBalanceForRentExemption(PUMP_HOLDER_REWARD_CONFIG_RENT_SPACE, "confirmed"),
+      connection.getBalance(new PublicKey(creatorAddress), "confirmed")
+    ]);
+    if (recipient && (!recipient.owner.equals(SystemProgram.programId) || recipient.executable)) throw new Error("Community recipient is not a normal SOL wallet. Fee setup stopped.");
+    const required = pumpFeeSharingSetupFundingTarget(BigInt(rent));
+    if (BigInt(balance) < required) {
+      attempt = await patchPumpFeeSharingState(id, { status: "SETUP_NEEDS_FUNDING", setupFundingTargetLamports: String(required), lastError: "Creator wallet needs additional SOL for fee-sharing account rent and network fees. Buys remain paused." });
+      return launchUtilityPublic(attempt);
+    }
+    const signer = decryptWallet(wallet), instructions = [];
+    if (!config.exists) {
+      const addresses = getPumpFeeSharingAddresses({ mint });
+      const pool = await connection.getAccountInfo(addresses.canonicalPool, "confirmed");
+      instructions.push(await buildPumpFeeSharingCreateConfigInstruction({ creator: signer.publicKey, mint, pool: pool ? addresses.canonicalPool : null }));
+    }
+    instructions.push(await buildPumpFeeSharingOneTimeUpdateInstruction({ creator: signer.publicKey, mint, holderRewardsVault: policy.partnerWallet, holderRewardsShareBps: policy.partnerShareBps }));
+    await patchPumpFeeSharingState(id, { creatorAddress, configAddress: getPumpFeeSharingAddresses({ mint }).sharingConfig.toBase58() });
+    await submitPumpFeeSharingSetupTransaction({ attempt, creatorKeypair: signer, instructions, step: "alliance_permanent_split" });
+    config = await readPumpFeeSharingConfig({ connection, mint, required: true });
+    if (allianceConfigMatches(config, policy, creatorAddress)) return active();
+    throw new Error("Coin is live. Alliance fee shares are awaiting on-chain verification; retry the same setup.");
+  });
+}
+
+async function setAllianceDistributionPaused(initial, paused) {
+  return LockService.withLock(`alliance-distribute:${pumpFeeSharingMint(initial)}`, 120000, async () => {
+    const id = pumpFeeSharingAttemptId(initial), attempt = await freshPumpFeeSharingAttempt(id);
+    if (attempt?.launchUtility?.mode !== "alliance" || attempt.launchUtility.autoDistribute !== true) throw new Error("This launch did not authorize daily distribution. Manual distribution remains available.");
+    await upsertPumpLaunchAttempt({ id, allianceDistribution: { ...(attempt.allianceDistribution || {}), automaticPaused: paused === true } });
+    return launchUtilityPublic(await freshPumpFeeSharingAttempt(id));
+  });
+}
+async function distributeLaunchAlliance(initial, { force = false } = {}) {
+  const id = pumpFeeSharingAttemptId(initial), mint = pumpFeeSharingMint(initial);
+  return LockService.withLock(`alliance-distribute:${mint}`, 120000, async () => {
+    let attempt = await freshPumpFeeSharingAttempt(id);
+    if (attempt?.launchUtility?.mode !== "alliance" || attempt.pumpFeeSharing?.status !== "ACTIVE") throw new Error("Alliance fee setup must be active before distribution.");
+    const last = attempt.allianceDistribution || {};
+    const elapsed = Date.now() - (Date.parse(last.lastCheckedAt || last.lastConfirmedAt || "") || 0);
+    if (!last.pending && ((!force && (attempt.launchUtility.autoDistribute !== true || last.automaticPaused === true || elapsed < 86400000)) || (force && elapsed < 60000))) return launchUtilityPublic(attempt);
+    const state = await settleLaunchAlliance({
+      connection,
+      load: async () => attempt.allianceDistribution || {},
+      save: async value => { await upsertPumpLaunchAttempt({ id, allianceDistribution: value }); attempt = await freshPumpFeeSharingAttempt(id); },
+      prepare: async () => {
+        // Reconcile an already-submitted transaction while paused, but do not
+        // replace a failed/expired one without a new manual action or schedule.
+        if (!force && (attempt.launchUtility.autoDistribute !== true || attempt.allianceDistribution?.automaticPaused === true)) return null;
+        const config = await readPumpFeeSharingConfig({ connection, mint, required: true });
+        if (!allianceConfigMatches(config, attempt.launchUtility, attempt.devWalletPublicKey)) throw new Error("Alliance on-chain shares differ from the approved recipients. No distribution sent.");
+        // The config PDA is unique to this coin: never use the creator's
+        // wallet-wide rewards to report or distribute per-coin earnings.
+        const balances = await getPumpRewardBalances({ connection, wallet: config.address });
+        if (BigInt(balances.creator.totalAtomic) < 1000000n) return null;
+        const wallet = walletsForOwner(await readWalletStore(), attempt.userId).find(row => row.publicKey === attempt.devWalletPublicKey);
+        if (!wallet) throw new Error("Restore the creator wallet to pay Alliance distribution network costs.");
+        const signer = decryptWallet(wallet);
+        const built = await buildPumpFeeSharingDistributionInstructions({ connection, payer: signer.publicKey, mint });
+        if (!allianceConfigMatches(built.sharingConfig, attempt.launchUtility, signer.publicKey)) throw new Error("Alliance config changed during preparation. Nothing sent.");
+        const latest = await connection.getLatestBlockhash("confirmed");
+        const tx = new Transaction({ recentBlockhash: latest.blockhash, feePayer: signer.publicKey });
+        for (const instruction of built.instructions) tx.add(instruction);
+        const [fee, balance] = await Promise.all([connection.getFeeForMessage(tx.compileMessage(), "confirmed"), connection.getBalance(signer.publicKey, "confirmed")]);
+        if (!Number.isSafeInteger(fee?.value) || fee.value < 0 || fee.value > 100000) throw new Error("Distribution network fee is unavailable or exceeds the 0.0001 SOL limit.");
+        if (balance < fee.value + 3000000) throw new Error("Creator wallet needs at least 0.003 SOL plus network fees for distribution account rent. No sibling wallet is charged.");
+        tx.sign(signer);
+        return { signature: bs58.encode(tx.signature), rawBase64: tx.serialize().toString("base64"), blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight };
+      }
+    });
+    await audit("launch_alliance_distribution", { userId: attempt.userId, launchAttemptId: id, tokenMint: mint, status: state.status, signature: state.pending?.signature || state.lastSignature || "" });
+    return launchUtilityPublic(await freshPumpFeeSharingAttempt(id));
+  });
 }
 
 function pumpHolderRewardEffectiveShareBps(policy = {}) {
@@ -33747,6 +33887,20 @@ async function processCreatorFeeAutoClaims() {
       if (results.length >= CONFIG.holderRewardsAutoClaimMaxPerTick) break;
       if (String(attempt.rail || "pump").toLowerCase() !== "pump") continue;
       if (utilityRequiresFeeSharing(attempt)) {
+        if (attempt.launchUtility.mode === "alliance" && attempt.pumpFeeSharing?.status === "ACTIVE") {
+          const distribution = attempt.allianceDistribution || {};
+          const lastCheck = Date.parse(distribution.lastCheckedAt || distribution.lastConfirmedAt || "") || 0;
+          if (!distribution.pending && (attempt.launchUtility.autoDistribute !== true || distribution.automaticPaused === true || now - lastCheck < 86400000)) continue;
+          if (now - (Date.parse(attempt.utilityCheckedAt || "") || 0) < 300000) continue;
+          await upsertPumpLaunchAttempt({ id: pumpFeeSharingAttemptId(attempt), utilityCheckedAt: new Date().toISOString() });
+          try { results.push(await distributeLaunchAlliance(attempt)); }
+          catch (error) {
+            const latest = await freshPumpFeeSharingAttempt(pumpFeeSharingAttemptId(attempt));
+            await upsertPumpLaunchAttempt({ id: pumpFeeSharingAttemptId(attempt), allianceDistribution: { ...(latest.allianceDistribution || {}), status: latest.allianceDistribution?.pending ? "PENDING" : "NEEDS_ATTENTION", lastCheckedAt: new Date().toISOString(), lastError: friendlyError(error).slice(0, 220) } });
+            results.push({ id: pumpFeeSharingAttemptId(attempt), status: "needs_attention", error: friendlyError(error) });
+          }
+          continue;
+        }
         if (attempt.pumpFeeSharing?.status === "ACTIVE" || attempt.pumpFeeSharing?.status === "CONFLICT") continue;
         if (String(attempt.status || "").toLowerCase() !== "complete") continue;
         if (now - (Date.parse(attempt.utilityCheckedAt || "") || 0) < 300000) continue;
@@ -34900,10 +35054,13 @@ async function showTelegramOgreToolsMenu(chatId, messageId = null) {
 const launchDrafts = new Map(); // chatId -> { name, symbol, description, devBuySol, x, telegram, website }
 const botLaunchRequestsBusy = new Set();
 const LAUNCH_FIELDS = {
+  utilityPartnerWallet: { emoji: "👛", ask: "Paste the community's SOL wallet address. This permanently receives its share of creator fees. Verify the full address yourself; a name is not proof of ownership.", max: 44 },
+  utilityPartnerName: { emoji: "◈", ask: "Send a community name for this Alliance (display label only, not verified affiliation).", max: 64 },
+  utilityPartnerPercent: { emoji: "%", ask: "Send the community share of creator fees as a percentage from 1 to 99. Your creator wallet keeps the remainder. This split is permanent.", num: true },
   utilityXHandle: { emoji: "𝕏", ask: "Send the X handle for UsePaid payouts (for example @creator). This requires permanent 100% fee routing; it will be reviewed before launch.", max: 16 },
   utilityCollection: { emoji: "◆", ask: "Send the Magic Eden collection symbol (for example okay_bears). This is a read-only floor preview, not a purchase.", max: 100 },
   name: { emoji: "📝", ask: "Send your coin's NAME (e.g. Ogre Mode):", max: 32 },
-  symbol: { emoji: "💲", ask: "Send the TICKER / symbol (e.g. OGRE):", max: 12, up: true },
+  symbol: { emoji: "💲", ask: "Send the TICKER / symbol (2–10 letters/numbers, e.g. OGRE):", max: 10, up: true },
   description: { emoji: "📄", ask: "Send a short DESCRIPTION for your coin:", max: 400 },
   devBuySol: { emoji: "💰", ask: "Send your DEV BUY amount in SOL (e.g. 0.1), or 0 for none:", num: true },
   x: { emoji: "🐦", ask: "Send your X (Twitter) link or @handle, or - to skip:", max: 80 },
@@ -34912,24 +35069,24 @@ const LAUNCH_FIELDS = {
 };
 function launchDraftFor(chatId) { let d = launchDrafts.get(chatId); if (!d) { d = {}; launchDrafts.set(chatId, d); } return d; }
 function launchUtilityFromDraft(d) {
+  if (d.utilityMode === "alliance") return { mode: "alliance", partnerName: d.utilityPartnerName || "Community", partnerWallet: d.utilityPartnerWallet || "", partnerShareBps: Number(d.utilityPartnerPercent || 50) * 100, autoDistribute: d.utilityAutoDistribute === true };
   if (d.utilityMode === "usepaid") return { mode: "usepaid", xHandle: d.utilityXHandle || "" };
   if (d.utilityMode === "nft_floor") return { mode: "nft_floor", collectionSymbol: d.utilityCollection || "", feeShareBps: 5000, maxPriceSol: "0.1", dailyBudgetSol: "0.5" };
   return { mode: "creator" };
 }
 async function showLaunchUtilityMenu(chatId, userId, messageId) {
-  const d = launchDraftFor(chatId), caps = launchUtilityCapabilities();
+  const d = launchDraftFor(chatId), caps = liveLaunchUtilityCapabilities();
   const mode = d.utilityMode || "creator";
-  const lines = ["◆ NFT & creator fees", "", `Fee choice: ${mode === "creator" ? "keep creator fees" : mode === "usepaid" ? "UsePaid / X payouts" : "NFT floor preview"}`,
+  const lines = ["◆ NFT & creator fees", "", `Fee choice: ${mode === "creator" ? "keep creator fees" : mode === "alliance" ? "Community Alliance" : "saved route unavailable · select a supported option"}`,
     `Create linked collection: ${d.nftEnabled ? "yes · coin art · up to 500 items · 5% royalty" : "no"}`,
     "", "Creating a collection does not redirect fees. Your launch wallet controls the collection and pays its extra rent/network costs. Add NFT items later in the NFT manager.",
-    "", caps.usepaid.available ? "UsePaid: available. Permanent 100% fee destination; provider handles 80% X payouts and 20% $PAID buy/burn." : `UsePaid: ${caps.usepaid.reason}`,
-    "NFT floor: preview only; purchases, dedicated vaults and distributions are not activated."];
+    "", "Community Alliance permanently splits creator fees between your creator wallet and a community SOL wallet. It does not pay individual holders or X cash.",
+    ...(mode === "alliance" ? [`${100-Number(d.utilityPartnerPercent || 50)}% creator / ${Number(d.utilityPartnerPercent || 50)}% community`, `Community: ${d.utilityPartnerName || "not set"}`, `Wallet: ${d.utilityPartnerWallet || "not set"}`, `Distribution: ${d.utilityAutoDistribute ? "daily when at least 0.001 SOL accrued" : "manual in My launches"}`, "Creator wallet pays network costs (max 0.0001 SOL per distribution) and needs a 0.003 SOL rent reserve."] : [])];
   await sendOrEditMessage(chatId, messageId, withBrandFooter(lines.join("\n")), { inline_keyboard: [
-    [{ text: "Keep creator fees", callback_data: "lb_utility:creator" }, { text: "X payouts", callback_data: "lb_utility:usepaid" }],
-    [{ text: "NFT floor preview", callback_data: "lb_utility:nft_floor" }],
+    [{ text: "Keep creator fees", callback_data: "lb_utility:creator" }],
+    ...(caps.alliance.available ? [[{ text: "Community Alliance", callback_data: "lb_utility:alliance" }]] : []),
     [{ text: d.nftEnabled ? "✓ Linked collection · turn off" : "+ Create linked collection", callback_data: "lb_nft_toggle" }],
-    ...(mode === "usepaid" ? [[{ text: `X recipient: ${d.utilityXHandle || "set handle"}`, callback_data: "lb_edit:utilityXHandle" }]] : []),
-    ...(mode === "nft_floor" ? [[{ text: `Collection: ${d.utilityCollection || "set symbol"}`, callback_data: "lb_edit:utilityCollection" }], [{ text: "Preview listings", callback_data: "lb_utility_preview" }]] : []),
+    ...(mode === "alliance" ? [[{ text: "Community name", callback_data: "lb_edit:utilityPartnerName" }, { text: "Community wallet", callback_data: "lb_edit:utilityPartnerWallet" }], [{ text: "Fee split %", callback_data: "lb_edit:utilityPartnerPercent" }], ...(caps.alliance.autoDistributeAvailable ? [[{ text: d.utilityAutoDistribute ? "Daily payouts ✓ · change to manual" : "Enable daily distributions", callback_data: "lb_alliance_auto" }]] : [])] : []),
     [{ text: "Back to launch", callback_data: "launch_build_menu" }]
   ] });
 }
@@ -34974,10 +35131,10 @@ async function showLaunchBuilder(chatId, userId, messageId = null) {
     `${LAUNCH_FIELDS.devBuySol.emoji} Dev buy: ${d.devBuySol ? d.devBuySol + " SOL" : "none"}`,
     `🎯 Auto-exit: ${d.autoExitX ? "auto-sell dev bag at " + d.autoExitX + "x" : "none (hold)"}`,
     `👛 Launch wallet: ${w.label}`,
-    `◆ NFT: ${d.nftEnabled ? "create linked collection" : "off"} · Fees: ${d.utilityMode === "usepaid" ? "UsePaid (permanent)" : d.utilityMode === "nft_floor" ? "NFT preview only" : "creator wallet"}`,
+    `◆ NFT: ${d.nftEnabled ? "create linked collection" : "off"} · Fees: ${d.utilityMode === "alliance" ? "Community Alliance (permanent)" : d.utilityMode && d.utilityMode !== "creator" ? "saved route unavailable" : "creator wallet"}`,
     `${LAUNCH_FIELDS.x.emoji} X: ${v(d.x)}   ${LAUNCH_FIELDS.telegram.emoji} TG: ${v(d.telegram)}   ${LAUNCH_FIELDS.website.emoji} Web: ${v(d.website)}`,
     "",
-    ready ? "Ready. Tap 🚀 LAUNCH NOW to mint it live (your dev buy fires with it)." : "Add at least a Name and Ticker to unlock Launch."
+    ready ? "Ready. Tap 🚀 LAUNCH NOW to mint it live. Optional buys run after the required launch and fee-setup confirmations." : "Add at least a Name and Ticker to unlock Launch."
   ];
   const kb = [
     [{ text: "📝 Name", callback_data: "lb_edit:name" }, { text: "💲 Ticker", callback_data: "lb_edit:symbol" }],
@@ -34993,17 +35150,36 @@ async function showLaunchBuilder(chatId, userId, messageId = null) {
 }
 async function handleLaunchBuilder(chatId, userId, data, messageId) {
   if ([...botLaunchRequestsBusy].some(key => key.startsWith(`${userId}:`))) { await say(chatId, "Your original launch is processing. Wait for its status before changing the draft."); return; }
+  if (data.startsWith("lb_alliance_daily:")) {
+    const attempt = await freshPumpFeeSharingAttempt(data.slice("lb_alliance_daily:".length));
+    if (!attempt || String(attempt.userId) !== String(userId)) { await say(chatId, "That launch is not owned by this account."); return; }
+    try {
+      const utility = await setAllianceDistributionPaused(attempt, attempt.allianceDistribution?.automaticPaused !== true);
+      await say(chatId, `Daily Alliance payouts ${utility.autoDistribute ? "enabled" : "paused"}. The permanent wallet split is unchanged. Already-submitted transactions can still confirm; manual distribution remains available.`);
+    } catch (error) { await say(chatId, "Payout setting needs attention: " + friendlyError(error)); }
+    return;
+  }
+  if (data.startsWith("lb_alliance_pay:")) {
+    const attempt = await freshPumpFeeSharingAttempt(data.slice("lb_alliance_pay:".length));
+    if (!attempt || String(attempt.userId) !== String(userId)) { await say(chatId, "That launch is not owned by this account."); return; }
+    try {
+      const utility = await distributeLaunchAlliance(attempt, { force: true }), d = utility.distribution || {};
+      await say(chatId, `Alliance distribution: ${d.status || "NOT_DISTRIBUTED"}\n${d.error || "Fees under 0.001 SOL remain accrued on-chain."}${d.signature ? "\nhttps://solscan.io/tx/" + d.signature : ""}`);
+    } catch (error) { await say(chatId, "Distribution needs attention: " + friendlyError(error)); }
+    return;
+  }
   if (data.startsWith("lb_utility_retry:")) {
     const attempt = await freshPumpFeeSharingAttempt(data.slice("lb_utility_retry:".length));
     if (!attempt || String(attempt.userId) !== String(userId)) { await say(chatId, "That launch is not owned by this account."); return; }
     try {
       const utility = await reconcileUsePaidLaunch(attempt);
-      await say(chatId, `UsePaid routing: ${utility.status}\n@${utility.xHandle}\nCA: ${pumpFeeSharingMint(attempt)}\n${utility.error || "Cash payouts are managed separately by UsePaid."}${utility.signature ? "\nhttps://solscan.io/tx/" + utility.signature : ""}`);
+      await say(chatId, `${utility.mode === "alliance" ? "Community Alliance" : "UsePaid routing"}: ${utility.status}\nCA: ${pumpFeeSharingMint(attempt)}\n${utility.error || utility.note || ""}${utility.signature ? "\nhttps://solscan.io/tx/" + utility.signature : ""}`);
     } catch (error) { await say(chatId, "Original fee setup is still pending: " + friendlyError(error) + " No new coin was launched."); }
     return;
   }
   if (data === "lb_utility_menu") { await showLaunchUtilityMenu(chatId, userId, messageId); return; }
-  if (data.startsWith("lb_utility:")) { const mode = data.split(":")[1]; if (["creator", "usepaid", "nft_floor"].includes(mode)) launchDraftFor(chatId).utilityMode = mode; await showLaunchUtilityMenu(chatId, userId, messageId); return; }
+  if (data.startsWith("lb_utility:")) { const mode = data.split(":")[1]; if (["creator", "alliance"].includes(mode)) launchDraftFor(chatId).utilityMode = mode; else await say(chatId, "That fee route is currently unavailable. Select creator fees or Community Alliance."); await showLaunchUtilityMenu(chatId, userId, messageId); return; }
+  if (data === "lb_alliance_auto") { const d = launchDraftFor(chatId); d.utilityAutoDistribute = !d.utilityAutoDistribute; await showLaunchUtilityMenu(chatId, userId, messageId); return; }
   if (data === "lb_nft_toggle") { const d = launchDraftFor(chatId); d.nftEnabled = !d.nftEnabled; await showLaunchUtilityMenu(chatId, userId, messageId); return; }
   if (data === "lb_utility_preview") {
     try {
@@ -35067,7 +35243,7 @@ async function showLaunchConfirm(chatId, userId, messageId) {
   if (!d.name || !d.symbol) { await say(chatId, "Add a Name and Ticker first."); return; }
   let utilityReview;
   try {
-    utilityReview = reviewLaunchUtility(launchUtilityFromDraft(d), { rail: "pump" });
+    utilityReview = reviewLiveLaunchUtility(launchUtilityFromDraft(d), { rail: "pump" });
     if (!utilityReview.available) throw new Error(utilityReview.blockers.join(" "));
   } catch (error) { await say(chatId, friendlyError(error) + " Open NFT & fee utility to review or keep creator fees."); return; }
   const w = await launchBuilderWalletLabel(chatId, userId, d);
@@ -35093,7 +35269,7 @@ async function showLaunchConfirm(chatId, userId, messageId) {
     `NFT collection: ${d.nftEnabled ? "create after mint · extra rent/network costs · retry separately if needed" : "off"}`,
     utilityReview.summary,
     ...utilityReview.warnings,
-    ...(utilityReview.treasury ? [`Permanent destination: ${utilityReview.treasury}`, "Confirming accepts UsePaid terms: https://usepaid.app/legal/terms and disclosures: https://usepaid.app/legal/disclosures"] : []),
+    ...(utilityReview.treasury ? [`Permanent destination: ${utilityReview.treasury}`] : []),
     "",
     "Make sure that wallet holds enough SOL (mint fee + buffer + your dev buy)."
   ].join("\n")), {
@@ -35120,7 +35296,7 @@ async function executeBotLaunchReviewed(chatId, userId, messageId, confirmationI
     return;
   }
   const wid = (d.walletId && wallets.find((w) => w.publicKey === d.walletId)) ? d.walletId : wallets[0].publicKey;
-  const utilityReview = reviewLaunchUtility(launchUtilityFromDraft(d), { rail: "pump" });
+  const utilityReview = reviewLiveLaunchUtility(launchUtilityFromDraft(d), { rail: "pump" });
   if (!launchConfirmationMatches(d.confirmation, { id: confirmationId, userId, fingerprint: launchDraftFingerprint(d, wid, utilityReview.treasury) })) {
     await say(chatId, "The launch settings changed or this confirmation is stale. Review the current details and confirm again.");
     await showLaunchConfirm(chatId, userId, messageId); return;
@@ -35138,7 +35314,7 @@ async function executeBotLaunchReviewed(chatId, userId, messageId, confirmationI
     imageDataUrl: d.imageDataUrl || "", imageName: d.imageName || "",
     devBuyEnabled: Number(d.devBuySol) > 0, devBuySol: String(d.devBuySol || "0"),
     devExitStrategy: telegramLaunchExitStrategy(d.autoExitX),
-    launchUtility: { ...launchUtilityFromDraft(d), consentVersion: LAUNCH_UTILITY_CONSENT_VERSION },
+    launchUtility: { ...launchUtilityFromDraft(d), consentVersion: utilityReview.consentVersion },
     nftCollection: { enabled: d.nftEnabled === true, supplyMode: "expandable", supplyCap: 500, royaltyBps: 500, useCoinArt: true },
     selectedDevWalletId: wid, slippageBps: 300, launchAttemptId: d.confirmation.id, source: "slimewire_tg"
   };
@@ -35155,7 +35331,7 @@ async function executeBotLaunchReviewed(chatId, userId, messageId, confirmationI
     launchDrafts.set(chatId, {});
     const out = [`✅ $${d.symbol} is LIVE — born on SlimeWire!`];
     if (result.warning) out.push(result.warning);
-    if (result.launchUtility) out.push(`UsePaid fee routing: ${result.launchUtility.status}. Cash payouts are managed separately by UsePaid.`);
+    if (result.launchUtility) out.push(`${result.launchUtility.mode === "alliance" ? "Community Alliance" : "UsePaid fee routing"}: ${result.launchUtility.status}. ${result.launchUtility.note || ""}`);
     if (result.nftCollection) out.push(`NFT collection: ${result.nftCollection.status}${result.nftCollection.address ? " · " + result.nftCollection.address : ""}`);
     if (mint) { out.push("", `CA: <code>${mint}</code>`, `Pump: https://pump.fun/${mint}`, `Chart: https://www.slimewire.org/t?ca=${mint}`); }
     // Arm the dev-bag auto-exit (take-profit only, no stop-loss) if a preset was chosen.
@@ -35183,7 +35359,8 @@ async function executeBotLaunchReviewed(chatId, userId, messageId, confirmationI
       out.push("", entry?.exitStatus === "armed" ? `🎯 Your ${autoExitX}x auto-exit is armed on the confirmed dev buy.` : entry?.exitError ? `🎯 Auto-exit needs attention: ${entry.exitError}` : `🎯 Your ${autoExitX}x target is saved with the original buy. It will arm after that buy confirms; it is not armed yet.`);
     }
     out.push("", "It's now a boss other traders can raid in the Swamp. 🐸");
-    const recoveryButtons = result.launchUtility && !["ACTIVE", "CONFLICT"].includes(result.launchUtility.status) ? [[{ text: "Retry fee setup · same coin", callback_data: `lb_utility_retry:${body.launchAttemptId}` }]] : [];
+    const recoveryButtons = result.launchUtility && !["ACTIVE", "CONFLICT"].includes(result.launchUtility.status) ? [[{ text: "Retry fee setup · same coin", callback_data: `lb_utility_retry:${body.launchAttemptId}` }]] : result.launchUtility?.mode === "alliance" && result.launchUtility.status === "ACTIVE" ? [[{ text: "Distribute Alliance fees / check receipt", callback_data: `lb_alliance_pay:${body.launchAttemptId}` }]] : [];
+    if (result.launchUtility?.mode === "alliance" && result.launchUtility.autoDistributionAuthorized) recoveryButtons.push([{ text: "Pause / resume daily Alliance payouts", callback_data: `lb_alliance_daily:${body.launchAttemptId}` }]);
     await sendOrEditMessage(chatId, null, withBrandFooter(out.join("\n")), { inline_keyboard: [...recoveryButtons, [{ text: "Ogre Tools", callback_data: "ogre_tools_menu" }, { text: "Main Menu", callback_data: "main_menu" }]] });
     // AI launch trailer (hype copy + generated card / video) — best-effort, never blocks the launch
     postLaunchTrailer(chatId, trailerDraft, mint).catch(() => {});
@@ -104026,6 +104203,11 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload, options = {})
   }
   const requestedDevBuySol = Math.max(0, Number(basePayload.devBuy?.amountSol) || 0);
   const requestedBundleAmountSol = Math.max(0, Number(bundle.amountSol) || 0);
+  let allianceSetupReserveSol = 0;
+  if (basePayload.launchUtility?.mode === "alliance") {
+    const rent = await connection.getMinimumBalanceForRentExemption(PUMP_HOLDER_REWARD_CONFIG_RENT_SPACE, "confirmed");
+    allianceSetupReserveSol = Number(pumpFeeSharingSetupFundingTarget(BigInt(rent)) + 3000000n) / LAMPORTS_PER_SOL;
+  }
   const postLaunchBuyIntent = buildPumpPostLaunchBuyIntent({ body, basePayload, creatorWallet, bundleWallets });
   if (postLaunchBuyIntent) {
     if (!options.bundlePreflighted) {
@@ -104091,7 +104273,7 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload, options = {})
       apiUrl: CONFIG.pumpLaunchApiUrl,
       timeoutMs,
       priorityFeeSol: CONFIG.pumpLaunchPriorityFeeSol,
-      requiredBufferSol: CONFIG.pumpLaunchRequiredBufferSol,
+      requiredBufferSol: CONFIG.pumpLaunchRequiredBufferSol + allianceSetupReserveSol,
       pool: railToPumpPortalPool(basePayload?.rail),
       skipLocalApiValidation: Boolean(basePayload.pumpCashback)
     }
@@ -104107,7 +104289,7 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload, options = {})
   }
   const holderRewardPolicy = normalizeHolderRewardPolicy(basePayload.holderRewards);
   let holderFeeSharingReady = true;
-  if (basePayload.launchUtility?.mode === "usepaid") {
+  if (utilityRequiresFeeSharing(basePayload)) {
     launchResult = await attachLaunchUtility(userId, basePayload, launchResult);
     holderFeeSharingReady = launchResult.launchUtility?.status === "ACTIVE";
   }
@@ -104282,6 +104464,9 @@ async function webLaunchPumpCoin(userId, body = {}) {
   const holderRewards = launchHolderRewardsFromBody(body);
   const launchRail = normalizeLaunchRail(body.rail || body.pool || body.launchpad);
   const pumpCashback = normalizePumpCashback(body.pumpCashback ?? body.nativePumpCashback ?? body.cashback);
+  if (pumpCashback) throw createPumpLaunchError("Pump no longer supports creating new Cashback coins. Choose Creator rewards or SlimeWire holder rewards; existing Cashback claims remain available.", "PUMP_CASHBACK_CREATE_DISABLED", 400, { stage: PUMP_LAUNCH_STAGE.CONFIG, launchAttemptId });
+  const requestedQuote = String(body.quoteMint || body.quoteAsset || "SOL").trim();
+  if (!["SOL", "WSOL", "So11111111111111111111111111111111111111112"].includes(requestedQuote)) throw createPumpLaunchError("This launch flow currently supports SOL pairs only. Unsupported quote assets cannot be silently changed to SOL.", "LAUNCH_QUOTE_UNAVAILABLE", 400, { stage: PUMP_LAUNCH_STAGE.CONFIG, launchAttemptId });
   if (pumpCashback && launchRail !== "pump") {
     const error = createPumpLaunchError("Pump Cash back is available only on the Pump launch rail.", "PUMP_CASHBACK_RAIL_INVALID", 400, {
       stage: PUMP_LAUNCH_STAGE.CONFIG,
@@ -104299,8 +104484,27 @@ async function webLaunchPumpCoin(userId, body = {}) {
     throw error;
   }
   const nftCollection = normalizeLinkedNftCollection(body.nftCollection, { name, symbol });
-  const utilityReview = assertLaunchUtilityReady(body.launchUtility, { ...body, rail: launchRail, pumpCashback, holderRewards, feeMode });
+  body.launchUtility = normalizeLaunchUtility(body.launchUtility);
+  const utilityContext = { ...body, rail: launchRail, pumpCashback, holderRewards, feeMode };
+  if (launchRail === "pump" && isPumpPortalLocalLaunch()) {
+    if (burnCreatorFees || buybackWallet || ["buyback", "burn", "split"].includes(feeMode)) throw new Error("This Pump launcher does not execute burn or buyback fee routes. Clear the saved route or choose Community Alliance under NFT & Fees.");
+    if (creatorFeeRecipient) {
+      const selected = selectPumpLaunchWallet(await readWalletStore(), userId, firstString(body.devWalletIndex, body.selectedDevWalletId, body.devWalletPublicKey));
+      if (creatorFeeRecipient !== selected.wallet.publicKey) throw new Error("Custom fee recipients must be configured through Community Alliance. The default Pump route belongs to the selected creator wallet.");
+    }
+  }
+  if (body.launchUtility?.mode === "alliance") {
+    const selected = selectPumpLaunchWallet(await readWalletStore(), userId, firstString(body.devWalletIndex, body.selectedDevWalletId, body.devWalletPublicKey));
+    allianceShareholders(body.launchUtility, selected.wallet.publicKey);
+    if (creatorFeeRecipient === selected.wallet.publicKey) { delete utilityContext.creatorFeeRecipient; delete utilityContext.feeRecipient; }
+    const recipient = await connection.getAccountInfo(new PublicKey(body.launchUtility.partnerWallet), "confirmed");
+    if (recipient && (!recipient.owner.equals(SystemProgram.programId) || recipient.executable)) throw new Error("Community recipient must be a normal SOL wallet, not a program account.");
+  }
+  const utilityReview = assertLaunchUtilityReady(body.launchUtility, utilityContext);
+  const liveUtilityReview = reviewLiveLaunchUtility(body.launchUtility, utilityContext);
+  if (!liveUtilityReview.available) throw new Error(liveUtilityReview.blockers.join(" "));
   const launchUtility = { ...utilityReview.policy, ...(utilityReview.treasury ? { treasury: utilityReview.treasury } : {}) };
+  if (launchUtility.mode === "alliance" && !isPumpPortalLocalLaunch()) throw new Error("Community Alliances require the local signed Pump flow so the fee split is verified before optional buys.");
   if (launchUtility.mode === "usepaid") {
     if (!isPumpPortalLocalLaunch()) throw new Error("UsePaid launches require the local signed Pump flow so fees are configured before buys.");
     await verifyUsePaidRecipient(connection, launchUtility.treasury);
@@ -104362,7 +104566,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
     source: "slimewire_web"
   };
   const priorUtilityAttempt = await freshPumpFeeSharingAttempt(launchAttemptId);
-  if (launchUtility.mode === "usepaid" || utilityRequiresFeeSharing(priorUtilityAttempt || {})) {
+  if (utilityRequiresFeeSharing({ launchUtility }) || utilityRequiresFeeSharing(priorUtilityAttempt || {})) {
     const prior = priorUtilityAttempt;
     if (prior?.userId && String(prior.userId) !== String(userId)) throw new Error("This launch attempt belongs to another account.");
     if (prior?.launchUtility && JSON.stringify(prior.launchUtility) !== JSON.stringify(launchUtility)) throw new Error("This saved launch already has a different fee destination. Resume its original setup.");
@@ -104421,7 +104625,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
       const requestedAtomicDevBuy = cleanLaunchBoolean(body.antiSnipe) || cleanLaunchBoolean(body.bundleDevBuy);
       const requestedBundleBuy = Number(body.bundleBuy?.amountSol) > 0;
       const requiresPreBuyFeeSharing = basePayload.rail === "pump"
-        && (normalizeHolderRewardPolicy(basePayload.holderRewards).enabled || launchUtility.mode === "usepaid");
+        && (normalizeHolderRewardPolicy(basePayload.holderRewards).enabled || utilityRequiresFeeSharing({ launchUtility }));
       const useJito = basePayload.rail === "pump"
         && CONFIG.pumpLaunchJitoBundle
         && Date.now() >= pumpLaunchJitoBuildCircuitUntil

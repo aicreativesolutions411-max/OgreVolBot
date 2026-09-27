@@ -7,6 +7,13 @@ import {
   pumpFeeSharingSetupFundingTarget
 } from "../src/lib/pumpRewardDurability.js";
 
+test("Alliance and legacy UsePaid intent and receipts survive ordinary launch-history compaction", () => {
+  const alliance = {id:'alliance',launchUtility:{mode:'alliance'},allianceDistribution:{pending:{signature:'signed'},receipts:[{signature:'paid'}]}};
+  const paid = {id:'paid',launchUtility:{mode:'usepaid'}};
+  const result=compactPumpRewardStore({attempts:[alliance,paid,{id:'ordinary'}]}, {launchHistoryLimit:1});
+  assert.deepEqual(result.attempts,[alliance,paid,{id:'ordinary'}]);
+});
+
 test("fee-sharing setup funding target includes rent plus a bounded fee reserve", () => {
   assert.equal(
     pumpFeeSharingSetupFundingTarget(2_500_000n, {

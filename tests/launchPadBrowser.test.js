@@ -55,11 +55,19 @@ test('new draft handoff cannot set money, fee routing, wallet or consent', () =>
   assert.equal(url.searchParams.get('lc_n'), 'Bright & Green');
   assert.deepEqual([...url.searchParams.keys()], ['from', 'lc_n', 'lc_s', 'lc_d']);
 });
+
+test('Alliance handoff selects a draft path only, never a wallet, split or payout consent',()=>{
+  const url=new URL(ui.draftUrl({name:'Together',symbol:'ALLY',mode:'alliance',partnerWallet:'evil',partnerShareBps:9999,autoDistribute:true,consentVersion:'yes'}),'https://slimewire.org');
+  assert.equal(url.searchParams.get('lc_utility'),'alliance');
+  assert.deepEqual([...url.searchParams.keys()],['from','lc_n','lc_s','lc_d','lc_utility']);
+  assert.equal(ui.coinModel({mint,launchUtility:{mode:'alliance'}}).rewardMode,'alliance');
+});
 test('launch design is a real responsive UI with existing launch and wallet entry points', () => {
   assert.ok(html.includes('/wallet')); assert.ok(html.includes('/prelaunch'));
   assert.ok(html.includes('id="launch-dialog"')); assert.ok(html.includes('aria-live="polite"'));
   assert.ok(!html.includes('<video')); assert.ok(!source.includes('setInterval'));
-  assert.ok(html.includes('Provider paused')); assert.ok(html.includes('not enabled'));
+  assert.ok(html.includes('Community Alliance')); assert.ok(html.includes('not enabled'));
+  for (const unavailable of ['x','business','linkedin','telegram']) assert.ok(!html.includes(`data-route="${unavailable}"`));
   assert.ok(!source.includes('method: \'POST\''));
   const css = readFileSync(new URL('../web/public/launch-pad.css', import.meta.url), 'utf8');
   assert.ok(css.includes('@media(max-width:640px)')); assert.ok(css.includes('prefers-reduced-motion'));

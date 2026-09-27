@@ -32,7 +32,8 @@ export async function feeSetupSubmissionDisposition(state, connection) {
 // creator and the reviewed permanent recipient—not only the utility dropdown.
 export function launchDraftFingerprint(draft, creatorAddress, treasury = '') {
   const keys = ['name', 'symbol', 'description', 'imageDataUrl', 'imageName', 'devBuySol',
-    'x', 'telegram', 'website', 'autoExitX', 'nftEnabled', 'utilityMode', 'utilityXHandle', 'utilityCollection'];
+    'x', 'telegram', 'website', 'autoExitX', 'nftEnabled', 'utilityMode', 'utilityXHandle', 'utilityCollection',
+    'utilityPartnerWallet', 'utilityPartnerName', 'utilityPartnerPercent', 'utilityAutoDistribute'];
   const payload = Object.fromEntries(keys.map(key => [key, draft[key] ?? null]));
   return createHash('sha256').update(JSON.stringify({ payload, creatorAddress, treasury })).digest('hex');
 }

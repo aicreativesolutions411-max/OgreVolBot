@@ -11126,11 +11126,11 @@ function launchCoinHtml() {
           <div class="volume-grid">
             <label>
               Token Name
-              <input data-launch-coin-name type="text" placeholder="Example: Ogre Mode" value="${escapeHtml(draft.name || "")}">
+              <input data-launch-coin-name maxlength="32" type="text" placeholder="Example: Ogre Mode" value="${escapeHtml(draft.name || "")}">
             </label>
             <label>
               Ticker
-              <input data-launch-coin-symbol type="text" placeholder="Example: OGRE" value="${escapeHtml(draft.symbol || "")}">
+              <input data-launch-coin-symbol minlength="2" maxlength="10" type="text" placeholder="Example: OGRE" value="${escapeHtml(draft.symbol || "")}">
             </label>
             <label class="full-span">
               Description
@@ -11221,42 +11221,41 @@ function launchCoinHtml() {
       html: `
           <div class="volume-grid">
             <label>
-              Creator / dev fee (you keep 100% of these)
+              Pump creator fee schedule
               <select data-launch-coin-creator-fee onchange="(this.closest('.volume-grid')||document).querySelector('[data-launch-coin-fee-custom-wrap]').hidden=(this.value!=='custom')">
-                <option value="1000" ${(!draft.creatorFeeBps || String(draft.creatorFeeBps) === "1000" || String(draft.creatorFeeBps) === "0") ? "selected" : ""}>100% — max creator fees (most pick this)</option>
-                <option value="custom" ${(draft.creatorFeeBps && !["0", "1000"].includes(String(draft.creatorFeeBps))) ? "selected" : ""}>Custom %</option>
+                <option value="1000" selected>Protocol-defined · creator rewards enabled</option>
               </select>
             </label>
-            <label data-launch-coin-fee-custom-wrap ${(draft.creatorFeeBps && !["0", "1000"].includes(String(draft.creatorFeeBps))) ? "" : "hidden"}>
+            <label data-launch-coin-fee-custom-wrap hidden>
               Custom fee % (max 10%)
               <input data-launch-coin-creator-fee-custom type="number" min="0" max="10" step="0.5" placeholder="e.g. 2" value="${draft.creatorFeeBps && !["0", "1000"].includes(String(draft.creatorFeeBps)) ? (Number(draft.creatorFeeBps) / 100) : ""}">
             </label>
-            <label>
-              Creator Fee Wallet
+            <label ${draft.creatorFeeRecipient ? '' : 'hidden'}>
+              Saved custom fee wallet · clear to use the creator wallet, or set an Alliance in NFT & Fees
               <input data-launch-coin-fee-recipient type="text" placeholder="Optional wallet address" value="${escapeHtml(draft.creatorFeeRecipient || "")}">
             </label>
             <label>
               Dev fees (where creator fees go)
               <select data-launch-coin-fee-mode>
                 <option value="dev" ${(draft.feeMode || "dev") === "dev" ? "selected" : ""}>100% to my dev wallet (most pick this)</option>
-                <option value="buyback" ${draft.feeMode === "buyback" ? "selected" : ""}>Custom — route to buyback wallet</option>
-                <option value="burn" ${draft.feeMode === "burn" ? "selected" : ""}>Custom — burn creator fees</option>
-                <option value="split" ${draft.feeMode === "split" ? "selected" : ""}>Custom — split dev / buyback</option>
+                <option value="buyback" hidden disabled ${draft.feeMode === "buyback" ? "selected" : ""}>Saved buyback route · unavailable</option>
+                <option value="burn" hidden disabled ${draft.feeMode === "burn" ? "selected" : ""}>Saved burn route · unavailable</option>
+                <option value="split" hidden disabled ${draft.feeMode === "split" ? "selected" : ""}>Saved split route · use Community Alliance</option>
               </select>
             </label>
-            <label>
-              Buyback Wallet
+            <label ${draft.buybackWallet ? '' : 'hidden'}>
+              Saved buyback wallet · clear this unavailable route
               <input data-launch-coin-buyback-wallet type="text" placeholder="Optional buyback wallet" value="${escapeHtml(draft.buybackWallet || "")}">
             </label>
-            <label class="switch-row full-span">
+            <label class="switch-row full-span" ${draft.burnCreatorFees ? '' : 'hidden'}>
               <input data-launch-coin-burn-creator-fees type="checkbox" ${draft.burnCreatorFees ? "checked" : ""}>
-              <span>Burn creator fees when supported by the launch connector</span>
+              <span>Saved burn setting is unavailable. Uncheck it before continuing.</span>
             </label>
-            <label class="switch-row full-span">
+            <label class="switch-row full-span" ${draft.pumpCashback ? '' : 'hidden'}>
               <input data-launch-coin-pump-cashback type="checkbox" ${draft.pumpCashback ? "checked" : ""}>
-              <span><strong>Pump Cash back — shows as enabled on Pump.</strong> Pump permanently redirects creator rewards to eligible traders based on each trader's own volume.</span>
+              <span><strong>Saved Cashback choice is retired.</strong> Uncheck this to continue with creator rewards. Existing Cashback coins keep their claims.</span>
             </label>
-            <p class="muted full-span">Exact Pump behavior: there is no fixed wallet count. Every eligible trader gets an individual on-chain reward accumulator and claims their own Cash back. This is permanent at creation and cannot be combined with SlimeWire holder rewards.</p>
+            <p class="muted full-span">Pump sets its creator fee schedule. SlimeWire cannot set a custom trading tax. Choose a Community Alliance under NFT & Fees for a permanent community wallet split, or use the separate holder-reward option below.</p>
             <label class="switch-row full-span">
               <input data-launch-coin-holder-rewards type="checkbox" ${draft.holderRewards?.enabled ? "checked" : ""}>
               <span>Share creator fees with token holders — SlimeWire accrues and batch-pays eligible Solana holders.</span>
@@ -12016,7 +12015,7 @@ async function submitLaunchCoin() {
     }
     const tokenMint = String(launch.tokenMint || launch.mint || launch.ca || launch.contractAddress || "").trim();
     const signature = launch.signature ? ` Signature: ${shortAddress(launch.signature)}.` : "";
-    if (launch.launchUtility) state.launchCoinStatus = `Coin launched. UsePaid fee routing: ${launch.launchUtility.status}; cash payouts are managed separately by UsePaid.`;
+    if (launch.launchUtility) state.launchCoinStatus = `Coin launched. ${launch.launchUtility.mode === "alliance" ? "Community Alliance" : "UsePaid fee routing"}: ${launch.launchUtility.status}. ${launch.launchUtility.note || ""}`;
     const collectionNote = launch.nftCollection?.status === "COMPLETE"
       ? ` NFT collection linked: ${shortAddress(launch.nftCollection.address)}.`
       : launch.nftCollection?.status === "FAILED"
