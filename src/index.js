@@ -10,6 +10,8 @@ import zlib from "node:zlib";
 import bs58 from "bs58";
 import sharp from "sharp";
 import { createScanPfpLoader, scanPhotoContent } from "./lib/telegramScanPfp.js";
+import { createLaunchDirectoryReader } from "./lib/launchDirectory.js";
+const publicLaunchDirectory = createLaunchDirectoryReader(() => readPumpLaunchAttempts());
 import ffmpegPath from "ffmpeg-static";
 import { WebSocketServer, WebSocket } from "ws";
 import nacl from "tweetnacl";
@@ -10119,6 +10121,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
         if (mints.length >= 80) break;
       }
       sendCachedWebJson(request, response, 200, { ok: true, launches: mints }, "public, max-age=30, stale-while-revalidate=300");
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/launch/directory") {
+      try {
+        const launches = await publicLaunchDirectory();
+        sendCachedWebJson(request, response, 200, { ok: true, launches }, "public, max-age=30, stale-while-revalidate=60");
+      } catch {
+        sendWebJson(request, response, 503, { ok: false, error: "Launch directory is temporarily unavailable. Please retry." });
+      }
       return;
     }
 

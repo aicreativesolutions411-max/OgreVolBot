@@ -1,0 +1,38 @@
+// Public launch discovery. Never return the attempt object: it contains private
+// wallet/recovery state. This view needs no RPC, indexer or paid metadata calls.
+const text = (value, max) => String(value || '').trim().slice(0, max);
+function imageUrl(value) {
+  try {
+    const url = new URL(text(value, 2048));
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : '';
+  } catch { return ''; }
+}
+export function buildLaunchDirectory(attempts = []) {
+  const seen = new Set(), rows = [];
+  for (const attempt of [...(Array.isArray(attempts) ? attempts : [])].reverse()) {
+    const mint = text(attempt?.tokenMint, 64);
+    if (String(attempt?.status || '').toUpperCase() !== 'COMPLETE' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint) || seen.has(mint)) continue;
+    seen.add(mint);
+    const metadata = attempt.metadataJson || {};
+    const date = Date.parse(attempt.completedAt || attempt.createdAt || '');
+    rows.push({
+      mint, name: text(attempt.tokenName || attempt.name || metadata.name, 64),
+      symbol: text(attempt.symbol || attempt.ticker || metadata.symbol, 16),
+      description: text(metadata.description, 180),
+      imageUrl: imageUrl(attempt.imageUri || metadata.image),
+      createdAt: Number.isFinite(date) ? new Date(date).toISOString() : '',
+      rewardMode: attempt.launchUtility?.status ? 'external' : attempt.pumpCashback ? 'cashback' : attempt.holderRewards?.enabled ? 'holders' : 'creator'
+    });
+  }
+  return rows.sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)).slice(0, 90);
+}
+export function createLaunchDirectoryReader(readAttempts, { now = Date.now, ttlMs = 60_000 } = {}) {
+  let value, expires = 0, pending;
+  return async function readDirectory() {
+    if (value && now() < expires) return value;
+    if (!pending) pending = Promise.resolve().then(readAttempts).then(store => {
+      value = buildLaunchDirectory(store?.attempts); expires = now() + ttlMs; return value;
+    }).finally(() => { pending = null; });
+    return pending;
+  };
+}
