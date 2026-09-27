@@ -24,6 +24,12 @@ test('directory preserves reward labels and rejects unsafe images', () => {
   assert.equal(buildLaunchDirectory([{ ...complete, imageUri: 'https://user:password@example.com/p.png' }])[0].imageUrl, '');
   assert.equal(buildLaunchDirectory([{ ...complete, completedAt: 'bad date' }])[0].createdAt, '');
 });
+test('directory keeps IPFS artwork and legacy image fields for exact launched coins', () => {
+  const cid = 'bafkreihei5dvwvm3fjdhgr3fiwspeznxcz3r4jm6s6jjfssqhkoqgjgoyu';
+  assert.equal(buildLaunchDirectory([{ ...complete, imageUri: 'ipfs://' + cid }])[0].imageUrl, 'https://pump.mypinata.cloud/ipfs/' + cid);
+  assert.equal(buildLaunchDirectory([{ ...complete, imageUri: '', imageUrl: 'https://example.com/legacy.png' }])[0].imageUrl, 'https://example.com/legacy.png');
+  assert.equal(buildLaunchDirectory([{ ...complete, imageUri: 'javascript:bad', metadataJson: { image: 'https://example.com/metadata.png' } }])[0].imageUrl, 'https://example.com/metadata.png');
+});
 test('directory cache coalesces reads, expires and does not hide storage errors', async () => {
   let calls = 0, now = 1000;
   const read = createLaunchDirectoryReader(async () => { calls++; return { attempts: [complete] }; }, { now: () => now, ttlMs: 100 });

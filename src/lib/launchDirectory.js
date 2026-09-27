@@ -3,7 +3,7 @@
 const text = (value, max) => String(value || '').trim().slice(0, max);
 function imageUrl(value) {
   try {
-    const url = new URL(text(value, 2048));
+    const url = new URL(text(value, 2048).replace(/^ipfs:\/\/(?:ipfs\/)?/i, 'https://pump.mypinata.cloud/ipfs/'));
     return url.protocol === 'https:' && !url.username && !url.password ? url.href : '';
   } catch { return ''; }
 }
@@ -19,7 +19,7 @@ export function buildLaunchDirectory(attempts = []) {
       mint, name: text(attempt.tokenName || attempt.name || metadata.name, 64),
       symbol: text(attempt.symbol || attempt.ticker || metadata.symbol, 16),
       description: text(metadata.description, 180),
-      imageUrl: imageUrl(attempt.imageUri || metadata.image),
+      imageUrl: [attempt.imageUri, attempt.imageUrl, metadata.image, metadata.imageUrl].map(imageUrl).find(Boolean) || '',
       createdAt: Number.isFinite(date) ? new Date(date).toISOString() : '',
       rewardMode: attempt.launchUtility?.status ? 'external' : attempt.pumpCashback ? 'cashback' : attempt.holderRewards?.enabled ? 'holders' : 'creator'
     });

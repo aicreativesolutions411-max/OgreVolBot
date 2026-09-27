@@ -18,6 +18,37 @@ test('launch cards escape user metadata, retain ticker, reject unsafe images and
   assert.equal(ui.coinModel({ mint: 'not-a-contract' }), null);
   assert.equal(ui.chartUrl('"><script>'), '');
 });
+test('launch PFPs use fast exact-CID gateways and retain a bounded fallback list', () => {
+  const cid = 'bafkreihei5dvwvm3fjdhgr3fiwspeznxcz3r4jm6s6jjfssqhkoqgjgoyu';
+  const sources = Array.from(ui.imageCandidates('https://ipfs.io/ipfs/' + cid));
+  assert.deepEqual(sources, ['https://pump.mypinata.cloud/ipfs/' + cid, 'https://gateway.pinata.cloud/ipfs/' + cid, 'https://ipfs.io/ipfs/' + cid]);
+  assert.equal(ui.safeImage('ipfs://' + cid), sources[0]);
+  assert.deepEqual(Array.from(ui.imageCandidates('javascript:alert(1)')), []);
+  assert.deepEqual(Array.from(ui.imageCandidates('https://example.com/coin.png')), ['https://example.com/coin.png']);
+  const card = ui.cardHtml(ui.coinModel({ mint, name: 'Bounce', imageUri: 'ipfs://' + cid }));
+  assert.ok(card.includes('data-image-sources='));
+  assert.ok(card.includes('pump.mypinata.cloud'));
+  assert.ok(!card.includes('/api/web/token-image')); // no paid metadata/RPC lookup for decoration
+});
+test('PFP loader advances on errors/timeouts and never removes an image before trying fallbacks', () => {
+  const timers = new Map(); let nextTimer = 0, removed = false;
+  const img = { src: '', hidden: true, complete: false, naturalWidth: 0, remove() { removed = true; } };
+  const schedule = fn => { timers.set(++nextTimer, fn); return nextTimer; };
+  const cancel = id => timers.delete(id);
+  ui.loadCoinImage(img, ['https://a.example/coin.png', 'https://b.example/coin.png', 'https://c.example/coin.png'], { schedule, cancel });
+  assert.equal(img.src, 'https://a.example/coin.png');
+  img.onerror(); assert.equal(img.src, 'https://b.example/coin.png'); assert.equal(removed, false);
+  [...timers.values()][0](); assert.equal(img.src, 'https://c.example/coin.png');
+  img.naturalWidth = 64; img.onload();
+  assert.equal(img.hidden, false); assert.equal(timers.size, 0); assert.equal(removed, false);
+  assert.equal(img.onerror, null);
+});
+test('exhausted PFP gateways leave honest initials without an infinite retry or broken image', () => {
+  let removed = false;
+  const img = { remove() { removed = true; } };
+  ui.loadCoinImage(img, ['https://example.com/coin.png'], { schedule: () => 1, cancel() {} });
+  img.onerror(); assert.equal(removed, true); assert.equal(img.onerror, null);
+});
 test('new draft handoff cannot set money, fee routing, wallet or consent', () => {
   const url = new URL(ui.draftUrl({ name: 'Bright & Green', symbol: 'BG', description: 'A new idea', walletIndex: 3, consentVersion: 'yes', amount: 100, launchUtility: { mode: 'usepaid' } }), 'https://slimewire.org');
   assert.equal(url.hash, '#launch'); assert.equal(url.searchParams.get('from'), 'fun');

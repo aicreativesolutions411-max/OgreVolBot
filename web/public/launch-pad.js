@@ -4,12 +4,35 @@
   const clean = (value, max = 100) => String(value || '').trim().slice(0, max);
   const isMint = value => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value) || /^0x[\da-f]{40}$/i.test(value);
   function safeImage(value) {
-    try { const u = new URL(clean(value, 2048)); return u.protocol === 'https:' && !u.username && !u.password ? u.href : ''; } catch { return ''; }
+    try { const raw = clean(value, 2048).replace(/^ipfs:\/\/(?:ipfs\/)?/i, 'https://pump.mypinata.cloud/ipfs/'); const u = new URL(raw); return u.protocol === 'https:' && !u.username && !u.password ? u.href : ''; } catch { return ''; }
+  }
+  function imageCandidates(value) {
+    const raw = safeImage(value); if (!raw) return [];
+    const url = new URL(raw), path = url.pathname.match(/^\/ipfs\/((?:Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{20,})(?:\/[^?#]*)?)$/);
+    // The CID identifies the exact same uploaded artwork on each gateway. No
+    // ticker search, generated substitute, wallet preload or paid RPC lookup.
+    return path ? [...new Set(['https://pump.mypinata.cloud/ipfs/' + path[1], 'https://gateway.pinata.cloud/ipfs/' + path[1], raw])] : [raw];
+  }
+  function loadCoinImage(img, sources, { schedule = setTimeout, cancel = clearTimeout } = {}) {
+    let index = 0, timer, finished = false;
+    const stop = () => { finished = true; cancel(timer); img.onload = null; img.onerror = null; };
+    const next = () => {
+      if (finished) return;
+      cancel(timer);
+      if (index >= sources.length) { stop(); img.remove(); return; }
+      img.src = sources[index++];
+      timer = schedule(next, 4500);
+    };
+    img.hidden = true;
+    img.onload = () => { if (img.naturalWidth > 0) { img.hidden = false; stop(); } else next(); };
+    img.onerror = next;
+    next();
+    return stop;
   }
   function coinModel(row) {
     const mint = clean(row?.mint, 64); if (!isMint(mint)) return null;
     return { mint, name: clean(row.name, 64) || clean(row.symbol, 16) || mint.slice(0, 5) + '…' + mint.slice(-4), symbol: clean(row.symbol, 16),
-      description: clean(row.description, 180), imageUrl: safeImage(row.imageUrl || row.imageUri), createdAt: clean(row.createdAt, 40),
+      description: clean(row.description, 180), imageUrl: safeImage(row.imageUrl) || safeImage(row.imageUri), createdAt: clean(row.createdAt, 40),
       chain: /^0x/i.test(mint) ? 'Robinhood' : 'Solana', status: clean(row.status, 40) || 'COMPLETE',
       rewardMode: row.rewardMode || (row.launchUtility ? 'external' : row.pumpCashback ? 'cashback' : row.holderRewards?.enabled ? 'holders' : 'creator') };
   }
@@ -25,13 +48,25 @@
   function cardHtml(coin) {
     const symbol = coin.symbol ? '$' + coin.symbol : 'Ticker unavailable';
     const status = coin.status === 'COMPLETE' ? coin.chain.toUpperCase() : coin.status.replace(/_/g, ' ');
-    return '<article class="coin-card"><div class="coin-top"><div class="coin-avatar"><span class="coin-initial" aria-hidden="true">' + esc((coin.symbol || coin.name).slice(0, 2).toUpperCase()) + '</span>' + (coin.imageUrl ? '<img src="' + esc(coin.imageUrl) + '" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">' : '') + '</div><span class="small-tag">' + esc(status) + '</span></div><h3 class="coin-title" title="' + esc(coin.name) + '">' + esc(coin.name) + '</h3><p class="coin-symbol">' + esc(symbol) + ' / ' + esc(coin.chain) + '</p><p class="coin-description">' + esc(coin.description || 'Launched through SlimeWire. Open the chart to research this coin.') + '</p><div class="coin-meta"><span>Reward route</span><strong>' + esc(rewardLabels[coin.rewardMode] || 'Not recorded') + '</strong></div><div class="coin-meta"><span>Launched</span><strong>' + esc(dateLabel(coin.createdAt)) + '</strong></div><div class="coin-actions"><a href="' + chartUrl(coin.mint) + '">View chart ↗</a><button class="copy-ca" type="button" data-copy="' + esc(coin.mint) + '" aria-label="Copy ' + esc(coin.name) + ' contract address">' + esc(coin.mint.slice(0, 4) + '…' + coin.mint.slice(-4)) + ' ⧉</button></div></article>';
+    const sources = imageCandidates(coin.imageUrl);
+    return '<article class="coin-card"><div class="coin-top"><div class="coin-avatar"><span class="coin-initial" aria-hidden="true">' + esc((coin.symbol || coin.name).slice(0, 2).toUpperCase()) + '</span>' + (sources.length ? '<img data-image-sources="' + esc(JSON.stringify(sources)) + '" alt="" hidden decoding="async" referrerpolicy="no-referrer">' : '') + '</div><span class="small-tag">' + esc(status) + '</span></div><h3 class="coin-title" title="' + esc(coin.name) + '">' + esc(coin.name) + '</h3><p class="coin-symbol">' + esc(symbol) + ' / ' + esc(coin.chain) + '</p><p class="coin-description">' + esc(coin.description || 'Launched through SlimeWire. Open the chart to research this coin.') + '</p><div class="coin-meta"><span>Reward route</span><strong>' + esc(rewardLabels[coin.rewardMode] || 'Not recorded') + '</strong></div><div class="coin-meta"><span>Launched</span><strong>' + esc(dateLabel(coin.createdAt)) + '</strong></div><div class="coin-actions"><a href="' + chartUrl(coin.mint) + '">View chart ↗</a><button class="copy-ca" type="button" data-copy="' + esc(coin.mint) + '" aria-label="Copy ' + esc(coin.name) + ' contract address">' + esc(coin.mint.slice(0, 4) + '…' + coin.mint.slice(-4)) + ' ⧉</button></div></article>';
   }
-  root.SlimeLaunchPad = { esc, safeImage, isMint, coinModel, chartUrl, draftUrl, cardHtml };
+  root.SlimeLaunchPad = { esc, safeImage, imageCandidates, loadCoinImage, isMint, coinModel, chartUrl, draftUrl, cardHtml };
   if (!root.document?.getElementById('launch-dialog')) return;
   const $ = id => document.getElementById(id), dialog = $('launch-dialog');
   const API = String(root.OGRE_PORTAL_CONFIG?.apiBase || '').trim().replace(/\/+$/, '');
   let view = location.hash === '#mine' ? 'mine' : 'explore', rows = [], limit = 6, requestId = 0, controller;
+  let imageObserver, imageStops = [];
+  function stopImages() { imageObserver?.disconnect(); imageObserver = null; imageStops.forEach(stop => stop()); imageStops = []; }
+  function startImages() {
+    const start = img => imageStops.push(loadCoinImage(img, JSON.parse(img.dataset.imageSources)));
+    // Observe the avatar shell (the image is hidden until decoded). Off-screen
+    // cards don't download or consume their timeout before the user reaches them.
+    if (root.IntersectionObserver) imageObserver = new root.IntersectionObserver((entries, observer) => {
+      entries.filter(entry => entry.isIntersecting && entry.target.isConnected).forEach(entry => { observer.unobserve(entry.target); const img = entry.target.querySelector('img'); if (img) start(img); });
+    }, { rootMargin: '200px' });
+    $('coin-grid').querySelectorAll('img[data-image-sources]').forEach(img => imageObserver ? imageObserver.observe(img.parentElement) : start(img));
+  }
   let previousFocus;
   const draft = { name: '', symbol: '', description: '' };
   function openDialog(title, content) {
@@ -78,13 +113,15 @@
   }
   function empty(title, copy, action = '') { return '<div class="empty-panel"><h3>' + esc(title) + '</h3><p>' + esc(copy) + '</p>' + action + '</div>'; }
   function paint() {
+    stopImages();
     const q = $('launch-search').value.trim().toLowerCase();
     const filtered = rows.filter(c => [c.name, c.symbol, c.mint].some(v => v.toLowerCase().includes(q)));
     $('coin-grid').innerHTML = filtered.length ? filtered.slice(0, limit).map(cardHtml).join('') : empty(q ? 'No matching launches.' : view === 'mine' ? 'Your next idea starts here.' : 'The next launch could be yours.', q ? 'Try another name, ticker or contract address. This directory only lists SlimeWire launches.' : 'Completed launches appear here once they are recorded. No demo coins or estimated earnings are shown.', '<button class="button button-primary" type="button" data-dialog="create">Create a coin ↗</button>');
     $('show-more').hidden = filtered.length <= limit;
-    $('coin-grid').querySelectorAll('img').forEach(img => img.addEventListener('error', () => img.remove(), { once: true }));
+    startImages();
   }
   async function load() {
+    stopImages();
     const id = ++requestId; controller?.abort(); controller = new AbortController();
     const thisController = controller, signal = thisController.signal, timer = setTimeout(() => thisController.abort(), 12000);
     const mine = view === 'mine'; rows = []; $('coin-grid').innerHTML = ''; $('show-more').hidden = true;

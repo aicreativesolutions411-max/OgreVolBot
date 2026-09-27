@@ -15,12 +15,11 @@ http.createServer(async (req, res) => {
     if (req.method !== 'GET') return json(403, { error: 'Read-only preview.' });
     if (url.pathname === '/config.js') { res.setHeader('Content-Type', 'text/javascript'); res.end('window.OGRE_PORTAL_CONFIG={apiBase:""};'); return; }
     if (url.pathname === '/api/web/launch/directory') {
-      // Existing public endpoint, until the new enriched directory is deployed.
       if (!publicCoins) {
-        const r = await fetch(base + '/api/web/swamp-launches', { signal: AbortSignal.timeout(12000) });
+        const r = await fetch(base + '/api/web/launch/directory', { signal: AbortSignal.timeout(12000) });
         if (!r.ok) throw new Error('Public launch source unavailable');
         const data = await r.json();
-        publicCoins = (data.launches || []).map(row => ({ mint: row.mint, name: row.symbol, symbol: row.symbol, rewardMode: 'unknown', createdAt: '' }));
+        publicCoins = data.launches || [];
       }
       return json(200, { ok: true, launches: publicCoins });
     }

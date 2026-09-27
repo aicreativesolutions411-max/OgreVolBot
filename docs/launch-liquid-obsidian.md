@@ -13,6 +13,13 @@ Selected direction: user-approved option 01, September 27, 2026.
 - X Money provider warning is a dated September 27 snapshot of https://usepaid.app/docs, which reports payouts paused. No cash balance or claim action is fabricated. The redesign does not alter existing fee assignments or provider configuration.
 - Google/LinkedIn/Telegram identity payouts and custom quote pairs remain marked not enabled. This visual release does not implement those adapters.
 
+## Coin artwork follow-up
+
+- IPFS PFPs load from Pump's image gateway first, with bounded exact-CID Pinata/original URL fallbacks. Direct `ipfs://` and older `imageUrl` metadata are retained.
+- Only visible/near-visible avatars load. Retry timers and observers are stopped on refresh/search/view changes. No metadata API, wallet read, paid RPC call or periodic polling was added.
+- A coin without published/stored artwork keeps its initials; another token's picture is never substituted.
+- Pump's [supported pair assets](https://pump.fun/docs/custom-pairs) include selected crypto and tokenized stocks (checked September 27, 2026), but SlimeWire's current launch executor remains SOL-based. A real quote-asset integration must cover funding, swaps, fees in the quote asset, recovery and issuer eligibility before it can be enabled; a dropdown alone is not sufficient.
+
 ## Artwork
 
 Built-in image generation, not API/CLI fallback.
