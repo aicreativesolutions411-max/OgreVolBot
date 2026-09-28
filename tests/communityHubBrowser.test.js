@@ -37,3 +37,9 @@ test('connecting an existing coin cannot wake old launch purchase callbacks',()=
   const active=index.slice(start,index.indexOf('if (allianceConfigMatches(',start));
   assert.match(active,/if \(!attempt\.communityConnection\)\s*\{\s*void resumeLaunchBundleInvitesAfterFeeSharing\(attempt\)/);
 });
+
+test('public community entry routes to the wallet origin instead of the terminal SPA',()=>{
+  const redirects=fs.readFileSync(new URL('../web/public/_redirects',import.meta.url),'utf8');
+  assert.match(redirects,/^\/launch\/community\s+https:\/\/app\.slimewire\.org\/launch\/community\s+302$/m);
+  assert.match(redirects,/^\/launch\/community\/\s+https:\/\/app\.slimewire\.org\/launch\/community\s+302$/m);
+});

@@ -1,6 +1,9 @@
 # SlimeWire Community Hub
 
-Entry point: `/launch/community`. The launch page links here; Wallet retains its
+Entry point: `slimewire.org/launch/community`, redirected by Pages to
+`app.slimewire.org/launch/community` to share Wallet's same-origin sign-in session.
+Agreement query strings and selected-tab fragments are retained; no auth token
+is passed in a URL. The launch page links here; Wallet retains its
 existing layout with an added Rewards inbox shortcut. Telegram DM commands
 `/community` and `/rewards` open the tools or read the account's saved rewards.
 Group commands never disclose a user's private managed-wallet list.

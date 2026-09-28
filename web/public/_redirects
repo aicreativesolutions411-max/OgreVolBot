@@ -20,6 +20,10 @@
 /c/*            /community.html        200
 /rewards/*      /partner-rewards.html  200
 /launch-coin    /#launch               302
+# Community management uses the same origin and sign-in session as Wallet.
+# Preserve agreement query strings and tab fragments; never put auth in a URL.
+/launch/community  https://app.slimewire.org/launch/community  302
+/launch/community/ https://app.slimewire.org/launch/community  302
 /left4sol       https://app.slimewire.org/left4sol  302
 /left4sol/*     https://app.slimewire.org/left4sol  302
 /quick          /fun.html              200
