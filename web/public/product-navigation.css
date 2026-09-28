@@ -1,0 +1,14 @@
+/* Product switcher only: do not restyle the wallet, charts, forms or balances. */
+.sw-product-strip{display:flex;flex:0 0 auto;justify-content:center;padding:0 14px;border-bottom:1px solid #a6d68720;background:#080e09;color:#eaf3e7;position:relative;z-index:29}
+.sw-product-nav{display:flex;align-items:center;justify-content:center;gap:4px;max-width:100%;margin:0;padding:0;font:600 12px/1.2 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+.sw-product-nav>a{display:flex;align-items:center;justify-content:center;min-height:44px;min-width:80px;padding:0 19px;color:#acbba6;text-decoration:none;border:0;border-bottom:2px solid transparent;white-space:nowrap;box-sizing:border-box}
+.sw-product-nav>a:hover{color:#dbffc5;background:#a4ff5310}
+.sw-product-nav>a[aria-current=page]{color:#bafa60;border-bottom-color:#bafa60}
+.sw-product-nav>a:focus-visible,[data-sw-product-nav]>a:focus-visible{outline:2px solid #bafa60;outline-offset:-4px;border-radius:5px}
+.sw-site-links>[aria-current=page]{color:#bafa60}
+.sw-site-links[data-sw-product-nav]>a{min-width:48px;justify-content:center}
+body:has(>.shell>.sw-product-strip) .site-header>.wallet-link{display:none}
+.fun-launch-embed .sw-product-strip,.fun-tool-embed .sw-product-strip{display:none!important}
+/* The launcher has its own full header with the same three destinations. */
+body:has(#v-launch.on) #app>.sw-product-strip{display:none}
+@media(max-width:480px){.sw-product-strip{padding-inline:10px}.sw-product-nav{width:100%}.sw-product-nav>a{flex:1;min-width:0;padding-inline:14px}}

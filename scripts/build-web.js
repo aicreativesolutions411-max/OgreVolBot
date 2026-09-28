@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 
 import { transform } from "esbuild";
 import { applyLaunchSiteDesign } from "./lib/launch-site-design.js";
+import { applyProductNavigation } from "./lib/product-navigation.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const publicDir = path.join(rootDir, "web", "public");
@@ -167,7 +168,7 @@ async function applySiteDesign(directory, prefix = "") {
     if (entry.isDirectory()) await applySiteDesign(target, name + "/");
     else if (entry.isFile() && entry.name.endsWith(".html")) {
       const source = await fs.readFile(target, "utf8");
-      const themed = applyLaunchSiteDesign(source, name);
+      const themed = applyProductNavigation(applyLaunchSiteDesign(source, name), name);
       if (themed !== source) await fs.writeFile(target, themed, "utf8");
     }
   }
