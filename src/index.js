@@ -32711,8 +32711,11 @@ async function reconcileLaunchAlliance(initial) {
     let config = await readPumpFeeSharingConfig({ connection, mint });
     const active = async () => {
       attempt = await patchPumpFeeSharingState(id, { status: "ACTIVE", setupConfirmedAt: attempt.pumpFeeSharing?.setupConfirmedAt || new Date().toISOString(), configAddress: config.address.toBase58(), warning: "", lastError: "" });
-      void resumeLaunchBundleInvitesAfterFeeSharing(attempt).catch(() => {});
-      void resumePumpPostLaunchBuysAfterFeeSharing(attempt).catch(() => {});
+      // Connecting an existing coin approves fee routing, never a launch buy.
+      if (!attempt.communityConnection) {
+        void resumeLaunchBundleInvitesAfterFeeSharing(attempt).catch(() => {});
+        void resumePumpPostLaunchBuysAfterFeeSharing(attempt).catch(() => {});
+      }
       return launchUtilityPublic(attempt);
     };
     if (allianceConfigMatches(config, policy, creatorAddress)) return active();

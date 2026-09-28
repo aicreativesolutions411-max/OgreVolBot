@@ -30,3 +30,10 @@ test('wallet and Telegram link to inbox without changing the wallet theme or tri
   const command=index.slice(index.indexOf('if (/^\\/(rewards|community|connectcoin)'),index.indexOf('if (text === "/launch"'));
   assert.match(command,/isPrivateChat/);assert.doesNotMatch(command,/sendRawTransaction|hub\.confirm|decryptWallet/);
 });
+
+test('connecting an existing coin cannot wake old launch purchase callbacks',()=>{
+  const index=fs.readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
+  const start=index.indexOf('async function reconcileLaunchAlliance(');
+  const active=index.slice(start,index.indexOf('if (allianceConfigMatches(',start));
+  assert.match(active,/if \(!attempt\.communityConnection\)\s*\{\s*void resumeLaunchBundleInvitesAfterFeeSharing\(attempt\)/);
+});
