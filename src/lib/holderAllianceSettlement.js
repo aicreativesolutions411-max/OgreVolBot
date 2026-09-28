@@ -8,7 +8,8 @@ export async function settleHolderBatch({load,save,prepare,connection,paused=fal
   const complete=async()=>{
     const credits={...(state.credits||{})};let paid=0n;
     for(const row of state.pending.rows){const value=BigInt(row.lamports),owed=BigInt(credits[row.wallet]||0);if(value>owed)throw new Error('Holder payout exceeds saved liability.');if(value===owed)delete credits[row.wallet];else credits[row.wallet]=String(owed-value);paid+=value;}
-    const receipt={signature:state.pending.signature,confirmedAt:now(),lamports:String(paid),recipients:state.pending.rows.length};
+    const receipt={signature:state.pending.signature,confirmedAt:now(),lamports:String(paid),recipients:state.pending.rows.length,
+      payments:state.pending.rows.map(row=>({wallet:row.wallet,lamports:String(row.lamports)}))};
     state={...state,credits,pending:null,retryRows:null,paidLamports:String(BigInt(state.paidLamports||0)+paid),receiptCount:(state.receiptCount||0)+1,receipts:[...(state.receipts||[]),receipt].slice(-100),status:'PAID',lastError:''};
     await save(state);return state;
   };

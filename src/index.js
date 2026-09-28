@@ -119,6 +119,8 @@ import { normalizeHolderAlliance, allocateHolderCycle, publicHolderLedger, HOLDE
 import { settleHolderBatch } from "./lib/holderAllianceSettlement.js";
 import { readHolderSnapshot, readHolderCommunities } from "./lib/holderAllianceSnapshot.js";
 import { buildLaunchRewardReport, holderEligibilityReport } from "./lib/launchRewardReport.js";
+import { createCommunityHub, buildRewardsInbox, receiptCredit, verifiedAgreementFor } from "./lib/communityHub.js";
+import { verifyCommunityAuthority } from "./lib/communityAuthority.js";
 import { hasManualCreatorFees } from "./lib/creatorClaimPolicy.js";
 import {
   PUMP_TOKEN_PROGRAM_ID,
@@ -6983,6 +6985,8 @@ async function registerTelegramBotCommands() {
     { command: "app", description: "📲 Download the SlimeWire mobile app" },
     { command: "web", description: "Login code for slimewire.org" },
     { command: "wallets", description: "Your saved wallets" },
+    { command: "rewards", description: "Holder rewards inbox across your wallets" },
+    { command: "community", description: "Connect coins, partnerships and project goals" },
     { command: "balances", description: "Wallet balances" },
     { command: "trade", description: "Buy / sell menu" },
     { command: "livetest", description: "Real mainnet test buy/sell flow" },
@@ -7412,6 +7416,10 @@ and is checked by an automated release audit before every upload.</p></div>
     }
     if (request.method === "GET" && ["/launch", "/become-a-boss", "/launchpad-info"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "launch.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/launch/community") {
+      await serveStaticHtmlPage(response, "launch-community.html");
       return;
     }
     // SEO landing page targeting "solana telegram (trading) bot" searches — real content, static + fast.
@@ -10131,6 +10139,24 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/community/public") {
+      const mint = requestUrl.searchParams.get("mint") || "";
+      try { if (mint) new PublicKey(mint); }
+      catch { sendWebJson(request, response, 400, { ok: false, error: "Enter a valid Solana coin address." }); return; }
+      sendWebJson(request, response, 200, { ok: true, ...await getCommunityHub().publicData({ mint, agreementId: requestUrl.searchParams.get("agreement") || "" }) });
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/community/inbox") {
+      let wallet;
+      try {
+        const key = new PublicKey(requestUrl.searchParams.get("wallet") || "");
+        if (key.equals(PublicKey.default) || !PublicKey.isOnCurve(key.toBytes())) throw new Error("Invalid wallet");
+        wallet = key.toBase58();
+      } catch { sendWebJson(request, response, 400, { ok: false, error: "Enter an ordinary Solana wallet address." }); return; }
+      response.setHeader("Cache-Control", "private, no-store");
+      sendWebJson(request, response, 200, { ok: true, inbox: buildRewardsInbox((await readPumpLaunchAttempts()).attempts, [wallet]) });
+      return;
+    }
     if (request.method === "GET" && pathname === "/api/web/launch/directory") {
       try {
         const launches = await publicLaunchDirectory();
@@ -10150,6 +10176,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
         const attempt = [...(store.attempts || [])].reverse().find(a => a.tokenMint === mint && a.status === "COMPLETE");
         const report = buildLaunchRewardReport(attempt);
         if (!report) { sendWebJson(request, response, 404, { ok: false, error: "No completed SlimeWire launch found for this coin." }); return; }
+        if (report.partnerMint) {
+          try {
+            const community = await getCommunityHub().publicData({ mint });
+            const agreement = verifiedAgreementFor(attempt, community.agreements);
+            if (agreement) { report.affiliation = "Verified creator-to-creator approval of these exact fee terms; not an endorsement by every holder."; report.agreementId = agreement.id; }
+          } catch { report.affiliation = "Partnership verification record is temporarily unavailable."; }
+        }
         sendCachedWebJson(request, response, 200, { ok: true, report, ...(wallet ? { eligibility: holderEligibilityReport(attempt, wallet) } : {}) }, wallet ? "private, no-store" : "public, max-age=30");
       } catch { sendWebJson(request, response, 400, { ok: false, error: "Rewards unavailable. Check the coin and optional Solana wallet address, then retry." }); }
       return;
@@ -12674,6 +12707,36 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
     if (request.method === "GET" && pathname === "/api/web/launches") {
       sendWebJson(request, response, 200, { ok: true, coins: await webLaunchedCoins(auth.userId) });
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/community/dashboard") {
+      response.setHeader("Cache-Control", "private, no-store");
+      sendWebJson(request, response, 200, { ok: true, ...await getCommunityHub().dashboard(auth.userId) });
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/community/my-inbox") {
+      const wallets = walletsForOwner(await readWalletStore(), auth.userId).map(w => w.publicKey);
+      response.setHeader("Cache-Control", "private, no-store");
+      sendWebJson(request, response, 200, { ok: true, inbox: buildRewardsInbox((await readPumpLaunchAttempts()).attempts, wallets) });
+      return;
+    }
+    if (request.method === "POST" && pathname.startsWith("/api/web/community/")) {
+      const body = await readJsonRequestBody(request, 12000), hub = getCommunityHub();
+      const action = pathname.slice("/api/web/community/".length);
+      const handlers = {
+        "connect/review": () => hub.review(auth.userId, body),
+        "connect/confirm": () => hub.confirm(auth.userId, body),
+        "partnership/propose": () => hub.propose(auth.userId, body),
+        "partnership/respond": () => hub.respond(auth.userId, body),
+        "goal/create": () => hub.createGoal(auth.userId, body),
+        "goal/sync": () => hub.syncGoal(auth.userId, String(body.id || ""))
+      };
+      if (!handlers[action]) { sendWebJson(request, response, 404, { ok: false, error: "Unknown community action." }); return; }
+      try {
+        const result = await handlers[action]();
+        await audit("community_hub_action", { userId: auth.userId, action, id: result.id, mint: result.mint, status: result.status });
+        sendWebJson(request, response, 200, { ok: true, result });
+      } catch (error) { sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) }); }
       return;
     }
     if (request.method === "GET" && pathname === "/api/web/pump/rewards") {
@@ -20039,6 +20102,28 @@ async function handleMessage(message, userId) {
     return;
   }
 
+  if (/^\/(rewards|community|connectcoin)(?:@\w+)?(?:\s|$)/i.test(text)) {
+    if (!isPrivateChat(message.chat)) { await say(chatId, "Open my DM and use /rewards for your private wallet inbox, or /community for coin setup and partnerships."); return; }
+    if (/^\/rewards(?:@\w+)?\s*$/i.test(text)) {
+      const wallets = walletsForOwner(await readWalletStore(), userId).map(w => w.publicKey);
+      const inbox = buildRewardsInbox((await readPumpLaunchAttempts()).attempts, wallets);
+      const sol = n => (Number(n) / LAMPORTS_PER_SOL).toLocaleString("en-US", { maximumFractionDigits: 9 });
+      await sayHtml(chatId, [
+        "◈ <b>Your community rewards</b>",
+        `Reserved / not yet paid: <b>${sol(inbox.owedLamports)} SOL</b>`,
+        `Recent finalized payments: <b>${sol(inbox.recentPaidLamports)} SOL</b>`, "",
+        ...inbox.coins.slice(0, 10).map(c => `<b>${escapeTelegramHtml(c.symbol ? "$" + c.symbol : c.mint.slice(0, 6))}</b> · ${escapeTelegramHtml(c.wallet.slice(0, 4) + "…" + c.wallet.slice(-4))}\n${sol(c.owedLamports)} SOL reserved · ${c.paused ? "paused" : c.delayed ? "delayed" : "12-hour snapshots"}`),
+        ...(inbox.coins.length ? [] : ["No saved eligible snapshots, credits or wallet-specific payments yet. This does not check live holdings."]), "",
+        "Recent payments are not lifetime earnings. Small credits accumulate until 0.001 SOL. Creator fees are separate in Wallet."
+      ].join("\n"), { inline_keyboard: [[{ text: "Rewards inbox", url: "https://slimewire.org/launch/community#inbox" }, { text: "Open Wallet", url: "https://slimewire.org/wallet" }]] });
+    } else {
+      await sayHtml(chatId, "◈ <b>SlimeWire Community Hub</b>\n\nConnect an existing SOL-paired Pump coin without relaunching, approve a creator-to-creator partnership, view rewards, or publish a fee-funded project goal.\n\nCreator authority is checked on-chain. Permanent fee changes require a separate review and confirmation. No transaction runs from this command.", { inline_keyboard: [
+        [{ text: "Connect my coin", url: "https://slimewire.org/launch/community#connect" }, { text: "Partnerships", url: "https://slimewire.org/launch/community#partners" }],
+        [{ text: "Rewards inbox", url: "https://slimewire.org/launch/community#inbox" }, { text: "Project goals", url: "https://slimewire.org/launch/community#goals" }]
+      ] });
+    }
+    return;
+  }
   if (text === "/launch" || /^\/launch(?:@\w+)?$/i.test(text)) {
     if (!isPrivateChat(message.chat)) {
       await say(chatId, "Open this bot in DM to build a coin launch.");
@@ -32441,6 +32526,57 @@ const PUMP_HOLDER_REWARD_PAYOUT_FEE_RESERVE = 100_000n;
 const PUMP_HOLDER_REWARD_FORCE_CRANK_MS = 6 * 60 * 60 * 1000;
 
 const launchNftMarketReader = createNftMarketReader({ apiKey: process.env.MAGIC_EDEN_API_KEY || "" });
+let communityHubInstance;
+function getCommunityHub() {
+  if (communityHubInstance) return communityHubInstance;
+  const hubPath = path.join(CONFIG.dataDir, "launch-community-hub.json");
+  communityHubInstance = createCommunityHub({
+    read: async () => {
+      try { return JSON.parse(await fs.readFile(hubPath, "utf8")); }
+      catch (error) { if (error.code === "ENOENT") return { reviews: [], agreements: [], goals: [] }; throw error; }
+    },
+    write: value => writeJsonFile(hubPath, value),
+    lock: task => withMoneyCacheLock("community-hub-mutation", 600000, task, () => { throw new Error("A community update is already processing. Retry shortly; no duplicate operation was submitted."); }),
+    attempts: async () => (await readPumpLaunchAttempts()).attempts,
+    wallets: async userId => walletsForOwner(await readWalletStore(), userId),
+    authority: verifyCommunityAuthority,
+    reviewPolicy: async (input, context) => {
+      const review = reviewLiveLaunchUtility(input, { rail: "pump" });
+      if (!review.available) throw new Error(review.blockers.join(" "));
+      assertLaunchUtilityReady(review.policy, { rail: "pump" });
+      if (review.policy.mode === "holder_alliance") await readHolderCommunities(context.mint, review.policy);
+      return review.policy;
+    },
+    connect: async review => {
+      let attempt = (await readPumpLaunchAttempts()).attempts.find(a => String(a.id) === review.attemptId);
+      if (attempt?.communityReviewId && attempt.communityReviewId !== review.id) throw new Error("Another saved connection owns this fee setup. Resume that connection.");
+      if (!attempt?.communityReviewId) {
+        if (attempt && (String(attempt.userId) !== review.userId || attempt.launchUtility?.mode && attempt.launchUtility.mode !== "creator")) throw new Error("The saved coin program changed. No fee changes were submitted.");
+        const metadata = await getPumpFunTokenMetadata(review.mint, { timeoutMs: 1500 }).catch(() => ({}));
+        await upsertPumpLaunchAttempt({
+          id: review.attemptId, userId: review.userId, rail: "pump", status: "COMPLETE", tokenMint: review.mint,
+          devWalletPublicKey: review.creator, launchUtility: review.policy, creatorFeeClaimMode: "manual",
+          communityReviewId: review.id, communityConnection: { approvedAt: review.confirmedAt, consentVersion: review.consentVersion, originalCreator: review.creator },
+          origin: attempt?.origin || (attempt ? "launched" : "connected"),
+          createdAt: attempt?.createdAt || new Date().toISOString(), completedAt: attempt?.completedAt || new Date().toISOString(),
+          tokenName: attempt?.tokenName || metadata.name || "", symbol: attempt?.symbol || metadata.symbol || "",
+          imageUri: attempt?.imageUri || metadata.imageUri || metadata.imageUrl || metadata.image || ""
+        });
+      }
+      attempt = await freshPumpFeeSharingAttempt(review.attemptId);
+      return reconcileLaunchAlliance(attempt);
+    },
+    verifyReceipt: async (signature, payee, attempt) => {
+      const rpc = new Connection("https://api.mainnet-beta.solana.com", { commitment: "finalized", disableRetryOnRateLimit: true, fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(15000) }) });
+      const tx = await rpc.getTransaction(signature, { commitment: "finalized", maxSupportedTransactionVersion: 0 });
+      if (!tx) return null;
+      const keys = [...(tx.transaction.message.accountKeys || tx.transaction.message.staticAccountKeys || []), ...(tx.meta?.loadedAddresses?.writable || []), ...(tx.meta?.loadedAddresses?.readonly || [])].map(String);
+      if (String(tx.transaction.signatures[0]) !== signature || !keys.includes(getPumpFeeSharingAddresses({ mint: attempt.tokenMint }).sharingConfig.toBase58())) throw new Error("Receipt is not the recorded per-coin fee distribution.");
+      return receiptCredit(tx, payee);
+    }
+  });
+  return communityHubInstance;
+}
 
 function liveLaunchUtilityCapabilities() {
   const caps = launchUtilityCapabilities();
@@ -33028,6 +33164,10 @@ async function submitPumpFeeSharingSetupTransaction({ attempt, creatorKeypair, i
     feePayer: creatorKeypair.publicKey
   });
   for (const instruction of instructions) tx.add(instruction);
+  if (attempt.communityConnection) {
+    const fee = await connection.getFeeForMessage(tx.compileMessage(), "confirmed");
+    if (!Number.isSafeInteger(fee?.value) || fee.value < 0 || fee.value > 100000) throw new Error("Existing-coin setup network fee exceeds the approved 0.0001 SOL limit or cannot be verified. Nothing sent.");
+  }
   tx.sign(creatorKeypair);
   const raw = tx.serialize();
   const signedSignature = tx.signature ? bs58.encode(tx.signature) : "";

@@ -14,7 +14,7 @@
   <link rel="stylesheet" href="/launch-pad.css?v=20260928b">
   <link rel="preload" as="image" href="/assets/slimewire/launch/liquid-obsidian-v1.webp" fetchpriority="high">
   <script src="/config.js"></script>
-  <script src="/launch-pad.js?v=20260928b" defer></script>
+  <script src="/launch-pad.js?v=20260928c" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#explore">Skip to launches</a>
@@ -26,7 +26,8 @@
         <a href="#explore" data-view="explore" aria-current="page">Explore</a>
         <button type="button" data-dialog="create">Create</button>
         <a href="#mine" data-view="mine">My launches</a>
-        <button type="button" data-dialog="payments">Rewards</button>
+        <a href="/launch/community">Community</a>
+        <a href="/launch/community#inbox">Rewards</a>
       </nav>
       <a class="button button-outline wallet-link" href="/wallet"><span aria-hidden="true">▣</span> Open wallet <span class="arrow" aria-hidden="true">↗</span></a>
     </header>
@@ -50,7 +51,7 @@
       <div class="content-grid">
         <section class="launches" id="explore" aria-labelledby="launches-title">
           <div class="section-heading"><div><p class="eyebrow" id="directory-kicker">MADE HERE. GOING PLACES.</p><h2 id="launches-title">Explore launches</h2></div><button class="text-button" id="refresh-launches" type="button">↻ Refresh</button></div>
-          <p class="section-description" id="directory-description">Recent SlimeWire launches. See who receives the creator fees, then open the payout records. Listing is not an endorsement.</p>
+          <p class="section-description" id="directory-description">Recent launches and connected coins. See who receives the creator fees, then open the payout records. Listing is not an endorsement.</p>
           <div class="directory-toolbar">
             <div class="directory-filters" role="group" aria-label="Filter launch fee routes"><button type="button" data-launch-filter="all" aria-pressed="true">All launches</button><button type="button" data-launch-filter="community" aria-pressed="false">Shared fees</button><button type="button" data-launch-filter="creator" aria-pressed="false">Creator fees</button></div>
             <details class="directory-search" id="directory-search"><summary>⌕ Find a launch</summary><div class="search-box"><label class="search"><span aria-hidden="true">⌕</span><input type="search" id="launch-search" placeholder="Name, $ticker or token address" aria-label="Find a recent SlimeWire launch" aria-describedby="search-scope" autocomplete="off"><button type="button" class="text-button" id="clear-search" hidden>Clear</button></label><p id="search-scope">Searches the recent SlimeWire launches below. For any other coin, <a href="/wallet">open Wallet ↗</a>.</p></div></details>
@@ -73,6 +74,10 @@
         </aside>
       </div>
       <section class="feature-rail" aria-label="Launch tools">
+        <a href="/launch/community#connect"><span class="feature-icon" aria-hidden="true">↗</span><span><b>Already have a coin?</b><small>Connect its creator fees. No relaunch.</small></span><span class="feature-arrow" aria-hidden="true">↗</span></a>
+        <a href="/launch/community#partners"><span class="feature-icon" aria-hidden="true">◎</span><span><b>Verified partnerships</b><small>Two creators. One public agreement.</small></span><span class="feature-arrow" aria-hidden="true">↗</span></a>
+        <a href="/launch/community#inbox"><span class="feature-icon" aria-hidden="true">◈</span><span><b>Rewards inbox</b><small>Your communities. All in one place.</small></span><span class="feature-arrow" aria-hidden="true">↗</span></a>
+        <a href="/launch/community#goals"><span class="feature-icon" aria-hidden="true">◔</span><span><b>Fund something real</b><small>Public project targets &amp; receipts.</small></span><span class="feature-arrow" aria-hidden="true">↗</span></a>
         <button type="button" data-dialog="recipients"><span class="feature-icon" aria-hidden="true">◔</span><span><b>Reward options</b><small>You, your holders &amp; another community</small></span><span class="feature-arrow" aria-hidden="true">↗</span></button>
         <button type="button" data-feature="bundle"><span class="feature-icon" aria-hidden="true">◇</span><span><b>Bundle buys</b><small>Wallets &amp; participant invites</small></span><span class="feature-arrow" aria-hidden="true">↗</span></button>
         <button type="button" data-feature="nft"><span class="feature-icon" aria-hidden="true">▱</span><span><b>Linked collections</b><small>Connect your coin &amp; community</small></span><span class="feature-arrow" aria-hidden="true">↗</span></button>

@@ -12,10 +12,14 @@ test('public launch directory exposes only completed, unique, valid Solana coins
 });
 test('directory whitelists public metadata without wallet, account or fee balances', () => {
   const [row] = buildLaunchDirectory([{ ...complete, userId: 123, encryptedMintSecret: 'secret', devWalletPublicKey: 'private context', recoveryIntents: {}, fees: 200, launchUtility: { mode: 'usepaid', xHandle: 'private' }, metadataJson: { description: 'A public coin', twitter: 'https://x.com/example' } }]);
-  assert.deepEqual(Object.keys(row).sort(), ['createdAt', 'description', 'imageUrl', 'mint', 'name', 'rewardMode', 'symbol']);
+  assert.deepEqual(Object.keys(row).sort(), ['createdAt', 'description', 'imageUrl', 'mint', 'name', 'origin', 'rewardMode', 'symbol']);
   assert.equal(row.rewardMode, 'external');
   assert.equal(row.description, 'A public coin');
   assert.ok(!JSON.stringify(row).includes('private'));
+});
+test('existing connected coins are never described as newly launched here', () => {
+  assert.equal(buildLaunchDirectory([{ ...complete, origin: 'connected' }])[0].origin, 'connected');
+  assert.equal(buildLaunchDirectory([complete])[0].origin, 'launched');
 });
 test('directory preserves reward labels and rejects unsafe images', () => {
   assert.equal(buildLaunchDirectory([{ ...complete, pumpCashback: true }])[0].rewardMode, 'cashback');

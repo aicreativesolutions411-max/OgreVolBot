@@ -60,7 +60,9 @@ export async function readHolderSnapshot(mint,{fetchImpl=fetch,excluded=[]}={}){
     ]);
     const solPair=(solMarket.pairs||[]).filter(p=>p.chainId==='solana'&&p.baseToken?.address===SOL&&Number(p.priceUsd)>0&&Number(p.liquidity?.usd)>=100000).sort((a,b)=>Number(b.liquidity.usd)-Number(a.liquidity.usd))[0];
     if(curveInfo?.value?.owner!==PUMP_PROGRAM_ID.toBase58()||!solPair)throw new Error('No verified active Pump curve or liquid indexed USD market. Fees accumulate until pricing is available.');
-    const curve=PUMP_SDK.decodeBondingCurve({...curveInfo.value,data:Buffer.from(curveInfo.value.data[0],'base64')});
+    const data=Buffer.from(curveInfo.value.data[0],'base64');
+    if(data.length<81)throw new Error('Incomplete Pump curve account; rewards remain reserved.');
+    const curve=PUMP_SDK.decodeBondingCurveNullable({...curveInfo.value,data});
     priceUsd=pumpCurveUsdPrice(curve,decimals,solPair.priceUsd);priceSource='finalized Pump SOL curve + liquid SOL/USD quote';
   }
   const seen=new Set();

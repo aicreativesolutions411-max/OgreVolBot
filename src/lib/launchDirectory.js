@@ -21,6 +21,7 @@ export function buildLaunchDirectory(attempts = []) {
       description: text(metadata.description, 180),
       imageUrl: [attempt.imageUri, attempt.imageUrl, metadata.image, metadata.imageUrl].map(imageUrl).find(Boolean) || '',
       createdAt: Number.isFinite(date) ? new Date(date).toISOString() : '',
+      origin: attempt.origin === 'connected' ? 'connected' : 'launched',
       rewardMode: attempt.launchUtility?.mode === 'holder_alliance' ? 'holder_alliance' : attempt.launchUtility?.mode === 'alliance' ? 'alliance' : attempt.launchUtility?.mode === 'usepaid' ? 'external' : attempt.pumpCashback ? 'cashback' : attempt.holderRewards?.enabled ? 'holders' : 'creator'
     });
   }
