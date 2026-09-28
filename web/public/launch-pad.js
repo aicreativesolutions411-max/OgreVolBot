@@ -37,6 +37,25 @@
       rewardMode: row.rewardMode || (['alliance','holder_alliance'].includes(row.launchUtility?.mode) ? row.launchUtility.mode : row.launchUtility ? 'external' : row.pumpCashback ? 'cashback' : row.holderRewards?.enabled ? 'holders' : 'creator') };
   }
   function chartUrl(mint) { return isMint(mint) ? 'https://dexscreener.com/' + (/^0x/i.test(mint) ? 'robinhood/' : 'solana/') + encodeURIComponent(mint) : ''; }
+  function walletCoinUrl(mint) { return isMint(mint) ? '/wallet?ca=' + encodeURIComponent(mint) : '/wallet'; }
+  function searchQuery(value) {
+    const raw = clean(value, 2048);
+    let candidate = raw;
+    try {
+      const u = new URL(raw), host = u.hostname.toLowerCase().replace(/^www\./, '');
+      if (u.protocol !== 'https:' || u.username || u.password) candidate = '';
+      else if (host === 'pump.fun' && /^\/coin\/[^/]+\/?$/.test(u.pathname)) candidate = decodeURIComponent(u.pathname.split('/')[2]);
+      else if (host === 'slimewire.org') candidate = u.searchParams.get('ca') || u.searchParams.get('token') || u.searchParams.get('rewards') || (u.hash.match(/^#(?:rhtrade|trade)\/([^/?#]+)$/) || [])[1] || '';
+      else candidate = ''; // Dex links may identify a pool: never guess a token from one.
+    } catch { /* A name, ticker or raw contract is not a URL. */ }
+    return { raw, mint: isMint(candidate) ? candidate : '', text: raw.replace(/^\$/, '').toLowerCase() };
+  }
+  function filterLaunches(coins, value = '', route = 'all') {
+    const q = searchQuery(value);
+    return coins.filter(c => (route === 'all' || (route === 'community' ? ['holder_alliance','holders','alliance'].includes(c.rewardMode) : c.rewardMode === 'creator')) &&
+      (!q.raw || (q.mint ? (/^0x/i.test(q.mint) ? c.mint.toLowerCase() === q.mint.toLowerCase() : c.mint === q.mint) : [c.name,c.symbol].some(v => v.toLowerCase().includes(q.text)) || c.mint.includes(q.raw))))
+      .sort((a,b) => (Date.parse(b.createdAt)||0) - (Date.parse(a.createdAt)||0));
+  }
   function draftUrl(draft) {
     const q = new URLSearchParams({ from: 'fun', lc_n: clean(draft.name, 32), lc_s: clean(draft.symbol, 10), lc_d: clean(draft.description, 800) });
     if (['alliance','holder_alliance','holder_self'].includes(draft.mode)) q.set('lc_utility', draft.mode);
@@ -51,13 +70,16 @@
     const symbol = coin.symbol ? '$' + coin.symbol : 'Ticker unavailable';
     const status = coin.status === 'COMPLETE' ? coin.chain.toUpperCase() : coin.status.replace(/_/g, ' ');
     const sources = imageCandidates(coin.imageUrl);
-    return '<article class="coin-card"><div class="coin-top"><div class="coin-avatar"><span class="coin-initial" aria-hidden="true">' + esc((coin.symbol || coin.name).slice(0, 2).toUpperCase()) + '</span>' + (sources.length ? '<img data-image-sources="' + esc(JSON.stringify(sources)) + '" alt="" hidden decoding="async" referrerpolicy="no-referrer">' : '') + '</div><span class="small-tag">' + esc(status) + '</span></div><h3 class="coin-title" title="' + esc(coin.name) + '">' + esc(coin.name) + '</h3><p class="coin-symbol">' + esc(symbol) + ' / ' + esc(coin.chain) + '</p><p class="coin-description">' + esc(coin.description || 'Launched through SlimeWire. Open the chart to research this coin.') + '</p><div class="coin-meta"><span>Reward route</span><strong>' + esc(rewardLabels[coin.rewardMode] || 'Not recorded') + '</strong></div><div class="coin-meta"><span>Launched</span><strong>' + esc(dateLabel(coin.createdAt)) + '</strong></div><div class="coin-actions"><a href="' + chartUrl(coin.mint) + '">View chart ↗</a><button class="copy-ca" type="button" data-copy="' + esc(coin.mint) + '" aria-label="Copy ' + esc(coin.name) + ' contract address">' + esc(coin.mint.slice(0, 4) + '…' + coin.mint.slice(-4)) + ' ⧉</button></div></article>';
+    return '<article class="coin-card"><div class="coin-top"><div class="coin-avatar"><span class="coin-initial" aria-hidden="true">' + esc((coin.symbol || coin.name).slice(0, 2).toUpperCase()) + '</span>' + (sources.length ? '<img data-image-sources="' + esc(JSON.stringify(sources)) + '" alt="" hidden decoding="async" referrerpolicy="no-referrer">' : '') + '</div><span class="small-tag">' + esc(status) + '</span></div>' +
+      '<h3 class="coin-title" title="' + esc(coin.name) + '">' + esc(coin.name) + '</h3><p class="coin-symbol">' + esc(symbol) + ' / ' + esc(coin.chain) + '</p>' +
+      (coin.description ? '<p class="coin-description">' + esc(coin.description) + '</p>' : '') +
+      '<div class="coin-meta"><span>Creator fees</span><strong>' + esc(rewardLabels[coin.rewardMode] || 'Not recorded') + '</strong></div><div class="coin-meta"><span>Launched</span><strong>' + esc(dateLabel(coin.createdAt)) + '</strong></div><div class="coin-actions"><a href="' + chartUrl(coin.mint) + '" target="_blank" rel="noopener noreferrer">Chart ↗</a><button class="copy-ca" type="button" data-copy="' + esc(coin.mint) + '" aria-label="Copy ' + esc(coin.name) + ' contract address">' + esc(coin.mint.slice(0, 4) + '…' + coin.mint.slice(-4)) + ' ⧉</button></div></article>';
   }
-  root.SlimeLaunchPad = { esc, safeImage, imageCandidates, loadCoinImage, isMint, coinModel, chartUrl, draftUrl, cardHtml, templateDraft };
+  root.SlimeLaunchPad = { esc, safeImage, imageCandidates, loadCoinImage, isMint, coinModel, chartUrl, walletCoinUrl, searchQuery, filterLaunches, draftUrl, cardHtml, templateDraft };
   if (!root.document?.getElementById('launch-dialog')) return;
   const $ = id => document.getElementById(id), dialog = $('launch-dialog');
   const API = String(root.OGRE_PORTAL_CONFIG?.apiBase || '').trim().replace(/\/+$/, '');
-  let view = location.hash === '#mine' ? 'mine' : 'explore', rows = [], limit = 6, requestId = 0, controller;
+  let view = location.hash === '#mine' ? 'mine' : 'explore', rows = [], limit = 6, requestId = 0, controller, routeFilter = 'all', loaded = false, updatedAt = '';
   let imageObserver, imageStops = [];
   function stopImages() { imageObserver?.disconnect(); imageObserver = null; imageStops.forEach(stop => stop()); imageStops = []; }
   function startImages() {
@@ -139,9 +161,14 @@
   function empty(title, copy, action = '') { return '<div class="empty-panel"><h3>' + esc(title) + '</h3><p>' + esc(copy) + '</p>' + action + '</div>'; }
   function paint() {
     stopImages();
-    const q = $('launch-search').value.trim().toLowerCase();
-    const filtered = rows.filter(c => [c.name, c.symbol, c.mint].some(v => v.toLowerCase().includes(q)));
-    $('coin-grid').innerHTML = filtered.length ? filtered.slice(0, limit).map(cardHtml).join('') : empty(q ? 'No matching launches.' : view === 'mine' ? 'Your next idea starts here.' : 'The next launch could be yours.', q ? 'Try another name, ticker or contract address. This directory only lists SlimeWire launches.' : 'Completed launches appear here once they are recorded. No demo coins or estimated earnings are shown.', '<button class="button button-primary" type="button" data-dialog="create">Create a coin ↗</button>');
+    const q = searchQuery($('launch-search').value);
+    const filtered = filterLaunches(rows, q.raw, routeFilter);
+    const missing = q.raw || routeFilter !== 'all';
+    const actions = missing ? '<button class="button button-outline" type="button" data-reset-directory>Clear filters</button>' + (q.mint ? '<a class="button button-primary" href="'+walletCoinUrl(q.mint)+'">Open this coin in Wallet ↗</a>' : '<a class="text-link" href="/wallet">Looking for any coin? Open Wallet ↗</a>') : '<button class="button button-primary" type="button" data-dialog="create">Create a coin ↗</button>';
+    $('coin-grid').innerHTML = filtered.length ? filtered.slice(0, limit).map(cardHtml).join('') : empty(missing ? 'No matching SlimeWire launches.' : view === 'mine' ? 'Your next idea starts here.' : 'The next launch could be yours.', missing ? (q.mint ? 'This address is not in the current launch results. It may be an older launch, outside SlimeWire, or excluded by the selected filter. Wallet can open the coin without placing a trade.' : 'This is a directory of recent SlimeWire launches, not a search across every coin. Try its name, $ticker or exact token address, or clear the selected filter.') : 'Completed launches appear here once they are recorded. No demo coins or estimated earnings are shown.', actions);
+    $('launch-status').textContent = filtered.length + ' of ' + rows.length + (view === 'mine' ? ' recorded launches' : ' recent launches') + (updatedAt ? ' · Updated '+updatedAt : '');
+    $('clear-search').hidden = !q.raw;
+    document.querySelectorAll('[data-launch-filter]').forEach(el => el.setAttribute('aria-pressed', String(el.dataset.launchFilter === routeFilter)));
     $('show-more').hidden = filtered.length <= limit;
     $('coin-grid').querySelectorAll('.coin-card').forEach((card,i)=>{ const coin=filtered[i]; if(!coin)return;const action=document.createElement('button');action.type='button';action.className='reward-detail-button';action.dataset.rewards=coin.mint;action.textContent='Rewards & receipts ↗';card.appendChild(action); });
     startImages();
@@ -150,12 +177,12 @@
     stopImages();
     const id = ++requestId; controller?.abort(); controller = new AbortController();
     const thisController = controller, signal = thisController.signal, timer = setTimeout(() => thisController.abort(), 12000);
-    const mine = view === 'mine'; rows = []; $('coin-grid').innerHTML = ''; $('show-more').hidden = true;
+    const mine = view === 'mine'; rows = []; loaded = false; $('coin-grid').innerHTML = ''; $('show-more').hidden = true;
     $('coin-grid').setAttribute('aria-busy', 'true'); $('refresh-launches').disabled = true;
     $('launch-status').textContent = 'Loading ' + (mine ? 'your launches' : 'launches') + '…';
     $('launches-title').textContent = mine ? 'My launches' : 'Explore launches';
     $('directory-kicker').textContent = mine ? 'YOUR IDEAS. YOUR LAUNCHES.' : 'MADE HERE. GOING PLACES.';
-    $('directory-description').textContent = mine ? 'Your recorded launches. Rewards remain in the receiving wallet.' : 'Real Solana coins launched through SlimeWire. Listing is not an endorsement.';
+    $('directory-description').textContent = mine ? 'Your recorded launches. Review each fee route and its receipts.' : 'Recent SlimeWire launches. See who receives the creator fees, then open the payout records. Listing is not an endorsement.';
     document.querySelectorAll('[data-view]').forEach(el => { if (el.dataset.view === view) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); });
     try {
       let token = ''; if (mine) { try { token = localStorage.getItem('ogreWebToken') || ''; } catch { /* privacy mode */ } }
@@ -166,8 +193,7 @@
       const data = await r.json();
       if (!data?.ok || !Array.isArray(mine ? data.coins : data.launches)) throw new Error('Launch data is temporarily unavailable. Please retry.');
       if (id !== requestId) return;
-      rows = (mine ? data.coins : data.launches).map(coinModel).filter(Boolean); paint();
-      $('launch-status').textContent = rows.length ? rows.length + (rows.length === 1 ? ' launch' : ' launches') + ' · Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+      rows = (mine ? data.coins : data.launches).map(coinModel).filter(Boolean); loaded = true; updatedAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); paint();
     } catch (error) {
       if (id !== requestId) return;
       $('launch-status').textContent = error.name === 'AbortError' ? 'Loading took too long. Tap Refresh to try again.' : error.message;
@@ -187,11 +213,14 @@
     }
     if(button.dataset.rewards) rewardsDialog(button.dataset.rewards);
     if(button.dataset.startMode){draft.mode=button.dataset.startMode;createDialog();}
+    if(button.dataset.launchFilter){routeFilter=button.dataset.launchFilter;limit=6;if(loaded)paint();}
+    if(button.hasAttribute('data-reset-directory')){routeFilter='all';$('launch-search').value='';limit=6;if(loaded)paint();}
   });
-  $('launch-search').addEventListener('input', () => { limit = 6; if (rows.length) paint(); });
+  $('launch-search').addEventListener('input', () => { limit = 6; if (loaded) paint(); });
+  $('clear-search').addEventListener('click', () => { $('launch-search').value='';limit=6;if(loaded)paint();$('launch-search').focus(); });
   $('show-more').addEventListener('click', () => { limit += 6; paint(); });
   $('refresh-launches').addEventListener('click', load);
-  root.addEventListener('hashchange', () => { const next = location.hash === '#mine' ? 'mine' : 'explore'; if (next !== view) { view = next; limit = 6; $('launch-search').value = ''; load(); } });
+  root.addEventListener('hashchange', () => { const next = location.hash === '#mine' ? 'mine' : 'explore'; if (next !== view) { view = next; limit = 6; routeFilter='all'; $('launch-search').value = ''; load(); } });
   root.addEventListener('storage', event => { if (view === 'mine' && (event.key === 'ogreWebToken' || event.key === null)) load(); });
   // No background polling, wallet preloading, or automatic financial actions.
   load();

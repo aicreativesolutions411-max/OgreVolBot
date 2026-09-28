@@ -84,6 +84,31 @@ function boot({ hash = '', token = '', response = { ok: true, launches: [] }, st
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+test('launch search accepts tickers and supported coin links without confusing pair addresses', () => {
+  const coin = ui.coinModel({mint, name:'Bounce', symbol:'BOUNCE'});
+  assert.equal(ui.filterLaunches([coin], '$bounce', 'all').length, 1);
+  assert.equal(ui.filterLaunches([coin], 'https://pump.fun/coin/'+mint+'?ref=x', 'all').length, 1);
+  assert.equal(ui.filterLaunches([coin], 'https://slimewire.org/wallet?ca='+mint, 'all').length, 1);
+  assert.equal(ui.filterLaunches([coin], mint, 'all').length, 1);
+  assert.equal(ui.filterLaunches([coin], mint.toLowerCase(), 'all').length, 0);
+  assert.equal(ui.searchQuery('https://dexscreener.com/solana/'+mint).mint, ''); // can be a pool, not a mint
+  assert.equal(ui.searchQuery('https://evil.example/coin/'+mint).mint, '');
+  assert.equal(ui.walletCoinUrl(mint), '/wallet?ca='+mint);
+  assert.equal(ui.walletCoinUrl('javascript:alert(1)'), '/wallet');
+});
+
+test('directory filters rewards and sorts recent launches without fabricated rankings', () => {
+  const older=ui.coinModel({mint,name:'Old',createdAt:'2026-01-01',rewardMode:'holder_alliance'});
+  const newer=ui.coinModel({mint:mint.replace('5','6'),name:'New',createdAt:'2026-09-01'});
+  assert.equal(ui.filterLaunches([older,newer], '', 'all')[0].name,'New');
+  assert.equal(ui.filterLaunches([older,newer], '', 'community').length,1);
+  assert.equal(ui.filterLaunches([older,newer], '', 'creator').length,1);
+  assert.ok(!html.includes('Search coins or paste a CA'));
+  assert.ok(html.indexOf('id="launch-search"') > html.indexOf('id="explore"'));
+  assert.ok(html.includes('id="directory-search"'));
+  assert.ok(!ui.cardHtml(newer).includes('Launched through SlimeWire. Open the chart'));
+});
+
 test('saved launch templates contain identity and route only, never wallet or spending approval',()=>{
   const result=ui.templateDraft({name:'Saved',symbol:'SAVE',mode:'holder_self',wallet:'secret',consentVersion:'approved',amount:100,launchAttemptId:'original'});
   assert.deepEqual(Object.keys(result),['name','symbol','description','mode']);
