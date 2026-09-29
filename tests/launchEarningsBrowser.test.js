@@ -27,3 +27,10 @@ test('earnings screen is read-only and has no trading or claim submission',()=>{
   const html=readFileSync(new URL('../web/public/launch-earnings.html',import.meta.url),'utf8');
   assert.ok(html.includes('Use my SlimeWire wallets'));assert.ok(html.includes('/wallet'));assert.ok(html.includes('No signature'));
 });
+
+test('entirely unattributed legacy history is not presented as zero earnings',()=>{
+  const data={scope:'all',period:'all',paidLamports:'0',reservedLamports:'0',developerPaidLamports:'0',communityPaidLamports:'0',recipientPaidLamports:'0',incomplete:true,unknownCoins:1,coins:[{paidLamports:null,reservedLamports:null}]};
+  assert.ok(ui.summaryHtml(data).includes('Not attributed'));assert.ok(!ui.summaryHtml(data).includes('0 SOL'));
+  assert.ok(!ui.summaryHtml({...data,scope:'mine'}).includes('0 SOL'));
+  assert.ok(ui.summaryHtml({...data,coins:[{paidLamports:'0',reservedLamports:'0'}]}).includes('earn-total-unit'));
+});

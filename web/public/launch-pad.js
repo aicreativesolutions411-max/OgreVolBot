@@ -266,7 +266,7 @@
   load();
   if($('launch-paid-total')){
     const earningsController=new AbortController(),earningsTimer=setTimeout(()=>earningsController.abort(),10000);
-    fetch(API+'/api/web/launch/earnings?scope=all',{credentials:'omit',signal:earningsController.signal}).then(r=>{if(!r.ok)throw Error('Unavailable');return r.json();}).then(d=>{if(d.ok&&d.earnings)$('launch-paid-total').textContent=exactSol(d.earnings.paidLamports)+' paid'+(d.earnings.incomplete?' · recorded subtotal':' · all time');}).catch(()=>{}).finally(()=>clearTimeout(earningsTimer));
+    fetch(API+'/api/web/launch/earnings?scope=all',{credentials:'omit',signal:earningsController.signal}).then(r=>{if(!r.ok)throw Error('Unavailable');return r.json();}).then(d=>{if(d.ok&&d.earnings){const e=d.earnings,unknown=e.coins?.length&&e.unknownCoins===e.coins.length&&BigInt(e.paidLamports||0)===0n;$('launch-paid-total').textContent=unknown?'Historical totals not yet attributed':exactSol(e.paidLamports)+' paid'+(e.incomplete?' · recorded subtotal':' · all time');}}).catch(()=>{}).finally(()=>clearTimeout(earningsTimer));
   }
   const sharedRewards=new URLSearchParams(root.location?.search||'').get('rewards');if(isMint(sharedRewards))rewardsDialog(sharedRewards);
   // Homepage shortcuts open the normal editable draft dialog. They cannot
