@@ -2,25 +2,35 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#080b09"><title>SlimeWire / My earnings</title>
-  <meta name="description" content="Track recorded creator fees, community rewards and receiving-wallet payments with finalized on-chain receipts.">
+  <meta name="theme-color" content="#080b09"><title>SlimeWire / Earnings</title>
+  <meta name="description" content="Follow SlimeWire payouts. All-time totals, per-coin earnings, recipient splits and verified payment history.">
   <link rel="canonical" href="https://slimewire.org/launch/earnings"><link rel="icon" href="/assets/slimewire/svg/slimewire-mark.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/launch-pad.css?v=20260929-earnings"><link rel="stylesheet" href="/launch-community.css?v=20260928c">
-  <script src="/config.js"></script><script src="/launch-pad.js?v=20260929-earnings" defer></script><script src="/launch-earnings.js?v=20260929-earnings" defer></script>
+  <link rel="stylesheet" href="/launch-pad.css?v=20260929-dashboard"><link rel="stylesheet" href="/launch-community.css?v=20260928c"><link rel="stylesheet" href="/launch-earnings.css?v=20260929-dashboard">
+  <script src="/config.js"></script><script src="/launch-pad.js?v=20260929-dashboard" defer></script><script src="/launch-earnings.js?v=20260929-dashboard" defer></script>
 </head>
-<body>
+<body class="earnings-page">
   <a class="skip-link" href="#earnings-content">Skip to earnings</a><div class="art-backdrop" aria-hidden="true"></div>
   <div class="shell">
-    <header class="site-header"><a class="brand" href="/launch"><img src="/assets/slimewire/svg/slimewire-mark.svg" width="39" height="39" alt=""><span>slimewire <em>/ earnings</em></span></a><nav aria-label="Launch navigation"><a href="/launch">Explore launches</a><a href="/launch#mine">My launches</a><a href="/launch/community">Community</a></nav><a class="button button-outline wallet-link" href="/wallet">Open wallet ↗</a></header>
+    <header class="site-header"><a class="brand" href="/launch"><img src="/assets/slimewire/svg/slimewire-mark.svg" width="39" height="39" alt=""><span>slimewire <em>/ earnings</em></span></a><nav aria-label="Launch navigation"><a href="/launch">Explore</a><a href="/launch#mine">My launches</a><a href="/launch/community">Community</a><a href="/launch/earnings" aria-current="page">Earnings</a></nav><a class="button button-outline wallet-link" href="/wallet">Open wallet ↗</a></header>
     <main>
-      <section class="hub-hero earnings-hero"><p class="eyebrow"><span class="status-dot"></span> EVERY PAYMENT. A RECORD.</p><h1>Your part.<br><span>All in one place.</span></h1><p>Developer fees, holder rewards and receiving-wallet payments.<br>Recorded payments and unpaid reserves—clearly separated.</p></section>
-      <section class="hub-panel earnings-wallet-picker" aria-label="Choose earnings wallets">
-        <form id="earnings-form" class="hub-form"><label for="earnings-wallets">Solana wallets · one per line, up to 25<textarea id="earnings-wallets" rows="2" spellcheck="false" autocomplete="off" placeholder="Paste your public wallet address"></textarea></label><div class="hub-actions"><button class="button button-primary" type="submit">Show earnings ↗</button><button class="text-button" type="button" id="earnings-managed">Use my SlimeWire wallets</button><button class="text-button" type="button" id="earnings-connected">Use connected wallet</button><button class="text-button" type="button" id="earnings-clear">Clear</button></div></form><p class="form-note">Read only. No signature, claim or trade. Your wallet list is not saved to this browser or added to the page URL.</p><div id="earnings-wallet-choices"></div>
+      <div class="earn-heading"><div><p class="eyebrow">FOLLOW THE FEES</p><h1>Earnings<span>.</span></h1><p>Every coin. Every share. Every payout.</p></div><div class="earn-heading-actions"><button type="button" id="earnings-wallet-open" class="button button-outline">Choose wallets</button><button type="button" id="earnings-refresh" class="text-button" aria-label="Refresh earnings">↻ Refresh</button></div></div>
+      <div class="earn-view-bar"><div class="earn-segment" role="group" aria-label="Earnings view"><button type="button" data-earn-scope="all" aria-pressed="true">All SlimeWire</button><button type="button" data-earn-scope="mine" aria-pressed="false">My Earnings</button></div><div class="earn-period" role="group" aria-label="Earnings period"><button type="button" data-earn-period="24h" aria-pressed="false">24h</button><button type="button" data-earn-period="7d" aria-pressed="false">7d</button><button type="button" data-earn-period="30d" aria-pressed="false">30d</button><button type="button" data-earn-period="all" aria-pressed="true">All time</button></div></div>
+      <p id="earnings-status" class="earn-status" role="status" aria-live="polite">Reading recorded payouts…</p>
+      <section id="earnings-summary" aria-label="Earnings overview" aria-busy="true"><div class="earn-loading">Loading verified records…</div></section>
+      <section class="earn-list-panel" aria-label="Coins and payments">
+        <div class="earn-list-toolbar"><div class="earn-tabs" role="group" aria-label="Earnings records"><button type="button" data-earn-tab="coins" aria-pressed="true">Coins</button><button type="button" data-earn-tab="payments" aria-pressed="false">Payments</button></div><div class="earn-filters"><input type="search" id="earnings-search" placeholder="Find a coin" aria-label="Search earnings by coin name, ticker or address"><select id="earnings-role" aria-label="Filter your role" hidden><option value="all">All roles</option><option value="Developer">Developer</option><option value="holder">Holder</option><option value="Receiving wallet">Receiving wallet</option></select><select id="earnings-sort" aria-label="Sort coins"><option value="earned">Most earned</option><option value="newest">Newest</option></select></div></div>
+        <div id="earnings-content" tabindex="-1" aria-live="polite"></div>
       </section>
-      <p id="earnings-status" class="hub-status" role="status" aria-live="polite"></p>
-      <section id="earnings-content" tabindex="-1" aria-label="Recorded earnings"><div class="empty-panel"><h3>Follow your share.</h3><p>Choose your wallets to see the SlimeWire fee programs with recorded payments or saved eligibility. This is not your full wallet balance or trading P&amp;L.</p></div></section>
     </main>
-    <footer><a class="footer-brand" href="/launch">SLIMEWIRE</a><p>Finalized records. No estimated earnings.</p><div><a href="/launch/community#inbox">Eligibility inbox ↗</a><a href="/wallet">Claims in Wallet ↗</a></div></footer>
-  </div><noscript><p>Enable JavaScript to check earnings. <a href="/wallet">Open Wallet</a></p></noscript>
+    <footer><a class="footer-brand" href="/launch">SLIMEWIRE</a><p>On-chain payments. No estimated earnings.</p><div><a href="/launch/community#inbox">Eligibility inbox ↗</a><a href="/wallet">Claims in Wallet ↗</a></div></footer>
+  </div>
+  <dialog id="earnings-wallet-dialog" aria-labelledby="earnings-wallet-title">
+    <div class="dialog-top"><span class="eyebrow">YOUR VIEW. YOUR WALLETS.</span><button type="button" class="close-button" data-close="earnings-wallet-dialog" aria-label="Close wallet selector">×</button></div>
+    <h2 id="earnings-wallet-title">Choose your wallets</h2><p class="form-note">Read only. No signature, claim or trade. Addresses are not saved to this browser or the page URL.</p>
+    <form id="earnings-form" class="hub-form"><label for="earnings-wallets">Public Solana addresses · up to 25<textarea id="earnings-wallets" rows="3" spellcheck="false" autocomplete="off" placeholder="Paste a public wallet address"></textarea></label><div class="hub-actions"><button class="button button-primary" type="submit">Show earnings ↗</button><button class="text-button" type="button" id="earnings-clear">Clear</button></div></form>
+    <div class="hub-actions"><button class="text-button" type="button" id="earnings-managed">Use my SlimeWire wallets</button><button class="text-button" type="button" id="earnings-connected">Use connected wallet</button></div><div id="earnings-wallet-choices"></div><p id="earnings-wallet-status" class="earn-status" role="status" aria-live="polite"></p>
+  </dialog>
+  <dialog id="earnings-detail" class="earn-detail" aria-labelledby="earnings-detail-title"><div class="dialog-top"><span class="eyebrow">COIN EARNINGS</span><button type="button" class="close-button" data-close="earnings-detail" aria-label="Close coin earnings">×</button></div><div id="earnings-detail-body"></div></dialog>
+  <noscript><p>Enable JavaScript to check earnings. <a href="/wallet">Open Wallet</a></p></noscript>
 </body>
 </html>

@@ -1,10 +1,12 @@
 import { feeSetupSubmissionDisposition } from './launchUtilityRecovery.js';
 import { HOLDER_MIN_PAYOUT, ledgerSources } from './holderAlliance.js';
+import { retainEarningsHistory } from './launchEarningsHistory.js';
 
 // Caller owns a durable per-mint lock. A saved allocation is a liability, never
 // reweighted on retry. Finalization is required before balance-based allocation.
 export async function settleHolderBatch({load,save,prepare,connection,paused=false,now=()=>new Date().toISOString()}){
   let state=await load()||{};
+  const persist=async value=>{const next=retainEarningsHistory(value,'holder',now());await save(next);return next;};
   const complete=async()=>{
     const credits={...(state.credits||{})};let paid=0n;
     const sources=ledgerSources(state),creditSources=Object.fromEntries(sources.map(k=>[k,{...(state.creditSources?.[k]||{})}])),paidBySource={...(state.paidBySource||{})},bySource={},paidByWallet={...(state.paidByWallet||{})};
@@ -19,8 +21,10 @@ export async function settleHolderBatch({load,save,prepare,connection,paused=fal
     }
     const receipt={signature:state.pending.signature,confirmedAt:now(),lamports:String(paid),recipients:state.pending.rows.length,
       bySource,payments:state.pending.rows.map(row=>({wallet:row.wallet,lamports:String(row.lamports)}))};
+    // Capture the old tail before rotating it, then persist history and debit atomically.
+    state=retainEarningsHistory(state,'holder',now());
     state={...state,credits,creditSources,paidBySource,paidByWallet,walletTrackingSince:state.walletTrackingSince||now(),pending:null,retryRows:null,paidLamports:String(BigInt(state.paidLamports||0)+paid),receiptCount:(state.receiptCount||0)+1,receipts:[...(state.receipts||[]),receipt].slice(-100),status:'PAID',lastError:''};
-    await save(state);return state;
+    state=await persist(state);return state;
   };
   if(state.pending){
     const reconciliationConnection={
@@ -35,7 +39,7 @@ export async function settleHolderBatch({load,save,prepare,connection,paused=fal
     const d=await feeSetupSubmissionDisposition({setupSignature:state.pending.signature,setupLastValidBlockHeight:state.pending.lastValidBlockHeight},reconciliationConnection);
     if(d.reason==='finalized')return complete();
     if(!d.rebuild)return state;
-    state={...state,retryRows:state.pending.rows,pending:null,status:'RETRYABLE'};await save(state);
+    state={...state,retryRows:state.pending.rows,pending:null,status:'RETRYABLE'};state=await persist(state);
   }
   if(paused)return state;
   const rows=state.retryRows||Object.entries(state.credits||{}).filter(([,amount])=>BigInt(amount)>=HOLDER_MIN_PAYOUT).sort(([a],[b])=>a.localeCompare(b,'en')).slice(0,8).map(([wallet,lamports])=>({wallet,lamports}));
@@ -43,13 +47,13 @@ export async function settleHolderBatch({load,save,prepare,connection,paused=fal
   const signed=await prepare(rows);
   if(!signed?.signature||!signed.rawBase64||!Number.isSafeInteger(signed.lastValidBlockHeight))throw new Error('Invalid signed holder payout. Nothing sent.');
   state={...state,status:'PENDING',pending:{...signed,rows,submittedAt:now()},lastError:''};
-  await save(state);
+  state=await persist(state);
   try{
     const actual=await connection.sendRawTransaction(Buffer.from(signed.rawBase64,'base64'),{skipPreflight:false,maxRetries:3});
     if(actual!==signed.signature)throw new Error('Payout signature mismatch; reconciliation required.');
     const result=await connection.confirmTransaction({signature:signed.signature,blockhash:signed.blockhash,lastValidBlockHeight:signed.lastValidBlockHeight},'finalized');
     if(!result?.value||result.value.err)throw new Error('Payout awaiting reconciliation.');
-  }catch(error){state={...state,lastError:String(error.message||error).slice(0,220)};await save(state);return state;}
+  }catch(error){state={...state,lastError:String(error.message||error).slice(0,220)};state=await persist(state);return state;}
   // Persistence errors propagate; do not replace an already-finalized intent.
   return complete();
 }

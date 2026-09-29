@@ -11,10 +11,10 @@
   <meta property="og:title" content="SlimeWire / Launch">
   <meta property="og:description" content="Your idea. Your community. Your launch.">
   <meta property="og:image" content="https://slimewire.org/assets/slimewire/launch/liquid-obsidian-v1.png">
-  <link rel="stylesheet" href="/launch-pad.css?v=20260929-earnings"><link rel="stylesheet" href="/launch-utility.css?v=20260929-earnings">
+  <link rel="stylesheet" href="/launch-pad.css?v=20260929-dashboard"><link rel="stylesheet" href="/launch-utility.css?v=20260929-earnings">
   <link rel="preload" as="image" href="/assets/slimewire/launch/liquid-obsidian-v1.webp" fetchpriority="high">
   <script src="/config.js"></script>
-  <script src="/launch-utility.js?v=20260929-earnings" defer></script><script src="/launch-pad.js?v=20260929-earnings" defer></script>
+  <script src="/launch-utility.js?v=20260929-earnings" defer></script><script src="/launch-pad.js?v=20260929-dashboard" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#explore">Skip to launches</a>
@@ -27,7 +27,7 @@
         <button type="button" data-dialog="create">Create</button>
         <a href="#mine" data-view="mine">My launches</a>
         <a href="/launch/community">Community</a>
-        <a href="/launch/earnings">My earnings</a>
+        <a href="/launch/earnings">Earnings</a>
       </nav>
       <a class="button button-outline wallet-link" href="/wallet"><span aria-hidden="true">▣</span> Open wallet <span class="arrow" aria-hidden="true">↗</span></a>
     </header>
@@ -48,6 +48,7 @@
         </div>
         <span class="route-context">Developer. Holders. Another community. Any SOL wallet.</span>
       </section>
+      <a class="launch-earnings-strip" href="/launch/earnings" id="launch-earnings-strip" aria-label="Open SlimeWire earnings"><span><small>FOLLOW THE FEES</small><b>SlimeWire earnings</b></span><span id="launch-paid-total">All-time totals &amp; per-coin payments</span><span aria-hidden="true">View earnings ↗</span></a>
       <div class="content-grid">
         <section class="launches" id="explore" aria-labelledby="launches-title">
           <div class="section-heading"><div><p class="eyebrow" id="directory-kicker">MADE HERE. GOING PLACES.</p><h2 id="launches-title">Explore launches</h2></div><button class="text-button" id="refresh-launches" type="button">↻ Refresh</button></div>

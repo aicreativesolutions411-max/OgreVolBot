@@ -31,5 +31,6 @@ export function readLaunchFeeReceipt(tx,{signature,mint,configAddress,recipients
   if(!event)throw new Error('Verified Pump fee event is not indexed yet.');
   const actual=Object.values(credits).reduce((a,b)=>a+b,0n);
   if(actual!==BigInt(event.distributed.toString())||!event.shareholders.every(s=>recipients.includes(s.address.toBase58()))||event.shareholders.length!==recipients.length)throw new Error('Fee event and recipient transfers do not reconcile.');
-  return {totalLamports:String(actual),payments:recipients.map(wallet=>({wallet,lamports:String(credits[wallet])})),accountingStatus:'verified'};
+  return {totalLamports:String(actual),payments:recipients.map(wallet=>({wallet,lamports:String(credits[wallet])})),accountingStatus:'verified',
+    ...(Number.isSafeInteger(tx.blockTime)&&tx.blockTime>0?{confirmedAt:new Date(tx.blockTime*1000).toISOString()}: {})};
 }

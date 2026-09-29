@@ -10168,12 +10168,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
     if (request.method === "GET" && pathname === "/api/web/launch/earnings") {
-      response.setHeader("Cache-Control", "private, no-store");
       const wallets = requestUrl.searchParams.getAll("wallet");
-      try { buildLaunchEarnings([], wallets); }
-      catch { sendWebJson(request, response, 400, { ok: false, error: "Enter up to 25 ordinary Solana wallet addresses and retry." }); return; }
+      const options = { scope: requestUrl.searchParams.get("scope") || "mine", period: requestUrl.searchParams.get("period") || "all" };
+      response.setHeader("Cache-Control", options.scope === "all" ? "public, max-age=30" : "private, no-store");
+      try { buildLaunchEarnings([], wallets, options); }
+      catch { sendWebJson(request, response, 400, { ok: false, error: "Choose All SlimeWire or 1–25 ordinary Solana wallets, and a valid time period." }); return; }
       try {
-        sendWebJson(request, response, 200, { ok: true, earnings: buildLaunchEarnings((await readPumpLaunchAttempts()).attempts || [], wallets) });
+        sendWebJson(request, response, 200, { ok: true, earnings: buildLaunchEarnings((await readPumpLaunchAttempts()).attempts || [], wallets, options) });
       } catch { sendWebJson(request, response, 503, { ok: false, error: "Saved earnings are temporarily unavailable. Please retry." }); }
       return;
     }

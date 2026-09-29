@@ -22,6 +22,11 @@ function fixture({token=false}={}){
 test('actual SDK event plus native transfers reconciles exact per-coin recipient amounts',()=>{
   for(const token of [false,true]){const {tx,args}=fixture({token}),r=readLaunchFeeReceipt(tx,args);assert.equal(r.accountingStatus,'verified');assert.equal(r.totalLamports,'1000');assert.deepEqual(r.payments.map(p=>p.lamports),['200','800']);}
 });
+
+test('period filters use the finalized chain timestamp when it is available',()=>{
+  const {tx,args}=fixture();tx.blockTime=1790683200;
+  assert.equal(readLaunchFeeReceipt(tx,args).confirmedAt,new Date(tx.blockTime*1000).toISOString());
+});
 test('wrong coin, missing event, failed transaction and mismatched transfers are never reported as earned fees',()=>{
   const {tx,args}=fixture();
   for(const change of [{mint:key().toBase58()},{signature:'other'},{configAddress:key().toBase58()},{recipients:[key().toBase58()]}])assert.throws(()=>readLaunchFeeReceipt(tx,{...args,...change}));

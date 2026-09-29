@@ -34,6 +34,7 @@
     return { mint, name: clean(row.name, 64) || clean(row.symbol, 16) || mint.slice(0, 5) + '…' + mint.slice(-4), symbol: clean(row.symbol, 16),
       description: clean(row.description, 180), imageUrl: safeImage(row.imageUrl) || safeImage(row.imageUri), createdAt: clean(row.createdAt, 40),
       chain: /^0x/i.test(mint) ? 'Robinhood' : 'Solana', status: clean(row.status, 40) || 'COMPLETE', origin: row.origin === 'connected' ? 'connected' : 'launched',
+      recordedPaidLamports:/^\d+$/.test(String(row.recordedPaidLamports??''))?String(row.recordedPaidLamports):null,earningsPartial:row.earningsPartial!==false,
       feeSplit:Array.isArray(row.feeSplit)?row.feeSplit.slice(0,13).map(d=>({label:clean(d.label,64),shareBps:Number(d.shareBps)})).filter(d=>Number.isInteger(d.shareBps)&&d.shareBps>0&&d.shareBps<=10000):[],
       rewardMode: row.rewardMode || (['alliance','holder_alliance'].includes(row.launchUtility?.mode) ? row.launchUtility.mode : row.launchUtility ? 'external' : row.pumpCashback ? 'cashback' : row.holderRewards?.enabled ? 'holders' : 'creator') };
   }
@@ -75,9 +76,11 @@
     return '<article class="coin-card"><div class="coin-top"><div class="coin-avatar"><span class="coin-initial" aria-hidden="true">' + esc((coin.symbol || coin.name).slice(0, 2).toUpperCase()) + '</span>' + (sources.length ? '<img data-image-sources="' + esc(JSON.stringify(sources)) + '" alt="" hidden decoding="async" referrerpolicy="no-referrer">' : '') + '</div><span class="small-tag">' + esc(status) + '</span></div>' +
       '<h3 class="coin-title" title="' + esc(coin.name) + '">' + esc(coin.name) + '</h3><p class="coin-symbol">' + esc(symbol) + ' / ' + esc(coin.chain) + '</p>' +
       (coin.description ? '<p class="coin-description">' + esc(coin.description) + '</p>' : '') +
+      (coin.recordedPaidLamports!==null&&coin.recordedPaidLamports!==undefined?'<a class="coin-paid-total" href="/launch/earnings?coin='+encodeURIComponent(coin.mint)+'"><span>Recorded paid'+(coin.earningsPartial?' · partial':'')+'</span><b>'+esc(exactSol(coin.recordedPaidLamports))+' ↗</b></a>':'')+
       (coin.feeSplit?.length?'<div class="coin-fee-split" aria-label="Creator fee allocation">'+coin.feeSplit.map(d=>'<span><b>'+esc(d.shareBps/100)+'%</b> '+esc(d.label)+'</span>').join('')+'</div>':'')+
       '<div class="coin-meta"><span>Creator fees</span><strong>' + esc(rewardLabels[coin.rewardMode] || 'Not recorded') + '</strong></div><div class="coin-meta"><span>' + (coin.origin === 'connected' ? 'Connected' : 'Launched') + '</span><strong>' + esc(dateLabel(coin.createdAt)) + '</strong></div><div class="coin-actions"><a href="' + chartUrl(coin.mint) + '" target="_blank" rel="noopener noreferrer">Chart ↗</a><button class="copy-ca" type="button" data-copy="' + esc(coin.mint) + '" aria-label="Copy ' + esc(coin.name) + ' contract address">' + esc(coin.mint.slice(0, 4) + '…' + coin.mint.slice(-4)) + ' ⧉</button></div></article>';
   }
+  function exactSol(value){const n=BigInt(value||0),f=String(n%1000000000n).padStart(9,'0').replace(/0+$/,'');return String(n/1000000000n)+(f?'.'+f:'')+' SOL';}
   function feeBreakdownHtml(report) {
     const money=value=>{if(value===null||value===undefined)return 'Not available';try{const n=BigInt(value),tail=String(n%1000000000n).padStart(9,'0').replace(/0+$/,'');return String(n/1000000000n)+(tail?'.'+tail:'')+' SOL';}catch{return 'Not available';}};
     const warnings={partial:'Verified subtotal; some older receipts are still unavailable.',wallet_wide_only:'Wallet-wide claims cannot be attributed to this coin.',not_yet_attributed:'Older rewards may not have destination-level attribution.',tracked:'Tracked since destination accounting began.',verified_recorded_receipts:'Verified recorded per-coin distributions.'};
@@ -261,6 +264,10 @@
   root.addEventListener('storage', event => { if (view === 'mine' && (event.key === 'ogreWebToken' || event.key === null)) load(); });
   // No background polling, wallet preloading, or automatic financial actions.
   load();
+  if($('launch-paid-total')){
+    const earningsController=new AbortController(),earningsTimer=setTimeout(()=>earningsController.abort(),10000);
+    fetch(API+'/api/web/launch/earnings?scope=all',{credentials:'omit',signal:earningsController.signal}).then(r=>{if(!r.ok)throw Error('Unavailable');return r.json();}).then(d=>{if(d.ok&&d.earnings)$('launch-paid-total').textContent=exactSol(d.earnings.paidLamports)+' paid'+(d.earnings.incomplete?' · recorded subtotal':' · all time');}).catch(()=>{}).finally(()=>clearTimeout(earningsTimer));
+  }
   const sharedRewards=new URLSearchParams(root.location?.search||'').get('rewards');if(isMint(sharedRewards))rewardsDialog(sharedRewards);
   // Homepage shortcuts open the normal editable draft dialog. They cannot
   // choose a wallet, approve fees, replace a terminal draft, or submit a coin.

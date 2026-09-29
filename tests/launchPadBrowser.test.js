@@ -126,9 +126,10 @@ test('saved launch templates contain identity and route only, never wallet or sp
   assert.equal(new URL(ui.draftUrl(result),'https://slimewire.org').searchParams.get('lc_utility'),'holder_self');
   assert.equal(ui.coinModel({mint,launchUtility:{mode:'holder_alliance'}}).rewardMode,'holder_alliance');
 });
-test('public explore loads once without touching account or paid RPC endpoints', async () => {
+test('public explore and earnings load once without touching account or paid RPC endpoints', async () => {
   const b = boot({ response: { ok: true, launches: [{ mint, name: 'Bounce', symbol: 'BOUNCE' }] } }); await settle();
-  assert.equal(b.requests.length, 1); assert.equal(b.storageReads.length, 0);
+  assert.equal(b.requests.length, 2); assert.equal(b.storageReads.length, 0);
+  assert.equal(b.requests[1].url, 'https://app.slimewire.org/api/web/launch/earnings?scope=all');
   assert.equal(b.requests[0].url, 'https://app.slimewire.org/api/web/launch/directory');
   assert.deepEqual(Object.keys(b.requests[0].options.headers), []);
   assert.ok(b.nodes.get('coin-grid').innerHTML.includes('$BOUNCE'));
@@ -136,7 +137,8 @@ test('public explore loads once without touching account or paid RPC endpoints',
 });
 test('My launches requires a session and never treats public coins as owned', async () => {
   const loggedOut = boot({ hash: '#mine' }); await settle();
-  assert.equal(loggedOut.requests.length, 0);
+  assert.equal(loggedOut.requests.length, 1);
+  assert.equal(loggedOut.requests[0].url, 'https://app.slimewire.org/api/web/launch/earnings?scope=all');
   assert.ok(loggedOut.nodes.get('coin-grid').innerHTML.includes('Connect your SlimeWire account'));
   const owned = boot({ hash: '#mine', token: 'test-session', response: { ok: true, coins: [{ mint, name: 'Owned', symbol: 'OWN' }] } }); await settle();
   assert.equal(owned.requests[0].url, 'https://app.slimewire.org/api/web/launches');

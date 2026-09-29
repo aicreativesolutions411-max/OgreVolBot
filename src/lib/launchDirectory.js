@@ -1,6 +1,7 @@
 // Public launch discovery. Never return the attempt object: it contains private
 // wallet/recovery state. This view needs no RPC, indexer or paid metadata calls.
 import {splitRecipients} from './holderAlliance.js';
+import {buildLaunchEarnings} from './launchEarnings.js';
 const text = (value, max) => String(value || '').trim().slice(0, max);
 function feeSplit(attempt){
   const p=attempt.launchUtility||{};if(!['alliance','holder_alliance'].includes(p.mode))return {};
@@ -14,6 +15,7 @@ function imageUrl(value) {
   } catch { return ''; }
 }
 export function buildLaunchDirectory(attempts = []) {
+  const totals=new Map(buildLaunchEarnings(Array.isArray(attempts)?attempts:[],[],{scope:'all'}).coins.map(c=>[c.mint,c]));
   const seen = new Set(), rows = [];
   for (const attempt of [...(Array.isArray(attempts) ? attempts : [])].reverse()) {
     const mint = text(attempt?.tokenMint, 64);
@@ -28,6 +30,8 @@ export function buildLaunchDirectory(attempts = []) {
       imageUrl: [attempt.imageUri, attempt.imageUrl, metadata.image, metadata.imageUrl].map(imageUrl).find(Boolean) || '',
       createdAt: Number.isFinite(date) ? new Date(date).toISOString() : '',
       origin: attempt.origin === 'connected' ? 'connected' : 'launched',
+      recordedPaidLamports:totals.get(mint)?.totalPaidLamports??null,
+      earningsPartial:totals.get(mint)?.partial??true,
       ...feeSplit(attempt),
       rewardMode: attempt.launchUtility?.mode === 'holder_alliance' ? 'holder_alliance' : attempt.launchUtility?.mode === 'alliance' ? 'alliance' : attempt.launchUtility?.mode === 'usepaid' ? 'external' : attempt.pumpCashback ? 'cashback' : attempt.holderRewards?.enabled ? 'holders' : 'creator'
     });

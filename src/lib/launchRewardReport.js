@@ -1,5 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 import { publicHolderLedger, HOLDER_CADENCE_MS, splitRecipients, recipientSource, ledgerSources } from './holderAlliance.js';
+import { earningsEvents } from './launchEarningsHistory.js';
 const text=(v,n=120)=>String(v||'').slice(0,n);
 const amount=v=>/^\d+$/.test(String(v||''))?String(v):'0';
 function rewardMode(attempt,policy){
@@ -13,9 +14,9 @@ const snapshot=s=>s?{at:text(s.at,40),own:s.own?{count:Number(s.own.count)||0,sl
 
 function feeDestinations(attempt,policy,holder){
   if(!['creator','alliance','holder_alliance'].includes(rewardMode(attempt,policy)))return {destinations:[],collectionTotalLamports:null,collectionReceiptCount:0,collectionAccountingPending:false,collectionReceipts:[],unattributedPaidLamports:'0'};
-  const receipts=attempt.allianceDistribution?.receipts||[],verified=receipts.filter(r=>r.accountingStatus==='verified');
+  const receipts=attempt.allianceDistribution?.receipts||[],verified=earningsEvents(attempt.allianceDistribution,'collection');
   const direct=wallet=>String(verified.reduce((total,r)=>total+(r.payments||[]).filter(p=>p.wallet===wallet).reduce((s,p)=>s+BigInt(amount(p.lamports)),0n),0n));
-  const tracked=['alliance','holder_alliance'].includes(policy.mode),partial=receipts.length!==verified.length;
+  const tracked=['alliance','holder_alliance'].includes(policy.mode),partial=receipts.some(r=>r.accountingStatus!=='verified');
   const ledger=attempt.holderAllianceLedger||{};
   const destination=(id,label,shareBps,address,tokenMint)=>{
     const source=ledger.creditSources?.[id];
@@ -30,7 +31,7 @@ function feeDestinations(attempt,policy,holder){
   else if(policy.mode==='alliance')destinations.push({id:'recipient',label:policy.partnerName||'Recipient wallet',address:text(policy.partnerWallet,44),shareBps:policy.partnerShareBps,paidLamports:direct(policy.partnerWallet),reservedLamports:null,coverage:partial?'partial':'verified_recorded_receipts'});
   return {destinations:destinations.filter(d=>d.shareBps>0),collectionTotalLamports:tracked?String(verified.reduce((a,r)=>a+BigInt(amount(r.totalLamports)),0n)):null,
     collectionReceiptCount:verified.length,collectionAccountingPending:partial,
-    collectionReceipts:receipts.slice(-20).map(r=>({signature:text(r.signature,100),confirmedAt:text(r.confirmedAt,40),totalLamports:r.accountingStatus==='verified'?amount(r.totalLamports):null,accountingStatus:r.accountingStatus||'unavailable'})),
+    collectionReceipts:[...verified.map(r=>({...r,accountingStatus:'verified'})),...receipts.filter(r=>!verified.some(v=>v.signature===r.signature))].slice(-20).map(r=>({signature:text(r.signature,100),confirmedAt:text(r.confirmedAt,40),totalLamports:r.accountingStatus==='verified'?amount(r.totalLamports):null,accountingStatus:r.accountingStatus||'unavailable'})),
     unattributedPaidLamports:holder?String(BigInt(amount(ledger.paidLamports))-ledgerSources(ledger).reduce((a,k)=>a+BigInt(amount(ledger.paidBySource?.[k])),0n)):'0'};
 }
 

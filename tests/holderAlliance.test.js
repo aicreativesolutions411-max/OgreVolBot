@@ -74,3 +74,12 @@ test('final receipt write failure remains reconcilable without a second send',as
   assert.ok(f.state.pending);assert.equal(f.sent,1);
   await settleHolderBatch(f);assert.equal(f.sent,1);assert.equal(f.state.paidLamports,'1000000');
 });
+
+test('finalized settlement retains the rotated receipt and per-wallet lifetime history atomically',async()=>{
+  const receipts=Array.from({length:100},(_,i)=>({signature:'old-'+i,confirmedAt:'2026-09-01T12:00:00Z',lamports:'1000000',payments:[{wallet:a,lamports:'1000000'}],bySource:{own:'1000000'}}));
+  const f=fixture({credits:{[a]:'1000000'},paidLamports:'100000000',paidByWallet:{[a]:'100000000'},receiptCount:100,receipts});
+  await settleHolderBatch(f);
+  assert.equal(f.state.receipts.length,100);assert.equal(f.state.earningsHistory.events.length,101);
+  assert.equal(f.state.earningsHistory.totalLamports,'101000000');assert.equal(f.state.earningsHistory.paidByWallet[a],'101000000');assert.equal(f.state.earningsHistory.incomplete,false);
+  await settleHolderBatch(f);assert.equal(f.sent,1);assert.equal(f.state.earningsHistory.events.length,101);
+});

@@ -10,9 +10,10 @@ test('public launch directory exposes only completed, unique, valid Solana coins
   assert.equal(rows[0].symbol, 'LATEST');
   assert.equal(rows[0].mint, mint);
 });
-test('directory whitelists public metadata without wallet, account or fee balances', () => {
+test('directory whitelists public metadata and recorded payouts without private wallet or account state', () => {
   const [row] = buildLaunchDirectory([{ ...complete, userId: 123, encryptedMintSecret: 'secret', devWalletPublicKey: 'private context', recoveryIntents: {}, fees: 200, launchUtility: { mode: 'usepaid', xHandle: 'private' }, metadataJson: { description: 'A public coin', twitter: 'https://x.com/example' } }]);
-  assert.deepEqual(Object.keys(row).sort(), ['createdAt', 'description', 'imageUrl', 'mint', 'name', 'origin', 'rewardMode', 'symbol']);
+  assert.deepEqual(Object.keys(row).sort(), ['createdAt', 'description', 'earningsPartial', 'imageUrl', 'mint', 'name', 'origin', 'recordedPaidLamports', 'rewardMode', 'symbol']);
+  assert.equal(row.recordedPaidLamports,null);
   assert.equal(row.rewardMode, 'external');
   assert.equal(row.description, 'A public coin');
   assert.ok(!JSON.stringify(row).includes('private'));
