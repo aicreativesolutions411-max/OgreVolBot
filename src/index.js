@@ -122,6 +122,7 @@ import { readHolderSnapshot, readHolderCommunities } from "./lib/holderAllianceS
 import { buildLaunchRewardReport, holderEligibilityReport } from "./lib/launchRewardReport.js";
 import { createReadStreamBackoff } from "./lib/readStreamBackoff.js";
 import { buildLaunchEarnings } from "./lib/launchEarnings.js";
+import { readPumpFeeReference } from "./lib/pumpFeeReference.js";
 import { readLaunchFeeReceipt } from "./lib/launchFeeReceipt.js";
 import { createCommunityHub, buildRewardsInbox, receiptCredit, verifiedAgreementFor } from "./lib/communityHub.js";
 import { verifyCommunityAuthority } from "./lib/communityAuthority.js";
@@ -10199,6 +10200,19 @@ async function handleWebApiRequest(request, response, requestUrl) {
       } catch {
         sendWebJson(request, response, 503, { ok: false, error: "Launch directory is temporarily unavailable. Please retry." });
       }
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/launch/fee-reference") {
+      let mint;
+      try { mint = new PublicKey(requestUrl.searchParams.get("mint") || "").toBase58(); }
+      catch { sendWebJson(request, response, 400, { ok: false, error: "Enter a valid Solana coin address." }); return; }
+      try {
+        const store = await readPumpLaunchAttempts();
+        const attempt = [...(store.attempts || [])].reverse().find(a => a.tokenMint === mint && a.status === "COMPLETE");
+        if (!attempt) { sendWebJson(request, response, 404, { ok: false, error: "No completed SlimeWire launch found for this coin." }); return; }
+        sendCachedWebJson(request, response, 200, { ok: true, reference: await readPumpFeeReference(attempt) }, "public, max-age=30");
+      } catch { sendWebJson(request, response, 503, { ok: false, error: "Fee reference is temporarily unavailable." }); }
       return;
     }
 

@@ -30,6 +30,7 @@ const server=http.createServer(async(req,res)=>{
     if(u.pathname==='/config.js'){res.writeHead(200,{'content-type':'application/javascript'});res.end('window.OGRE_PORTAL_CONFIG={apiBase:""};');return;}
     if(u.pathname==='/api/web/launch/earnings'){json(200,{ok:true,earnings:buildLaunchEarnings(attempts,u.searchParams.getAll('wallet'),{scope:u.searchParams.get('scope')||'mine',period:u.searchParams.get('period')||'all'})});return;}
     if(u.pathname==='/api/web/launch/rewards'){json(200,{ok:true,report:buildLaunchRewardReport(attempts.find(a=>a.tokenMint===u.searchParams.get('mint')))});return;}
+    if(u.pathname==='/api/web/launch/fee-reference'){json(200,{ok:true,reference:{mint:u.searchParams.get('mint'),source:'Pump',scope:'coin_creator',status:'available',asset:'SOL',earnedLamports:'7872559004',claimableLamports:null,checkedAt:iso(now),note:'LOCAL TEST DATA — simulated Pump reference for layout testing only.'}});return;}
     if(u.pathname==='/api/web/launch/directory'){json(200,{ok:true,launches:buildLaunchDirectory(attempts)});return;}
     const route={'/':'home.html','/games':'games.html','/help':'help.html','/bot':'bot.html','/terminal':'terminal.html','/wallet':'fun.html','/wallet/':'fun.html','/launch/community':'launch-community.html','/launch/earnings':'launch-earnings.html','/launch':'launch.html'}[u.pathname]||u.pathname;
     const file=path.resolve(root,'.'+(route.startsWith('/')?route:'/'+route));

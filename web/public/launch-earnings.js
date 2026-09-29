@@ -96,7 +96,7 @@
     const c=data?.coins.find(c=>c.mint===mint);if(!c)return;
     const dialog=$('earnings-detail');if(!dialog.open){returnFocus=document.activeElement;dialog.showModal();}
     const id=++detailEpoch;detailController?.abort();detailController=new AbortController();const active=detailController,timer=setTimeout(()=>active.abort(),10000);
-    const render=r=>{detailStops.forEach(f=>f());detailStops=[];$('earnings-detail-body').innerHTML=detailHtml(c,r,period);loadImages($('earnings-detail-body'),detailStops);};
+    const render=r=>{detailStops.forEach(f=>f());detailStops=[];$('earnings-detail-body').innerHTML=detailHtml(c,r,period);loadImages($('earnings-detail-body'),detailStops);if(r&&root.SlimeFeeReference){const reference=document.createElement('div');$('earnings-detail-body').querySelector('.earn-detail-identity').after(reference);detailStops.push(root.SlimeFeeReference.mount(reference,mint,API));}};
     render(null);dialog.querySelector('[data-close]').focus();
     try{const response=await fetch(API+'/api/web/launch/rewards?mint='+encodeURIComponent(mint),{signal:active.signal,credentials:'omit'}),r=await response.json();if(!response.ok||!r.ok)throw Error(r.error||'Fee split could not be loaded.');if(id!==detailEpoch||!dialog.open)return;render(r.report);}
     catch(e){if(id===detailEpoch&&dialog.open){$('earnings-detail-status').textContent='Fee split unavailable. '+(e.name==='AbortError'?'Request timed out.':e.message);const b=document.createElement('button');b.type='button';b.className='text-button';b.textContent='Retry fee split';b.onclick=()=>showCoin(mint);$('earnings-detail-status').appendChild(b);}}

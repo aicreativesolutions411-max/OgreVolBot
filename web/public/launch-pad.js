@@ -125,15 +125,16 @@
     }, { rootMargin: '200px' });
     $('coin-grid').querySelectorAll('img[data-image-sources]').forEach(img => imageObserver ? imageObserver.observe(img.parentElement) : start(img));
   }
-  let previousFocus;
+  let previousFocus, rewardReferenceStop;
   const draft = { name: '', symbol: '', description: '', mode: 'creator' };
   function openDialog(title, content) {
+    rewardReferenceStop?.(); rewardReferenceStop = undefined;
     if (!dialog.open) previousFocus = document.activeElement;
     $('dialog-body').innerHTML = '<h2 class="dialog-title" id="dialog-title">' + esc(title) + '</h2>' + content;
     if (!dialog.open) dialog.showModal();
     $('close-dialog').focus();
   }
-  dialog.addEventListener('close', () => previousFocus?.focus?.());
+  dialog.addEventListener('close', () => { rewardReferenceStop?.(); rewardReferenceStop = undefined; previousFocus?.focus?.(); });
   $('close-dialog').addEventListener('click', () => dialog.close());
   dialog.addEventListener('click', event => { if (event.target === dialog) { const r = dialog.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close(); } });
   const launchLink = '<a class="button button-primary" href="/?from=fun#launch">Open launch workspace <span class="arrow">↗</span></a>';
@@ -203,6 +204,7 @@
       const eligibility=data.eligibility?'<div class="pair-summary"><b>'+esc(labels[data.eligibility.own])+'</b>'+(r.partnerHolderShareBps?'<p>Other community: '+esc(labels[data.eligibility.partner])+'</p>':'')+(data.eligibility.recipient?'<p><b>Selected receiving wallet · no holding requirement</b></p>':'')+'<p>Your reserved rewards: '+sol(data.eligibility.owedLamports)+' SOL</p><p>'+esc(data.eligibility.note)+'</p>'+(data.eligibility.asOf?'<small>As of '+esc(new Date(data.eligibility.asOf).toLocaleString())+'</small>':'')+'</div>':'';
       openDialog((r.symbol?'$'+r.symbol:'Coin')+' · rewards',feeBreakdownHtml(r)+stats+(holder?'<form class="create-form" id="eligibility-form"><label for="holder-wallet">Check your wallet · read only</label><input id="holder-wallet" maxlength="44" autocomplete="off" placeholder="Paste your Solana wallet" value="'+esc(wallet)+'"><div class="dialog-actions"><button type="submit" class="button button-outline">Check last snapshot</button><button type="button" id="use-connected-wallet" class="text-button">Use connected wallet</button></div><p id="eligibility-note" class="form-note" role="status">No signature or payment required. Eligibility refreshes at each payout snapshot, not continuously.</p></form>'+eligibility+'<details class="receipt-list"><summary>'+esc(r.receiptCount)+' confirmed payout batches</summary>'+(r.receipts||[]).slice().reverse().map(tx=>'<p>'+esc(new Date(tx.confirmedAt).toLocaleString())+' · '+sol(tx.lamports)+' SOL · '+esc(tx.recipients)+' wallets <a href="https://solscan.io/tx/'+encodeURIComponent(tx.signature)+'" target="_blank" rel="noopener noreferrer">Receipt ↗</a></p>').join('')+'</details><p class="dialog-copy">'+esc(r.note)+'</p>':'')+'<div class="dialog-actions"><a class="button button-outline" href="'+chartUrl(mint)+'" target="_blank" rel="noopener noreferrer">DexScreener ↗</a><button type="button" class="text-button" id="share-rewards">Copy rewards link</button><button type="button" class="text-button" id="refresh-rewards">Refresh</button></div><p id="share-status" class="form-note" role="status"></p>');
       if(root.SlimeLaunchPassport&&r.passport)$('dialog-body').insertAdjacentHTML('beforeend',root.SlimeLaunchPassport.render(r.passport));
+      if(root.SlimeFeeReference){const reference=document.createElement('div');$('dialog-title').after(reference);rewardReferenceStop=root.SlimeFeeReference.mount(reference,mint,API);}
       if(holder){$('eligibility-form').onsubmit=e=>{e.preventDefault();const value=$('holder-wallet').value.trim();if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value)){$('eligibility-note').textContent='Enter a valid Solana wallet address.';return;}rewardsDialog(mint,value);};$('use-connected-wallet').onclick=()=>{const key=root.solana?.publicKey?.toString?.()||root.phantom?.solana?.publicKey?.toString?.();if(key)rewardsDialog(mint,key);else $('eligibility-note').textContent='No browser wallet is connected here. Paste your public wallet address to check without connecting.';};}
       const communityLink=document.createElement('a');communityLink.className='button button-outline';communityLink.href=r.agreementId?'/launch/community?agreement='+encodeURIComponent(r.agreementId)+'#partners':'/launch/community#inbox';communityLink.textContent=r.agreementId?'View verified creator agreement ↗':'Open community rewards inbox ↗';$('dialog-body').appendChild(communityLink);
       const identity=document.createElement('div');identity.className='reward-coin-identity';const art=safeImage(r.imageUrl);identity.innerHTML='<div class="coin-avatar"><span class="coin-initial">'+esc((r.symbol||r.name||'?').slice(0,2))+'</span>'+(art?'<img alt="" hidden referrerpolicy="no-referrer">':'')+'</div><div><b>'+esc(r.name||r.symbol||'Launched coin')+'</b><small>'+esc(mint)+'</small></div>';$('dialog-title').after(identity);if(art)imageStops.push(loadCoinImage(identity.querySelector('img'),imageCandidates(art)));
