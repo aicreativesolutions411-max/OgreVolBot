@@ -119,7 +119,9 @@ test("/left4sol hands desktop and mobile directly to the raw full-viewport game 
 });
 
 test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH trading", () => {
-  assert.match(server, /requestUrl\.pathname === "\/wallet"[\s\S]{0,180}Location: "\/wallet\/\?install=1"/);
+  assert.match(server, /requestUrl\.pathname === "\/wallet"[\s\S]{0,400}Location: "\/wallet\/\?" \+ walletQuery\.toString\(\)/);
+  assert.match(server, /new URLSearchParams\(requestUrl.search\)/);
+  assert.match(server, /if \(!walletQuery.has\("install"\)\) walletQuery.set\("install", "1"\)/);
   assert.match(server, /requestUrl\.pathname === "\/wallet\/"[\s\S]{0,260}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   for (const route of ["/wallet", "/wallet/", "/wallet/*", "/wallet.html"]) {
     assert.match(redirects, new RegExp(`^${route.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s+https:\\/\\/app\\.slimewire\\.org\\/wallet\\/\\?install=1\\s+302$`, "m"));

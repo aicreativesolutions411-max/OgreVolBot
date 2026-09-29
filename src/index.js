@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fsSync from "node:fs";
+import { serveStaticVideo } from "./lib/staticVideo.js";
 import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
@@ -7441,6 +7442,10 @@ and is checked by an automated release audit before every upload.</p></div>
       await serveStaticHtmlPage(response, "games.html");
       return;
     }
+    if (request.method === "GET" && requestUrl.pathname === "/help") {
+      await serveStaticHtmlPage(response, "help.html");
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === "/resources") {
       await serveStaticHtmlPage(response, "resources.html");
       return;
@@ -8149,7 +8154,9 @@ and is checked by an automated release audit before every upload.</p></div>
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/wallet") {
-      response.writeHead(302, { Location: "/wallet/?install=1", "Cache-Control": "no-store" });
+      const walletQuery = new URLSearchParams(requestUrl.search);
+      if (!walletQuery.has("install")) walletQuery.set("install", "1");
+      response.writeHead(302, { Location: "/wallet/?" + walletQuery.toString(), "Cache-Control": "no-store" });
       response.end();
       return;
     }
@@ -8192,7 +8199,7 @@ and is checked by an automated release audit before every upload.</p></div>
       || /\.(?:css|js|mjs|png|jpe?g|svg|webp|ico|json|webmanifest|woff2?)$/i.test(requestUrl.pathname))) {
       // .json/.webmanifest added so /manifest.json (the PWA manifest) serves. serveWebPortal is
       // path-constrained to web/dist, which holds no sensitive json (data files live in /var/data).
-      await serveWebPortal(requestUrl, response, request.method, request.headers["accept-encoding"]);
+      await serveWebPortal(requestUrl, response, request.method, request.headers["accept-encoding"], request.headers.range);
       return;
     }
 
@@ -13521,7 +13528,7 @@ function compressedStaticAsset(target, data, stat, encoding) {
   return body;
 }
 
-async function serveWebPortal(requestUrl, response, method = "GET", acceptEncoding = "") {
+async function serveWebPortal(requestUrl, response, method = "GET", acceptEncoding = "", range = "") {
   const relativePath = requestUrl.pathname === "/" ? "home.html"
     : requestUrl.pathname === "/connect"
     || requestUrl.pathname === "/login" || requestUrl.pathname.startsWith("/account/login")
@@ -13532,7 +13539,7 @@ async function serveWebPortal(requestUrl, response, method = "GET", acceptEncodi
   const safeRelativePath = relativePath.replace(/^[/\\]+/, "");
   const filePath = path.resolve(WEB_STATIC_DIR, safeRelativePath);
 
-  if (!filePath.startsWith(WEB_STATIC_DIR)) {
+  if (filePath !== WEB_STATIC_DIR && !filePath.startsWith(WEB_STATIC_DIR + path.sep)) {
     response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("Forbidden");
     return;
@@ -13541,6 +13548,10 @@ async function serveWebPortal(requestUrl, response, method = "GET", acceptEncodi
   try {
     const stat = await fs.stat(filePath);
     const target = stat.isDirectory() ? path.join(filePath, "index.html") : filePath;
+    if (target.toLowerCase().endsWith('.mp4')) {
+      await serveStaticVideo(response, target, stat.size, {method, range});
+      return;
+    }
     const data = await fs.readFile(target);
     const fileName = path.basename(target);
     // index.html is the entry doc and config.js is regenerated per build without a cache-busting
@@ -51205,6 +51216,9 @@ function xDmStateFile() { return path.join(CONFIG.dataDir, "x-dm-terminal.json")
 let xDmStateCache = null;
 let xDmPollRunning = false;
 let xDmLastPollHeartbeatAt = 0;
+let xDmInboxFailures = 0;
+let xDmInboxRetryAt = 0;
+function xDmInboxBackoffMs(failures) { return Math.min(300_000, 15_000 * (2 ** Math.min(5, Math.max(0, Number(failures) - 1)))); }
 let xDmStateWriteChain = Promise.resolve();
 function xDmTerminalEnabled() {
   const v = String(process.env.X_DM_ENABLED || "").trim();
@@ -52637,9 +52651,18 @@ async function xDmPollTick() {
     let stateDirty = xDmPruneState(state);
     const fetchStartedAt = Date.now();
     let events;
+    if (Date.now() < xDmInboxRetryAt) {
+      // Inbox compatibility failures must not hot-loop or hold up trade receipts.
+      const outboxResult = await xDmFlushReceiptOutbox(state);
+      if (outboxResult.changed || stateDirty) await writeXDmState(state);
+      return { inboxBackoff: true, retryAt: xDmInboxRetryAt, receiptChunksSent: outboxResult.sent };
+    }
     try {
       events = await xDmFetchEvents({ maxResults: Number(process.env.X_DM_FETCH_LIMIT || 50) });
+      xDmInboxFailures = 0;
+      xDmInboxRetryAt = 0;
     } catch (error) {
+      xDmInboxRetryAt = Date.now() + xDmInboxBackoffMs(++xDmInboxFailures);
       // Receipt delivery is independent from inbox health. A temporary read
       // failure must not strand confirmation results that are already queued.
       const outboxResult = await xDmFlushReceiptOutbox(state);
@@ -67196,6 +67219,9 @@ function groupBuyBackoffDelayMs(failures, retryAfterMs = 0, jitterUnit = Math.ra
 }
 
 function groupBuyFeedRetryDelayMs(error, failures = 1, jitterUnit = Math.random()) {
+  // A local admission timeout is not a provider throttle. Retry this read at
+  // bounded priority without imposing a host-wide cooldown on unrelated buys.
+  if (["GROUP_BUY_GATE_EXPIRED", "GROUP_BUY_GATE_EVICTED", "GROUP_BUY_GATE_FULL"].includes(error?.code)) return 1;
   const status = Number(error?.status) || 0;
   const message = String(error?.message || error || "");
   const retryable = [408, 425, 429].includes(status)
@@ -67227,7 +67253,7 @@ async function retryGroupBuyFeedOperation(operation, {
       if (!(delayMs > 0) || attempt >= attempts) throw error;
       // The operation itself is scheduled through the host gate. Extending that gate's cooldown
       // here makes this retry and every other Pump request wait together instead of stampeding.
-      cooldownFn(delayMs);
+      if (!String(error?.code || "").startsWith("GROUP_BUY_GATE_")) cooldownFn(delayMs);
       onRetry({ attempt, delayMs, error });
     }
   }

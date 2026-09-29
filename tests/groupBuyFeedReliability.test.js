@@ -102,6 +102,15 @@ test("one host-wide FIFO gate spaces starts and applies provider-wide 429 cooldo
   assert.match(serverSource, /remaining <= 1/);
 });
 
+test("local queue expiry retries the same read without freezing unrelated live buys", async () => {
+  let calls=0;const cooldowns=[];
+  const result=await helpers.retryGroupBuyFeedOperation(async()=>{
+    if(++calls===1){const e=new Error('Provider request expired in the host queue');e.code='GROUP_BUY_GATE_EXPIRED';throw e;}
+    return {trades:[{id:'same-cursor-buy'}]};
+  },{maxAttempts:2,cooldownFn:n=>cooldowns.push(n)});
+  assert.equal(calls,2);assert.equal(result.trades[0].id,'same-cursor-buy');assert.deepEqual(cooldowns,[]);
+});
+
 test("Pump buy pages retry through the shared cooldown and preserve the page until success", async () => {
   let calls = 0;
   const cooldowns = [];

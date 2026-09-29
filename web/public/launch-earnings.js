@@ -8,7 +8,7 @@
   const coinName=c=>c.symbol?'$'+c.symbol:c.name||short(c.mint);
   function avatar(c){
     const sources=root.SlimeLaunchPad?.imageCandidates(c.imageUrl)||[];
-    return '<div class="coin-avatar"><span class="coin-initial" aria-hidden="true">'+esc((c.symbol||c.name||'?').slice(0,2))+'</span>'+(sources.length?'<img data-earnings-image="'+esc(JSON.stringify(sources))+'" alt="" hidden decoding="async" referrerpolicy="no-referrer">':'')+'</div>';
+    return '<div class="coin-avatar"><span class="coin-initial" aria-hidden="true">'+esc((c.symbol||c.name||'?').slice(0,2))+'</span>'+('<img data-image-mint="'+esc(c.mint)+'" data-earnings-image="'+esc(JSON.stringify(sources))+'" alt="" hidden decoding="async" referrerpolicy="no-referrer">')+'</div>';
   }
   function summaryHtml(data){
     const mine=data.scope!=='all',coins=data.coins||[],known=!coins.length||coins.some(c=>c.paidLamports!==null&&c.paidLamports!==undefined)||BigInt(data.paidLamports||0)>0n;
@@ -57,7 +57,14 @@
   let scope='all',period='all',tab='coins',limit=25,epoch=0,controller,data=null,detailEpoch=0,detailController,stops=[],detailStops=[],returnFocus;
   let selectedWallets=[],managedEpoch=0,sharedCoinOpened=false;
   const stopImages=()=>{stops.forEach(f=>f());stops=[];};
-  const loadImages=(element,list)=>element.querySelectorAll('[data-earnings-image]').forEach(img=>list.push(root.SlimeLaunchPad.loadCoinImage(img,JSON.parse(img.dataset.earningsImage))));
+  const loadImages=(element,list)=>{
+    const images=element.querySelectorAll('[data-earnings-image]');
+    const start=img=>list.push(root.SlimeLaunchPad.loadCoinImage(img,JSON.parse(img.dataset.earningsImage),{mint:img.dataset.imageMint}));
+    if(!root.IntersectionObserver){images.forEach(start);return;}
+    // Observe the visible avatar wrapper, not its initially hidden image.
+    const visibleObserver=new root.IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){visibleObserver.unobserve(entry.target);const img=entry.target.querySelector('[data-earnings-image]');if(img)start(img);}}),{rootMargin:'240px'});
+    images.forEach(img=>visibleObserver.observe(img.parentElement));list.push(()=>visibleObserver.disconnect());
+  };
   const options=()=>({tab,limit,search:$('earnings-search').value,sort:$('earnings-sort').value,role:scope==='mine'?$('earnings-role').value:'all'});
   function paint(){
     if(!data)return;stopImages();

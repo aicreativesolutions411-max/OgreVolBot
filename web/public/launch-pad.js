@@ -13,13 +13,32 @@
     // ticker search, generated substitute, wallet preload or paid RPC lookup.
     return path ? [...new Set(['https://pump.mypinata.cloud/ipfs/' + path[1], 'https://gateway.pinata.cloud/ipfs/' + path[1], raw])] : [raw];
   }
-  function loadCoinImage(img, sources, { schedule = setTimeout, cancel = clearTimeout } = {}) {
-    let index = 0, timer, finished = false;
+  function createImageResolver(fetcher, now = Date.now) {
+    const cache=new Map();
+    return function resolve(mint){
+      if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint))return Promise.resolve([]);
+      const old=cache.get(mint);if(old&&old.until>now())return old.promise;
+      // Exact mint, free public index, one coalesced read. No wallet/RPC reads.
+      const entry={until:now()+60_000,promise:null};
+      entry.promise=Promise.resolve().then(()=>fetcher('https://api.dexscreener.com/latest/dex/tokens/'+encodeURIComponent(mint),{signal:AbortSignal.timeout(5000),credentials:'omit'})).then(async r=>{
+        if(!r.ok)return [];const data=await r.json();
+        const pair=(data.pairs||[]).filter(p=>p.chainId==='solana'&&p.baseToken?.address===mint&&safeImage(p.info?.imageUrl)).sort((a,b)=>(Number(b.liquidity?.usd)||0)-(Number(a.liquidity?.usd)||0))[0];
+        const images=imageCandidates(pair?.info?.imageUrl);if(images.length)entry.until=now()+600_000;return images;
+      }).catch(()=>[]);
+      cache.set(mint,entry);if(cache.size>120)cache.delete(cache.keys().next().value);return entry.promise;
+    };
+  }
+  const resolveCoinImages=createImageResolver((...args)=>root.fetch(...args));
+  function loadCoinImage(img, sources, { schedule = setTimeout, cancel = clearTimeout, mint = '' } = {}) {
+    sources=[...sources];let index = 0, timer, finished = false, lookedUp=false;
     const stop = () => { finished = true; cancel(timer); img.onload = null; img.onerror = null; };
     const next = () => {
       if (finished) return;
       cancel(timer);
-      if (index >= sources.length) { stop(); img.remove(); return; }
+      if (index >= sources.length) {
+        if(mint&&!lookedUp){lookedUp=true;resolveCoinImages(mint).then(rows=>{if(finished)return;sources=rows.filter(s=>!sources.includes(s));index=0;next();});return;}
+        stop(); img.remove(); return;
+      }
       img.src = sources[index++];
       timer = schedule(next, 4500);
     };
@@ -73,7 +92,7 @@
     const symbol = coin.symbol ? '$' + coin.symbol : 'Ticker unavailable';
     const status = coin.status === 'COMPLETE' ? coin.chain.toUpperCase() : coin.status.replace(/_/g, ' ');
     const sources = imageCandidates(coin.imageUrl);
-    return '<article class="coin-card"><div class="coin-top"><div class="coin-avatar"><span class="coin-initial" aria-hidden="true">' + esc((coin.symbol || coin.name).slice(0, 2).toUpperCase()) + '</span>' + (sources.length ? '<img data-image-sources="' + esc(JSON.stringify(sources)) + '" alt="" hidden decoding="async" referrerpolicy="no-referrer">' : '') + '</div><span class="small-tag">' + esc(status) + '</span></div>' +
+    return '<article class="coin-card"><div class="coin-top"><div class="coin-avatar"><span class="coin-initial" aria-hidden="true">' + esc((coin.symbol || coin.name).slice(0, 2).toUpperCase()) + '</span>' + ('<img data-image-mint="'+esc(coin.mint)+'" data-image-sources="' + esc(JSON.stringify(sources)) + '" alt="" hidden decoding="async" referrerpolicy="no-referrer">') + '</div><span class="small-tag">' + esc(status) + '</span></div>' +
       '<h3 class="coin-title" title="' + esc(coin.name) + '">' + esc(coin.name) + '</h3><p class="coin-symbol">' + esc(symbol) + ' / ' + esc(coin.chain) + '</p>' +
       (coin.description ? '<p class="coin-description">' + esc(coin.description) + '</p>' : '') +
       (coin.recordedPaidLamports!==null&&coin.recordedPaidLamports!==undefined?'<a class="coin-paid-total" href="/launch/earnings?coin='+encodeURIComponent(coin.mint)+'"><span>Recorded paid'+(coin.earningsPartial?' · partial':'')+'</span><b>'+esc(exactSol(coin.recordedPaidLamports))+' ↗</b></a>':'')+
@@ -90,7 +109,7 @@
     const mode=new URLSearchParams(search).get('mode');
     return ['creator','holder_self','holder_alliance','alliance'].includes(mode)?mode:'';
   }
-  root.SlimeLaunchPad = { esc, safeImage, imageCandidates, loadCoinImage, isMint, coinModel, chartUrl, walletCoinUrl, searchQuery, filterLaunches, draftUrl, cardHtml, templateDraft, entryMode, feeBreakdownHtml };
+  root.SlimeLaunchPad = { esc, safeImage, imageCandidates, createImageResolver, loadCoinImage, isMint, coinModel, chartUrl, walletCoinUrl, searchQuery, filterLaunches, draftUrl, cardHtml, templateDraft, entryMode, feeBreakdownHtml };
   if (!root.document?.getElementById('launch-dialog')) return;
   const $ = id => document.getElementById(id), dialog = $('launch-dialog');
   const API = String(root.OGRE_PORTAL_CONFIG?.apiBase || '').trim().replace(/\/+$/, '');
@@ -98,7 +117,7 @@
   let imageObserver, imageStops = [];
   function stopImages() { imageObserver?.disconnect(); imageObserver = null; imageStops.forEach(stop => stop()); imageStops = []; }
   function startImages() {
-    const start = img => imageStops.push(loadCoinImage(img, JSON.parse(img.dataset.imageSources)));
+    const start = img => imageStops.push(loadCoinImage(img, JSON.parse(img.dataset.imageSources), {mint:img.dataset.imageMint}));
     // Observe the avatar shell (the image is hidden until decoded). Off-screen
     // cards don't download or consume their timeout before the user reaches them.
     if (root.IntersectionObserver) imageObserver = new root.IntersectionObserver((entries, observer) => {
@@ -144,6 +163,7 @@
       <div class="fee-choice-cards" role="group" aria-label="Fee route">${[['creator','Keep my fees','Claim when you want.'],['holder_self','Reward communities','You + your holders.'],['holder_alliance','Custom split','Communities + wallets.']].map(([mode,title,copy])=>`<button type="button" data-fee-choice="${mode}" aria-pressed="${draft.mode===mode}"><b>${title}</b><span>${copy}</span></button>`).join('')}</div>
       <details class="advanced-fee-choice" ${draft.mode==='alliance'?'open':''}><summary>Advanced fee route</summary><button type="button" class="text-button" data-fee-choice="alliance">Community treasury wallet · manual / daily distribution</button></details>
       <div class="draft-utility">${utility.render('draftFee',policy)}</div><aside class="draft-live-preview" aria-label="Live launch preview" id="draft-preview"></aside>
+      <section class="launch-readiness" id="launch-readiness" aria-label="Launch readiness"></section>
       <p class="form-note"><strong>Nothing launches yet.</strong> Next, add artwork, choose your spending wallet and optional bundles, then review full addresses, permanent percentages and costs. Templates never select your spending wallet.</p>
       <div class="dialog-actions"><button type="submit" class="button button-primary">Continue to full review ↗</button></div>
       <details class="template-tools"><summary>Save or share this setup</summary><p class="form-note">Coin details and fee recipients only. Anyone with the link can read them. Never include private information.</p><div class="dialog-actions"><button type="button" id="share-template" class="button button-outline">Copy template link</button><button type="button" id="save-template" class="text-button">Save on this device</button><button type="button" id="load-template" class="text-button">Load saved</button><button type="button" id="remove-template" class="text-button">Delete saved</button></div></details><p id="template-status" class="form-note" role="status"></p></form>`);
@@ -151,6 +171,8 @@
       draft.name=$('coin-name').value;draft.symbol=$('coin-ticker').value;draft.description=$('coin-description').value;draft.mode=$('draftFeeMode').value;draft.launchUtility=utility.read('draftFee');
       const p=draft.launchUtility,shares=p.mode==='creator'?[['Developer',10000]]:p.mode==='alliance'?[['Developer',10000-p.partnerShareBps],[p.partnerName||'Treasury wallet',p.partnerShareBps]]:[['Developer',p.creatorShareBps],['My holders',p.ownHolderShareBps],['Other community',p.partnerHolderShareBps],...utility.recipients(p).map(r=>[r.label||'Receiving wallet',r.shareBps])];
       const error=utility.draftError(p);
+      const checks=root.SlimeJourney?.readiness({...draft,splitError:error||''})||[];
+      $('launch-readiness').innerHTML='<h3>Before your coin goes live</h3><ul>'+checks.map(c=>'<li data-state="'+c.state+'"><b>'+(c.state==='ready'?'✓ ':c.state==='fix'?'! ':'→ ')+esc(c.label)+'</b><small>'+esc(c.detail)+'</small></li>').join('')+'</ul>';
       $('draft-preview').innerHTML=`<small>LIVE DRAFT PREVIEW · ARTWORK ADDED NEXT</small><h3>${esc(draft.name||'Your coin')} <span>$${esc(draft.symbol||'TICKER')}</span></h3><p>${esc(draft.description||'Your idea, on-chain.')}</p><div class="coin-fee-split">${shares.filter(r=>r[1]>0).map(([name,bps])=>`<span><b>${esc(bps/100)}%</b> ${esc(name)}</span>`).join('')}</div><p class="draft-check" data-valid="${!error}">${esc(error||'100% allocated · SOL pair · SOL payouts')}</p>`;
       $('create-form').querySelectorAll('[data-fee-choice]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.feeChoice===draft.mode)));
     };

@@ -12,9 +12,29 @@
   let dashboard=null,caps=null,publicData={agreements:[],goals:[]},view='',epoch=0,inbox=null;
   const token=()=>{try{return localStorage.getItem('ogreWebToken')||'';}catch{return '';}};
   const logged=()=>!!dashboard;
+  const draftKey='slimeCommunityDraftV1';
+  function walletLoginUrl(){const back=root.SlimeJourney?.safeReturn(location.pathname+location.search+location.hash)||'/launch/community';return '/wallet/?returnTo='+encodeURIComponent(back);}
+  function saveConnectDraft(){
+    const f=$('connect-form');if(!f)return;
+    const values=Object.fromEntries(new FormData(f));delete values.wallet;
+    // Only a draft. Never persist signing wallets, tokens, approvals or a review ID.
+    const fields=['mint','mode','creator','own','partner','partnerMint','payee'];
+    const saved=Object.fromEntries(fields.map(k=>[k,String(values[k]||'').slice(0,80)]));
+    if(values.mode==='custom')saved.recipients=root.SlimeLaunchUtility.readRecipients('hubFee');
+    try{sessionStorage.setItem(draftKey,JSON.stringify(saved));}catch{}
+  }
+  function restoreConnectDraft(){
+    try{const v=JSON.parse(sessionStorage.getItem(draftKey)||'null');if(!v||q.get('mint')&&q.get('mint')!==v.mint)return;
+      const f=$('connect-form');for(const k of ['mint','mode','creator','own','partner','partnerMint','payee'])if(f.elements[k]&&typeof v[k]==='string')f.elements[k].value=v[k];
+      if(v.mode==='custom'&&Array.isArray(v.recipients)){
+        $('recipient-wallet-label').innerHTML=root.SlimeLaunchUtility.recipientEditor('hubFee',{recipients:v.recipients});
+        status('Draft restored, including receiving wallets. Review every address; no approval was saved.');
+      }
+    }catch{}
+  }
   function status(text,error=false){$('hub-status').textContent=text;$('hub-status').classList.toggle('error',error);}
   async function api(path,{body,privateRead=false}={}){
-    const auth=token();if((body||privateRead)&&!auth)throw Error('Sign in through Wallet first, then return here and refresh.');
+    const auth=token();if((body||privateRead)&&!auth)throw Error('Sign in through Wallet, then use Back to launch setup. Your draft stays on this device.');
     const response=await fetch(API+'/api/web/'+path,{method:body?'POST':'GET',headers:{...(body?{'Content-Type':'application/json'}:{}),...(auth?{Authorization:'Bearer '+auth}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(body?60000:20000),cache:'no-store'});
     const data=await response.json();if(!response.ok||data.ok===false)throw Error(data.error||'The request could not finish. Check the saved setup before retrying.');return data;
   }
@@ -22,7 +42,7 @@
   const walletOptions=()=>options(dashboard?.wallets||[],w=>w.publicKey,w=>w.label+' · '+short(w.publicKey));
   const disabled=()=>logged()?'':' disabled';
   const note=(title,text)=>'<aside class="hub-panel"><h3>'+title+'</h3><p>'+text+'</p></aside>';
-  function account(){ $('hub-account').innerHTML=logged()?'<span>'+dashboard.wallets.length+' managed wallet'+(dashboard.wallets.length===1?'':'s')+' available · same account as Wallet</span><button class="text-button" id="hub-refresh">↻ Refresh</button>':'<span>Explore public records without signing in. To manage a coin, <a href="/wallet">sign in through Wallet ↗</a>, then return.</span><button class="text-button" id="hub-refresh">↻ Refresh</button>'; $('hub-refresh').onclick=()=>load(); }
+  function account(){ $('hub-account').innerHTML=logged()?'<span>'+dashboard.wallets.length+' managed wallet'+(dashboard.wallets.length===1?'':'s')+' available · same account as Wallet</span><button class="text-button" id="hub-refresh">↻ Refresh</button>':'<span>Explore public records without signing in. To manage a coin, <a href="'+walletLoginUrl()+'">sign in through Wallet ↗</a>. Your setup draft is kept on this device.</span><button class="text-button" id="hub-refresh">↻ Refresh</button>'; $('hub-refresh').onclick=()=>load(); }
   async function act(button,work){if(button?.disabled)return; if(button)button.disabled=true;status('Working…');try{await work();}catch(e){status(e.name==='TimeoutError'?'Request timed out. Its outcome may be pending. Refresh your saved setup before retrying; do not create another setup.':e.message,true);}finally{if(button?.isConnected)button.disabled=false;}}
   function form(id,work){$(id)?.addEventListener('submit',e=>{e.preventDefault();const f=e.currentTarget;act(f.querySelector('[type=submit]'),()=>work(Object.fromEntries(new FormData(f)),f));});}
   async function refreshPrivate(){if(token())dashboard=await api('community/dashboard',{privateRead:true});account();}
@@ -40,9 +60,11 @@
   function render(){view=selected();document.querySelectorAll('[data-tab]').forEach(a=>a.setAttribute('aria-current',a.dataset.tab===view?'page':'false'));({connect:connectView,partners:partnerView,inbox:inboxView,goals:goalView})[view]();}
   function connectView(){
     $('hub-content').innerHTML='<div class="hub-layout"><div><section class="hub-panel"><h2>Keep the coin.<br>Give its fees a purpose.</h2><p>Connect an existing SOL-paired Pump coin. Use its creator wallet and an unlocked fee configuration. No new token. No relaunch.</p><form id="connect-form" class="hub-form"><label>Coin contract address<input name="mint" required autocomplete="off" spellcheck="false" value="'+esc(q.get('mint')||'')+'" placeholder="Paste the original Pump coin address"></label><label>Creator wallet<select name="wallet" required>'+walletOptions()+'</select></label><label>Where should creator fees go?<select name="mode" id="connect-mode"><option value="own">Me + my holders</option><option value="two">Me + two holder communities</option><option value="custom">Custom split · developer, holders & wallets</option><option value="treasury">Me + a project / treasury wallet</option></select></label><div class="hub-shares"><label>Creator %<input name="creator" type="number" min="1" max="99" step="1" value="20" required></label><label id="own-label" hidden>My holders %<input name="own" type="number" min="0" max="99" step="1" value="40"></label><label id="partner-label" hidden>Partner holders %<input name="partner" type="number" min="0" max="99" step="1" value="40"></label></div><div id="recipient-wallet-label" class="launch-utility" hidden>'+root.SlimeLaunchUtility.recipientEditor('hubFee')+'</div><label id="partner-mint-label" hidden>Partner community coin address<input name="partnerMint" autocomplete="off" spellcheck="false"></label><label id="payee-label" hidden>Project / treasury SOL wallet<input name="payee" autocomplete="off" spellcheck="false"></label><p id="split-explanation">Your holders receive the remaining 80%. Eligible wallets hold strictly over $20 at each 12-hour snapshot.</p><button class="button button-primary" type="submit"'+disabled()+(!caps?' disabled':'')+'>Check coin & review split ↗</button></form></section><section class="hub-panel"><h3>Saved setups</h3><div id="saved-reviews" class="hub-list">'+(dashboard?.reviews.length?dashboard.reviews.slice().reverse().map(r=>'<div class="hub-record"><span class="hub-tag">'+esc(r.status)+'</span><p class="hub-address">'+esc(r.mint)+'</p><button class="text-button" data-review="'+esc(r.id)+'">'+(r.status==='ACTIVE'?'View approved terms':'Review / resume this setup')+' ↗</button></div>').join(''):'<p>No setup reviews saved yet.</p>')+'</div></section></div>'+note('A deliberate, one-time choice.','Pump fee splits are permanent. You keep at least 1% of creator fees. Holder and recipient-wallet credits remain owed even when distribution is paused. Custom splits use a managed rewards vault, 12-hour cycles, a 0.001 SOL vault reserve and 0.001 SOL minimum wallet payouts. Project-only treasury splits use manual distributions.<br><br>Setup rent and reserves are capped at 0.02 SOL, with a 0.0001 SOL transaction network-fee cap. A funded creator wallet is required. Locked, Cashback, Mayhem and non-SOL coins cannot be connected.')+'</div>';
+    restoreConnectDraft();
     const change=()=>{const mode=$('connect-mode').value,custom=mode==='custom',two=mode==='two'||custom,treasury=mode==='treasury';['recipient-wallet-label'].forEach(id=>$(id).hidden=!custom);['own-label','partner-label','partner-mint-label'].forEach(id=>$(id).hidden=!two);$('payee-label').hidden=!treasury;const c=Number($('connect-form').elements.creator.value);$('split-explanation').textContent=treasury?'The payee gets the remaining '+(100-c)+'%. Manual distribution. The split continues after a project target is reached.':two?'Whole percentages must total 100%. Unused destinations can receive 0%. Holders need strictly over $20; the pasted wallet has no holding requirement. Rewards run every 12 hours, delayed if required holder data is unavailable.':'Your holders receive the remaining '+(100-c)+'%. Eligible wallets hold strictly over $20 at each 12-hour snapshot.';};
+    $('connect-form').addEventListener('input',saveConnectDraft);$('connect-form').addEventListener('change',saveConnectDraft);
     $('connect-mode').onchange=change;$('connect-form').elements.creator.oninput=change;
-    root.SlimeLaunchUtility.wireRecipients('hubFee',change);
+    root.SlimeLaunchUtility.wireRecipients('hubFee',()=>{change();saveConnectDraft();});
     change();
     form('connect-form',async v=>{
       let policy;if(v.mode==='treasury')policy={mode:'alliance',partnerWallet:v.payee,partnerShareBps:(100-Number(v.creator))*100,partnerName:'Project treasury',autoDistribute:false,consentVersion:caps.alliance?.consentVersion};
