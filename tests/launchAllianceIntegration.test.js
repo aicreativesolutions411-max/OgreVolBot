@@ -9,7 +9,7 @@ import {assertLaunchUtilityReady} from '../src/lib/launchUtility.js';
 import {settleLaunchAlliance} from '../src/lib/launchAllianceSettlement.js';
 import {feeSetupSubmissionDisposition} from '../src/lib/launchUtilityRecovery.js';
 import {pumpFeeSharingSetupFundingTarget} from '../src/lib/pumpRewardDurability.js';
-import {normalizeHolderAlliance,verifySplitRecipient,allocateHolderCycle,HOLDER_CADENCE_MS,HOLDER_MIN_PAYOUT,HOLDER_VAULT_RESERVE,HOLDER_ALLIANCE_CONSENT_VERSION} from '../src/lib/holderAlliance.js';
+import {normalizeHolderAlliance,splitRecipients,verifySplitRecipient,allocateHolderCycle,HOLDER_CADENCE_MS,HOLDER_MIN_PAYOUT,HOLDER_VAULT_RESERVE,HOLDER_ALLIANCE_CONSENT_VERSION} from '../src/lib/holderAlliance.js';
 import {settleHolderBatch} from '../src/lib/holderAllianceSettlement.js';
 import {readHolderCommunities} from '../src/lib/holderAllianceSnapshot.js';
 const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
@@ -33,7 +33,7 @@ function fixture({auto=true,active=true}={}) {
     getSignatureStatus:async()=>({value:{confirmationStatus:'confirmed'}})
   };
   const context={connection,Keypair,PublicKey,SystemProgram,Transaction,bs58,Buffer,allianceShareholders,allianceConfigMatches,assertLaunchUtilityReady,settleLaunchAlliance,pumpFeeSharingSetupFundingTarget,
-    normalizeHolderAlliance,verifySplitRecipient,allocateHolderCycle,HOLDER_CADENCE_MS,HOLDER_MIN_PAYOUT,HOLDER_VAULT_RESERVE,settleHolderBatch,launchFeeReadRpc:()=>connection,
+    normalizeHolderAlliance,splitRecipients,verifySplitRecipient,allocateHolderCycle,HOLDER_CADENCE_MS,HOLDER_MIN_PAYOUT,HOLDER_VAULT_RESERVE,settleHolderBatch,launchFeeReadRpc:()=>connection,
     pumpHolderRewardVaultWallet:async()=>({keypair:partnerSigner}),
     readHolderSnapshot:async()=>({slot:100,priceUsd:'1',capturedAt:Date.now(),holders:[{wallet:creator.publicKey.toBase58(),amount:'1'}]}),
     PUMP_HOLDER_REWARD_CONFIG_RENT_SPACE:1024,
@@ -101,6 +101,15 @@ test('actual four-way integration pays recipient and both communities from the s
 test('actual holder integration fails closed before allocation when either snapshot fails',async()=>{
   const f=holderFixture();let calls=0;f.context.readHolderSnapshot=async()=>{if(++calls===2)throw Error('incomplete partner');return {holders:[{wallet:f.creator.publicKey.toBase58(),amount:'1'}],capturedAt:Date.now()};};
   await assert.rejects(f.distribute(),/incomplete partner/);assert.equal(f.calls.sends,0);assert.equal(f.record.holderAllianceLedger,undefined);
+});
+
+test('holder-only payout batches do not re-query unrelated receiving wallets',async()=>{
+  const f=holderFixture(),recipient=Keypair.generate().publicKey.toBase58();
+  f.record.launchUtility=normalizeHolderAlliance({...f.record.launchUtility,ownHolderShareBps:4000,partnerHolderShareBps:2000,recipientShareBps:2000,recipients:[{wallet:recipient,shareBps:2000}]});
+  f.record.holderAllianceLedger={credits:{[f.creator.publicKey.toBase58()]:'2000000'},creditSources:{own:{[f.creator.publicKey.toBase58()]:'2000000'}}};
+  f.connection.getAccountInfo=async()=>{throw Error('unnecessary receiving-wallet RPC');};
+  await f.distribute({force:true});
+  assert.equal(f.calls.sends,1);assert.equal(f.record.holderAllianceLedger.paidLamports,'2000000');
 });
 test('actual holder integration pause preserves credits and prevents new signing',async()=>{
   const f=holderFixture();f.record={...f.record,holderAllianceLedger:{credits:{[f.creator.publicKey.toBase58()]:'2000000'}}};

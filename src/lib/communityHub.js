@@ -27,7 +27,7 @@ function termsFor(attempt) {
   return { mint: attempt.tokenMint, creator: attempt.devWalletPublicKey, mode: p.mode,
     creatorShareBps: p.creatorShareBps, ownHolderShareBps: p.ownHolderShareBps,
     partnerHolderShareBps: p.partnerHolderShareBps, partnerMint: p.partnerMint,
-    ...(p.recipientShareBps?{recipientShareBps:p.recipientShareBps,recipientWallet:p.recipientWallet}:{}),
+    ...(p.recipientShareBps?{recipientShareBps:p.recipientShareBps,...(Array.isArray(p.recipients)?{recipients:p.recipients}:{recipientWallet:p.recipientWallet})}:{}),
     minimumUsd: 20, cadenceHours: 12, asset: 'SOL', permanent: true };
 }
 const agreementNote = 'Creator representatives approved these exact terms. This is not approval by every holder or a guarantee. Withdrawing endorsement does not change permanent on-chain fee shares or owed rewards.';

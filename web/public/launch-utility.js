@@ -3,6 +3,59 @@
   'use strict';
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const at = (prefix, key) => document.getElementById(prefix + key);
+  const recipients = p => Array.isArray(p.recipients) ? p.recipients : p.recipientShareBps > 0 ? [{wallet:p.recipientWallet,shareBps:p.recipientShareBps,label:'Receiving wallet'}] : [];
+  function recipientEditor(prefix, policy={}) {
+    const rows=recipients(policy);
+    return `<div class="fee-recipients" id="${esc(prefix)}Recipients"><div data-recipient-rows>${(rows.length?rows:[{wallet:'',shareBps:0,label:''}]).map((r,i)=>recipientRow(prefix,r,i)).join('')}</div><button type="button" data-add-recipient>Add recipient +</button><p class="launch-utility-note">Up to 10 Solana receiving wallets. NOT a coin CA. No recipient signup or claim needed. Paid on the 12-hour rewards cycle; small amounts accumulate.</p><p data-recipient-status role="status" class="launch-utility-note"></p></div>`;
+  }
+  function recipientRow(prefix,r={},i=0) {
+    return `<div class="fee-recipient-row" data-recipient-row><label>Label · optional<input data-recipient-label maxlength="40" value="${esc(r.label||'')}" placeholder="Team, artist, project…"></label><label>Wallet · full Solana address<input ${i===0?`id="${esc(prefix)}RecipientWallet"`:''} data-recipient-wallet maxlength="44" autocomplete="off" spellcheck="false" value="${esc(r.wallet||'')}" placeholder="Paste receiving wallet"></label><div class="fee-recipient-share"><label>Share · %<input ${i===0?`id="${esc(prefix)}RecipientShare"`:''} data-recipient-share type="number" min="0" max="99" step="1" value="${esc((r.shareBps||0)/100)}"></label><button type="button" data-remove-recipient aria-label="Remove receiving wallet">Remove</button></div></div>`;
+  }
+  function readRecipients(prefix) {
+    return [...(at(prefix,'Recipients')?.querySelectorAll('[data-recipient-row]')||[])].map(row=>({wallet:row.querySelector('[data-recipient-wallet]').value.trim(),shareBps:Number(row.querySelector('[data-recipient-share]').value)*100,label:row.querySelector('[data-recipient-label]').value.trim()})).filter(r=>r.wallet||r.shareBps);
+  }
+  function wireRecipients(prefix,onChange=()=>{}) {
+    const box=at(prefix,'Recipients');if(!box||box.dataset.wired)return;box.dataset.wired='true';
+    box.addEventListener('click',e=>{const button=e.target.closest('button');if(!button)return;
+      if(button.hasAttribute('data-add-recipient')){const count=box.querySelectorAll('[data-recipient-row]').length;if(count>=10){box.querySelector('[data-recipient-status]').textContent='Maximum 10 receiving wallets.';return;}box.querySelector('[data-recipient-rows]').insertAdjacentHTML('beforeend',recipientRow(prefix,{},count));box.querySelector('[data-recipient-row]:last-child input').focus();}
+      else if(button.hasAttribute('data-remove-recipient'))button.closest('[data-recipient-row]').remove();else return;
+      box.querySelector('[data-recipient-status]').textContent='';onChange();
+    });
+  }
+  function draftError(p={}) {
+    if(p.mode==='creator')return '';
+    if(p.mode==='holder_self')p={...p,mode:'holder_alliance',partnerHolderShareBps:0,recipients:[]};
+    if(p.mode==='alliance')return !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(p.partnerWallet||'')?'Enter the full community receiving wallet.':!Number.isInteger(p.partnerShareBps)||p.partnerShareBps<100||p.partnerShareBps>9900?'Community share must be 1–99%.':'';
+    if(p.mode!=='holder_alliance')return 'Choose an available fee route.';
+    const rows=recipients(p),shares=[p.creatorShareBps,p.ownHolderShareBps,p.partnerHolderShareBps,...rows.map(r=>r.shareBps)];
+    if(shares.some(v=>!Number.isInteger(v)||v<0||v%100)||p.creatorShareBps<100||p.creatorShareBps>9900)return 'Use whole percentages and keep at least 1% for the developer.';
+    if(shares.reduce((n,v)=>n+v,0)!==10000)return 'Fee percentages must total 100%.';
+    if(p.partnerHolderShareBps&&!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(p.partnerMint||''))return 'Enter the other community’s Solana coin address.';
+    if(rows.length>10)return 'Use no more than 10 receiving wallets.';
+    if(rows.some(r=>!r.shareBps||!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(r.wallet||'')))return 'Each receiving wallet needs a full address and at least 1%. Remove unused rows.';
+    if(new Set(rows.map(r=>r.wallet)).size!==rows.length)return 'Each receiving wallet must be different.';
+    return '';
+  }
+  // Explicitly shared templates are untrusted, editable drafts. Never retain
+  // spending wallets, amounts, signatures, saved operation IDs or approvals.
+  function templateDraft(value={}) {
+    const clean=(v,n)=>String(v||'').trim().slice(0,n),bps=v=>Number.isInteger(Number(v))?Number(v):0;
+    const p=value.launchUtility||{mode:value.mode},mode=['creator','holder_self','holder_alliance','alliance'].includes(p.mode)?p.mode:'creator';
+    let policy={mode};
+    if(['holder_self','holder_alliance'].includes(mode)){
+      const rows=recipients(p).slice(0,10).map(r=>({wallet:clean(r.wallet,44),shareBps:bps(r.shareBps),label:clean(r.label,40)}));
+      policy={mode,creatorShareBps:bps(p.creatorShareBps??2000),ownHolderShareBps:bps(p.ownHolderShareBps??(mode==='holder_self'?8000:4000)),partnerHolderShareBps:mode==='holder_self'?0:bps(p.partnerHolderShareBps??4000),partnerMint:mode==='holder_self'?'':clean(p.partnerMint,44),partnerName:clean(p.partnerName,64),recipients:mode==='holder_self'?[]:rows,recipientShareBps:mode==='holder_self'?0:rows.reduce((n,r)=>n+r.shareBps,0)};
+    }else if(mode==='alliance')policy={mode,partnerName:clean(p.partnerName,64),partnerWallet:clean(p.partnerWallet,44),partnerShareBps:bps(p.partnerShareBps??5000)};
+    return {version:1,name:clean(value.name,32),symbol:clean(value.symbol,10).replace(/[^a-z\d]/gi,''),description:clean(value.description,800),mode,launchUtility:policy};
+  }
+  function parseTemplate(value) {
+    if(typeof value!=='string'||value.length>16000)throw Error('Launch template is too large.');
+    let parsed;try{parsed=JSON.parse(value);}catch{throw Error('Launch template could not be read.');}
+    if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw Error('Invalid launch template.');
+    if(parsed.launchUtility?.recipients?.length>10)throw Error('Launch template exceeds 10 recipients.');
+    return templateDraft(parsed);
+  }
+  function templateLink(value){return 'https://slimewire.org/launch?template='+encodeURIComponent(JSON.stringify(templateDraft(value)));}
   let capabilitiesPromise;
   function capabilities() {
     if (capabilitiesPromise) return capabilitiesPromise;
@@ -19,19 +72,20 @@
     return capabilitiesPromise;
   }
   function render(prefix, policy = {}) {
-    const mode = policy.mode === 'holder_alliance' && policy.partnerHolderShareBps === 0 && !policy.recipientShareBps ? 'holder_self' : policy.mode || 'creator';
+    const mode = policy.mode === 'holder_alliance' && policy.partnerHolderShareBps === 0 && !recipients(policy).some(r=>r.shareBps>0) ? 'holder_self' : policy.mode || 'creator';
     return `<section class="launch-utility" data-utility-prefix="${esc(prefix)}" aria-label="Creator fee utility">
+      ${policy.templateReviewRequired?'<p class="launch-utility-blocker"><b>Template draft:</b> Check every full recipient address and percentage below. This template is not a verified endorsement and has not authorized any launch or payment.</p>':''}
       <div class="launch-utility-heading"><span>YOUR CREATOR FEES</span><small>Choose once · review before launch</small></div>
       <label for="${prefix}Mode">Where should future creator fees go?</label>
       <select id="${prefix}Mode"><option value="creator" ${mode === 'creator' ? 'selected' : ''}>Keep my fees · claim when I want</option><option value="holder_self" ${mode === 'holder_self' ? 'selected' : ''}>Reward my community · me + my holders</option><option value="holder_alliance" ${mode === 'holder_alliance' ? 'selected' : ''}>Custom fee split · developer, holders & wallet</option><option value="alliance" ${mode === 'alliance' ? 'selected' : ''}>Advanced · share with a community treasury wallet</option><option value="nft_floor" hidden disabled ${mode === 'nft_floor' ? 'selected' : ''}>Saved NFT floor route · unavailable</option></select>
       <div data-utility-mode="creator"><p class="launch-utility-note">Keep 100% of your creator fees, not all trading fees. New launches default to manual claims in Wallet. Pump claims are wallet-wide: a manual-claim coin pauses automatic creator claims for that wallet, so another coin cannot sweep these fees. An optional NFT collection does not redirect fees.</p></div>
       <div class="launch-utility-note"><b>Trading pair: SOL · Rewards paid in SOL.</b> A recipient community is separate from the trading pair. Other crypto and stock-token pairs are not enabled until their full launch, trade and payout path is verified; stock tokens also require issuer eligibility checks.</div>
       <div data-utility-mode="holder_alliance" hidden>
-        <p class="launch-utility-note"><b>Share the fees. Keep it simple.</b> Set each destination’s percentage. Keep at least 1% for the developer; unused destinations receive 0%. All four percentages must total 100%.</p>
+        <p class="launch-utility-note"><b>Share the fees. Keep it simple.</b> Keep at least 1% for the developer; unused communities receive 0%. All selected destinations must total 100%.</p>
         <div data-holder-partner><label for="${prefix}HolderPartnerName">Partner community name · not verified affiliation</label><input id="${prefix}HolderPartnerName" maxlength="64" value="${esc(policy.partnerName || '')}" placeholder="Community name">
         <label for="${prefix}PartnerMint">Partner coin · Solana contract address</label><input id="${prefix}PartnerMint" maxlength="44" autocomplete="off" spellcheck="false" value="${esc(policy.partnerMint || '')}" placeholder="Paste the other community’s coin CA">
-        </div><div class="launch-utility-grid fee-share-grid">${[['CreatorShare','Me',policy.creatorShareBps ?? 2000],['OwnHolderShare','My coin’s holders',policy.ownHolderShareBps ?? 4000],['PartnerHolderShare','Other community',policy.partnerHolderShareBps ?? 4000],['RecipientShare','Recipient wallet',policy.recipientShareBps ?? 0]].map(([id,label,value])=>`<label>${label} · %<input id="${prefix}${id}" type="number" min="${id==='CreatorShare'?1:0}" max="99" step="1" value="${esc(value/100)}"></label>`).join('')}</div>
-        <div data-recipient-wallet><label for="${prefix}RecipientWallet">Recipient wallet · Solana receiving address, NOT a coin CA</label><input id="${prefix}RecipientWallet" maxlength="44" autocomplete="off" spellcheck="false" value="${esc(policy.recipientWallet || '')}" placeholder="Paste the wallet that should receive SOL"><p class="launch-utility-note">No recipient signup or claim is needed. The pasted wallet gets its selected share on the 12-hour rewards cycle. A 0% share disables this destination.</p></div>
+        </div><div class="launch-utility-grid fee-share-grid">${[['CreatorShare','Me',policy.creatorShareBps ?? 2000],['OwnHolderShare','My coin’s holders',policy.ownHolderShareBps ?? (mode==='holder_self'?8000:4000)],['PartnerHolderShare','Other community',policy.partnerHolderShareBps ?? (mode==='holder_self'?0:4000)]].map(([id,label,value])=>`<label>${label} · %<input id="${prefix}${id}" type="number" min="${id==='CreatorShare'?1:0}" max="99" step="1" value="${esc(value/100)}"></label>`).join('')}</div>
+        <details data-recipient-wallet ${recipients(policy).length?'open':''}><summary>Receiving wallets · optional</summary>${recipientEditor(prefix,policy)}</details>
         <p class="launch-utility-note" data-holder-split role="status"></p>
         <p class="launch-utility-note"><b>Twice daily · over $20 · proportional to holdings.</b> Small rewards accumulate. The split is permanent; you can pause automatic payouts, but earned rewards remain owed.</p>
         <details><summary>Eligibility, timing &amp; network costs</summary>
@@ -58,7 +112,7 @@
   }
   function read(prefix) {
     const mode = at(prefix, 'Mode')?.value || 'creator';
-    if (mode === 'holder_alliance' || mode === 'holder_self') return { mode:'holder_alliance', partnerName: mode==='holder_self'?'':(at(prefix, 'HolderPartnerName')?.value || '').trim(), partnerMint: mode==='holder_self'?'':(at(prefix, 'PartnerMint')?.value || '').trim(), creatorShareBps: Number(at(prefix, 'CreatorShare')?.value)*100, ownHolderShareBps: Number(at(prefix, 'OwnHolderShare')?.value)*100, partnerHolderShareBps: mode==='holder_self'?0:Number(at(prefix, 'PartnerHolderShare')?.value)*100, recipientShareBps:Number(at(prefix,'RecipientShare')?.value||0)*100, recipientWallet:(at(prefix,'RecipientWallet')?.value||'').trim() };
+    if (mode === 'holder_alliance' || mode === 'holder_self') { const rows=mode==='holder_self'?[]:readRecipients(prefix);return { mode:'holder_alliance', partnerName: mode==='holder_self'?'':(at(prefix, 'HolderPartnerName')?.value || '').trim(), partnerMint: mode==='holder_self'?'':(at(prefix, 'PartnerMint')?.value || '').trim(), creatorShareBps: Number(at(prefix, 'CreatorShare')?.value)*100, ownHolderShareBps: Number(at(prefix, 'OwnHolderShare')?.value)*100, partnerHolderShareBps: mode==='holder_self'?0:Number(at(prefix, 'PartnerHolderShare')?.value)*100, recipientShareBps:rows.reduce((n,r)=>n+r.shareBps,0),recipients:rows }; }
     if (mode === 'alliance') return { mode, partnerName: (at(prefix, 'PartnerName')?.value || '').trim(), partnerWallet: (at(prefix, 'PartnerWallet')?.value || '').trim(), partnerShareBps: Math.round(Number(at(prefix, 'PartnerShare')?.value) * 100), autoDistribute: at(prefix, 'AutoDistribute')?.checked === true };
     if (mode === 'nft_floor') return { mode, collectionSymbol: (at(prefix, 'Collection')?.value || '').trim(), feeShareBps: Number(at(prefix, 'Share')?.value) * 100, maxPriceSol: at(prefix, 'Max')?.value, dailyBudgetSol: at(prefix, 'Daily')?.value };
     return { mode: 'creator' };
@@ -74,7 +128,8 @@
     const sync = () => {
       const selected = at(prefix, 'Mode').value, mode=selected==='holder_self'?'holder_alliance':selected;
       const partner=root.querySelector('[data-holder-partner]');if(partner)partner.hidden=selected==='holder_self';
-      const partnerShare=at(prefix,'PartnerHolderShare');if(partnerShare){partnerShare.closest('label').hidden=selected==='holder_self';if(selected==='holder_self'){partnerShare.value='0';at(prefix,'OwnHolderShare').value=String(100-Number(at(prefix,'CreatorShare').value)-Number(at(prefix,'RecipientShare')?.value||0));}}
+      const receiverBox=root.querySelector('[data-recipient-wallet]');if(receiverBox)receiverBox.hidden=selected==='holder_self';
+      const partnerShare=at(prefix,'PartnerHolderShare');if(partnerShare){partnerShare.closest('label').hidden=selected==='holder_self';if(selected==='holder_self'){partnerShare.value='0';at(prefix,'OwnHolderShare').value=String(100-Number(at(prefix,'CreatorShare').value));}}
       root.querySelectorAll('[data-utility-mode]').forEach(el => { el.hidden = el.dataset.utilityMode !== mode; });
       root.querySelector('.launch-utility-actions').hidden = mode === 'creator';
       const label = at(prefix, 'Availability');
@@ -83,8 +138,10 @@
         capabilities().then(c => { if (at(prefix, 'Mode')?.value !== selected) return; const route = mode === 'holder_alliance' ? c.holderAlliance : mode === 'alliance' ? c.alliance : c.nftFloor; label.textContent = route?.available ? 'Available · review required' : route?.reason || 'Unavailable on this deployment.'; }).catch(e => { label.textContent = e.message; });
       }
     };
-    const split = () => { const value = Number(at(prefix, 'PartnerShare')?.value); const line = root.querySelector('[data-alliance-split]'); if (line) line.textContent = value > 0 && value < 100 ? `${100-value}% creator · ${value}% community` : 'Choose a community share from 1% to 99%.'; const sum=['CreatorShare','OwnHolderShare','PartnerHolderShare','RecipientShare'].reduce((a,key)=>a+Number(at(prefix,key)?.value||0),0); const holderLine=root.querySelector('[data-holder-split]'); if(holderLine) holderLine.textContent=sum===100?'100% allocated · permanent after launch':`${sum}% allocated · must total 100%`; };
-    root.addEventListener('input', event => { at(prefix, 'Review').hidden = true; if(at(prefix,'Mode').value==='holder_self'&&[prefix+'CreatorShare',prefix+'RecipientShare'].includes(event.target.id))at(prefix,'OwnHolderShare').value=String(100-Number(at(prefix,'CreatorShare').value)-Number(at(prefix,'RecipientShare').value)); split(); onChange(); });
+    const split = () => { const value = Number(at(prefix, 'PartnerShare')?.value); const line = root.querySelector('[data-alliance-split]'); if (line) line.textContent = value > 0 && value < 100 ? `${100-value}% creator · ${value}% community` : 'Choose a community share from 1% to 99%.';const p=read(prefix),sum=[p.creatorShareBps,p.ownHolderShareBps,p.partnerHolderShareBps,p.recipientShareBps].reduce((n,v)=>n+Number(v||0),0)/100;const holderLine=root.querySelector('[data-holder-split]');if(holderLine){holderLine.textContent=sum===100?'100% allocated · permanent after launch':`${sum}% allocated · must total 100%`;holderLine.dataset.valid=String(sum===100);} };
+    const changed=()=>{at(prefix,'Review').hidden=true;split();onChange();};
+    wireRecipients(prefix,changed);
+    root.addEventListener('input', event => { if(at(prefix,'Mode').value==='holder_self'&&event.target.id===prefix+'CreatorShare')at(prefix,'OwnHolderShare').value=String(100-Number(at(prefix,'CreatorShare').value));changed(); });
     at(prefix, 'Mode').addEventListener('change', () => {sync();split();onChange();});
     at(prefix, 'Preview').onclick = async () => {
       const button = at(prefix, 'Preview'); button.disabled = true; button.textContent = 'Checking…';
@@ -108,7 +165,7 @@
     if (!utility && !nft && !warning) return '';
     if (utility?.mode === 'holder_alliance') {
       const d=utility.distribution||{}, receipt=s=>`<a href="https://solscan.io/tx/${encodeURIComponent(s)}" target="_blank" rel="noopener noreferrer">Receipt ↗</a>`;
-      return `<div class="launch-utility-review">${warning}<b data-utility-status>Fee destinations · ${esc(utility.status)}</b><p>${esc(utility.creatorShareBps/100)}% launcher · ${esc(utility.ownHolderShareBps/100)}% own holders${utility.partnerHolderShareBps?` · ${esc(utility.partnerHolderShareBps/100)}% partner holders`:``}${utility.recipientShareBps?` · ${esc(utility.recipientShareBps/100)}% recipient wallet`:``}</p>${utility.recipientShareBps?`<p>Recipient wallet: <code style="overflow-wrap:anywhere">${esc(utility.recipientWallet)}</code></p>`:``}${utility.partnerHolderShareBps?`<p>Other community: ${esc(utility.partnerName)}<br><code style="overflow-wrap:anywhere">${esc(utility.partnerMint)}</code></p>`:``}<p>${utility.autoDistribute?'Automatic · every 12 hours':'Automatic payouts paused'} · community holders need over $20; recipient wallet has no holding requirement<br>Paid: ${esc(Number(d.paidLamports||0)/1e9)} SOL · Reserved rewards: ${esc(Number(d.owedLamports||0)/1e9)} SOL</p><p><a href="/launch?rewards=${encodeURIComponent(launch.mint||launch.tokenMint||utility.mint||``)}">Fee totals by destination &amp; receipts ↗</a></p><p>Rewards payout: ${esc(d.status)}${d.nextSnapshotAt?' · Next snapshot '+esc(new Date(d.nextSnapshotAt).toLocaleString()):''}</p><p data-utility-error>${esc(utility.error||d.error||utility.feeDistribution?.error||'')}</p>${utility.signature?`<p>Fee setup: ${receipt(utility.signature)}</p>`:''}<button type="button" data-alliance-daily="${esc(utility.launchAttemptId)}" data-daily-action="${utility.autoDistribute?'pause_daily':'resume_daily'}">${utility.autoDistribute?'Pause':'Resume'} automatic payouts</button>${utility.status==='ACTIVE'?`<button type="button" data-alliance-distribute="${esc(utility.launchAttemptId)}">Check / retry due payouts</button>`:`<button type="button" data-launch-utility-retry="${esc(utility.launchAttemptId)}">Retry fee setup · same coin</button>`}<details><summary>${esc(d.receiptCount||0)} finalized rewards batches</summary>${(d.receipts||[]).slice().reverse().map(r=>`<p>${esc(r.confirmedAt)} · ${esc(Number(r.lamports)/1e9)} SOL · ${esc(r.recipients)} wallets · ${receipt(r.signature)}</p>`).join('')}</details></div>`;
+      return `<div class="launch-utility-review">${warning}<b data-utility-status>Fee destinations · ${esc(utility.status)}</b><p>${esc(utility.creatorShareBps/100)}% launcher · ${esc(utility.ownHolderShareBps/100)}% own holders${utility.partnerHolderShareBps?` · ${esc(utility.partnerHolderShareBps/100)}% partner holders`:``}${utility.recipientShareBps?` · ${esc(utility.recipientShareBps/100)}% receiving wallets`:``}</p>${recipients(utility).map(r=>`<p>${esc(r.label||'Receiving wallet')} · ${esc(r.shareBps/100)}%<br><code style="overflow-wrap:anywhere">${esc(r.wallet)}</code></p>`).join('')}${utility.partnerHolderShareBps?`<p>Other community: ${esc(utility.partnerName)}<br><code style="overflow-wrap:anywhere">${esc(utility.partnerMint)}</code></p>`:``}<p>${utility.autoDistribute?'Automatic · every 12 hours':'Automatic payouts paused'} · community holders need over $20; recipient wallet has no holding requirement<br>Paid: ${esc(Number(d.paidLamports||0)/1e9)} SOL · Reserved rewards: ${esc(Number(d.owedLamports||0)/1e9)} SOL</p><p><a href="/launch?rewards=${encodeURIComponent(launch.mint||launch.tokenMint||utility.mint||``)}">Fee totals by destination &amp; receipts ↗</a></p><p>Rewards payout: ${esc(d.status)}${d.nextSnapshotAt?' · Next snapshot '+esc(new Date(d.nextSnapshotAt).toLocaleString()):''}</p><p data-utility-error>${esc(utility.error||d.error||utility.feeDistribution?.error||'')}</p>${utility.signature?`<p>Fee setup: ${receipt(utility.signature)}</p>`:''}<button type="button" data-alliance-daily="${esc(utility.launchAttemptId)}" data-daily-action="${utility.autoDistribute?'pause_daily':'resume_daily'}">${utility.autoDistribute?'Pause':'Resume'} automatic payouts</button>${utility.status==='ACTIVE'?`<button type="button" data-alliance-distribute="${esc(utility.launchAttemptId)}">Check / retry due payouts</button>`:`<button type="button" data-launch-utility-retry="${esc(utility.launchAttemptId)}">Retry fee setup · same coin</button>`}<details><summary>${esc(d.receiptCount||0)} finalized rewards batches</summary>${(d.receipts||[]).slice().reverse().map(r=>`<p>${esc(r.confirmedAt)} · ${esc(Number(r.lamports)/1e9)} SOL · ${esc(r.recipients)} wallets · ${receipt(r.signature)}</p>`).join('')}</details></div>`;
     }
     if (utility?.mode === 'alliance') {
       const d = utility.distribution || {};
@@ -136,13 +193,14 @@
     } catch (error) { box.querySelector('[data-utility-error]').textContent = error.message; }
     finally { button.disabled = false; button.textContent = old; }
   });
-  // URL input is a draft only. No account, wallet, launch ID or consent can be
-  // supplied by a deep link; the user must review everything in the destination.
+  // Plain links retain their legacy allowlist. Explicit templates may suggest
+  // fee recipients, never a spending wallet, execution ID or consent.
   function prefill(search) {
     const q = new URLSearchParams(search);
+    if(q.has('lc_template')){let t;try{t=parseTemplate(q.get('lc_template'));}catch{return null;}return {...t,launchUtility:{...t.launchUtility,templateReviewRequired:true},devBuySol:'0',nftEnabled:false,sharedTemplate:true,x:'',telegram:'',website:''};}
     if (!q.has('lc_n') && !q.has('lc_s')) return null;
     const get = (key, max) => (q.get(key) || '').slice(0, max);
     return { name: get('lc_n', 64), symbol: get('lc_s', 12), description: get('lc_d', 800), x: get('lc_x', 200), telegram: get('lc_tg', 200), website: get('lc_web', 200), devBuySol: /^\d+(?:\.\d{1,9})?$/.test(q.get('lc_dev') || '') ? q.get('lc_dev') : '0', nftEnabled: q.get('lc_nft') === '1', launchUtility: ['creator', 'alliance', 'holder_self', 'holder_alliance', 'nft_floor'].includes(q.get('lc_utility')) ? { mode: q.get('lc_utility'), collectionSymbol: get('lc_collection', 100), partnerName: get('lc_community',64) } : { mode: 'creator' } };
   }
-  window.SlimeLaunchUtility = { render, read, wire, prepare, resultHtml, configureRecovery, prefill, capabilities };
+  window.SlimeLaunchUtility = { render, read, wire, prepare, resultHtml, configureRecovery, prefill, capabilities, recipients,recipientEditor,readRecipients,wireRecipients,draftError,templateDraft,parseTemplate,templateLink };
 })();

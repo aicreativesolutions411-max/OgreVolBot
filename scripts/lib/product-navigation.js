@@ -1,7 +1,7 @@
 // Static, presentation-only product navigation. No balances or account preloads.
 const surfaces = new Map([
   ['index.html', 'terminal'], ['gg.html', 'terminal'], ['fun.html', 'wallet'],
-  ['cash/index.html', 'wallet'], ['launch.html', 'launch'], ['launch-community.html', 'launch']
+  ['cash/index.html', 'wallet'], ['launch.html', 'launch'], ['launch-community.html', 'launch'], ['launch-earnings.html', 'launch']
 ]);
 
 export function productNavigation(active = '') {

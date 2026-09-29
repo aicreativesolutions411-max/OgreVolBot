@@ -34,6 +34,7 @@
     return { mint, name: clean(row.name, 64) || clean(row.symbol, 16) || mint.slice(0, 5) + '…' + mint.slice(-4), symbol: clean(row.symbol, 16),
       description: clean(row.description, 180), imageUrl: safeImage(row.imageUrl) || safeImage(row.imageUri), createdAt: clean(row.createdAt, 40),
       chain: /^0x/i.test(mint) ? 'Robinhood' : 'Solana', status: clean(row.status, 40) || 'COMPLETE', origin: row.origin === 'connected' ? 'connected' : 'launched',
+      feeSplit:Array.isArray(row.feeSplit)?row.feeSplit.slice(0,13).map(d=>({label:clean(d.label,64),shareBps:Number(d.shareBps)})).filter(d=>Number.isInteger(d.shareBps)&&d.shareBps>0&&d.shareBps<=10000):[],
       rewardMode: row.rewardMode || (['alliance','holder_alliance'].includes(row.launchUtility?.mode) ? row.launchUtility.mode : row.launchUtility ? 'external' : row.pumpCashback ? 'cashback' : row.holderRewards?.enabled ? 'holders' : 'creator') };
   }
   function chartUrl(mint) { return isMint(mint) ? 'https://dexscreener.com/' + (/^0x/i.test(mint) ? 'robinhood/' : 'solana/') + encodeURIComponent(mint) : ''; }
@@ -59,13 +60,14 @@
   function draftUrl(draft) {
     const q = new URLSearchParams({ from: 'fun', lc_n: clean(draft.name, 32), lc_s: clean(draft.symbol, 10), lc_d: clean(draft.description, 800) });
     if (['alliance','holder_alliance','holder_self'].includes(draft.mode)) q.set('lc_utility', draft.mode);
-    // Draft-only handoff to the existing reviewed launcher. No wallet, funds,
-    // consent, fee recipient or execution identifier can be set by this page.
+    if(draft.launchUtility&&root.SlimeLaunchUtility)q.set('lc_template',JSON.stringify(root.SlimeLaunchUtility.templateDraft(draft)));
+    // An explicit template may suggest fee recipients. The destination still
+    // requires wallet selection and a fresh review; never pass spending consent.
     return '/?' + q.toString() + '#launch';
   }
   function dateLabel(value) { const d = new Date(value); return Number.isFinite(d.getTime()) ? d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'Date unavailable'; }
   const rewardLabels = { creator: 'Keep my fees', cashback: 'Cash back', holders: 'Legacy holder rewards', holder_alliance: 'Community rewards', alliance: 'Treasury wallet split', external: 'External fee route' };
-  function templateDraft(value={}) { return {name:clean(value.name,32),symbol:clean(value.symbol,10).replace(/[^a-z\d]/gi,''),description:clean(value.description,800),mode:['creator','holder_self','holder_alliance','alliance'].includes(value.mode)?value.mode:'creator'}; }
+  function templateDraft(value={}) { return root.SlimeLaunchUtility?root.SlimeLaunchUtility.templateDraft(value):{name:clean(value.name,32),symbol:clean(value.symbol,10).replace(/[^a-z\d]/gi,''),description:clean(value.description,800),mode:['creator','holder_self','holder_alliance','alliance'].includes(value.mode)?value.mode:'creator'}; }
   function cardHtml(coin) {
     const symbol = coin.symbol ? '$' + coin.symbol : 'Ticker unavailable';
     const status = coin.status === 'COMPLETE' ? coin.chain.toUpperCase() : coin.status.replace(/_/g, ' ');
@@ -73,6 +75,7 @@
     return '<article class="coin-card"><div class="coin-top"><div class="coin-avatar"><span class="coin-initial" aria-hidden="true">' + esc((coin.symbol || coin.name).slice(0, 2).toUpperCase()) + '</span>' + (sources.length ? '<img data-image-sources="' + esc(JSON.stringify(sources)) + '" alt="" hidden decoding="async" referrerpolicy="no-referrer">' : '') + '</div><span class="small-tag">' + esc(status) + '</span></div>' +
       '<h3 class="coin-title" title="' + esc(coin.name) + '">' + esc(coin.name) + '</h3><p class="coin-symbol">' + esc(symbol) + ' / ' + esc(coin.chain) + '</p>' +
       (coin.description ? '<p class="coin-description">' + esc(coin.description) + '</p>' : '') +
+      (coin.feeSplit?.length?'<div class="coin-fee-split" aria-label="Creator fee allocation">'+coin.feeSplit.map(d=>'<span><b>'+esc(d.shareBps/100)+'%</b> '+esc(d.label)+'</span>').join('')+'</div>':'')+
       '<div class="coin-meta"><span>Creator fees</span><strong>' + esc(rewardLabels[coin.rewardMode] || 'Not recorded') + '</strong></div><div class="coin-meta"><span>' + (coin.origin === 'connected' ? 'Connected' : 'Launched') + '</span><strong>' + esc(dateLabel(coin.createdAt)) + '</strong></div><div class="coin-actions"><a href="' + chartUrl(coin.mint) + '" target="_blank" rel="noopener noreferrer">Chart ↗</a><button class="copy-ca" type="button" data-copy="' + esc(coin.mint) + '" aria-label="Copy ' + esc(coin.name) + ' contract address">' + esc(coin.mint.slice(0, 4) + '…' + coin.mint.slice(-4)) + ' ⧉</button></div></article>';
   }
   function feeBreakdownHtml(report) {
@@ -129,12 +132,34 @@
     openDialog('Rewards. With receipts.', '<p class="dialog-copy">On any coin below, open <b>Fee totals &amp; receipts</b> for destination percentages, verified developer payments, holder and recipient-wallet payouts, reserved rewards, the next snapshot and your eligibility at the last completed snapshot.</p><div class="route-list"><a class="route-option" href="/wallet"><span><b>Claim my creator fees</b><small>Standard Pump claims are wallet-wide and can include multiple coins.</small></span><em>WALLET ↗</em></a><a class="route-option" href="/?from=fun#launch"><span><b>Manage my rewards program</b><small>Pause, resume or retry payouts from Your launches. Reserved rewards remain owed.</small></span><em>MANAGE ↗</em></a></div><p class="dialog-copy">Only finalized holder transactions count as paid. Snapshot delays and small balances are shown honestly—no estimated returns.</p>');
   }
   function createDialog() {
-    openDialog('Make it yours.', '<ol class="launch-progress" aria-label="Launch steps"><li>01 Coin</li><li>02 Fees</li><li>03 Pair</li><li>04 Review</li></ol><form class="create-form" id="create-form"><div class="form-row"><div><label for="coin-name">Coin name</label><input id="coin-name" name="name" maxlength="32" required placeholder="Your next idea" autocomplete="off" value="' + esc(draft.name) + '"></div><div><label for="coin-ticker">Ticker</label><input id="coin-ticker" name="symbol" minlength="2" maxlength="10" pattern="[A-Za-z0-9]+" required placeholder="TICKER" autocomplete="off" value="' + esc(draft.symbol) + '"></div></div><label for="coin-description">Description <span>· optional</span></label><textarea id="coin-description" name="description" maxlength="800" placeholder="What is this coin about?">' + esc(draft.description) + '</textarea><label for="coin-launch-mode">Who receives your creator fees?</label><select id="coin-launch-mode">'+[['creator','Keep my fees · claim when I want'],['holder_self','Reward my community · me + my holders'],['holder_alliance','Custom split · developer, holders & recipient wallet'],['alliance','Advanced · community treasury wallet']].map(([value,label])=>'<option value="'+value+'" '+(draft.mode===value?'selected':'')+'>'+label+'</option>').join('')+'</select><div class="pair-summary"><span>TRADING PAIR</span><b>SOL</b><p>Fees and rewards are paid in SOL. Selecting another community does not change the pair or convert rewards to its token.</p></div><p class="form-note"><strong>Nothing launches yet.</strong> Next, add artwork, set exact percentages, choose your wallet and optional bundles, then review the permanent choices and full costs.</p><div class="dialog-actions"><button type="submit" class="button button-primary">Continue to full review ↗</button><button type="button" id="save-template" class="button button-outline">Save template</button><button type="button" id="load-template" class="text-button">Load saved</button><button type="button" id="remove-template" class="text-button">Delete saved</button></div><p id="template-status" class="form-note" role="status"></p></form>');
-    $('create-form').addEventListener('input', () => { draft.name = $('coin-name').value; draft.symbol = $('coin-ticker').value; draft.description = $('coin-description').value; draft.mode = $('coin-launch-mode').value; });
-    $('save-template').onclick=()=>{try{localStorage.setItem('slimeLaunchTemplateV1',JSON.stringify(templateDraft(draft)));$('template-status').textContent='Saved on this device. No wallet, approval or payment information is saved.';}catch{$('template-status').textContent='This browser could not save the template.';}};
-    $('load-template').onclick=()=>{try{const saved=localStorage.getItem('slimeLaunchTemplateV1');if(!saved){$('template-status').textContent='No saved template on this device.';return;}Object.assign(draft,templateDraft(JSON.parse(saved)));createDialog();$('template-status').textContent='Template loaded. Recipients and costs still require a new review.';}catch{$('template-status').textContent='Saved template could not be read.';}};
+    const utility=root.SlimeLaunchUtility;
+    const policy=draft.launchUtility||{mode:draft.mode};
+    openDialog('Make it yours.', `<ol class="launch-progress" aria-label="Launch steps"><li>01 Coin & fees</li><li>02 Artwork & wallet</li><li>03 Review & launch</li></ol>
+      ${draft.shared?'<p class="template-warning"><b>Shared draft · not an approved launch.</b> Check every recipient and percentage. Anyone can create a template; opening one never authorizes a payment.</p>':''}
+      <form class="create-form" id="create-form"><div class="form-row"><div><label for="coin-name">Coin name</label><input id="coin-name" maxlength="32" required placeholder="Your next idea" autocomplete="off" value="${esc(draft.name)}"></div><div><label for="coin-ticker">Ticker</label><input id="coin-ticker" minlength="2" maxlength="10" pattern="[A-Za-z0-9]+" required placeholder="TICKER" autocomplete="off" value="${esc(draft.symbol)}"></div></div>
+      <label for="coin-description">Description · optional</label><textarea id="coin-description" maxlength="800" placeholder="What is this coin about?">${esc(draft.description)}</textarea>
+      <div class="fee-choice-cards" role="group" aria-label="Fee route">${[['creator','Keep my fees','Claim when you want.'],['holder_self','Reward communities','You + your holders.'],['holder_alliance','Custom split','Communities + wallets.']].map(([mode,title,copy])=>`<button type="button" data-fee-choice="${mode}" aria-pressed="${draft.mode===mode}"><b>${title}</b><span>${copy}</span></button>`).join('')}</div>
+      <details class="advanced-fee-choice" ${draft.mode==='alliance'?'open':''}><summary>Advanced fee route</summary><button type="button" class="text-button" data-fee-choice="alliance">Community treasury wallet · manual / daily distribution</button></details>
+      <div class="draft-utility">${utility.render('draftFee',policy)}</div><aside class="draft-live-preview" aria-label="Live launch preview" id="draft-preview"></aside>
+      <p class="form-note"><strong>Nothing launches yet.</strong> Next, add artwork, choose your spending wallet and optional bundles, then review full addresses, permanent percentages and costs. Templates never select your spending wallet.</p>
+      <div class="dialog-actions"><button type="submit" class="button button-primary">Continue to full review ↗</button></div>
+      <details class="template-tools"><summary>Save or share this setup</summary><p class="form-note">Coin details and fee recipients only. Anyone with the link can read them. Never include private information.</p><div class="dialog-actions"><button type="button" id="share-template" class="button button-outline">Copy template link</button><button type="button" id="save-template" class="text-button">Save on this device</button><button type="button" id="load-template" class="text-button">Load saved</button><button type="button" id="remove-template" class="text-button">Delete saved</button></div></details><p id="template-status" class="form-note" role="status"></p></form>`);
+    const sync=()=>{
+      draft.name=$('coin-name').value;draft.symbol=$('coin-ticker').value;draft.description=$('coin-description').value;draft.mode=$('draftFeeMode').value;draft.launchUtility=utility.read('draftFee');
+      const p=draft.launchUtility,shares=p.mode==='creator'?[['Developer',10000]]:p.mode==='alliance'?[['Developer',10000-p.partnerShareBps],[p.partnerName||'Treasury wallet',p.partnerShareBps]]:[['Developer',p.creatorShareBps],['My holders',p.ownHolderShareBps],['Other community',p.partnerHolderShareBps],...utility.recipients(p).map(r=>[r.label||'Receiving wallet',r.shareBps])];
+      const error=utility.draftError(p);
+      $('draft-preview').innerHTML=`<small>LIVE DRAFT PREVIEW · ARTWORK ADDED NEXT</small><h3>${esc(draft.name||'Your coin')} <span>$${esc(draft.symbol||'TICKER')}</span></h3><p>${esc(draft.description||'Your idea, on-chain.')}</p><div class="coin-fee-split">${shares.filter(r=>r[1]>0).map(([name,bps])=>`<span><b>${esc(bps/100)}%</b> ${esc(name)}</span>`).join('')}</div><p class="draft-check" data-valid="${!error}">${esc(error||'100% allocated · SOL pair · SOL payouts')}</p>`;
+      $('create-form').querySelectorAll('[data-fee-choice]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.feeChoice===draft.mode)));
+    };
+    utility.wire('draftFee',{onChange:sync,request:async()=>{throw Error('Continue to full review to select your wallet and verify this split.');}});
+    $('create-form').addEventListener('input',sync);
+    $('create-form').querySelectorAll('[data-fee-choice]').forEach(button=>{button.onclick=()=>{$('draftFeeMode').value=button.dataset.feeChoice;$('draftFeeMode').dispatchEvent(new Event('change'));};});
+    sync();
+    $('save-template').onclick=()=>{try{sync();localStorage.setItem('slimeLaunchTemplateV1',JSON.stringify(templateDraft(draft)));$('template-status').textContent='Draft saved locally, including receiving wallets. No spending wallet or approval saved.';}catch{$('template-status').textContent='This browser could not save the template.';}};
+    $('share-template').onclick=async()=>{sync();const error=utility.draftError(draft.launchUtility);if(error){$('template-status').textContent=error;return;}const link=utility.templateLink(draft);try{await navigator.clipboard.writeText(link);$('template-status').textContent='Template link copied. Recipients and percentages must be reviewed by anyone using it.';}catch{$('template-status').textContent=link;}};
+    $('load-template').onclick=()=>{try{const saved=localStorage.getItem('slimeLaunchTemplateV1');if(!saved){$('template-status').textContent='No saved template on this device.';return;}Object.assign(draft,utility.parseTemplate(saved),{shared:true});createDialog();$('template-status').textContent='Template loaded. Review every receiving address.';}catch{$('template-status').textContent='Saved template could not be read.';}};
     $('remove-template').onclick=()=>{try{localStorage.removeItem('slimeLaunchTemplateV1');$('template-status').textContent='Saved template deleted. Your current draft is unchanged.';}catch{$('template-status').textContent='Could not remove the saved template.';}};
-    $('create-form').addEventListener('submit', event => { event.preventDefault(); if (!draft.name.trim() || !draft.symbol.trim()) return; location.assign(draftUrl(draft)); });
+    $('create-form').addEventListener('submit',event=>{event.preventDefault();sync();const error=utility.draftError(draft.launchUtility);if(error){$('template-status').textContent=error;return;}location.assign(draftUrl(draft));});
   }
   let rewardsRequest=0;
   async function rewardsDialog(mint,wallet=''){
@@ -154,6 +179,8 @@
       openDialog((r.symbol?'$'+r.symbol:'Coin')+' · rewards',feeBreakdownHtml(r)+stats+(holder?'<form class="create-form" id="eligibility-form"><label for="holder-wallet">Check your wallet · read only</label><input id="holder-wallet" maxlength="44" autocomplete="off" placeholder="Paste your Solana wallet" value="'+esc(wallet)+'"><div class="dialog-actions"><button type="submit" class="button button-outline">Check last snapshot</button><button type="button" id="use-connected-wallet" class="text-button">Use connected wallet</button></div><p id="eligibility-note" class="form-note" role="status">No signature or payment required. Eligibility refreshes at each payout snapshot, not continuously.</p></form>'+eligibility+'<details class="receipt-list"><summary>'+esc(r.receiptCount)+' confirmed payout batches</summary>'+(r.receipts||[]).slice().reverse().map(tx=>'<p>'+esc(new Date(tx.confirmedAt).toLocaleString())+' · '+sol(tx.lamports)+' SOL · '+esc(tx.recipients)+' wallets <a href="https://solscan.io/tx/'+encodeURIComponent(tx.signature)+'" target="_blank" rel="noopener noreferrer">Receipt ↗</a></p>').join('')+'</details><p class="dialog-copy">'+esc(r.note)+'</p>':'')+'<div class="dialog-actions"><a class="button button-outline" href="'+chartUrl(mint)+'" target="_blank" rel="noopener noreferrer">DexScreener ↗</a><button type="button" class="text-button" id="share-rewards">Copy rewards link</button><button type="button" class="text-button" id="refresh-rewards">Refresh</button></div><p id="share-status" class="form-note" role="status"></p>');
       if(holder){$('eligibility-form').onsubmit=e=>{e.preventDefault();const value=$('holder-wallet').value.trim();if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value)){$('eligibility-note').textContent='Enter a valid Solana wallet address.';return;}rewardsDialog(mint,value);};$('use-connected-wallet').onclick=()=>{const key=root.solana?.publicKey?.toString?.()||root.phantom?.solana?.publicKey?.toString?.();if(key)rewardsDialog(mint,key);else $('eligibility-note').textContent='No browser wallet is connected here. Paste your public wallet address to check without connecting.';};}
       const communityLink=document.createElement('a');communityLink.className='button button-outline';communityLink.href=r.agreementId?'/launch/community?agreement='+encodeURIComponent(r.agreementId)+'#partners':'/launch/community#inbox';communityLink.textContent=r.agreementId?'View verified creator agreement ↗':'Open community rewards inbox ↗';$('dialog-body').appendChild(communityLink);
+      const identity=document.createElement('div');identity.className='reward-coin-identity';const art=safeImage(r.imageUrl);identity.innerHTML='<div class="coin-avatar"><span class="coin-initial">'+esc((r.symbol||r.name||'?').slice(0,2))+'</span>'+(art?'<img alt="" hidden referrerpolicy="no-referrer">':'')+'</div><div><b>'+esc(r.name||r.symbol||'Launched coin')+'</b><small>'+esc(mint)+'</small></div>';$('dialog-title').after(identity);if(art)imageStops.push(loadCoinImage(identity.querySelector('img'),imageCandidates(art)));
+      const rewardCommunity=document.createElement('button');rewardCommunity.type='button';rewardCommunity.className='text-button';rewardCommunity.textContent='Launch a coin that rewards this community ↗';rewardCommunity.onclick=()=>{draft.mode='holder_alliance';draft.launchUtility={mode:'holder_alliance',creatorShareBps:2000,ownHolderShareBps:4000,partnerHolderShareBps:4000,partnerMint:mint,partnerName:r.name||r.symbol||'Partner community',recipients:[]};createDialog();};$('dialog-body').appendChild(rewardCommunity);
       $('refresh-rewards').onclick=()=>rewardsDialog(mint,wallet);
       $('share-rewards').onclick=async()=>{const link='https://slimewire.org/launch?rewards='+encodeURIComponent(mint);try{await navigator.clipboard.writeText(link);$('share-status').textContent='Rewards link copied. Share it with your community.';}catch{$('share-status').textContent=link;}};
     }catch(error){if(id===rewardsRequest&&dialog.open)openDialog('Rewards unavailable','<p class="dialog-copy">'+esc(error.name==='AbortError'?'Loading timed out. Please retry.':error.message)+'</p><button class="button button-outline" type="button" data-rewards="'+esc(mint)+'">Retry</button>');}
@@ -212,8 +239,8 @@
   }
   document.addEventListener('click', async event => {
     const button = event.target.closest('button,a'); if (!button) return;
-    if (button.hasAttribute('data-start-alliance')) { draft.mode = 'alliance'; createDialog(); }
-    if (button.hasAttribute('data-start-holders')) { draft.mode = 'holder_alliance'; createDialog(); }
+    if (button.hasAttribute('data-start-alliance')) { draft.mode = 'alliance'; draft.launchUtility=null;createDialog(); }
+    if (button.hasAttribute('data-start-holders')) { draft.mode = 'holder_alliance';draft.launchUtility=null; createDialog(); }
     if (button.dataset.dialog) ({ create: createDialog, recipients: recipientsDialog, payments: paymentsDialog }[button.dataset.dialog])?.();
     if (button.dataset.route) routeDialog(button.dataset.route);
     if (button.dataset.feature) featureDialog(button.dataset.feature);
@@ -222,7 +249,7 @@
       catch { openDialog('Copy contract address', '<p class="dialog-copy">Select and copy the address below.</p><div class="create-form"><label for="copy-address">Contract address</label><input readonly id="copy-address" value="' + esc(button.dataset.copy) + '"></div>'); $('copy-address').select(); }
     }
     if(button.dataset.rewards) rewardsDialog(button.dataset.rewards);
-    if(button.dataset.startMode){draft.mode=button.dataset.startMode;createDialog();}
+    if(button.dataset.startMode){draft.mode=button.dataset.startMode;draft.launchUtility=null;createDialog();}
     if(button.dataset.launchFilter){routeFilter=button.dataset.launchFilter;limit=6;if(loaded)paint();}
     if(button.hasAttribute('data-reset-directory')){routeFilter='all';$('launch-search').value='';limit=6;if(loaded)paint();}
   });
@@ -238,5 +265,7 @@
   // Homepage shortcuts open the normal editable draft dialog. They cannot
   // choose a wallet, approve fees, replace a terminal draft, or submit a coin.
   const initialMode=entryMode(root.location?.search||'');
-  if(initialMode){draft.mode=initialMode;createDialog();}
+  const sharedTemplate=new URLSearchParams(root.location?.search||'').get('template');
+  if(sharedTemplate){try{Object.assign(draft,root.SlimeLaunchUtility.parseTemplate(sharedTemplate),{shared:true});createDialog();}catch(error){openDialog('Template unavailable','<p class="dialog-copy">'+esc(error.message)+'</p>'+launchLink);}}
+  else if(initialMode){draft.mode=initialMode;createDialog();}
 })(window);

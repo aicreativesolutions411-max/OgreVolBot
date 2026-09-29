@@ -80,3 +80,37 @@ test('all web launch surfaces wire recovery without polling or new wallet creati
   assert.ok(!source.includes('setInterval'));
   assert.ok(!source.includes('/api/web/wallet/create'));
 });
+
+test('shared templates preserve draft recipients but strip spending, consent and execution state',()=>{
+  const wallet='5FQN4usbgWyDd5oyVNF8gan3yXAHS4gxzRGKgYyvpump';
+  const template=ui.templateDraft({name:'Coin',symbol:'TST',description:'Draft',walletIndex:4,devBuySol:5,launchAttemptId:'bad',launchUtility:{mode:'holder_alliance',creatorShareBps:2000,ownHolderShareBps:4000,partnerHolderShareBps:0,recipients:[{wallet,shareBps:4000,label:'Team',secret:'no'}],consentVersion:'approved',autoDistribute:true}});
+  assert.equal(template.launchUtility.recipients[0].wallet,wallet);
+  assert.equal(template.launchUtility.recipientShareBps,4000);
+  assert.equal(template.walletIndex,undefined);assert.equal(template.devBuySol,undefined);
+  assert.equal(template.launchUtility.consentVersion,undefined);
+  assert.equal(template.launchUtility.autoDistribute,undefined);
+  assert.equal(template.launchUtility.recipients[0].secret,undefined);
+  const link=ui.templateLink(template);assert.ok(link.startsWith('https://slimewire.org/launch?template='));
+  const parsed=ui.prefill('?lc_template='+encodeURIComponent(JSON.stringify(template))+'&lc_dev=5&walletIndex=7');
+  assert.equal(parsed.devBuySol,'0');assert.equal(parsed.sharedTemplate,true);
+  assert.equal(parsed.launchUtility.recipients[0].wallet,wallet);
+  assert.throws(()=>ui.parseTemplate('x'.repeat(20000)),/template/i);
+  assert.equal(ui.prefill('?lc_template=not-json'),null);
+  assert.equal(ui.templateDraft({launchUtility:{mode:'usepaid',xHandle:'alice'}}).launchUtility.mode,'creator');
+});
+
+test('terminal and wallet launch workspace preserve the complete draft policy across navigation',()=>{
+  for(const name of ['index.html','gg.html']){
+    const source=readFileSync(new URL('../web/public/'+name,import.meta.url),'utf8');
+    assert.ok(source.includes('lcUtilityPolicy:d.launchUtility'));
+    assert.ok(source.includes('f.lcUtilityPolicy=SlimeLaunchUtility.read("lcUtility")'));
+    assert.ok(source.includes('SlimeLaunchUtility.render("lcUtility",state.launchForm?.lcUtilityPolicy||{})'));
+  }
+});
+
+test('multi-recipient editor escapes labels and maintains valid-total feedback',()=>{
+  const html=ui.recipientEditor('r',{recipients:[{wallet:'abc',shareBps:2500,label:'<team>'},{wallet:'def',shareBps:1000,label:'Second'}]});
+  assert.ok(html.includes('&lt;team&gt;'));assert.ok(html.includes('Add recipient'));assert.ok(html.includes('data-recipient-row'));
+  assert.equal(ui.draftError({mode:'holder_alliance',creatorShareBps:2000,ownHolderShareBps:4000,partnerHolderShareBps:0,recipients:[]}), 'Fee percentages must total 100%.');
+  assert.equal(ui.draftError({mode:'creator'}),'');
+});

@@ -115,10 +115,11 @@ import { feeSetupSubmissionDisposition, launchDraftFingerprint, launchConfirmati
 import { verifyUsePaidRecipient } from "./lib/usePaidRecipient.js";
 import { allianceShareholders, allianceConfigMatches } from "./lib/launchAlliance.js";
 import { settleLaunchAlliance, publicAllianceSettlement } from "./lib/launchAllianceSettlement.js";
-import { normalizeHolderAlliance, verifySplitRecipient, allocateHolderCycle, publicHolderLedger, HOLDER_CADENCE_MS, HOLDER_MIN_PAYOUT, HOLDER_VAULT_RESERVE } from "./lib/holderAlliance.js";
+import { normalizeHolderAlliance, splitRecipients, verifySplitRecipient, allocateHolderCycle, publicHolderLedger, HOLDER_CADENCE_MS, HOLDER_MIN_PAYOUT, HOLDER_VAULT_RESERVE } from "./lib/holderAlliance.js";
 import { settleHolderBatch } from "./lib/holderAllianceSettlement.js";
 import { readHolderSnapshot, readHolderCommunities } from "./lib/holderAllianceSnapshot.js";
 import { buildLaunchRewardReport, holderEligibilityReport } from "./lib/launchRewardReport.js";
+import { buildLaunchEarnings } from "./lib/launchEarnings.js";
 import { readLaunchFeeReceipt } from "./lib/launchFeeReceipt.js";
 import { createCommunityHub, buildRewardsInbox, receiptCredit, verifiedAgreementFor } from "./lib/communityHub.js";
 import { verifyCommunityAuthority } from "./lib/communityAuthority.js";
@@ -7427,6 +7428,10 @@ and is checked by an automated release audit before every upload.</p></div>
       await serveStaticHtmlPage(response, "launch-community.html");
       return;
     }
+    if (request.method === "GET" && ["/launch/earnings", "/launch/earnings/", "/earnings"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "launch-earnings.html");
+      return;
+    }
     // SEO landing page targeting "solana telegram (trading) bot" searches — real content, static + fast.
     if (request.method === "GET" && ["/solana-telegram-bot", "/bot", "/telegram-bot"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "bot.html");
@@ -10160,6 +10165,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       } catch { sendWebJson(request, response, 400, { ok: false, error: "Enter an ordinary Solana wallet address." }); return; }
       response.setHeader("Cache-Control", "private, no-store");
       sendWebJson(request, response, 200, { ok: true, inbox: buildRewardsInbox((await readPumpLaunchAttempts()).attempts, [wallet]) });
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/launch/earnings") {
+      response.setHeader("Cache-Control", "private, no-store");
+      const wallets = requestUrl.searchParams.getAll("wallet");
+      try { buildLaunchEarnings([], wallets); }
+      catch { sendWebJson(request, response, 400, { ok: false, error: "Enter up to 25 ordinary Solana wallet addresses and retry." }); return; }
+      try {
+        sendWebJson(request, response, 200, { ok: true, earnings: buildLaunchEarnings((await readPumpLaunchAttempts()).attempts || [], wallets) });
+      } catch { sendWebJson(request, response, 503, { ok: false, error: "Saved earnings are temporarily unavailable. Please retry." }); }
       return;
     }
     if (request.method === "GET" && pathname === "/api/web/launch/directory") {
@@ -32894,7 +32909,7 @@ async function distributeHolderAlliance(initial) {
     const save = async ledger => { await upsertPumpLaunchAttempt({ id, holderAllianceLedger: ledger }); attempt = await freshPumpFeeSharingAttempt(id); };
     const load = async () => attempt.holderAllianceLedger || {};
     const prepare = async rows => {
-      if (policy.recipientShareBps && rows.some(row => row.wallet === policy.recipientWallet)) await verifySplitRecipient(launchFeeReadRpc(), policy, { creator: attempt.devWalletPublicKey, mint, vault: attempt.pumpFeeSharing?.vaultAddress });
+      if (policy.recipientShareBps && splitRecipients(policy).some(recipient => rows.some(row => row.wallet === recipient.wallet))) await verifySplitRecipient(launchFeeReadRpc(), policy, { creator: attempt.devWalletPublicKey, mint, vault: attempt.pumpFeeSharing?.vaultAddress });
       const creator = walletsForOwner(await readWalletStore(), attempt.userId).find(row => row.publicKey === attempt.devWalletPublicKey);
       if (!creator) throw new Error("Restore the creator wallet to pay holder payout network fees.");
       const signer = decryptWallet(creator), vault = await pumpHolderRewardVaultWallet(attempt);

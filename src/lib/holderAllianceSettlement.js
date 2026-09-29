@@ -1,5 +1,5 @@
 import { feeSetupSubmissionDisposition } from './launchUtilityRecovery.js';
-import { HOLDER_MIN_PAYOUT } from './holderAlliance.js';
+import { HOLDER_MIN_PAYOUT, ledgerSources } from './holderAlliance.js';
 
 // Caller owns a durable per-mint lock. A saved allocation is a liability, never
 // reweighted on retry. Finalization is required before balance-based allocation.
@@ -7,17 +7,19 @@ export async function settleHolderBatch({load,save,prepare,connection,paused=fal
   let state=await load()||{};
   const complete=async()=>{
     const credits={...(state.credits||{})};let paid=0n;
-    const creditSources=Object.fromEntries(['own','partner','recipient'].map(k=>[k,{...(state.creditSources?.[k]||{})}])),paidBySource={...(state.paidBySource||{})},bySource={};
+    const sources=ledgerSources(state),creditSources=Object.fromEntries(sources.map(k=>[k,{...(state.creditSources?.[k]||{})}])),paidBySource={...(state.paidBySource||{})},bySource={},paidByWallet={...(state.paidByWallet||{})};
+    if(!state.paidByWallet)for(const receipt of state.receipts||[])for(const row of receipt.payments||[])paidByWallet[row.wallet]=String(BigInt(paidByWallet[row.wallet]||0)+BigInt(row.lamports));
     for(const row of state.pending.rows){
       const value=BigInt(row.lamports),owed=BigInt(credits[row.wallet]||0);if(value>owed)throw new Error('Holder payout exceeds saved liability.');
       let left=value;
-      for(const source of ['own','partner','recipient']){const existing=BigInt(creditSources[source][row.wallet]||0),debit=existing<left?existing:left;if(debit){creditSources[source][row.wallet]=String(existing-debit);paidBySource[source]=String(BigInt(paidBySource[source]||0)+debit);bySource[source]=String(BigInt(bySource[source]||0)+debit);left-=debit;}}
+      for(const source of sources){const existing=BigInt(creditSources[source][row.wallet]||0),debit=existing<left?existing:left;if(debit){creditSources[source][row.wallet]=String(existing-debit);paidBySource[source]=String(BigInt(paidBySource[source]||0)+debit);bySource[source]=String(BigInt(bySource[source]||0)+debit);left-=debit;}}
       if(left){paidBySource.unattributed=String(BigInt(paidBySource.unattributed||0)+left);bySource.unattributed=String(BigInt(bySource.unattributed||0)+left);}
       if(value===owed)delete credits[row.wallet];else credits[row.wallet]=String(owed-value);paid+=value;
+      paidByWallet[row.wallet]=String(BigInt(paidByWallet[row.wallet]||0)+value);
     }
     const receipt={signature:state.pending.signature,confirmedAt:now(),lamports:String(paid),recipients:state.pending.rows.length,
       bySource,payments:state.pending.rows.map(row=>({wallet:row.wallet,lamports:String(row.lamports)}))};
-    state={...state,credits,creditSources,paidBySource,pending:null,retryRows:null,paidLamports:String(BigInt(state.paidLamports||0)+paid),receiptCount:(state.receiptCount||0)+1,receipts:[...(state.receipts||[]),receipt].slice(-100),status:'PAID',lastError:''};
+    state={...state,credits,creditSources,paidBySource,paidByWallet,walletTrackingSince:state.walletTrackingSince||now(),pending:null,retryRows:null,paidLamports:String(BigInt(state.paidLamports||0)+paid),receiptCount:(state.receiptCount||0)+1,receipts:[...(state.receipts||[]),receipt].slice(-100),status:'PAID',lastError:''};
     await save(state);return state;
   };
   if(state.pending){

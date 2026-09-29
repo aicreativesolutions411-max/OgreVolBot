@@ -1,6 +1,12 @@
 // Public launch discovery. Never return the attempt object: it contains private
 // wallet/recovery state. This view needs no RPC, indexer or paid metadata calls.
+import {splitRecipients} from './holderAlliance.js';
 const text = (value, max) => String(value || '').trim().slice(0, max);
+function feeSplit(attempt){
+  const p=attempt.launchUtility||{};if(!['alliance','holder_alliance'].includes(p.mode))return {};
+  const rows=p.mode==='alliance'?[['Developer wallet',10000-p.partnerShareBps],[p.partnerName||'Treasury wallet',p.partnerShareBps]]:[['Developer wallet',p.creatorShareBps],['This coin’s holders',p.ownHolderShareBps],[p.partnerName||'Other community holders',p.partnerHolderShareBps],...splitRecipients(p).map(r=>[r.label||'Receiving wallet',r.shareBps])];
+  return {feeSplit:rows.filter(r=>Number.isInteger(r[1])&&r[1]>0&&r[1]<=10000).slice(0,13).map(([label,shareBps])=>({label:text(label,64),shareBps}))};
+}
 function imageUrl(value) {
   try {
     const url = new URL(text(value, 2048).replace(/^ipfs:\/\/(?:ipfs\/)?/i, 'https://pump.mypinata.cloud/ipfs/'));
@@ -22,6 +28,7 @@ export function buildLaunchDirectory(attempts = []) {
       imageUrl: [attempt.imageUri, attempt.imageUrl, metadata.image, metadata.imageUrl].map(imageUrl).find(Boolean) || '',
       createdAt: Number.isFinite(date) ? new Date(date).toISOString() : '',
       origin: attempt.origin === 'connected' ? 'connected' : 'launched',
+      ...feeSplit(attempt),
       rewardMode: attempt.launchUtility?.mode === 'holder_alliance' ? 'holder_alliance' : attempt.launchUtility?.mode === 'alliance' ? 'alliance' : attempt.launchUtility?.mode === 'usepaid' ? 'external' : attempt.pumpCashback ? 'cashback' : attempt.holderRewards?.enabled ? 'holders' : 'creator'
     });
   }

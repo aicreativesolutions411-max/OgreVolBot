@@ -58,7 +58,7 @@ test('Cloudflare and origin keep a separate terminal entry instead of replacing 
 
 test('homepage and terminal cannot swap shells when offline', () => {
   const worker=read('web/public/sw.js');
-  assert.match(worker,/slimewire-shell-v92-fee-destinations/);
+  assert.match(worker,/slimewire-shell-v93-launch-earnings/);
   assert.match(worker,/url\.pathname === "\/" \? "\/" : "\/terminal\?desktop=1"/);
   assert.match(worker,/status: 503/);
 });

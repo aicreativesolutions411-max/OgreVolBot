@@ -1,12 +1,26 @@
 import { PublicKey, SystemProgram } from '@solana/web3.js';
 export const HOLDER_ALLIANCE_CONSENT_VERSION='2026-09-27-holders-v1';
 export const WALLET_SPLIT_CONSENT_VERSION='2026-09-28-wallet-split-v2';
+export const MULTI_WALLET_CONSENT_VERSION='2026-09-29-multi-wallet-v3';
+export const MAX_FEE_RECIPIENTS=10;
+export function splitRecipients(policy={}) {
+  return Array.isArray(policy.recipients)?policy.recipients:(policy.recipientShareBps?[{wallet:policy.recipientWallet,shareBps:policy.recipientShareBps,label:'Recipient wallet'}]:[]);
+}
+export function recipientSource(policy,wallet){return Array.isArray(policy.recipients)?'recipient:'+wallet:'recipient';}
+export function ledgerSources(state={}){return [...new Set(['own','partner','recipient',...Object.keys(state.creditSources||{}),...Object.keys(state.paidBySource||{}).filter(k=>k!=='unattributed')])];}
 export const HOLDER_CADENCE_MS=12*60*60*1000;
 export const HOLDER_MIN_PAYOUT=1000000n;
 export const HOLDER_VAULT_RESERVE=1000000n;
 export function normalizeHolderAlliance(input={}) {
+  const multi=Array.isArray(input.recipients);
+  if(input.recipients!==undefined&&!multi)throw new Error('Recipient wallets must be a list.');
+  if(multi&&input.recipients.length>MAX_FEE_RECIPIENTS)throw new Error('Use at most 10 receiving wallets.');
+  const recipients=multi?input.recipients.map(r=>({wallet:String(r?.wallet||'').trim(),shareBps:Number(r?.shareBps),label:String(r?.label||'Recipient wallet').trim().slice(0,40)})):[];
+  if(recipients.some(r=>!Number.isSafeInteger(r.shareBps)||r.shareBps<100||r.shareBps>9900||r.shareBps%100))throw new Error('Each receiving wallet needs a whole percentage from 1% to 99%. Remove unused wallets.');
+  const recipientTotal=recipients.reduce((a,r)=>a+r.shareBps,0);
+  if(multi&&input.recipientShareBps!==undefined&&Number(input.recipientShareBps)!==recipientTotal)throw new Error('Receiving wallet percentages do not match their total.');
   const keys=['creatorShareBps','ownHolderShareBps','partnerHolderShareBps','recipientShareBps'];
-  const shares=keys.map(k=>Number(k==='recipientShareBps'?(input[k]??0):input[k]));
+  const shares=keys.map(k=>Number(k==='recipientShareBps'?(multi?recipientTotal:input[k]??0):input[k]));
   if(shares.some(v=>!Number.isSafeInteger(v)||v<0||v>9900||v%100!==0)||shares[0]<100||shares.reduce((a,b)=>a+b,0)!==10000)throw new Error('Use whole percentages totaling 100%. Keep at least 1% for the developer and 1% for another destination. Unused destinations can receive 0%; choose Keep my fees for 100% developer.');
   let partnerMint='';
   if(shares[2]>0){
@@ -15,19 +29,24 @@ export function normalizeHolderAlliance(input={}) {
     partnerMint=mint.toBase58();
   }
   let recipientWallet='';
-  if(shares[3]){
-    let key;try{key=new PublicKey(String(input.recipientWallet||'').trim());}catch{throw new Error('Paste a valid Solana recipient wallet address, not a coin contract.');}
-    recipientWallet=key.toBase58();
-    if(!PublicKey.isOnCurve(key.toBytes())||key.equals(PublicKey.default)||recipientWallet===partnerMint||recipientWallet==='1nc1nerator11111111111111111111111111111111111')throw new Error('Recipient must be a normal Solana wallet, not a token, program or burn address.');
+  const seen=new Set();
+  for(const r of multi?recipients:shares[3]?[{wallet:input.recipientWallet}]:[]){
+    let key;try{key=new PublicKey(String(r.wallet||'').trim());}catch{throw new Error('Paste a valid Solana recipient wallet address, not a coin contract.');}
+    r.wallet=key.toBase58();
+    if(!PublicKey.isOnCurve(key.toBytes())||key.equals(PublicKey.default)||r.wallet===partnerMint||r.wallet==='1nc1nerator11111111111111111111111111111111111')throw new Error('Recipient must be a normal Solana wallet, not a token, program or burn address.');
+    if(seen.has(r.wallet))throw new Error('Duplicate recipient wallet. Combine its percentage into one row.');seen.add(r.wallet);
+    if(!multi)recipientWallet=r.wallet;
   }
-  return {version:shares[3]?2:1,mode:'holder_alliance',partnerMint,partnerName:partnerMint?String(input.partnerName||'Partner community').trim().slice(0,64):'',recipientWallet,...Object.fromEntries(keys.map((k,i)=>[k,shares[i]])),minimumUsd:20,cadenceMs:HOLDER_CADENCE_MS,autoDistribute:true,consentVersion:String(input.consentVersion||'')};
+  return {version:multi?3:shares[3]?2:1,mode:'holder_alliance',partnerMint,partnerName:partnerMint?String(input.partnerName||'Partner community').trim().slice(0,64):'',recipientWallet,...(multi?{recipients}:{}),...Object.fromEntries(keys.map((k,i)=>[k,shares[i]])),minimumUsd:20,cadenceMs:HOLDER_CADENCE_MS,autoDistribute:true,consentVersion:String(input.consentVersion||'')};
 }
 export async function verifySplitRecipient(connection,policy,{creator='',mint='',vault=''}={}){
-  if(!policy.recipientShareBps)return;
-  const normalized=normalizeHolderAlliance(policy),key=new PublicKey(normalized.recipientWallet);
+  const normalized=normalizeHolderAlliance(policy);
+  for(const row of splitRecipients(normalized)){
+  const key=new PublicKey(row.wallet);
   if([creator,mint,vault].includes(key.toBase58()))throw new Error('Use a recipient wallet different from the developer, coin contract and rewards vault.');
   const info=await connection.getAccountInfo(key,'confirmed');
   if(info&&(!info.owner.equals(SystemProgram.programId)||info.executable||(info.data?.length||0)>0))throw new Error('Recipient is a coin contract, token account or program. Paste a normal SOL receiving wallet.');
+  }
 }
 function fraction(value){
   const m=String(value).match(/^(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i);
@@ -63,7 +82,9 @@ export function allocateHolderCycle(state,{policy,balance,snapshots,now=Date.now
   const partner=policy.partnerHolderShareBps?available-own-recipient:0n;
   const walletAmount=policy.ownHolderShareBps||policy.partnerHolderShareBps?recipient:available;
   const credits={...(state.credits||{})};
-  const creditSources=Object.fromEntries(['own','partner','recipient'].map(k=>[k,{...(state.creditSources?.[k]||{})}]));
+  const creditSources=Object.fromEntries(ledgerSources(state).map(k=>[k,{...(state.creditSources?.[k]||{})}]));
+  const recipientAllocations={};
+  if(policy.recipientShareBps){let left=walletAmount;const rows=splitRecipients(policy);rows.forEach((r,i)=>{const award=i===rows.length-1?left:walletAmount*BigInt(r.shareBps)/BigInt(policy.recipientShareBps);left-=award;const source=recipientSource(policy,r.wallet);creditSources[source]||={};recipientAllocations[source]=award;});}
   const add=(source,wallet,award)=>{if(!award)return;credits[wallet]=String(BigInt(credits[wallet]||0)+award);creditSources[source][wallet]=String(BigInt(creditSources[source][wallet]||0)+award);};
   const distribute=(amount,snapshot,source)=>{
     if(!Array.isArray(snapshot?.holders))throw new Error('A complete verified holder snapshot is required for both communities.');
@@ -77,8 +98,8 @@ export function allocateHolderCycle(state,{policy,balance,snapshots,now=Date.now
   };
   const carryOwn=policy.ownHolderShareBps?distribute(own+BigInt(state.carryOwn||0),snapshots.own,'own'):'0';
   const carryPartner=policy.partnerHolderShareBps?distribute(partner+BigInt(state.carryPartner||0),snapshots.partner,'partner'):'0';
-  if(policy.recipientShareBps)add('recipient',policy.recipientWallet,walletAmount);
-  const allocatedBySource=Object.fromEntries([['own',own],['partner',partner],['recipient',walletAmount]].map(([k,v])=>[k,String(BigInt(state.allocatedBySource?.[k]||0)+v)]));
+  for(const r of splitRecipients(policy))add(recipientSource(policy,r.wallet),r.wallet,recipientAllocations[recipientSource(policy,r.wallet)]||0n);
+  const allocatedBySource={...(state.allocatedBySource||{}),...Object.fromEntries([['own',own],['partner',partner],...Object.entries(recipientAllocations)].map(([k,v])=>[k,String(BigInt(state.allocatedBySource?.[k]||0)+v)]))};
   const summary=s=>s?{slot:s.slot,priceUsd:s.priceUsd,count:s.holders.length}:null;
   return {...state,version:2,credits,creditSources,allocatedBySource,sourceTrackingSince:state.sourceTrackingSince||now,carryOwn,carryPartner,lastSnapshotAt:now,status:'ALLOCATED',lastError:'',
     allocatedLamports:String(BigInt(state.allocatedLamports||0)+available),

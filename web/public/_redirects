@@ -24,6 +24,9 @@
 # Preserve agreement query strings and tab fragments; never put auth in a URL.
 /launch/community  https://app.slimewire.org/launch/community  302
 /launch/community/ https://app.slimewire.org/launch/community  302
+/launch/earnings  https://app.slimewire.org/launch/earnings  302
+/launch/earnings/ https://app.slimewire.org/launch/earnings  302
+/earnings        https://app.slimewire.org/launch/earnings  302
 /left4sol       https://app.slimewire.org/left4sol  302
 /left4sol/*     https://app.slimewire.org/left4sol  302
 /quick          /fun.html              200

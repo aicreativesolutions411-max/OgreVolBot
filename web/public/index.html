@@ -66,8 +66,8 @@
 <meta name="apple-mobile-web-app-title" content="SlimeWire">
 <link rel="apple-touch-icon" sizes="180x180" href="/assets/slimewire/png/apple-touch-icon.png">
 <script src="/config.js"></script>
-<link rel="stylesheet" href="/launch-utility.css?v=20260928-fees2">
-<script src="/launch-utility.js?v=20260928-fees2"></script>
+<link rel="stylesheet" href="/launch-utility.css?v=20260929-earnings">
+<script src="/launch-utility.js?v=20260929-earnings"></script>
 <style>
   :root{
     --bg:#050705;--bg2:#070b07;--panel:#0a0f0b;--panel2:#0c130d;--row:#0b110c;--row-hover:#10180f;
@@ -802,7 +802,7 @@
   let launchDraftSaveTimer=null;
   const incomingLaunch=SlimeLaunchUtility.prefill(location.search);
   if(incomingLaunch&&!state.launchActiveAttemptId){
-    const d=incomingLaunch;state.launchForm={lcName:d.name,lcSym:d.symbol,lcDesc:d.description,lcX:d.x,lcTg:d.telegram,lcWeb:d.website,lcDevBuy:d.devBuySol,lcNftEnabled:d.nftEnabled,lcUtilityMode:d.launchUtility.mode,lcUtilityHandle:d.launchUtility.xHandle||"",lcUtilityCollection:d.launchUtility.collectionSymbol||"",lcUtilityPartnerName:d.launchUtility.partnerName||""};
+    const d=incomingLaunch;state.launchForm={lcName:d.name,lcSym:d.symbol,lcDesc:d.description,lcX:d.x,lcTg:d.telegram,lcWeb:d.website,lcDevBuy:d.devBuySol,lcNftEnabled:d.nftEnabled,lcUtilityPolicy:d.launchUtility};
     state.launchImg=null;state.launchBanner=null;state.launchRail="pump";state.launchTab="coin";persistLaunchDraftNow();
     const clean=new URL(location.href);for(const key of [...clean.searchParams.keys()])if(key.startsWith("lc_"))clean.searchParams.delete(key);clean.hash="launch";history.replaceState(null,"",clean.pathname+clean.search+clean.hash);
   }
@@ -5214,7 +5214,7 @@
   // Persist the WHOLE launch form across navigations (go to Wallet / dev wallet and back) so nothing
   // typed or uploaded disappears. Snapshot on every edit; restore right after each render. Images live
   // in state.launchImg/Banner (file inputs can't be re-populated for security, so we re-show the preview).
-  function lcSnapshot(){const root=$("#v-launch");if(!root)return;const f=state.launchForm||(state.launchForm={});root.querySelectorAll("input,textarea,select").forEach(el=>{if(!el.id||el.type==="file"||el.id==="lcChatCa")return;f[el.id]=(el.type==="checkbox"||el.type==="radio")?el.checked:el.value;});persistLaunchDraftSoon();}
+  function lcSnapshot(){const root=$("#v-launch");if(!root)return;const f=state.launchForm||(state.launchForm={});root.querySelectorAll("input,textarea,select").forEach(el=>{if(!el.id||el.type==="file"||el.id==="lcChatCa"||el.id.startsWith("lcUtility"))return;f[el.id]=(el.type==="checkbox"||el.type==="radio")?el.checked:el.value;});if($("#lcUtilityMode"))f.lcUtilityPolicy=SlimeLaunchUtility.read("lcUtility");persistLaunchDraftSoon();}
   function lcReadDevBuyAmount(){
     const input=$("#lcDevBuy"),saved=state.launchForm&&state.launchForm.lcDevBuy;
     const raw=String((input&&input.value)!=null?input.value:(saved||"")).trim().replace(",",".");
@@ -5272,7 +5272,7 @@
     if(!(await ensureTradeReady()))return;const name=String(($("#lcNftItemName")||{}).value||"").trim();if(!name){toast("Give this NFT a name.",true);return;}if(!state.lcNftItemImage){toast("Choose an artwork image before minting.",true);return;}const btn=$("#lcNftItemMint");if(btn){btn.disabled=true;btn.textContent="Minting…";}const body={tokenMint:state.lcNftMint,name,description:String(($("#lcNftItemDescription")||{}).value||"").trim(),rarity:String(($("#lcNftItemRarity")||{}).value||"common"),recipient:String(($("#lcNftItemRecipient")||{}).value||"").trim(),clientRequestId:attemptId()};if(state.lcNftItemImage){body.imageDataUrl=state.lcNftItemImage.dataUrl;body.imageName=state.lcNftItemImage.name;}const {ok,d}=await lcNftLongPost("/api/web/nft/item/mint",body);if(!(ok&&d&&d.ok)){state.lcNftStatus=apiMessage(d,"The NFT was not minted.");lcPaintNftManager();return;}state.lcNftItemImage=null;toast("NFT minted");await lcLoadNftManager();
   }
   function lcWireNftManager(){const load=$("#lcNftManagerLoad"),refresh=$("#lcNftRefresh"),create=$("#lcNftCreateLater"),link=$("#lcNftLinkExisting"),mint=$("#lcNftItemMint"),img=$("#lcNftItemImage"),ref=$("#lcNftStudioReference"),quote=$("#lcNftStudioQuote"),start=$("#lcNftStudioStart"),previews=$("#lcNftStudioPreviews"),approve=$("#lcNftStudioApprove"),build=$("#lcNftStudioBuild"),cancel=$("#lcNftStudioCancel"),studioRefresh=$("#lcNftStudioRefresh");if(load)load.onclick=lcLoadNftManager;if(refresh)refresh.onclick=lcLoadNftManager;if(create)create.onclick=lcCreateLaterNftCollection;if(link)link.onclick=lcLinkExistingNftCollection;if(mint)mint.onclick=lcMintNftItem;if(img)img.onchange=e=>lcReadNftItemImage(e.target.files&&e.target.files[0]);if(ref)ref.onchange=e=>lcReadNftStudioReference(e.target.files&&e.target.files[0]);if(quote)quote.onclick=lcQuoteNftStudio;if(start)start.onclick=lcStartNftStudio;if(previews)previews.onclick=lcGenerateNftPreviews;if(approve)approve.onclick=lcApproveNftPreview;if(build)build.onclick=lcBuildNftStudio;if(cancel)cancel.onclick=lcCancelNftStudio;if(studioRefresh)studioRefresh.onclick=lcLoadNftManager;}
-  function lcRestore(){const root=$("#v-launch");if(!root)return;const f=state.launchForm;if(f){root.querySelectorAll("input,textarea,select").forEach(el=>{if(!el.id||el.type==="file"||el.id==="lcChatCa"||!(el.id in f))return;if(el.type==="checkbox"||el.type==="radio")el.checked=!!f[el.id];else if(f[el.id]!=null&&f[el.id]!=="")el.value=f[el.id];});}
+  function lcRestore(){const root=$("#v-launch");if(!root)return;const f=state.launchForm;if(f){root.querySelectorAll("input,textarea,select").forEach(el=>{if(!el.id||el.type==="file"||el.id==="lcChatCa"||!(el.id in f)||(f.lcUtilityPolicy&&el.id.startsWith("lcUtility")))return;if(el.type==="checkbox"||el.type==="radio")el.checked=!!f[el.id];else if(f[el.id]!=null&&f[el.id]!=="")el.value=f[el.id];});}
     if(state.launchImg&&$("#lcImgPrev"))$("#lcImgPrev").innerHTML='<img src="'+state.launchImg.dataUrl+'" style="height:64px;width:64px;border-radius:10px;object-fit:cover;border:1px solid var(--border)">';
     if(state.launchBanner&&$("#lcBannerPrev"))$("#lcBannerPrev").innerHTML='<img src="'+state.launchBanner.dataUrl+'" style="height:40px;border-radius:10px;object-fit:cover;border:1px solid var(--border)">';
     // Re-apply the show/hide that depends on restored checkbox state (promoter rows, bundle amount).
@@ -5303,7 +5303,7 @@
         '<div class="field"><label>Telegram</label><input id="lcTg" placeholder="https://t.me/yourcoin"></div>'+
         '<div class="field"><label>Website</label><input id="lcWeb" placeholder="https://yourcoin.com"></div>'+
       '</div>'+
-      '<div data-lpanel="nft"'+show("nft")+'>'+SlimeLaunchUtility.render("lcUtility")+'<div class="launch-summary"><span class="mark">◆</span><div><b>Create your coin’s NFT collection.</b><br><span class="mut">Optional · Solana only. Your creator wallet controls it. Marketplace indexing and sales are not guaranteed. A collection does not automatically redirect creator fees.</span></div></div>'+
+      '<div data-lpanel="nft"'+show("nft")+'>'+SlimeLaunchUtility.render("lcUtility",state.launchForm?.lcUtilityPolicy||{})+'<div class="launch-summary"><span class="mark">◆</span><div><b>Create your coin’s NFT collection.</b><br><span class="mut">Optional · Solana only. Your creator wallet controls it. Marketplace indexing and sales are not guaranteed. A collection does not automatically redirect creator fees.</span></div></div>'+
         '<label class="lcheck"><input type="checkbox" id="lcNftEnabled"> <span><b>Create and link an NFT collection</b> — funded from the selected creator wallet.</span></label>'+
         '<div id="lcNftSetup" class="feebox" style="display:none;margin-top:8px">'+
           '<div class="field"><label>Collection name <span style="text-transform:none">(optional)</span></label><input id="lcNftName" maxlength="64" placeholder="Defaults to Coin Name NFT Collection"></div>'+

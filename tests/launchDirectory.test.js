@@ -21,6 +21,12 @@ test('existing connected coins are never described as newly launched here', () =
   assert.equal(buildLaunchDirectory([{ ...complete, origin: 'connected' }])[0].origin, 'connected');
   assert.equal(buildLaunchDirectory([complete])[0].origin, 'launched');
 });
+
+test('shared-fee launch cards expose allocation labels without private vault or account state',()=>{
+  const [row]=buildLaunchDirectory([{...complete,launchUtility:{mode:'holder_alliance',creatorShareBps:2000,ownHolderShareBps:5000,partnerHolderShareBps:0,recipientShareBps:3000,recipients:[{wallet:'private-context',label:'Artist',shareBps:3000}]},encryptedVaultSecret:'never'}]);
+  assert.deepEqual(row.feeSplit.map(d=>[d.label,d.shareBps]),[['Developer wallet',2000],['This coin’s holders',5000],['Artist',3000]]);
+  assert.ok(!JSON.stringify(row).includes('private-context'));assert.ok(!JSON.stringify(row).includes('never'));
+});
 test('directory preserves reward labels and rejects unsafe images', () => {
   assert.equal(buildLaunchDirectory([{ ...complete, pumpCashback: true }])[0].rewardMode, 'cashback');
   assert.equal(buildLaunchDirectory([{ ...complete, holderRewards: { enabled: true } }])[0].rewardMode, 'holders');

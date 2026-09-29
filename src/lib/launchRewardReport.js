@@ -1,5 +1,5 @@
 import { PublicKey } from '@solana/web3.js';
-import { publicHolderLedger, HOLDER_CADENCE_MS } from './holderAlliance.js';
+import { publicHolderLedger, HOLDER_CADENCE_MS, splitRecipients, recipientSource, ledgerSources } from './holderAlliance.js';
 const text=(v,n=120)=>String(v||'').slice(0,n);
 const amount=v=>/^\d+$/.test(String(v||''))?String(v):'0';
 function rewardMode(attempt,policy){
@@ -26,12 +26,12 @@ function feeDestinations(attempt,policy,holder){
   };
   const destinations=[{id:'creator',label:'Developer wallet',address:text(attempt.devWalletPublicKey,44),shareBps:holder?policy.creatorShareBps:policy.mode==='alliance'?10000-policy.partnerShareBps:10000,
     paidLamports:tracked?direct(attempt.devWalletPublicKey):null,reservedLamports:null,coverage:tracked?(partial?'partial':'verified_recorded_receipts'):'wallet_wide_only'}];
-  if(holder)destinations.push(destination('own','This coin’s holders',policy.ownHolderShareBps,'',attempt.tokenMint),destination('partner',policy.partnerName||'Other community holders',policy.partnerHolderShareBps,'',policy.partnerMint),destination('recipient','Recipient wallet',policy.recipientShareBps,policy.recipientWallet,''));
+  if(holder)destinations.push(destination('own','This coin’s holders',policy.ownHolderShareBps,'',attempt.tokenMint),destination('partner',policy.partnerName||'Other community holders',policy.partnerHolderShareBps,'',policy.partnerMint),...splitRecipients(policy).map(r=>destination(recipientSource(policy,r.wallet),r.label||'Recipient wallet',r.shareBps,r.wallet,'')));
   else if(policy.mode==='alliance')destinations.push({id:'recipient',label:policy.partnerName||'Recipient wallet',address:text(policy.partnerWallet,44),shareBps:policy.partnerShareBps,paidLamports:direct(policy.partnerWallet),reservedLamports:null,coverage:partial?'partial':'verified_recorded_receipts'});
   return {destinations:destinations.filter(d=>d.shareBps>0),collectionTotalLamports:tracked?String(verified.reduce((a,r)=>a+BigInt(amount(r.totalLamports)),0n)):null,
     collectionReceiptCount:verified.length,collectionAccountingPending:partial,
     collectionReceipts:receipts.slice(-20).map(r=>({signature:text(r.signature,100),confirmedAt:text(r.confirmedAt,40),totalLamports:r.accountingStatus==='verified'?amount(r.totalLamports):null,accountingStatus:r.accountingStatus||'unavailable'})),
-    unattributedPaidLamports:holder?String(BigInt(amount(ledger.paidLamports))-['own','partner','recipient'].reduce((a,k)=>a+BigInt(amount(ledger.paidBySource?.[k])),0n)):'0'};
+    unattributedPaidLamports:holder?String(BigInt(amount(ledger.paidLamports))-ledgerSources(ledger).reduce((a,k)=>a+BigInt(amount(ledger.paidBySource?.[k])),0n)):'0'};
 }
 
 // Explicit public allowlist. Never serialize an attempt, credits, signed bytes,
@@ -41,7 +41,7 @@ export function buildLaunchRewardReport(attempt={}){
   const policy=attempt.launchUtility||{},mode=rewardMode(attempt,policy),holder=mode==='holder_alliance';
   const ledger=holder?publicHolderLedger(attempt.holderAllianceLedger):null;
   return {
-    mint:text(attempt.tokenMint,64),name:text(attempt.tokenName||attempt.name||attempt.metadataJson?.name,64),symbol:text(attempt.symbol||attempt.ticker,16),
+    mint:text(attempt.tokenMint,64),name:text(attempt.tokenName||attempt.name||attempt.metadataJson?.name,64),symbol:text(attempt.symbol||attempt.ticker||attempt.metadataJson?.symbol,16),imageUrl:text(attempt.imageUri||attempt.imageUrl||attempt.metadataJson?.image,2048),
     mode,
     asset:'SOL',quoteMint:'So11111111111111111111111111111111111111112',
     accountingScope:holder?'coin_holder_vault':'wallet',
@@ -59,7 +59,7 @@ export function buildLaunchRewardReport(attempt={}){
     distributionStatus:ledger?.status||'',minimumUsd:holder?20:null,cadenceHours:holder?HOLDER_CADENCE_MS/3600000:null,
     nextSnapshotAt:ledger?.nextSnapshotAt||'',lastSnapshot:snapshot(ledger?.lastSnapshot),
     receiptCount:ledger?.receiptCount||0,
-    receipts:(attempt.holderAllianceLedger?.receipts||[]).slice(-20).map(r=>({signature:text(r.signature,100),lamports:amount(r.lamports),recipients:Number(r.recipients)||0,confirmedAt:text(r.confirmedAt,40),bySource:Object.fromEntries(['own','partner','recipient','unattributed'].filter(k=>r.bySource?.[k]).map(k=>[k,amount(r.bySource[k])]))})),
+    receipts:(attempt.holderAllianceLedger?.receipts||[]).slice(-20).map(r=>({signature:text(r.signature,100),lamports:amount(r.lamports),recipients:Number(r.recipients)||0,confirmedAt:text(r.confirmedAt,40),bySource:Object.fromEntries([...ledgerSources(attempt.holderAllianceLedger),'unattributed'].filter(k=>r.bySource?.[k]).map(k=>[k,amount(r.bySource[k])]))})),
     delayed:holder&&!!(attempt.holderLastError||attempt.holderAllianceLedger?.lastError),
     note:holder?'Finalized recorded payments only. Developer payments and vault funding are counted from verified per-coin Pump receipts; vault funding is not counted a second time as recipient income. Reserved amounts are not paid. Older unclassified history and unavailable receipts are not estimated. Network/data failures can delay the 12-hour schedule.':policy.mode==='alliance'?'Only verified per-coin distribution receipts count toward these destination totals. Unavailable historical receipts are not estimated.':mode==='creator'?'Standard creator claims may cover several coins. Check wallet-wide balances in Wallet; per-coin earnings are not estimated.':mode==='cashback'?'This coin uses the existing Pump Cashback program, not a 100% developer allocation. Check the appropriate reward balances in Wallet; per-coin destination amounts are not available here.':'This coin has a legacy fee program. Its existing configuration remains unchanged. Destination-level amounts and percentages are unavailable in this report; they are not assumed to belong to the developer.'
   };
@@ -68,6 +68,6 @@ export function holderEligibilityReport(attempt,wallet){
   const key=new PublicKey(wallet);if(!PublicKey.isOnCurve(key.toBytes()))throw new Error('Enter an ordinary Solana wallet address.');
   const policy=attempt.launchUtility||{},ledger=attempt.holderAllianceLedger||{};
   const result=side=>!policy[side==='own'?'ownHolderShareBps':'partnerHolderShareBps']?'not_selected':!Array.isArray(ledger.lastEligibility?.[side])?'unknown':ledger.lastEligibility[side].includes(key.toBase58())?'eligible':'not_eligible';
-  return {wallet:key.toBase58(),asOf:ledger.lastSnapshot?.at||'',own:result('own'),partner:result('partner'),recipient:policy.recipientShareBps>0&&policy.recipientWallet===key.toBase58(),owedLamports:amount(ledger.credits?.[key.toBase58()]),
+  return {wallet:key.toBase58(),asOf:ledger.lastSnapshot?.at||'',own:result('own'),partner:result('partner'),recipient:splitRecipients(policy).some(r=>r.wallet===key.toBase58()),owedLamports:amount(ledger.credits?.[key.toBase58()]),
     note:'Based on the last completed snapshot, not live holdings. More than $20 is required at each snapshot; pools, program and burn accounts are excluded. No snapshot means eligibility is unknown.'};
 }
