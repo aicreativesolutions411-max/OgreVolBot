@@ -3,7 +3,7 @@
 // /api/ responses or non-GET requests, so trading data is never served stale. Offline just
 // shows the cached shell, which then loads live data when the connection returns.
 
-const SHELL_CACHE = "slimewire-shell-v90-smart-alerts";
+const SHELL_CACHE = "slimewire-shell-v91-product-home";
 // Standalone pages are their OWN documents (Pro, raid board, prelaunch, hub, launch, guide, share
 // pages). The SW must NEVER treat their navigations as the app shell — doing so served the cached
 // main-app (the "/pro shows the old intro then the main page" bug). Only the SPA's own routes are
@@ -47,7 +47,14 @@ self.addEventListener("fetch", (event) => {
       return res;
     } catch {
       const cached = await caches.match(req);                // offline: serve the cached shell
-      return cached || (req.mode === "navigate" ? caches.match("/") : Response.error());
+      if (cached) return cached;
+      if (req.mode === "navigate") {
+        // Home is no longer the terminal shell. Never substitute one product
+        // for another when an uncached deep link is opened offline.
+        const fallback = await caches.match(url.pathname === "/" ? "/" : "/terminal?desktop=1");
+        return fallback || new Response("You’re offline. Reconnect to open SlimeWire.", { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+      }
+      return Response.error();
     }
   })());
 });

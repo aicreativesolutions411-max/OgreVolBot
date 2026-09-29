@@ -3,6 +3,14 @@
 # that honors a _headers file. Keep the two in sync.
 
 # Entry doc + per-build config are always fetched fresh.
+/
+  Cache-Control: no-store
+/home.html
+  Cache-Control: no-store
+/terminal
+  Cache-Control: no-store
+/terminal.html
+  Cache-Control: no-store
 /index.html
   Cache-Control: no-store
 /config.js

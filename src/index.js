@@ -13492,7 +13492,8 @@ function compressedStaticAsset(target, data, stat, encoding) {
 }
 
 async function serveWebPortal(requestUrl, response, method = "GET", acceptEncoding = "") {
-  const relativePath = requestUrl.pathname === "/" || requestUrl.pathname === "/connect"
+  const relativePath = requestUrl.pathname === "/" ? "home.html"
+    : requestUrl.pathname === "/connect"
     || requestUrl.pathname === "/login" || requestUrl.pathname.startsWith("/account/login")
     || requestUrl.pathname === "/launch-coin"
     || requestUrl.pathname === "/portal" || requestUrl.pathname === "/terminal"
@@ -13514,7 +13515,7 @@ async function serveWebPortal(requestUrl, response, method = "GET", acceptEncodi
     const fileName = path.basename(target);
     // index.html is the entry doc and config.js is regenerated per build without a cache-busting
     // query, so both must always be fetched fresh.
-    const noStoreAsset = target.endsWith("index.html") || fileName === "config.js" || fileName === "community.js"
+    const noStoreAsset = target.endsWith("index.html") || fileName === "home.html" || fileName === "terminal.html" || fileName === "config.js" || fileName === "community.js"
       || fileName === "sw.js" || fileName === "fun-sw.js" || fileName === "slimewire-funding.js";
     const immutableMedia = /\.(?:mp4|png|jpe?g|svg|webp|ico)$/i.test(target);
     // build-web.js rewrites a fresh ?v=<buildId> onto app.js / styles.css / overrides every deploy,

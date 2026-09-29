@@ -290,6 +290,9 @@ for (const activeTerminalPage of ["index.html", "gg.html"]) {
     .replace(/app\.js(?:\?v=[^"]*)?/g, `app.js?v=${buildId}`);
   await fs.writeFile(pagePath, await extractActiveTerminalBundles(versionedPageHtml), "utf8");
 }
+// A distinct filename prevents Pages' pretty-URL canonicalization from
+// turning /terminal into / now that / has its own lightweight landing page.
+await fs.copyFile(path.join(distDir, "index.html"), path.join(distDir, "terminal.html"));
 
 try {
   const assetDir = path.join(distDir, "assets");
