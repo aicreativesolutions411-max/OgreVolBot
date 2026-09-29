@@ -1,7 +1,7 @@
 # SlimeWire routing (Cloudflare Pages / any _redirects-aware proxy).
 # The homepage and terminal are separate documents. Keep old-app aliases and referral
 # links working. NOTE: no /api/* rule here on purpose — the existing API proxy is left untouched.
-/               /home.html             200
+/               /home                  200
 /classic        /old.html              200
 /old            /old.html              200
 /old/*          /old.html              200
@@ -39,10 +39,12 @@
 # worker scope so it installs as a separate app). Assets under /cash/* are real
 # files and serve directly — only the bare path needs the shell rewrite.
 /cash           /cash/index.html       200
-/terminal       /terminal.html         200
-/terminal/*     /terminal.html         200
-/portal         /terminal.html         200
-/portal/*       /terminal.html         200
-/connect        /terminal.html         200
-/login          /terminal.html         200
-/account/login  /terminal.html         200
+# Pages resolves /terminal to terminal.html natively. Do NOT rewrite that
+# exact path to its .html filename: canonicalization redirects it to itself.
+# Rewrite aliases to the extension-less URL for the same reason.
+/terminal/*     /terminal              200
+/portal         /terminal              200
+/portal/*       /terminal              200
+/connect        /terminal              200
+/login          /terminal              200
+/account/login  /terminal              200

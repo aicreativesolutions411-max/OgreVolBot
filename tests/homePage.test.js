@@ -42,8 +42,9 @@ test('home has no account preload or money side effect and uses accessible contr
 
 test('Cloudflare and origin keep a separate terminal entry instead of replacing its source', () => {
   const redirects=read('web/public/_redirects');
-  assert.match(redirects,/^\/\s+\/home\.html\s+200/m);
-  assert.match(redirects,/^\/terminal\s+\/terminal\.html\s+200/m);
+  assert.match(redirects,/^\/\s+\/home\s+200/m);
+  assert.doesNotMatch(redirects,/^\/terminal\s+\S+/m, 'Pages serves terminal.html natively; rewriting the extension-less path loops');
+  assert.match(redirects,/^\/terminal\/\*\s+\/terminal\s+200/m);
   const build=read('scripts/build-web.js');
   assert.match(build,/copyFile\(path\.join\(distDir, "index\.html"\), path\.join\(distDir, "terminal\.html"\)\)/);
   const server=read('src/index.js');

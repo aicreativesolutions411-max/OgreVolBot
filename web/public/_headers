@@ -7,6 +7,8 @@
   Cache-Control: no-store
 /home.html
   Cache-Control: no-store
+/home
+  Cache-Control: no-store
 /terminal
   Cache-Control: no-store
 /terminal.html
