@@ -9,6 +9,14 @@ test('return destinations are allowlisted paths, never external redirects or pay
   assert.equal(j.safeReturn('/launch/community?mint=abc#connect'),'/launch/community?mint=abc#connect');
   for(const s of ['https://evil.test','//evil.test','/\\evil.test','/api/web/trade','/launch/community?token=secret','/wallet?buy=1','/launch/community%0a'])assert.equal(j.safeReturn(s),'',s);
 });
+
+test('public wallet redirects preserve incoming coin, activity and launch-return parameters',()=>{
+  const redirects=read('web/public/_redirects');
+  for(const route of ['/wallet','/wallet/','/wallet/*','/wallet.html']){
+    const row=redirects.split(/\r?\n/).find(line=>line.trim().split(/\s+/)[0]===route);
+    assert.equal(row.trim().split(/\s+/)[1],'https://app.slimewire.org/wallet');
+  }
+});
 test('readiness never implies funding, authority or transaction simulation passed locally',()=>{
   const j=journey(); const rows=j.readiness({name:'Example',symbol:'EX',splitError:''});
   assert.equal(rows.filter(r=>r.state==='ready').length,2);

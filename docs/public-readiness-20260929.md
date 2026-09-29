@@ -15,10 +15,11 @@ User-approved scope: polish the existing SlimeWire products without replacing th
 ## Verification
 - `npm run build:web`: passed.
 - `npm run check`: passed.
-- `npm test`: 1,567 passed, zero failed.
+- `npm test`: 1,568 passed, zero failed (including the production redirect follow-up).
 - Desktop and 390px mobile browser QA: no horizontal overflow on Games, Help and Wallet; trailer playback and sound verified in Edge; native fullscreen control present. The in-app QA browser crashed on video playback, so playback was verified in Edge instead.
 - Wallet tools expand correctly. More menu labels remain visible. Community coin and percentage draft restored after navigating to Wallet and back. Launch readiness rendered without any financial submission.
 - Static video range handling has regression tests; the server streams ranges instead of reading the entire trailer into memory.
+- Production preflight found that Pages' old fixed `?install=1` destination dropped incoming wallet coin/activity/return parameters. The query-free redirect now hands off to the app route, which preserves the query and adds the install default. Public trailer delivery returned HTTP 206 for a 1 KB range, with the correct total length.
 - Release procedure: commit/push this batch, use the web-only Render release script, verify the exact SHA, public pages, media ranges and runtime logs. Worker deployments are not needed: the new video helper is web-only.
 
 ## Steam media provenance

@@ -124,7 +124,8 @@ test("/wallet is a dedicated lazy SlimeWallet surface with in-app SOL and ETH tr
   assert.match(server, /if \(!walletQuery.has\("install"\)\) walletQuery.set\("install", "1"\)/);
   assert.match(server, /requestUrl\.pathname === "\/wallet\/"[\s\S]{0,260}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   for (const route of ["/wallet", "/wallet/", "/wallet/*", "/wallet.html"]) {
-    assert.match(redirects, new RegExp(`^${route.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s+https:\\/\\/app\\.slimewire\\.org\\/wallet\\/\\?install=1\\s+302$`, "m"));
+    const redirect = redirects.split(/\r?\n/).find(line => line.trim().split(/\s+/)[0] === route);
+    assert.equal(redirect.trim().split(/\s+/)[1], "https://app.slimewire.org/wallet");
   }
   assert.doesNotMatch(redirects, /^\/wallet(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /data-view="wallet-swap"/);
