@@ -7437,6 +7437,10 @@ and is checked by an automated release audit before every upload.</p></div>
       await serveStaticHtmlPage(response, "bot.html");
       return;
     }
+    if (request.method === "GET" && ["/games", "/slime-games"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "games.html");
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === "/resources") {
       await serveStaticHtmlPage(response, "resources.html");
       return;

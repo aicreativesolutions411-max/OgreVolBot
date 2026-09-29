@@ -2,6 +2,10 @@
 # The homepage and terminal are separate documents. Keep old-app aliases and referral
 # links working. NOTE: no /api/* rule here on purpose — the existing API proxy is left untouched.
 /               /home                  200
+# Standalone guides resolve to their own documents, not the terminal shell.
+/telegram-bot   /bot                   200
+/solana-telegram-bot /bot               200
+/slime-games    /games                 200
 /classic        /old.html              200
 /old            /old.html              200
 /old/*          /old.html              200
