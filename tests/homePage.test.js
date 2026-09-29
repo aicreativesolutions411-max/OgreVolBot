@@ -8,7 +8,7 @@ test('selected homepage is real accessible HTML with every product destination',
   const html=read('web/public/home.html');
   assert.match(html, /One home\. <span>Every move\.<\/span>/);
   assert.doesNotMatch(html, /switchboard|slimewire\.com|Sign in with X/i);
-  for(const link of ['/wallet','/terminal?desktop=1','/launch','/terminal?from=fun#launch','/terminal?from=fun&amp;lc_utility=holder_self#launch']) assert.ok(html.includes('href="'+link+'"'),link);
+  for(const link of ['/wallet','/terminal?desktop=1','/launch','/launch?mode=creator','/launch?mode=holder_self']) assert.ok(html.includes('href="'+link+'"'),link);
   assert.match(html, /<dialog[^>]+id="claim-dialog"/);
   assert.match(html, /Creator fees/);
   assert.match(html, /Holder rewards/);
@@ -64,4 +64,16 @@ test('homepage preserves exact legacy query intent without creating an open redi
   assert.equal(target({pathname:'/',search:'?redirect=https%3A%2F%2Fevil.example&ref=abc',hash:'#launch'}),'/terminal?redirect=https%3A%2F%2Fevil.example&ref=abc#launch');
   assert.equal(target({pathname:'/',search:'?utm_source=tg',hash:'#trade/coin'}),'/terminal?utm_source=tg#trade/coin');
   assert.equal(target({pathname:'/',search:'?ref=abc',hash:'#claim'}),'');
+});
+
+test('launch product entry selects only a supported draft mode, without starting a launch', () => {
+  const context=vm.createContext({URLSearchParams,window:{}});
+  vm.runInContext(read('web/public/launch-pad.js'),context);
+  const entry=context.window.SlimeLaunchPad.entryMode;
+  assert.equal(entry('?mode=holder_self'),'holder_self');
+  assert.equal(entry('?mode=creator'),'creator');
+  assert.equal(entry('?mode=usepaid'),'');
+  assert.equal(entry('?mode=bad'),'');
+  assert.equal(entry(''),'');
+  assert.match(read('web/public/launch-pad.js'),/if\(initialMode\)\{draft\.mode=initialMode;createDialog\(\);\}/);
 });

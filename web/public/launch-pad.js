@@ -75,7 +75,11 @@
       (coin.description ? '<p class="coin-description">' + esc(coin.description) + '</p>' : '') +
       '<div class="coin-meta"><span>Creator fees</span><strong>' + esc(rewardLabels[coin.rewardMode] || 'Not recorded') + '</strong></div><div class="coin-meta"><span>' + (coin.origin === 'connected' ? 'Connected' : 'Launched') + '</span><strong>' + esc(dateLabel(coin.createdAt)) + '</strong></div><div class="coin-actions"><a href="' + chartUrl(coin.mint) + '" target="_blank" rel="noopener noreferrer">Chart ↗</a><button class="copy-ca" type="button" data-copy="' + esc(coin.mint) + '" aria-label="Copy ' + esc(coin.name) + ' contract address">' + esc(coin.mint.slice(0, 4) + '…' + coin.mint.slice(-4)) + ' ⧉</button></div></article>';
   }
-  root.SlimeLaunchPad = { esc, safeImage, imageCandidates, loadCoinImage, isMint, coinModel, chartUrl, walletCoinUrl, searchQuery, filterLaunches, draftUrl, cardHtml, templateDraft };
+  function entryMode(search='') {
+    const mode=new URLSearchParams(search).get('mode');
+    return ['creator','holder_self','holder_alliance','alliance'].includes(mode)?mode:'';
+  }
+  root.SlimeLaunchPad = { esc, safeImage, imageCandidates, loadCoinImage, isMint, coinModel, chartUrl, walletCoinUrl, searchQuery, filterLaunches, draftUrl, cardHtml, templateDraft, entryMode };
   if (!root.document?.getElementById('launch-dialog')) return;
   const $ = id => document.getElementById(id), dialog = $('launch-dialog');
   const API = String(root.OGRE_PORTAL_CONFIG?.apiBase || '').trim().replace(/\/+$/, '');
@@ -226,4 +230,8 @@
   // No background polling, wallet preloading, or automatic financial actions.
   load();
   const sharedRewards=new URLSearchParams(root.location?.search||'').get('rewards');if(isMint(sharedRewards))rewardsDialog(sharedRewards);
+  // Homepage shortcuts open the normal editable draft dialog. They cannot
+  // choose a wallet, approve fees, replace a terminal draft, or submit a coin.
+  const initialMode=entryMode(root.location?.search||'');
+  if(initialMode){draft.mode=initialMode;createDialog();}
 })(window);
