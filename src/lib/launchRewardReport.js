@@ -1,7 +1,8 @@
 import { PublicKey } from '@solana/web3.js';
-import { publicHolderLedger, HOLDER_CADENCE_MS, splitRecipients, recipientSource, ledgerSources } from './holderAlliance.js';
+import { publicHolderLedger, splitRecipients, recipientSource, ledgerSources } from './holderAlliance.js';
 import { earningsEvents } from './launchEarningsHistory.js';
 import { buildLaunchPassport } from './launchPassport.js';
+import { flowScheduleSummary } from './slimeFlows.js';
 const text=(v,n=120)=>String(v||'').slice(0,n);
 const amount=v=>/^\d+$/.test(String(v||''))?String(v):'0';
 function rewardMode(attempt,policy){
@@ -42,6 +43,7 @@ export function buildLaunchRewardReport(attempt={}){
   if(attempt.status!=='COMPLETE'||!attempt.tokenMint)return null;
   const policy=attempt.launchUtility||{},mode=rewardMode(attempt,policy),holder=mode==='holder_alliance';
   const ledger=holder?publicHolderLedger(attempt.holderAllianceLedger):null;
+  const schedule=flowScheduleSummary(attempt);
   const report = {
     mint:text(attempt.tokenMint,64),name:text(attempt.tokenName||attempt.name||attempt.metadataJson?.name,64),symbol:text(attempt.symbol||attempt.ticker||attempt.metadataJson?.symbol,16),imageUrl:text(attempt.imageUri||attempt.imageUrl||attempt.metadataJson?.image,2048),
     mode,
@@ -55,15 +57,15 @@ export function buildLaunchRewardReport(attempt={}){
     partnerMint:holder?text(policy.partnerMint,44):'',partnerName:text(policy.partnerName,64),
     affiliation:'Not verified — naming a community does not imply endorsement.',
     status:holder?text(attempt.pumpFeeSharing?.status||'PENDING_SETUP'):policy.mode==='alliance'?text(attempt.pumpFeeSharing?.status):'ACCRUING',
-    automatic:holder&&attempt.allianceDistribution?.automaticPaused!==true,
+    automatic:holder&&attempt.allianceDistribution?.automaticPaused!==true&&!schedule.paused,
     paidLamports:ledger?amount(ledger.paidLamports):null,owedLamports:ledger?amount(ledger.owedLamports):null,
     allocatedLamports:ledger?amount(attempt.holderAllianceLedger?.allocatedLamports):null,
-    distributionStatus:ledger?.status||'',minimumUsd:holder?20:null,cadenceHours:holder?HOLDER_CADENCE_MS/3600000:null,
-    nextSnapshotAt:ledger?.nextSnapshotAt||'',lastSnapshot:snapshot(ledger?.lastSnapshot),
+    distributionStatus:ledger?.status||'',minimumUsd:holder?20:null,cadenceHours:holder?schedule.cadenceHours:null,
+    nextSnapshotAt:attempt.holderAllianceLedger?.lastSnapshotAt?new Date(Number(attempt.holderAllianceLedger.lastSnapshotAt)+schedule.cadenceHours*3600000).toISOString():'',lastSnapshot:snapshot(ledger?.lastSnapshot),
     receiptCount:ledger?.receiptCount||0,
     receipts:(attempt.holderAllianceLedger?.receipts||[]).slice(-20).map(r=>({signature:text(r.signature,100),lamports:amount(r.lamports),recipients:Number(r.recipients)||0,confirmedAt:text(r.confirmedAt,40),bySource:Object.fromEntries([...ledgerSources(attempt.holderAllianceLedger),'unattributed'].filter(k=>r.bySource?.[k]).map(k=>[k,amount(r.bySource[k])]))})),
     delayed:holder&&!!(attempt.holderLastError||attempt.holderAllianceLedger?.lastError),
-    note:holder?'Finalized recorded payments only. Developer payments and vault funding are counted from verified per-coin Pump receipts; vault funding is not counted a second time as recipient income. Reserved amounts are not paid. Older unclassified history and unavailable receipts are not estimated. Network/data failures can delay the 12-hour schedule.':policy.mode==='alliance'?'Only verified per-coin distribution receipts count toward these destination totals. Unavailable historical receipts are not estimated.':mode==='creator'?'Standard creator claims may cover several coins. Check wallet-wide balances in Wallet; per-coin earnings are not estimated.':mode==='cashback'?'This coin uses the existing Pump Cashback program, not a 100% developer allocation. Check the appropriate reward balances in Wallet; per-coin destination amounts are not available here.':'This coin has a legacy fee program. Its existing configuration remains unchanged. Destination-level amounts and percentages are unavailable in this report; they are not assumed to belong to the developer.'
+    note:holder?'Finalized recorded payments only. Developer payments and vault funding are counted from verified per-coin Pump receipts; vault funding is not counted a second time as recipient income. Reserved amounts are not paid. Older unclassified history and unavailable receipts are not estimated. Network/data failures can delay the configured schedule.':policy.mode==='alliance'?'Only verified per-coin distribution receipts count toward these destination totals. Unavailable historical receipts are not estimated.':mode==='creator'?'Standard creator claims may cover several coins. Check wallet-wide balances in Wallet; per-coin earnings are not estimated.':mode==='cashback'?'This coin uses the existing Pump Cashback program, not a 100% developer allocation. Check the appropriate reward balances in Wallet; per-coin destination amounts are not available here.':'This coin has a legacy fee program. Its existing configuration remains unchanged. Destination-level amounts and percentages are unavailable in this report; they are not assumed to belong to the developer.'
   };
   return { ...report, passport: buildLaunchPassport(report) };
 }

@@ -69,13 +69,18 @@ export function eligibleHolderBalances(rows,{decimals,priceUsd,excluded=[]}){
   return [...balances].filter(([,amount])=>amount*n>threshold).map(([wallet,amount])=>({wallet,amount:String(amount)})).sort((a,b)=>a.wallet.localeCompare(b.wallet,'en'));
 }
 export function holderLiabilities(state={}){return Object.values(state.credits||{}).reduce((a,b)=>a+BigInt(b),0n)+BigInt(state.carryOwn||0)+BigInt(state.carryPartner||0);}
-export function allocateHolderCycle(state,{policy,balance,snapshots,now=Date.now()}){
+export function allocateHolderCycle(state,{policy,balance,snapshots,now=Date.now(),allocationLimitLamports=null,flowRun=null}){
   policy=normalizeHolderAlliance(policy);
   if(state.lastSnapshotAt&&now-state.lastSnapshotAt<HOLDER_CADENCE_MS)throw new Error('Holder snapshots are at least 12 hours apart.');
   if(state.pending||state.retryRows)throw new Error('Reconcile the previous payout before a new snapshot.');
   if((!policy.ownHolderShareBps&&BigInt(state.carryOwn||0)>0n)||(!policy.partnerHolderShareBps&&BigInt(state.carryPartner||0)>0n))throw new Error('An inactive allocation has reserved rewards. Reconcile the original policy first.');
-  const available=BigInt(balance)-holderLiabilities(state)-HOLDER_VAULT_RESERVE;
+  let available=BigInt(balance)-holderLiabilities(state)-HOLDER_VAULT_RESERVE;
   if(available<0n)throw new Error('Vault balance does not cover its reserved holder rewards. No new allocation made.');
+  if(allocationLimitLamports!==null){
+    if(!/^\d+$/.test(String(allocationLimitLamports))||BigInt(allocationLimitLamports)<=0n)throw new Error('Invalid allocation limit.');
+    if(available>BigInt(allocationLimitLamports))available=BigInt(allocationLimitLamports);
+  }
+  if(flowRun&&(!flowRun.id||!Number.isSafeInteger(flowRun.revision)||(state.flowRuns||[]).some(r=>r.id===flowRun.id)))throw new Error('Invalid or duplicate program run. Reconcile the saved allocation.');
   const combined=BigInt(policy.ownHolderShareBps+policy.partnerHolderShareBps+policy.recipientShareBps);
   const recipient=available*BigInt(policy.recipientShareBps)/combined;
   const own=policy.partnerHolderShareBps?available*BigInt(policy.ownHolderShareBps)/combined:policy.ownHolderShareBps?available-recipient:0n;
@@ -102,6 +107,7 @@ export function allocateHolderCycle(state,{policy,balance,snapshots,now=Date.now
   const allocatedBySource={...(state.allocatedBySource||{}),...Object.fromEntries([['own',own],['partner',partner],...Object.entries(recipientAllocations)].map(([k,v])=>[k,String(BigInt(state.allocatedBySource?.[k]||0)+v)]))};
   const summary=s=>s?{slot:s.slot,priceUsd:s.priceUsd,count:s.holders.length}:null;
   return {...state,version:2,credits,creditSources,allocatedBySource,sourceTrackingSince:state.sourceTrackingSince||now,carryOwn,carryPartner,lastSnapshotAt:now,status:'ALLOCATED',lastError:'',
+    ...(flowRun?{flowRuns:[...(state.flowRuns||[]),{id:flowRun.id,revision:flowRun.revision,at:new Date(now).toISOString(),allocatedLamports:String(available),status:'ALLOCATED'}].slice(-100)}:{}),
     allocatedLamports:String(BigInt(state.allocatedLamports||0)+available),
     lastEligibility:{own:policy.ownHolderShareBps?snapshots.own.holders.map(r=>r.wallet):[],partner:policy.partnerHolderShareBps?snapshots.partner.holders.map(r=>r.wallet):[]},
     lastSnapshot:{at:new Date(now).toISOString(),newLamports:String(available),own:policy.ownHolderShareBps?summary(snapshots.own):null,partner:policy.partnerHolderShareBps?summary(snapshots.partner):null}};

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { PublicKey } from '@solana/web3.js';
 import { holderEligibilityReport } from './launchRewardReport.js';
+import { flowScheduleSummary } from './slimeFlows.js';
 
 export const COMMUNITY_CONSENT = '2026-09-28-community-v1';
 const WSOL = 'So11111111111111111111111111111111111111112';
@@ -23,19 +24,28 @@ function connectableProgram(rows,mint,userId) {
   return matches.at(-1);
 }
 function termsFor(attempt) {
-  const p = attempt.launchUtility || {};
+  const p = attempt.launchUtility || {}, approved=attempt.slimeFlow?.approved;
   return { mint: attempt.tokenMint, creator: attempt.devWalletPublicKey, mode: p.mode,
     creatorShareBps: p.creatorShareBps, ownHolderShareBps: p.ownHolderShareBps,
     partnerHolderShareBps: p.partnerHolderShareBps, partnerMint: p.partnerMint,
     ...(p.recipientShareBps?{recipientShareBps:p.recipientShareBps,...(Array.isArray(p.recipients)?{recipients:p.recipients}:{recipientWallet:p.recipientWallet})}:{}),
-    minimumUsd: 20, cadenceHours: 12, asset: 'SOL', permanent: true };
+    minimumUsd: 20, cadenceHours: flowScheduleSummary(attempt).cadenceHours, asset: 'SOL', permanent: true,
+    ...(approved?{program:{approvalHash:approved.hash,minimumLamports:approved.program?.minimumLamports,maximumLamports:approved.program?.maximumLamports}}:{}) };
 }
 const agreementNote = 'Creator representatives approved these exact terms. This is not approval by every holder or a guarantee. Withdrawing endorsement does not change permanent on-chain fee shares or owed rewards.';
 export function publicAgreement(row) {
   return { id: clean(row.id, 80), mint: clean(row.mint, 44), partnerMint: clean(row.partnerMint, 44),
     status: clean(row.status, 30), terms: row.terms, termsHash: clean(row.termsHash, 64), expiresAt: row.expiresAt,
     approvals: (row.approvals || []).map(a => ({wallet:a.wallet, role:a.role, at:a.at})),
-    createdAt: row.createdAt, withdrawnAt: row.withdrawnAt || '', note: row.status==='VERIFIED'?agreementNote:'Only the approvals listed below are recorded. Pending or withdrawn proposals are not verified partnerships. Withdrawing endorsement does not change permanent on-chain fees or owed rewards.' };
+    createdAt: row.createdAt, withdrawnAt: row.withdrawnAt || '', note: row.status==='VERIFIED'?agreementNote:row.status==='TERMS_CHANGED'?'These historical approvals no longer match the current program. A fresh agreement is required. Permanent fee shares and unpaid rewards are unchanged.':'Only the approvals listed below are recorded. Pending or withdrawn proposals are not verified partnerships. Withdrawing endorsement does not change permanent on-chain fees or owed rewards.' };
+}
+function currentAgreement(row,rows,now){
+  if(row.status==='PENDING'&&Date.parse(row.expiresAt)<=now)return publicAgreement({...row,status:'EXPIRED'});
+  if(['PENDING','VERIFIED'].includes(row.status)){
+    const a=programFor(rows,row.mint);
+    if(!a||a.pumpFeeSharing?.status!=='ACTIVE'||hash(termsFor(a))!==row.termsHash)return publicAgreement({...row,status:'TERMS_CHANGED'});
+  }
+  return publicAgreement(row);
 }
 const goalNote = 'A public expense target, not escrow, an investment, or a verified charity. The permanent fee split continues after this target is reached. Only recorded finalized fee distributions count; the payee controls received funds.';
 function publicGoal(g) {
@@ -174,16 +184,16 @@ export function createCommunityHub({read,write,lock,attempts,wallets,authority,r
       });
     },
     async dashboard(userId) {
-      const s=await load(),ws=await wallets(userId),keys=new Set(ws.map(w=>w.publicKey));
+      const s=await load(),ws=await wallets(userId),keys=new Set(ws.map(w=>w.publicKey)),rows=await attempts();
       return {wallets:ws.map(w=>({publicKey:w.publicKey,label:clean(w.label||w.name||'Wallet',64)})),
         reviews:s.reviews.filter(r=>owns(r,userId)).slice(-20).map(publicReview),
-        agreements:s.agreements.filter(p=>owns(p,userId)||p.approvals.some(a=>keys.has(a.wallet))).map(p=>publicAgreement(p.status==='PENDING'&&Date.parse(p.expiresAt)<=now()?{...p,status:'EXPIRED'}:p)),
+        agreements:s.agreements.filter(p=>owns(p,userId)||p.approvals.some(a=>keys.has(a.wallet))).map(p=>currentAgreement(p,rows,now())),
         goals:s.goals.filter(g=>owns(g,userId)).map(publicGoal),
-        programs:(await attempts()).filter(a=>owns(a,userId)&&a.status==='COMPLETE').map(a=>({mint:a.tokenMint,symbol:clean(a.symbol,16),id:a.id,creator:a.devWalletPublicKey,mode:a.launchUtility?.mode||'creator',status:a.pumpFeeSharing?.status||'ACCRUING',partnerMint:a.launchUtility?.partnerMint||'',terms:termsFor(a),payee:a.launchUtility?.partnerWallet||'',shareBps:a.launchUtility?.partnerShareBps||0,automatic:a.launchUtility?.autoDistribute===true}))};
+        programs:rows.filter(a=>owns(a,userId)&&a.status==='COMPLETE').map(a=>({mint:a.tokenMint,symbol:clean(a.symbol,16),id:a.id,creator:a.devWalletPublicKey,mode:a.launchUtility?.mode||'creator',status:a.pumpFeeSharing?.status||'ACCRUING',partnerMint:a.launchUtility?.partnerMint||'',terms:termsFor(a),payee:a.launchUtility?.partnerWallet||'',shareBps:a.launchUtility?.partnerShareBps||0,automatic:a.launchUtility?.autoDistribute===true&&!flowScheduleSummary(a).paused}))};
     },
     async publicData({mint,agreementId}={}) {
-      const s=await load();
-      return {agreements:s.agreements.filter(p=>agreementId?p.id===agreementId:mint?p.mint===mint||p.partnerMint===mint:p.status==='VERIFIED').slice(-100).map(p=>publicAgreement(p.status==='PENDING'&&Date.parse(p.expiresAt)<=now()?{...p,status:'EXPIRED'}:p)),
+      const s=await load(),rows=await attempts();
+      return {agreements:s.agreements.filter(p=>agreementId?p.id===agreementId:mint?p.mint===mint||p.partnerMint===mint:p.status==='VERIFIED').slice(-100).map(p=>currentAgreement(p,rows,now())),
         goals:s.goals.filter(g=>!mint||g.mint===mint).slice(-100).map(publicGoal)};
     }
   };
@@ -194,7 +204,7 @@ export function buildRewardsInbox(attempts, wallets) {
   const seen=new Set();
   for(const a of [...attempts].reverse()) {
     if(a.status!=='COMPLETE'||a.launchUtility?.mode!=='holder_alliance'||seen.has(a.tokenMint))continue;
-    seen.add(a.tokenMint);const ledger=a.holderAllianceLedger||{};
+    seen.add(a.tokenMint);const ledger=a.holderAllianceLedger||{},schedule=flowScheduleSummary(a);
     for(const wallet of keys) {
       const e=holderEligibilityReport(a,wallet);
       const receipts=(ledger.receipts||[]).flatMap(r=>{
@@ -205,8 +215,8 @@ export function buildRewardsInbox(attempts, wallets) {
       owed+=BigInt(e.owedLamports);paid+=receipts.reduce((s,r)=>s+BigInt(r.lamports),0n);
       coins.push({mint:a.tokenMint,symbol:clean(a.symbol||a.ticker,16),name:clean(a.tokenName||a.name,64),wallet,eligibility:e,
         owedLamports:e.owedLamports,receipts:receipts.slice(-20),status:a.pumpFeeSharing?.status||'PENDING_SETUP',
-        paused:a.allianceDistribution?.automaticPaused===true,delayed:!!(a.holderLastError||ledger.lastError),
-        nextSnapshotAt:ledger.lastSnapshotAt?iso(ledger.lastSnapshotAt+12*3600000):'',minimumPayoutLamports:'1000000'});
+        paused:a.allianceDistribution?.automaticPaused===true||schedule.paused,delayed:!!(a.holderLastError||ledger.lastError),cadenceHours:schedule.cadenceHours,
+        nextSnapshotAt:ledger.lastSnapshotAt?iso(ledger.lastSnapshotAt+schedule.cadenceHours*3600000):'',minimumPayoutLamports:'1000000'});
     }
   }
   return {asset:'SOL',owedLamports:String(owed),recentPaidLamports:String(paid),coins,

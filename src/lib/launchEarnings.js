@@ -1,6 +1,7 @@
 import { PublicKey } from '@solana/web3.js';
-import { splitRecipients, HOLDER_CADENCE_MS, holderLiabilities } from './holderAlliance.js';
+import { splitRecipients, holderLiabilities } from './holderAlliance.js';
 import { earningsEvents, lamports as amount } from './launchEarningsHistory.js';
+import { flowScheduleSummary } from './slimeFlows.js';
 
 const clean=(v,n=64)=>String(v||'').slice(0,n);
 const sum=rows=>rows.reduce((s,v)=>s+amount(v),0n);
@@ -22,6 +23,7 @@ export function buildLaunchEarnings(attempts=[],wallets=[],{scope='mine',period=
     if(a.status!=='COMPLETE'||!a.tokenMint||seen.has(a.tokenMint))continue;
     seen.add(a.tokenMint);
     const p=a.launchUtility||{},l=a.holderAllianceLedger||{},distribution=a.allianceDistribution||{},roles=new Set();
+    const schedule=flowScheduleSummary(a),paused=distribution.automaticPaused===true||schedule.paused;
     const holder=p.mode==='holder_alliance',tracked=holder||p.mode==='alliance';
     if(keys.has(a.devWalletPublicKey))roles.add('Developer');
     if(splitRecipients(p).some(r=>keys.has(r.wallet))||keys.has(p.partnerWallet))roles.add('Receiving wallet');
@@ -71,8 +73,8 @@ export function buildLaunchEarnings(attempts=[],wallets=[],{scope='mine',period=
     coins.push({mint:clean(a.tokenMint),name:clean(a.tokenName||a.name||a.metadataJson?.name),symbol:clean(a.symbol||a.ticker||a.metadataJson?.symbol,16),imageUrl:clean(a.imageUri||a.imageUrl||a.metadataJson?.image,2048),createdAt,roles:[...roles],
       paidLamports:tracked?String(coinPaid):null,totalPaidLamports:totalPaid===null?null:String(totalPaid),collectedLamports:tracked?String(collectionTotal):null,reservedLamports:holder?String(coinReserved):null,claimableLamports:null,partial,
       trackedSince:firstDate([...collections,...rewards].map(e=>e.confirmedAt).concat(partial?[]:[createdAt])),
-      automatic:holder&&distribution.automaticPaused!==true,paused:distribution.automaticPaused===true,delayed:!!(a.holderLastError||l.lastError),status:clean(a.pumpFeeSharing?.status||'ACCRUING',40),
-      nextSnapshotAt:l.lastSnapshotAt?new Date(Number(l.lastSnapshotAt)+HOLDER_CADENCE_MS).toISOString():'',
+      automatic:holder&&!paused,paused,cadenceHours:schedule.cadenceHours,program:schedule.program,delayed:!!(a.holderLastError||l.lastError),status:clean(a.pumpFeeSharing?.status||'ACCRUING',40),
+      nextSnapshotAt:l.lastSnapshotAt?new Date(Number(l.lastSnapshotAt)+schedule.cadenceHours*3600000).toISOString():'',
       receiptCount:receipts.length,receipts:receipts.sort((x,y)=>(Date.parse(y.confirmedAt)||0)-(Date.parse(x.confirmedAt)||0)).slice(0,100)});
   }
   return {asset:'SOL',scope,period,asOf:new Date(now).toISOString(),wallets:[...keys],paidLamports:String(paid),reservedLamports:String(reserved),collectedLamports:String(collected),

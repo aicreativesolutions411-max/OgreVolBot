@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Keypair } from '@solana/web3.js';
 import { createCommunityHub, buildRewardsInbox, publicAgreement, receiptCredit, verifiedAgreementFor } from '../src/lib/communityHub.js';
 import { publicHolderLedger } from '../src/lib/holderAlliance.js';
+import { normalizeFlow } from '../src/lib/slimeFlows.js';
 const key=()=>Keypair.generate().publicKey.toBase58();
 const mint=key(),partner=key(),creator=key(),other=key(),holder=key();
 const policy={mode:'holder_alliance',creatorShareBps:2000,ownHolderShareBps:4000,partnerHolderShareBps:4000,partnerMint:partner,consentVersion:'test'};
@@ -96,4 +97,19 @@ test('public verified badge binds the current program and disappears after withd
 test('a pending launch with the same mint is never imported into a second program',async()=>{
   const f=fixture();f.rows=[{id:'pending',userId:'u',mintPublicKey:mint,status:'SUBMITTED'}];
   await assert.rejects(f.hub.review('u',{mint,wallet:creator,policy}),/original launch/);
+});
+
+test('changing a native program invalidates prior partnership approval without erasing its history',async()=>{
+  const f=fixture();f.rows=[{id:'a',tokenMint:mint,status:'COMPLETE',userId:'u',devWalletPublicKey:creator,launchUtility:policy,pumpFeeSharing:{status:'ACTIVE'}}];
+  const p=await f.hub.propose('u',{mint,partnerMint:partner,wallet:creator});
+  const a=await f.hub.respond('v',{id:p.id,wallet:other,action:'accept',termsHash:p.termsHash});
+  f.rows[0].slimeFlow={state:'ACTIVE',approved:{hash:'new-program-approval',program:normalizeFlow({name:'Daily rewards',trigger:{type:'schedule',hours:24},conditions:{minimumSol:'0.1',maximumSol:'1'},actions:['allocate_rewards','settle_rewards']})}};
+  assert.equal(verifiedAgreementFor(f.rows[0],[a]),null);
+  const publicRow=(await f.hub.publicData({agreementId:p.id})).agreements[0];
+  assert.equal(publicRow.status,'TERMS_CHANGED');assert.equal(publicRow.approvals.length,2);assert.match(publicRow.note,/no longer match/);
+  assert.equal((await f.hub.dashboard('u')).agreements[0].status,'TERMS_CHANGED');
+  const next=await f.hub.propose('u',{mint,partnerMint:partner,wallet:creator});
+  assert.equal(next.terms.cadenceHours,24);assert.equal(next.terms.program.maximumLamports,'1000000000');
+  assert.notEqual(next.termsHash,p.termsHash);
+  assert.equal(f.store.agreements.find(r=>r.id===p.id).status,'VERIFIED','the historical approval is retained, not rewritten');
 });

@@ -1,12 +1,12 @@
 // Static, presentation-only product navigation. No balances or account preloads.
 const surfaces = new Map([
   ['index.html', 'terminal'], ['gg.html', 'terminal'], ['fun.html', 'wallet'],
-  ['cash/index.html', 'wallet'], ['launch.html', 'launch'], ['launch-community.html', 'launch'], ['launch-earnings.html', 'launch']
+  ['cash/index.html', 'wallet'], ['launch.html', 'launch'], ['launch-community.html', 'launch'], ['launch-earnings.html', 'launch'], ['launch-flows.html', 'launch']
 ]);
 
 export function productNavigation(active = '') {
   const link = (key, href, label) => `<a href="${href}"${key === active ? ' aria-current="page"' : ''}>${label}</a>`;
-  return `<nav class="sw-product-nav" data-sw-product-nav aria-label="SlimeWire products">${link('wallet', '/wallet', 'Wallet')}${link('terminal', '/terminal?desktop=1', 'Terminal')}${link('launch', '/launch', 'Launch')}<details class="sw-more"><summary>More <span aria-hidden="true">⌄</span></summary><div><a href="/">Home</a><a href="/bot">Telegram bot</a><a href="/games">Slime Games</a><a href="/launch/earnings">Earnings & receipts</a><a href="/help">Help & getting started</a><a href="/help#fees">Fees</a><a href="/help#security">Wallet safety</a></div></details></nav>`;
+  return `<nav class="sw-product-nav" data-sw-product-nav aria-label="SlimeWire products">${link('wallet', '/wallet', 'Wallet')}${link('terminal', '/terminal?desktop=1', 'Terminal')}${link('launch', '/launch', 'Launch')}<details class="sw-more"><summary>More <span aria-hidden="true">⌄</span></summary><div><a href="/">Home</a><a href="/bot">Telegram bot</a><a href="/games">Slime Games</a><a href="/launch/earnings">Earnings & receipts</a><a href="/launch/flows">Slime Flows</a><a href="/help">Help & getting started</a><a href="/help#fees">Fees</a><a href="/help#security">Wallet safety</a></div></details></nav>`;
 }
 
 export function applyProductNavigation(html, fileName) {

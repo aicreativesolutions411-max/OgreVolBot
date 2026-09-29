@@ -33,6 +33,7 @@ export const launchSiteNavigation = `
       <a href="/launch/community">Community <span>Fee sharing, partnerships &amp; rewards</span></a>
       <a href="/launch#mine">My launches</a>
       <a href="/launch/earnings">My earnings <span>Developer, holder &amp; receiving-wallet payments</span></a>
+      <a href="/launch/flows">Slime Flows <span>Native fee programs &amp; simulations</span></a>
       <a href="/terminal">Trading terminal <span>Charts, markets &amp; positions</span></a>
       <a href="/prelaunch">Prelaunch <span>Bring your community together</span></a>
       <a href="/launch-os">Launch tools <span>Brand, website &amp; community kit</span></a>

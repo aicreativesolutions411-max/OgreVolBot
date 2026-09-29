@@ -9,7 +9,8 @@ import {assertLaunchUtilityReady} from '../src/lib/launchUtility.js';
 import {settleLaunchAlliance} from '../src/lib/launchAllianceSettlement.js';
 import {feeSetupSubmissionDisposition} from '../src/lib/launchUtilityRecovery.js';
 import {pumpFeeSharingSetupFundingTarget} from '../src/lib/pumpRewardDurability.js';
-import {normalizeHolderAlliance,splitRecipients,verifySplitRecipient,allocateHolderCycle,HOLDER_CADENCE_MS,HOLDER_MIN_PAYOUT,HOLDER_VAULT_RESERVE,HOLDER_ALLIANCE_CONSENT_VERSION} from '../src/lib/holderAlliance.js';
+import {normalizeHolderAlliance,splitRecipients,verifySplitRecipient,allocateHolderCycle,holderLiabilities,HOLDER_CADENCE_MS,HOLDER_MIN_PAYOUT,HOLDER_VAULT_RESERVE,HOLDER_ALLIANCE_CONSENT_VERSION} from '../src/lib/holderAlliance.js';
+import {createSlimeFlows,evaluateFlow} from '../src/lib/slimeFlows.js';
 import {settleHolderBatch} from '../src/lib/holderAllianceSettlement.js';
 import {readHolderCommunities} from '../src/lib/holderAllianceSnapshot.js';
 const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
@@ -33,7 +34,7 @@ function fixture({auto=true,active=true}={}) {
     getSignatureStatus:async()=>({value:{confirmationStatus:'confirmed'}})
   };
   const context={connection,Keypair,PublicKey,SystemProgram,Transaction,bs58,Buffer,allianceShareholders,allianceConfigMatches,assertLaunchUtilityReady,settleLaunchAlliance,pumpFeeSharingSetupFundingTarget,
-    normalizeHolderAlliance,splitRecipients,verifySplitRecipient,allocateHolderCycle,HOLDER_CADENCE_MS,HOLDER_MIN_PAYOUT,HOLDER_VAULT_RESERVE,settleHolderBatch,launchFeeReadRpc:()=>connection,
+    normalizeHolderAlliance,splitRecipients,verifySplitRecipient,allocateHolderCycle,holderLiabilities,evaluateFlow,slimeFlowsEnabled:()=>false,HOLDER_CADENCE_MS,HOLDER_MIN_PAYOUT,HOLDER_VAULT_RESERVE,settleHolderBatch,launchFeeReadRpc:()=>connection,
     pumpHolderRewardVaultWallet:async()=>({keypair:partnerSigner}),
     readHolderSnapshot:async()=>({slot:100,priceUsd:'1',capturedAt:Date.now(),holders:[{wallet:creator.publicKey.toBase58(),amount:'1'}]}),
     PUMP_HOLDER_REWARD_CONFIG_RENT_SPACE:1024,
@@ -75,6 +76,63 @@ function holderFixture(){
   f.connection.getBalance=async key=>key.equals(f.partner)?9000000:100000000;
   return f;
 }
+
+async function programFixture({minimumSol='0.001',maximumSol='0.003',hours=24}={}){
+  const f=holderFixture();f.record={...f.record,status:'COMPLETE'};
+  f.context.slimeFlowsEnabled=()=>true;
+  const service=createSlimeFlows({enabled:true,attempts:async()=>[f.record],load:async()=>f.record,save:async patch=>{f.record={...f.record,...patch};},wallets:async()=>[{publicKey:f.creator.publicKey.toBase58()}],lock:async(_mint,fn)=>fn()});
+  await service.saveDraft('owner',{attemptId:f.record.id,revision:0,definition:{name:'Integration program',trigger:{type:'schedule',hours},conditions:{minimumSol,maximumSol},actions:['allocate_rewards','settle_rewards']}});
+  const result=await service.review('owner',{attemptId:f.record.id,revision:1});
+  await service.activate('owner',{attemptId:f.record.id,revision:1,reviewHash:result.review.hash,acknowledge:true});
+  return f;
+}
+
+test('actual native program caps new allocations and saves a single run before settling',async()=>{
+  const f=await programFixture();await f.distribute({force:true});
+  assert.equal(f.record.holderAllianceLedger.paidLamports,'3000000');
+  assert.equal(f.record.holderAllianceLedger.flowRuns.length,1);
+  assert.equal(f.record.holderAllianceLedger.flowRuns[0].allocatedLamports,'3000000');
+  assert.equal(f.record.holderAllianceLedger.flowRuns[0].revision,1);
+  await f.distribute({force:true});assert.equal(f.calls.sends,1);assert.equal(f.record.holderAllianceLedger.flowRuns.length,1);
+});
+
+test('program cadence blocks early allocation and collection, but preserves settling already owed credits',async()=>{
+  const f=await programFixture();f.record.holderAllianceLedger={lastSnapshotAt:Date.now()-13*3600000};
+  f.record.allianceDistribution.lastCheckedAt='';
+  await f.distribute({force:true});assert.equal(f.calls.sends,0);assert.equal(f.calls.balances,0);
+  f.record.holderAllianceLedger.credits={[f.creator.publicKey.toBase58()]:'2000000'};
+  await f.distribute({force:true});assert.equal(f.calls.sends,1);assert.equal(f.record.holderAllianceLedger.paidLamports,'2000000');
+  assert.equal(f.record.holderAllianceLedger.flowRuns,undefined);
+});
+
+test('program minimum leaves deposits unallocated without requesting holder snapshots',async()=>{
+  const f=await programFixture({minimumSol:'0.01',maximumSol:'1'});
+  f.context.readHolderSnapshot=async()=>{throw Error('snapshot must not be requested below minimum');};
+  await f.distribute({force:true});assert.equal(f.calls.sends,0);assert.equal(f.record.holderAllianceLedger,undefined);
+});
+
+test('paused, disabled or changed program terms prevent signing and preserve existing credits',async()=>{
+  for(const change of [f=>{f.record.slimeFlow.state='PAUSED';},f=>{f.context.slimeFlowsEnabled=()=>false;},f=>{f.record.slimeFlow.approved.policyHash='changed';}]){
+    const f=await programFixture();f.record.holderAllianceLedger={credits:{[f.creator.publicKey.toBase58()]:'2000000'}};
+    change(f);await f.distribute({force:true});assert.equal(f.calls.sends,0);
+    assert.equal(f.record.holderAllianceLedger.credits[f.creator.publicKey.toBase58()],'2000000');
+  }
+});
+
+test('paused native programs reconcile finalized holder transfers without resending them',async()=>{
+  const f=await programFixture();f.connection.confirmTransaction=async()=>{throw Error('confirmation temporarily unavailable');};
+  await f.distribute();const signature=f.record.holderAllianceLedger.pending.signature;assert.equal(f.calls.sends,1);
+  f.record.slimeFlow.state='PAUSED';f.connection.getSignatureStatus=async()=>({value:{confirmationStatus:'finalized',err:null}});
+  await f.distribute();assert.equal(f.calls.sends,1);assert.equal(f.record.holderAllianceLedger.pending,null);
+  assert.equal(f.record.holderAllianceLedger.receipts[0].signature,signature);
+});
+
+test('paused native programs never replace an expired collection transaction',async()=>{
+  const f=await programFixture();f.record.slimeFlow.state='PAUSED';
+  f.record.allianceDistribution={pending:{signature:'expired',lastValidBlockHeight:100}};
+  f.connection.getSignatureStatus=async()=>({value:null});f.connection.getBlockHeight=async()=>101;
+  await f.distribute();assert.equal(f.calls.sends,0);assert.equal(f.calls.balances,0);assert.equal(f.record.allianceDistribution.pending,null);
+});
 test('actual holder integration pays both community allocations once and respects 12-hour cadence',async()=>{
   const f=holderFixture();await f.distribute({force:true});assert.equal(f.calls.sends,1);assert.equal(f.record.holderAllianceLedger.paidLamports,'8000000');
   assert.equal(f.record.holderAllianceLedger.lastSnapshot.own.count,1);assert.equal(f.record.holderAllianceLedger.lastSnapshot.partner.count,1);

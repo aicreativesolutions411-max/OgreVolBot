@@ -116,7 +116,8 @@ import { feeSetupSubmissionDisposition, launchDraftFingerprint, launchConfirmati
 import { verifyUsePaidRecipient } from "./lib/usePaidRecipient.js";
 import { allianceShareholders, allianceConfigMatches } from "./lib/launchAlliance.js";
 import { settleLaunchAlliance, publicAllianceSettlement } from "./lib/launchAllianceSettlement.js";
-import { normalizeHolderAlliance, splitRecipients, verifySplitRecipient, allocateHolderCycle, publicHolderLedger, HOLDER_CADENCE_MS, HOLDER_MIN_PAYOUT, HOLDER_VAULT_RESERVE } from "./lib/holderAlliance.js";
+import { normalizeHolderAlliance, splitRecipients, verifySplitRecipient, allocateHolderCycle, holderLiabilities, publicHolderLedger, HOLDER_CADENCE_MS, HOLDER_MIN_PAYOUT, HOLDER_VAULT_RESERVE } from "./lib/holderAlliance.js";
+import { createSlimeFlows, flowCapabilities, evaluateFlow, flowScheduleSummary } from "./lib/slimeFlows.js";
 import { settleHolderBatch } from "./lib/holderAllianceSettlement.js";
 import { readHolderSnapshot, readHolderCommunities } from "./lib/holderAllianceSnapshot.js";
 import { buildLaunchRewardReport, holderEligibilityReport } from "./lib/launchRewardReport.js";
@@ -6992,6 +6993,7 @@ async function registerTelegramBotCommands() {
     { command: "wallets", description: "Your saved wallets" },
     { command: "rewards", description: "Holder rewards inbox across your wallets" },
     { command: "community", description: "Connect coins, partnerships and project goals" },
+    { command: "flows", description: "Build and review native fee programs" },
     { command: "balances", description: "Wallet balances" },
     { command: "trade", description: "Buy / sell menu" },
     { command: "livetest", description: "Real mainnet test buy/sell flow" },
@@ -7429,6 +7431,10 @@ and is checked by an automated release audit before every upload.</p></div>
     }
     if (request.method === "GET" && requestUrl.pathname === "/launch/community") {
       await serveStaticHtmlPage(response, "launch-community.html");
+      return;
+    }
+    if (request.method === "GET" && ["/launch/flows", "/launch/flows/"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "launch-flows.html");
       return;
     }
     if (request.method === "GET" && ["/launch/earnings", "/launch/earnings/", "/earnings"].includes(requestUrl.pathname)) {
@@ -10162,6 +10168,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/flows/capabilities") {
+      sendWebJson(request, response, 200, { ok: true, ...flowCapabilities(slimeFlowsEnabled()) }, "", { "Cache-Control": "no-store" });
+      return;
+    }
     if (request.method === "GET" && pathname === "/api/web/community/public") {
       const mint = requestUrl.searchParams.get("mint") || "";
       try { if (mint) new PublicKey(mint); }
@@ -12756,6 +12766,22 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
     if (request.method === "GET" && pathname === "/api/web/launches") {
       sendWebJson(request, response, 200, { ok: true, coins: await webLaunchedCoins(auth.userId) });
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/flows/dashboard") {
+      sendWebJson(request, response, 200, { ok: true, ...await getSlimeFlows().dashboard(auth.userId) }, "", { "Cache-Control": "private, no-store" });
+      return;
+    }
+    if (request.method === "POST" && pathname.startsWith("/api/web/flows/")) {
+      const body = await readJsonRequestBody(request, 12000), service = getSlimeFlows();
+      const action = pathname.slice("/api/web/flows/".length);
+      const handlers = { draft: () => service.saveDraft(auth.userId, body), preview: () => service.preview(auth.userId, body), review: () => service.review(auth.userId, body), activate: () => service.activate(auth.userId, body), pause: () => service.pause(auth.userId, body) };
+      if (!Object.hasOwn(handlers, action)) { sendWebJson(request, response, 404, { ok: false, error: "Unknown program action." }); return; }
+      try {
+        const result = await handlers[action]();
+        await audit("slime_flow_action", { userId: auth.userId, action, launchAttemptId: String(body.attemptId || ""), revision: body.revision });
+        sendWebJson(request, response, 200, { ok: true, result }, "", { "Cache-Control": "private, no-store" });
+      } catch (error) { sendWebJson(request, response, 400, { ok: false, error: friendlyError(error) }); }
       return;
     }
     if (request.method === "GET" && pathname === "/api/web/community/dashboard") {
@@ -20159,6 +20185,12 @@ async function handleMessage(message, userId) {
     return;
   }
 
+  if (/^\/flows(?:@\w+)?(?:\s|$)/i.test(text)) {
+    if (!isPrivateChat(message.chat)) { await say(chatId, "Open my DM and use /flows to manage your private launch programs."); return; }
+    const available = slimeFlowsEnabled();
+    await sayHtml(chatId, "◈ <b>Slime Flows</b>\n\nNative fee programs: schedules, funding thresholds, allocation caps and saved payment receipts. Your existing permanent split stays unchanged.\n\n" + (available ? "Review and approve each program on the secure setup page." : "Drafts and simulations are available. Live activation is held for funded validation.") + "\n\nThis command never signs, launches or sends funds.", { inline_keyboard: [[{ text: "Open Slime Flows", url: "https://slimewire.org/launch/flows" }, { text: "Earnings", url: "https://slimewire.org/launch/earnings" }]] });
+    return;
+  }
   if (/^\/(rewards|community|connectcoin)(?:@\w+)?(?:\s|$)/i.test(text)) {
     if (!isPrivateChat(message.chat)) { await say(chatId, "Open my DM and use /rewards for your private wallet inbox, or /community for coin setup and partnerships."); return; }
     if (/^\/rewards(?:@\w+)?\s*$/i.test(text)) {
@@ -20169,7 +20201,7 @@ async function handleMessage(message, userId) {
         "◈ <b>Your community rewards</b>",
         `Reserved / not yet paid: <b>${sol(inbox.owedLamports)} SOL</b>`,
         `Recent finalized payments: <b>${sol(inbox.recentPaidLamports)} SOL</b>`, "",
-        ...inbox.coins.slice(0, 10).map(c => `<b>${escapeTelegramHtml(c.symbol ? "$" + c.symbol : c.mint.slice(0, 6))}</b> · ${escapeTelegramHtml(c.wallet.slice(0, 4) + "…" + c.wallet.slice(-4))}\n${sol(c.owedLamports)} SOL reserved · ${c.paused ? "paused" : c.delayed ? "delayed" : "12-hour snapshots"}`),
+        ...inbox.coins.slice(0, 10).map(c => `<b>${escapeTelegramHtml(c.symbol ? "$" + c.symbol : c.mint.slice(0, 6))}</b> · ${escapeTelegramHtml(c.wallet.slice(0, 4) + "…" + c.wallet.slice(-4))}\n${sol(c.owedLamports)} SOL reserved · ${c.paused ? "paused" : c.delayed ? "delayed" : String(c.cadenceHours || 12) + "-hour snapshots"}`),
         ...(inbox.coins.length ? [] : ["No saved eligible snapshots, credits or wallet-specific payments yet. This does not check live holdings."]), "",
         "Recent payments are not lifetime earnings. Small credits accumulate until 0.001 SOL. Creator fees are separate in Wallet."
       ].join("\n"), { inline_keyboard: [[{ text: "Rewards inbox", url: "https://slimewire.org/launch/community#inbox" }, { text: "Open Wallet", url: "https://slimewire.org/wallet" }]] });
@@ -32588,6 +32620,19 @@ function launchFeeReadRpc() {
   return new Connection("https://api.mainnet-beta.solana.com", { commitment: "finalized", disableRetryOnRateLimit: true, fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(12000) }) });
 }
 let communityHubInstance;
+let slimeFlowsInstance;
+function slimeFlowsEnabled() { return process.env.SLIME_FLOWS_VALIDATED_VERSION === "2026-09-29-v1"; }
+function getSlimeFlows() {
+  if (!slimeFlowsInstance) slimeFlowsInstance = createSlimeFlows({
+    enabled: slimeFlowsEnabled(),
+    attempts: async () => (await readPumpLaunchAttempts()).attempts || [],
+    load: freshPumpFeeSharingAttempt,
+    save: upsertPumpLaunchAttempt,
+    wallets: async userId => walletsForOwner(await readWalletStore(), userId),
+    lock: (mint, task) => withMoneyCacheLock(`alliance-distribute:${mint}`, 600000, task, allianceOperationBusy)
+  });
+  return slimeFlowsInstance;
+}
 function getCommunityHub() {
   if (communityHubInstance) return communityHubInstance;
   const hubPath = path.join(CONFIG.dataDir, "launch-community-hub.json");
@@ -32664,14 +32709,14 @@ function reviewLiveLaunchUtility(input, context = {}) {
 }
 function launchUtilityPublic(attempt = {}) {
   if (!utilityRequiresFeeSharing(attempt)) return null;
-  const state = attempt.pumpFeeSharing || {};
+  const state = attempt.pumpFeeSharing || {}, schedule = flowScheduleSummary(attempt);
   if (attempt.launchUtility.mode === "holder_alliance") return {
     ...normalizeHolderAlliance(attempt.launchUtility), launchAttemptId: pumpFeeSharingAttemptId(attempt), mint: pumpFeeSharingMint(attempt),
     status: state.status || "PENDING_SETUP", creatorAddress: attempt.devWalletPublicKey || "",
     vaultAddress: state.vaultAddress || "", signature: state.setupSignature || "", error: state.lastError || "",
-    autoDistribute: attempt.allianceDistribution?.automaticPaused !== true, autoDistributionAuthorized: true,
-    distribution: { ...publicHolderLedger(attempt.holderAllianceLedger), error: attempt.holderLastError || attempt.holderAllianceLedger?.lastError || "" }, feeDistribution: publicAllianceSettlement(attempt.allianceDistribution),
-    note: "Developer + selected communities + optional receiving wallet. Community eligibility is strictly over $20; the pasted wallet has no holding requirement. Rewards cycle every 12 hours; small payouts accumulate."
+    autoDistribute: attempt.allianceDistribution?.automaticPaused !== true && !schedule.paused, autoDistributionAuthorized: true, cadenceMs: schedule.cadenceHours * 3600000,
+    distribution: { ...publicHolderLedger(attempt.holderAllianceLedger), nextSnapshotAt: attempt.holderAllianceLedger?.lastSnapshotAt ? new Date(Number(attempt.holderAllianceLedger.lastSnapshotAt) + schedule.cadenceHours * 3600000).toISOString() : "", error: attempt.holderLastError || attempt.holderAllianceLedger?.lastError || "" }, feeDistribution: publicAllianceSettlement(attempt.allianceDistribution),
+    note: `Developer + selected communities + optional receiving wallets. Community eligibility is strictly over $20; pasted wallets have no holding requirement. New reward cycles are at least ${schedule.cadenceHours} hours apart, subject to funding and complete data; small payouts accumulate.`
   };
   if (attempt.launchUtility.mode === "alliance") return {
     mode: "alliance", launchAttemptId: pumpFeeSharingAttemptId(attempt), status: state.status || "PENDING_SETUP",
@@ -32836,6 +32881,8 @@ async function distributeLaunchAlliance(initial, { force = false, holderCrankOnl
     if (!["alliance", "holder_alliance"].includes(attempt?.launchUtility?.mode) || attempt.pumpFeeSharing?.status !== "ACTIVE") throw new Error("Alliance fee setup must be active before distribution.");
     const policy = effectiveAlliancePolicy(attempt);
     const last = attempt.allianceDistribution || {};
+    // A saved program controls new collection, never reconciliation of a signed intent.
+    if (holderCrankOnly && !last.pending && !evaluateFlow(attempt, { enabled: slimeFlowsEnabled() }).allowed) return launchUtilityPublic(attempt);
     const elapsed = Date.now() - (Date.parse(last.lastCheckedAt || last.lastConfirmedAt || "") || 0);
     if (!last.pending && ((!force && (attempt.launchUtility.autoDistribute !== true || last.automaticPaused === true || elapsed < (holderCrankOnly ? HOLDER_CADENCE_MS : 86400000))) || (force && elapsed < 60000))) return launchUtilityPublic(attempt);
     const state = await settleLaunchAlliance({
@@ -32860,6 +32907,7 @@ async function distributeLaunchAlliance(initial, { force = false, holderCrankOnl
         // Reconcile an already-submitted transaction while paused, but do not
         // replace a failed/expired one without a new manual action or schedule.
         if (!force && (attempt.launchUtility.autoDistribute !== true || attempt.allianceDistribution?.automaticPaused === true)) return null;
+        if (holderCrankOnly && !evaluateFlow(attempt, { enabled: slimeFlowsEnabled() }).allowed) return null;
         const config = await readPumpFeeSharingConfig({ connection, mint, required: true });
         if (!allianceConfigMatches(config, policy, attempt.devWalletPublicKey)) throw new Error("Alliance on-chain shares differ from the approved recipients. No distribution sent.");
         // The config PDA is unique to this coin: never use the creator's
@@ -32899,7 +32947,9 @@ function startHolderAllianceRunner() {
       const due = (store.attempts || []).filter(a => {
         if (a.launchUtility?.mode !== "holder_alliance" || a.pumpFeeSharing?.status !== "ACTIVE" || Number(a.holderNextCheckAt || 0) > now) return false;
         const ledger = a.holderAllianceLedger || {};
-        return ledger.pending || a.allianceDistribution?.pending || (a.allianceDistribution?.automaticPaused !== true && (ledger.retryRows || Object.values(ledger.credits || {}).some(v => BigInt(v) >= HOLDER_MIN_PAYOUT) || now - Number(ledger.lastSnapshotAt || 0) >= HOLDER_CADENCE_MS));
+        const flow = evaluateFlow(a, { now, enabled: slimeFlowsEnabled() });
+        const flowPaused = a.slimeFlow?.approved && !['ready', 'schedule', 'minimum'].includes(flow.reason);
+        return ledger.pending || a.allianceDistribution?.pending || (!flowPaused && a.allianceDistribution?.automaticPaused !== true && (ledger.retryRows || Object.values(ledger.credits || {}).some(v => BigInt(v) >= HOLDER_MIN_PAYOUT) || (flow.allowed && now - Number(ledger.lastSnapshotAt || 0) >= HOLDER_CADENCE_MS)));
       }).sort((a,b) => Number(a.holderLastCheckAt || 0) - Number(b.holderLastCheckAt || 0));
       const attempt = due[0]; if (!attempt) return;
       const id = pumpFeeSharingAttemptId(attempt);
@@ -32907,7 +32957,9 @@ function startHolderAllianceRunner() {
         await distributeHolderAlliance(attempt);
         const latest = await freshPumpFeeSharingAttempt(id), ledger = latest.holderAllianceLedger || {};
         const pending = ledger.pending || ledger.retryRows || latest.allianceDistribution?.pending || Object.values(ledger.credits || {}).some(v => BigInt(v) >= HOLDER_MIN_PAYOUT);
-        await upsertPumpLaunchAttempt({ id, holderLastError: "", holderLastCheckAt: Date.now(), holderNextCheckAt: pending ? Date.now() + 15000 : Math.max(Date.now() + 300000, Number(ledger.lastSnapshotAt || Date.now()) + HOLDER_CADENCE_MS) });
+        const cadence = evaluateFlow(latest, { enabled: slimeFlowsEnabled() }).cadenceMs;
+        const snapshotBase = Number(ledger.lastSnapshotAt || (latest.slimeFlow?.approved ? 0 : Date.now()));
+        await upsertPumpLaunchAttempt({ id, holderLastError: "", holderLastCheckAt: Date.now(), holderNextCheckAt: pending ? Date.now() + 15000 : Math.max(Date.now() + 300000, snapshotBase + cadence) });
       } catch (error) {
         // Status metadata must not overwrite a concurrent locked payout ledger.
         await upsertPumpLaunchAttempt({ id, holderLastCheckAt: Date.now(), holderNextCheckAt: Date.now() + 300000, holderLastError: friendlyError(error).slice(0,220) });
@@ -32938,7 +32990,8 @@ async function distributeHolderAlliance(initial) {
     if (attempt.allianceDistribution?.pending) return launchUtilityPublic(attempt);
     const config = await readPumpFeeSharingConfig({ connection, mint, required: true });
     if (!allianceConfigMatches(config, effectiveAlliancePolicy(attempt), attempt.devWalletPublicKey)) throw new Error("Permanent holder fee configuration does not match. No payout sent.");
-    const paused = attempt.allianceDistribution?.automaticPaused === true;
+    const program = evaluateFlow(attempt, { enabled: slimeFlowsEnabled() });
+    const paused = attempt.allianceDistribution?.automaticPaused === true || (attempt.slimeFlow?.approved && !['ready', 'schedule', 'minimum'].includes(program.reason));
     const save = async ledger => { await upsertPumpLaunchAttempt({ id, holderAllianceLedger: ledger }); attempt = await freshPumpFeeSharingAttempt(id); };
     const load = async () => attempt.holderAllianceLedger || {};
     const prepare = async rows => {
@@ -32963,12 +33016,17 @@ async function distributeHolderAlliance(initial) {
       await settleHolderBatch({ load, save, prepare, connection, paused });
       return launchUtilityPublic(attempt);
     }
-    if (paused || Date.now() - Number(ledger.lastSnapshotAt || 0) < HOLDER_CADENCE_MS) return launchUtilityPublic(attempt);
+    if (paused || !program.allowed || Date.now() - Number(ledger.lastSnapshotAt || 0) < HOLDER_CADENCE_MS) return launchUtilityPublic(attempt);
     const vault = attempt.pumpFeeSharing.vaultAddress;
     const balance = await connection.getBalance(new PublicKey(vault), "finalized");
     if (BigInt(balance) <= HOLDER_VAULT_RESERVE) return launchUtilityPublic(attempt);
+    const available = BigInt(balance) - holderLiabilities(ledger) - HOLDER_VAULT_RESERVE;
+    if (available < 0n) throw new Error("Vault does not cover saved rewards. No allocation made.");
+    const decision = evaluateFlow(attempt, { enabled: slimeFlowsEnabled(), availableLamports: String(available) });
+    if (!decision.allowed) return launchUtilityPublic(attempt);
     const snapshots = await readHolderCommunities(mint, policy, { excluded: [vault] });
-    ledger = allocateHolderCycle(ledger, { policy, balance: String(balance), snapshots });
+    ledger = allocateHolderCycle(ledger, { policy, balance: String(balance), snapshots, allocationLimitLamports: decision.allocationLimitLamports,
+      flowRun: decision.runId ? { id: decision.runId, revision: decision.revision } : null });
     await save(ledger);
     await settleHolderBatch({ load, save, prepare, connection, paused: false });
     return launchUtilityPublic(attempt);
