@@ -1,0 +1,11 @@
+.launch-passport{margin:24px 0;padding:18px;border:1px solid #98c57544;border-radius:16px;background:#08100b}
+.launch-passport>summary{cursor:pointer;font-weight:750;color:#d7ffb7;min-height:44px;line-height:1.5}
+.launch-passport>summary>span{display:block;font-weight:400;font-size:12px;color:#acbaa7;margin-left:18px}
+.passport-model{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;font-size:13px;padding:14px 0}
+.passport-model>span{color:#b4fb6c}.passport-destinations,.passport-events{list-style:none;padding:0;margin:4px 0 18px}
+.passport-destinations li,.passport-events li{display:flex;flex-wrap:wrap;gap:8px;padding:12px 0;border-bottom:1px solid #bcdbab20;font-size:13px}
+.passport-destinations li>span{margin-left:auto}.passport-destinations code,.passport-destinations small{width:100%;color:#aabc9f;overflow-wrap:anywhere}
+.passport-events small{color:#9eaf95;margin-left:auto}.passport-events a{width:100%;color:#b8ff78;min-height:30px;display:flex;align-items:center}
+.passport-hash{display:block;overflow-wrap:anywhere;font-size:11px;color:#abc398;padding-top:12px}
+.passport-notes{padding-left:16px;font-size:11px;line-height:1.6;color:#9cae94}.passport-notes li{margin:8px 0}
+.launch-passport details>summary{cursor:pointer;min-height:40px;padding:10px 0}.launch-passport h3{font-size:15px;margin-top:22px}

@@ -120,6 +120,7 @@ import { normalizeHolderAlliance, splitRecipients, verifySplitRecipient, allocat
 import { settleHolderBatch } from "./lib/holderAllianceSettlement.js";
 import { readHolderSnapshot, readHolderCommunities } from "./lib/holderAllianceSnapshot.js";
 import { buildLaunchRewardReport, holderEligibilityReport } from "./lib/launchRewardReport.js";
+import { createReadStreamBackoff } from "./lib/readStreamBackoff.js";
 import { buildLaunchEarnings } from "./lib/launchEarnings.js";
 import { readLaunchFeeReceipt } from "./lib/launchFeeReceipt.js";
 import { createCommunityHub, buildRewardsInbox, receiptCredit, verifiedAgreementFor } from "./lib/communityHub.js";
@@ -66647,6 +66648,7 @@ async function buyWsDesired() {
 // token transfers harmless while removing DexScreener's cache delay from the critical path.
 function groupBuyChainWakeUrl() {
   const configured = firstString(
+    process.env.GROUP_BUY_CHAIN_WAKE_WS_URL,
     CHAINSTACK_WSS,
     CONFIG.heliusWsUrl,
     CONFIG.readRpcUrl,
@@ -66665,6 +66667,7 @@ function groupBuyChainWakeUrl() {
 }
 const GROUP_BUY_CHAIN_WAKE_URL = groupBuyChainWakeUrl();
 const GROUP_BUY_CHAIN_WAKE_MAX_SUBSCRIPTIONS = 200;
+const groupBuyWakeBackoff = createReadStreamBackoff();
 let groupBuyChainWakeWs = null;
 let groupBuyChainWakeReconnectTimer = null;
 let groupBuyChainWakeHeartbeatTimer = null;
@@ -66700,7 +66703,7 @@ function groupBuyChainWakeConnected() {
 
 function noteGroupBuyChainWakeError(error) {
   groupBuyChainWakeDiag.errors += 1;
-  groupBuyChainWakeDiag.lastError = friendlyError(error).slice(0, 180);
+  groupBuyChainWakeDiag.lastError = groupBuyWakeBackoff.fail(error).lastError;
 }
 
 function triggerGroupBuyChainWakePoll(mint) {
@@ -66720,7 +66723,7 @@ function scheduleGroupBuyChainWakeReconnect(delayMs = 3_000) {
     groupBuyChainWakeReconnectTimer = null;
     groupBuyChainWakeDiag.reconnects += 1;
     startGroupBuyChainWake();
-  }, Math.max(1_000, Number(delayMs) || 3_000));
+  }, Math.max(1_000, Number(delayMs) || 3_000, groupBuyWakeBackoff.remaining()));
   if (groupBuyChainWakeReconnectTimer.unref) groupBuyChainWakeReconnectTimer.unref();
 }
 
@@ -66763,6 +66766,7 @@ function syncGroupBuyChainWakeSubscriptions() {
 
 function startGroupBuyChainWake() {
   if (!GROUP_BUY_CHAIN_WAKE_URL || !groupBuyChainWakeDesired.size) return;
+  if (groupBuyWakeBackoff.remaining() > 0) return;
   if (groupBuyChainWakeWs && [WebSocket.OPEN, WebSocket.CONNECTING].includes(groupBuyChainWakeWs.readyState)) return;
   try {
     const ws = new WebSocket(GROUP_BUY_CHAIN_WAKE_URL, {
@@ -66775,6 +66779,7 @@ function startGroupBuyChainWake() {
       groupBuyChainWakeDiag.connected = true;
       groupBuyChainWakeDiag.connectedAt = Date.now();
       groupBuyChainWakeDiag.lastError = "";
+      groupBuyWakeBackoff.reset();
       groupBuyChainWakeRequest.clear();
       groupBuyChainWakeRequested.clear();
       groupBuyChainWakeSubscriptionMint.clear();
@@ -67550,6 +67555,8 @@ function groupBuyHealthSnapshot() {
       ? Math.max(0, now - Number(groupBuyChainWakeDiag.lastEventAt))
       : null,
     chainWakeLastError: groupBuyChainWakeDiag.lastError || null,
+    chainWakeErrorCategory: groupBuyWakeBackoff.state().category || null,
+    chainWakeRetryAfterMs: groupBuyWakeBackoff.remaining(),
     trackedSolTokens: groupBuyHttpState.size,
     polls: Number(groupBuyTradeDiag.polls) || 0,
     pages: Number(groupBuyTradeDiag.pages) || 0,

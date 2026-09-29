@@ -1,6 +1,7 @@
 import { PublicKey } from '@solana/web3.js';
 import { publicHolderLedger, HOLDER_CADENCE_MS, splitRecipients, recipientSource, ledgerSources } from './holderAlliance.js';
 import { earningsEvents } from './launchEarningsHistory.js';
+import { buildLaunchPassport } from './launchPassport.js';
 const text=(v,n=120)=>String(v||'').slice(0,n);
 const amount=v=>/^\d+$/.test(String(v||''))?String(v):'0';
 function rewardMode(attempt,policy){
@@ -41,7 +42,7 @@ export function buildLaunchRewardReport(attempt={}){
   if(attempt.status!=='COMPLETE'||!attempt.tokenMint)return null;
   const policy=attempt.launchUtility||{},mode=rewardMode(attempt,policy),holder=mode==='holder_alliance';
   const ledger=holder?publicHolderLedger(attempt.holderAllianceLedger):null;
-  return {
+  const report = {
     mint:text(attempt.tokenMint,64),name:text(attempt.tokenName||attempt.name||attempt.metadataJson?.name,64),symbol:text(attempt.symbol||attempt.ticker||attempt.metadataJson?.symbol,16),imageUrl:text(attempt.imageUri||attempt.imageUrl||attempt.metadataJson?.image,2048),
     mode,
     asset:'SOL',quoteMint:'So11111111111111111111111111111111111111112',
@@ -64,6 +65,7 @@ export function buildLaunchRewardReport(attempt={}){
     delayed:holder&&!!(attempt.holderLastError||attempt.holderAllianceLedger?.lastError),
     note:holder?'Finalized recorded payments only. Developer payments and vault funding are counted from verified per-coin Pump receipts; vault funding is not counted a second time as recipient income. Reserved amounts are not paid. Older unclassified history and unavailable receipts are not estimated. Network/data failures can delay the 12-hour schedule.':policy.mode==='alliance'?'Only verified per-coin distribution receipts count toward these destination totals. Unavailable historical receipts are not estimated.':mode==='creator'?'Standard creator claims may cover several coins. Check wallet-wide balances in Wallet; per-coin earnings are not estimated.':mode==='cashback'?'This coin uses the existing Pump Cashback program, not a 100% developer allocation. Check the appropriate reward balances in Wallet; per-coin destination amounts are not available here.':'This coin has a legacy fee program. Its existing configuration remains unchanged. Destination-level amounts and percentages are unavailable in this report; they are not assumed to belong to the developer.'
   };
+  return { ...report, passport: buildLaunchPassport(report) };
 }
 export function holderEligibilityReport(attempt,wallet){
   const key=new PublicKey(wallet);if(!PublicKey.isOnCurve(key.toBytes()))throw new Error('Enter an ordinary Solana wallet address.');
