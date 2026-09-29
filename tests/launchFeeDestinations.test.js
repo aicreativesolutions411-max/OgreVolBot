@@ -75,3 +75,9 @@ test('old destination totals are unknown and verified per-coin collections do no
   assert.equal(report.destinations[0].paidLamports,'200');assert.equal(report.destinations[1].paidLamports,null);
   assert.equal(report.unattributedPaidLamports,'300');assert.equal(report.collectionReceipts[1].totalLamports,null);
 });
+test('Cashback and legacy programs are not mislabeled as 100% developer allocations',()=>{
+  for(const extra of [{pumpCashback:true},{cashback:true},{isCashbackCoin:true},{holderRewards:{enabled:true}},{launchUtility:{mode:'usepaid'}},{launchUtility:{mode:'nft_floor'}},{creatorFeeSplit:[{wallet:key()}]},{creatorFeeRecipient:key()}]){
+    const report=buildLaunchRewardReport({status:'COMPLETE',tokenMint:key(),devWalletPublicKey:creator,...extra});
+    assert.equal(report.destinations.length,0);assert.equal(report.creatorShareBps,null);assert.equal(report.collectionTotalLamports,null);
+  }
+});
