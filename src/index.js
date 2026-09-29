@@ -10174,7 +10174,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
       try { buildLaunchEarnings([], wallets, options); }
       catch { sendWebJson(request, response, 400, { ok: false, error: "Choose All SlimeWire or 1–25 ordinary Solana wallets, and a valid time period." }); return; }
       try {
-        sendWebJson(request, response, 200, { ok: true, earnings: buildLaunchEarnings((await readPumpLaunchAttempts()).attempts || [], wallets, options) });
+        const payload = { ok: true, earnings: buildLaunchEarnings((await readPumpLaunchAttempts()).attempts || [], wallets, options) };
+        if (options.scope === "all") sendCachedWebJson(request, response, 200, payload, "public, max-age=30");
+        else sendWebJson(request, response, 200, payload, "", { "Cache-Control": "private, no-store" });
       } catch { sendWebJson(request, response, 503, { ok: false, error: "Saved earnings are temporarily unavailable. Please retry." }); }
       return;
     }
