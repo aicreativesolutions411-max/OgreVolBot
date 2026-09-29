@@ -1,6 +1,8 @@
 // Static crawler-visible branding. Never depend on client-side JS for share cards.
-export const BRAND_MARK = '/assets/slimewire/brand/slime-mark-20260929.jpg';
-export const SHARE_IMAGE = 'https://slimewire.org/assets/slimewire/brand/slimewire-share-20260929.png';
+// Explicit release query also bypasses a CDN-cached SPA fallback if a crawler
+// requested a new filename before that release's assets finished propagating.
+export const BRAND_MARK = '/assets/slimewire/brand/slime-mark-20260929.jpg?v=c005fdf5';
+export const SHARE_IMAGE = 'https://slimewire.org/assets/slimewire/brand/slimewire-share-20260929.png?v=c005fdf5';
 const DEFAULT_DESCRIPTION = 'One home. Every move. Wallet, terminal and launches with creator and community fee sharing.';
 const pages = new Map([
   ['home.html', ['/', 'SlimeWire — One home. Every move.', DEFAULT_DESCRIPTION]],

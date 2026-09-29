@@ -18,7 +18,7 @@ for (const route of ['/', '/launch', '/bot', '/help', '/terminal', '/wallet']) {
     console.log('PASS', route, html.match(/<title>([^<]+)<\/title>/)?.[1] || '');
   } catch (error) { failures++; console.error('FAIL', route, error.message); }
 }
-for (const asset of [BRAND_MARK, new URL(SHARE_IMAGE).pathname]) {
+for (const asset of [BRAND_MARK, new URL(SHARE_IMAGE).pathname + new URL(SHARE_IMAGE).search]) {
   try {
     const response = await request(new URL(asset, base)), remote = Buffer.from(await response.arrayBuffer());
     if (!response.ok || !response.headers.get('content-type')?.startsWith('image/')) throw new Error('Image unavailable: ' + response.status);

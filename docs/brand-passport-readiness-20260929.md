@@ -15,6 +15,8 @@
 
 Local results: build and syntax checks passed; 1,584 tests passed with zero failures. All six product routes and both exact image assets passed the read-only smoke. Mobile homepage and expanded Passport were checked at 390px without horizontal overflow; uploaded header logo loaded successfully.
 
+Deployment follow-up: the CDN had cached a 200 HTML fallback for the two newly requested image paths before static deployment completed. The actual new files were present and correct with a fresh query. Image references now carry an explicit release query; smoke checks verify the exact full URLs and bytes rather than accepting a 200 response as proof of an image.
+
 ## Still required before calling the whole platform launch-ready
 
 1. **Feed authorization:** the selected Chainstack WebSocket returned 403. Backoff contains retries; it does not repair provider credentials/permissions. Verify an authorized free endpoint or the existing subscription with the owner. Do not silently substitute billable Helius traffic.
