@@ -27,6 +27,7 @@ function termsFor(attempt) {
   return { mint: attempt.tokenMint, creator: attempt.devWalletPublicKey, mode: p.mode,
     creatorShareBps: p.creatorShareBps, ownHolderShareBps: p.ownHolderShareBps,
     partnerHolderShareBps: p.partnerHolderShareBps, partnerMint: p.partnerMint,
+    ...(p.recipientShareBps?{recipientShareBps:p.recipientShareBps,recipientWallet:p.recipientWallet}:{}),
     minimumUsd: 20, cadenceHours: 12, asset: 'SOL', permanent: true };
 }
 const agreementNote = 'Creator representatives approved these exact terms. This is not approval by every holder or a guarantee. Withdrawing endorsement does not change permanent on-chain fee shares or owed rewards.';
@@ -71,7 +72,7 @@ export function createCommunityHub({read,write,lock,attempts,wallets,authority,r
         const mint=address(input.mint),creator=await wallet(userId,input.wallet);
         const rows=await attempts(),existing=connectableProgram(rows,mint,userId);
         const proof=await authority(mint,creator,{editable:true});
-        const policy=await reviewPolicy(input.policy,{rail:'pump',mint});
+        const policy=await reviewPolicy(input.policy,{rail:'pump',mint,creator});
         if(!['holder_alliance','alliance'].includes(policy.mode)) throw new Error('Choose a holder reward or treasury split.');
         if(policy.partnerMint===mint) throw new Error('Choose a different partner community.');
         const s=await load();
@@ -200,7 +201,7 @@ export function buildRewardsInbox(attempts, wallets) {
         const n=(r.payments||[]).filter(p=>p.wallet===wallet).reduce((s,p)=>s+BigInt(amount(p.lamports)),0n);
         return n>0n?[{signature:clean(r.signature,100),lamports:String(n),confirmedAt:clean(r.confirmedAt,40)}]:[];
       });
-      if(e.owedLamports==='0'&&!receipts.length&&e.own!=='eligible'&&e.partner!=='eligible')continue;
+      if(e.owedLamports==='0'&&!receipts.length&&e.own!=='eligible'&&e.partner!=='eligible'&&!e.recipient)continue;
       owed+=BigInt(e.owedLamports);paid+=receipts.reduce((s,r)=>s+BigInt(r.lamports),0n);
       coins.push({mint:a.tokenMint,symbol:clean(a.symbol||a.ticker,16),name:clean(a.tokenName||a.name,64),wallet,eligibility:e,
         owedLamports:e.owedLamports,receipts:receipts.slice(-20),status:a.pumpFeeSharing?.status||'PENDING_SETUP',

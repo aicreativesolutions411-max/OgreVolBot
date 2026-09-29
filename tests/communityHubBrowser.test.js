@@ -10,6 +10,11 @@ test('community display uses exact decimal SOL amounts and escapes untrusted con
   const html=ui.policyFacts({mode:'alliance',partnerWallet:'<script>bad</script>',partnerShareBps:1000},'creator');
   assert.ok(!html.includes('<script>'));assert.match(html,/90% creator/);
 });
+test('community review displays the fourth recipient and exact percentage',()=>{
+  const html=ui.policyFacts({mode:'holder_alliance',creatorShareBps:2000,ownHolderShareBps:3000,partnerHolderShareBps:3000,recipientShareBps:2000,recipientWallet:'<wallet>'},'creator');
+  assert.match(html,/Recipient wallet share/);assert.match(html,/Recipient SOL wallet/);assert.match(html,/&lt;wallet&gt;/);
+  assert.match(source,/caps\.holderAlliance\?\.walletSplitConsentVersion/);assert.match(source,/value="custom"/);
+});
 test('inbox distinguishes reserved, finalized and old snapshot state without auto claiming',()=>{
   const html=ui.inboxHtml({owedLamports:'500000',recentPaidLamports:'1000000',note:'Last snapshot, not live',coins:[]});
   assert.match(html,/Reserved · not yet paid/);assert.match(html,/not lifetime/);assert.match(html,/No saved eligible/);

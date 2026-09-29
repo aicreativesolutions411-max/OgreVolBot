@@ -66,11 +66,21 @@ test('launch design is a real responsive UI with existing launch and wallet entr
   assert.ok(html.includes('/wallet')); assert.ok(html.includes('/prelaunch'));
   assert.ok(html.includes('id="launch-dialog"')); assert.ok(html.includes('aria-live="polite"'));
   assert.ok(!html.includes('<video')); assert.ok(!source.includes('setInterval'));
-  assert.ok(html.includes('Community Alliance')); assert.ok(html.includes('not enabled'));
+  assert.ok(html.includes('Custom fee split')); assert.ok(html.includes('not enabled'));
   for (const unavailable of ['x','business','linkedin','telegram']) assert.ok(!html.includes(`data-route="${unavailable}"`));
   assert.ok(!source.includes('method: \'POST\''));
   const css = readFileSync(new URL('../web/public/launch-pad.css', import.meta.url), 'utf8');
   assert.ok(css.includes('@media(max-width:640px)')); assert.ok(css.includes('prefers-reduced-motion'));
+});
+test('per-coin fee view shows all destinations, unknown values and escaped wallet metadata',()=>{
+  const output=ui.feeBreakdownHtml({collectionTotalLamports:'1000000000',collectionReceiptCount:1,collectionAccountingPending:true,unattributedPaidLamports:'500',destinations:[
+    {id:'creator',label:'Developer',address:mint,shareBps:2000,paidLamports:'200000000',reservedLamports:null,coverage:'partial'},
+    {id:'own',label:'Own holders',tokenMint:mint,shareBps:3000,paidLamports:'300000000',reservedLamports:'0',coverage:'tracked'},
+    {id:'partner',label:'<script>bad</script>',shareBps:3000,paidLamports:null,reservedLamports:null,coverage:'not_yet_attributed'},
+    {id:'recipient',label:'Recipient wallet',address:mint,shareBps:2000,paidLamports:'200000000',reservedLamports:'1',coverage:'tracked'}]});
+  assert.ok(output.includes('20%'));assert.ok(output.includes('30%'));assert.ok(output.includes('0.000000001 SOL'));
+  assert.ok(output.includes('Not available'));assert.ok(output.includes('additional receipts awaiting accounting'));
+  assert.ok(output.includes('&lt;script&gt;'));assert.ok(!output.includes('<script>'));assert.ok(output.includes('not assigned to a guessed destination'));
 });
 
 function boot({ hash = '', token = '', response = { ok: true, launches: [] }, status = 200 } = {}) {

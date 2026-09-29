@@ -7,10 +7,17 @@ export async function settleHolderBatch({load,save,prepare,connection,paused=fal
   let state=await load()||{};
   const complete=async()=>{
     const credits={...(state.credits||{})};let paid=0n;
-    for(const row of state.pending.rows){const value=BigInt(row.lamports),owed=BigInt(credits[row.wallet]||0);if(value>owed)throw new Error('Holder payout exceeds saved liability.');if(value===owed)delete credits[row.wallet];else credits[row.wallet]=String(owed-value);paid+=value;}
+    const creditSources=Object.fromEntries(['own','partner','recipient'].map(k=>[k,{...(state.creditSources?.[k]||{})}])),paidBySource={...(state.paidBySource||{})},bySource={};
+    for(const row of state.pending.rows){
+      const value=BigInt(row.lamports),owed=BigInt(credits[row.wallet]||0);if(value>owed)throw new Error('Holder payout exceeds saved liability.');
+      let left=value;
+      for(const source of ['own','partner','recipient']){const existing=BigInt(creditSources[source][row.wallet]||0),debit=existing<left?existing:left;if(debit){creditSources[source][row.wallet]=String(existing-debit);paidBySource[source]=String(BigInt(paidBySource[source]||0)+debit);bySource[source]=String(BigInt(bySource[source]||0)+debit);left-=debit;}}
+      if(left){paidBySource.unattributed=String(BigInt(paidBySource.unattributed||0)+left);bySource.unattributed=String(BigInt(bySource.unattributed||0)+left);}
+      if(value===owed)delete credits[row.wallet];else credits[row.wallet]=String(owed-value);paid+=value;
+    }
     const receipt={signature:state.pending.signature,confirmedAt:now(),lamports:String(paid),recipients:state.pending.rows.length,
-      payments:state.pending.rows.map(row=>({wallet:row.wallet,lamports:String(row.lamports)}))};
-    state={...state,credits,pending:null,retryRows:null,paidLamports:String(BigInt(state.paidLamports||0)+paid),receiptCount:(state.receiptCount||0)+1,receipts:[...(state.receipts||[]),receipt].slice(-100),status:'PAID',lastError:''};
+      bySource,payments:state.pending.rows.map(row=>({wallet:row.wallet,lamports:String(row.lamports)}))};
+    state={...state,credits,creditSources,paidBySource,pending:null,retryRows:null,paidLamports:String(BigInt(state.paidLamports||0)+paid),receiptCount:(state.receiptCount||0)+1,receipts:[...(state.receipts||[]),receipt].slice(-100),status:'PAID',lastError:''};
     await save(state);return state;
   };
   if(state.pending){

@@ -10,7 +10,9 @@ const ui = context.window.SlimeLaunchUtility;
 test('Alliance is selectable, retired routes cannot be newly selected, and automatic distribution is opt-in', () => {
   const html=ui.render('test',{});
   assert.ok(html.includes('value="alliance"'));
-  assert.ok(html.includes('value="usepaid" hidden disabled'));
+  assert.ok(!html.includes('value="usepaid"'));
+  assert.ok(html.includes('RecipientShare'));
+  assert.ok(html.includes('NOT a coin CA'));
   assert.ok(html.includes('value="nft_floor" hidden disabled'));
   assert.ok(!/<input[^>]+AutoDistribute[^>]+checked/.test(html));
   const draft=ui.prefill('?lc_n=Test&lc_utility=alliance&lc_community=Friends&partnerWallet=evil&autoDistribute=true&consentVersion=yes');
@@ -46,7 +48,7 @@ test('utility availability uses the configured API origin, not the static-site H
   const c = vm.createContext({
     window: { OGRE_PORTAL_CONFIG: { apiBase: 'https://app.slimewire.org/' } },
     document: { addEventListener() {} }, URLSearchParams, AbortController, setTimeout, clearTimeout,
-    fetch: async url => { urls.push(url); return { ok: true, json: async () => ({ usepaid: { available: true }, nftFloor: { available: false } }) }; }
+    fetch: async url => { urls.push(url); return { ok: true, json: async () => ({ holderAlliance: { available: true }, alliance: { available: true } }) }; }
   });
   vm.runInContext(readFileSync(new URL('../web/public/launch-utility.js', import.meta.url), 'utf8'), c);
   await Promise.all([c.window.SlimeLaunchUtility.capabilities(), c.window.SlimeLaunchUtility.capabilities()]);
@@ -55,7 +57,8 @@ test('utility availability uses the configured API origin, not the static-site H
 test('Telegram deep-link prefills utility but can never imply launch consent', () => {
   const draft = ui.prefill('?lc_n=Test&lc_s=TST&lc_dev=0.5&lc_nft=1&lc_utility=usepaid&lc_xpay=alice&consentVersion=2026-09-22&launchAttemptId=other');
   assert.equal(draft.name, 'Test'); assert.equal(draft.devBuySol, '0.5'); assert.equal(draft.nftEnabled, true);
-  assert.equal(draft.launchUtility.xHandle, 'alice');
+  assert.equal(draft.launchUtility.xHandle, undefined);
+  assert.equal(draft.launchUtility.mode, 'creator');
   assert.equal(draft.launchUtility.consentVersion, undefined); assert.equal(draft.launchAttemptId, undefined);
   assert.equal(ui.prefill('?unrelated=true'), null);
   assert.equal(ui.prefill('?lc_n=Test&lc_dev=-1&lc_utility=evil').devBuySol, '0');

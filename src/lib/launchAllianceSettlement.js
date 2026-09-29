@@ -2,10 +2,17 @@ import { feeSetupSubmissionDisposition } from './launchUtilityRecovery.js';
 
 // Call under a durable per-launch lock. No browser state or wallet-wide fee
 // estimate can authorize this operation. Keep signed bytes private in storage.
-export async function settleLaunchAlliance({load,save,prepare,connection,now=()=>new Date().toISOString()}) {
+export async function settleLaunchAlliance({load,save,prepare,connection,readReceipt,now=()=>new Date().toISOString()}) {
   let state=await load()||{};
+  const account=async receipt=>{
+    if(!readReceipt)return receipt;
+    try{return {...receipt,...await readReceipt(receipt.signature),accountingLastCheckedAt:now()};}catch{return {...receipt,accountingStatus:'pending',accountingLastCheckedAt:now()};}
+  };
+  // One bounded read per cycle retries missing receipt accounting without ever
+  // resubmitting its payment. Older receipt-only history stays visibly partial.
+  if(readReceipt){const next=(state.receipts||[]).filter(r=>r.accountingStatus!=='verified').sort((a,b)=>String(a.accountingLastCheckedAt||'').localeCompare(String(b.accountingLastCheckedAt||'')))[0];const i=next?(state.receipts||[]).indexOf(next):-1;if(i>=0){const receipts=[...state.receipts];receipts[i]=await account(receipts[i]);state={...state,receipts};await save(state);}}
   const complete=async()=>{
-    const receipt={signature:state.pending.signature,confirmedAt:now()};
+    const receipt=await account({signature:state.pending.signature,confirmedAt:now()});
     const receipts=[...(state.receipts||[])];
     if(!receipts.some(row=>row.signature===receipt.signature))receipts.push(receipt);
     const next={...state,status:'CONFIRMED',lastSignature:receipt.signature,lastConfirmedAt:receipt.confirmedAt,receipts,pending:null,lastError:''};
@@ -37,5 +44,5 @@ export async function settleLaunchAlliance({load,save,prepare,connection,now=()=
 }
 
 export function publicAllianceSettlement(state={}){
-  return {status:state.status||'NOT_DISTRIBUTED',signature:state.pending?.signature||state.lastSignature||'',lastConfirmedAt:state.lastConfirmedAt||'',lastCheckedAt:state.lastCheckedAt||'',error:state.lastError||'',receipts:(state.receipts||[]).slice(-20).map(row=>({signature:row.signature,confirmedAt:row.confirmedAt})),receiptCount:(state.receipts||[]).length};
+  return {status:state.status||'NOT_DISTRIBUTED',signature:state.pending?.signature||state.lastSignature||'',lastConfirmedAt:state.lastConfirmedAt||'',lastCheckedAt:state.lastCheckedAt||'',error:state.lastError||'',receipts:(state.receipts||[]).slice(-20).map(row=>({signature:row.signature,confirmedAt:row.confirmedAt,accountingStatus:row.accountingStatus||'unavailable',totalLamports:row.totalLamports??null})),receiptCount:(state.receipts||[]).length};
 }

@@ -9,7 +9,7 @@ import {assertLaunchUtilityReady} from '../src/lib/launchUtility.js';
 import {settleLaunchAlliance} from '../src/lib/launchAllianceSettlement.js';
 import {feeSetupSubmissionDisposition} from '../src/lib/launchUtilityRecovery.js';
 import {pumpFeeSharingSetupFundingTarget} from '../src/lib/pumpRewardDurability.js';
-import {normalizeHolderAlliance,allocateHolderCycle,HOLDER_CADENCE_MS,HOLDER_MIN_PAYOUT,HOLDER_VAULT_RESERVE,HOLDER_ALLIANCE_CONSENT_VERSION} from '../src/lib/holderAlliance.js';
+import {normalizeHolderAlliance,verifySplitRecipient,allocateHolderCycle,HOLDER_CADENCE_MS,HOLDER_MIN_PAYOUT,HOLDER_VAULT_RESERVE,HOLDER_ALLIANCE_CONSENT_VERSION} from '../src/lib/holderAlliance.js';
 import {settleHolderBatch} from '../src/lib/holderAllianceSettlement.js';
 import {readHolderCommunities} from '../src/lib/holderAllianceSnapshot.js';
 const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
@@ -33,7 +33,7 @@ function fixture({auto=true,active=true}={}) {
     getSignatureStatus:async()=>({value:{confirmationStatus:'confirmed'}})
   };
   const context={connection,Keypair,PublicKey,SystemProgram,Transaction,bs58,Buffer,allianceShareholders,allianceConfigMatches,assertLaunchUtilityReady,settleLaunchAlliance,pumpFeeSharingSetupFundingTarget,
-    normalizeHolderAlliance,allocateHolderCycle,HOLDER_CADENCE_MS,HOLDER_MIN_PAYOUT,HOLDER_VAULT_RESERVE,settleHolderBatch,
+    normalizeHolderAlliance,verifySplitRecipient,allocateHolderCycle,HOLDER_CADENCE_MS,HOLDER_MIN_PAYOUT,HOLDER_VAULT_RESERVE,settleHolderBatch,launchFeeReadRpc:()=>connection,
     pumpHolderRewardVaultWallet:async()=>({keypair:partnerSigner}),
     readHolderSnapshot:async()=>({slot:100,priceUsd:'1',capturedAt:Date.now(),holders:[{wallet:creator.publicKey.toBase58(),amount:'1'}]}),
     PUMP_HOLDER_REWARD_CONFIG_RENT_SPACE:1024,
@@ -87,6 +87,15 @@ test('actual own-community integration pays without querying a partner and retai
   await f.distribute({force:true});
   assert.equal(calls.length,1);assert.equal(f.calls.sends,1);assert.equal(f.record.holderAllianceLedger.paidLamports,'8000000');
   assert.equal(f.record.holderAllianceLedger.lastSnapshot.partner,null);
+  await f.distribute({force:true});assert.equal(f.calls.sends,1);
+});
+test('actual four-way integration pays recipient and both communities from the same reviewed vault without duplicate sends',async()=>{
+  const f=holderFixture(),recipient=Keypair.generate().publicKey.toBase58();
+  f.record.launchUtility=normalizeHolderAlliance({...f.record.launchUtility,ownHolderShareBps:3000,partnerHolderShareBps:3000,recipientShareBps:2000,recipientWallet:recipient});
+  await f.distribute({force:true});
+  assert.equal(f.calls.sends,1);assert.equal(f.record.holderAllianceLedger.paidLamports,'8000000');
+  assert.deepEqual(f.record.holderAllianceLedger.paidBySource,{own:'3000000',partner:'3000000',recipient:'2000000'});
+  assert.equal(f.record.holderAllianceLedger.receipts[0].payments.find(p=>p.wallet===recipient).lamports,'2000000');
   await f.distribute({force:true});assert.equal(f.calls.sends,1);
 });
 test('actual holder integration fails closed before allocation when either snapshot fails',async()=>{

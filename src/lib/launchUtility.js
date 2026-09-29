@@ -1,6 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 import { normalizeLaunchAlliance, ALLIANCE_CONSENT_VERSION } from './launchAlliance.js';
-import { normalizeHolderAlliance, HOLDER_ALLIANCE_CONSENT_VERSION } from './holderAlliance.js';
+import { normalizeHolderAlliance, HOLDER_ALLIANCE_CONSENT_VERSION, WALLET_SPLIT_CONSENT_VERSION } from './holderAlliance.js';
 
 // Consent is intentionally not a persistent/global checkbox. It accompanies one
 // reviewed launch and is versioned whenever the irreversible provider terms change.
@@ -47,7 +47,7 @@ export function launchUtilityCapabilities(env = process.env) {
     version: 1, consentVersion: LAUNCH_UTILITY_CONSENT_VERSION,
     linkedCollection: { available: true, chains: ['solana'], standard: 'metaplex-core' },
     alliance: { available: true, chains: ['solana'], rail: 'pump', quote: 'SOL', recipients: 2, consentVersion: ALLIANCE_CONSENT_VERSION },
-    holderAlliance: { available: true, chains: ['solana'], rail: 'pump', quote: 'SOL', minimumUsd: 20, cadenceHours: 12, consentVersion: HOLDER_ALLIANCE_CONSENT_VERSION },
+    holderAlliance: { available: true, chains: ['solana'], rail: 'pump', quote: 'SOL', minimumUsd: 20, cadenceHours: 12, consentVersion: HOLDER_ALLIANCE_CONSENT_VERSION, walletSplitConsentVersion: WALLET_SPLIT_CONSENT_VERSION },
     nftFloor: { available: false, previewAvailable: true, reason: 'NFT floor purchases need a verified marketplace execution adapter; preview only. No fees will be redirected.', custody: 'A separate vault per coin is required before activation.' },
     usepaid: { available: usepaidAvailable, treasury: usepaidAvailable ? treasury : '',
       reason: 'X cash payouts are unavailable. New UsePaid routing is disabled while provider payouts are paused.',
@@ -74,31 +74,32 @@ export function reviewLaunchUtility(input, context = {}, env = process.env) {
   }
   if (policy.mode === 'alliance') {
     summary = `Community Alliance: permanently route ${policy.partnerShareBps / 100}% of future creator fees to ${policy.partnerName} (${policy.partnerWallet}); ${100 - policy.partnerShareBps / 100}% stays with the creator wallet.`;
-    warnings.push('This is a direct wallet split, not individual holder rewards, NFT purchases or X cash payouts.', 'The finalized Pump fee recipients and percentages cannot be changed. Verify the full destination address before signing.', 'A community name is supplied by the launcher; it is not independent proof of endorsement or control.', policy.autoDistribute ? 'Daily distribution is authorized from collected creator fees. The creator wallet pays network costs; small balances accumulate until economical to distribute.' : 'Fees accrue on-chain. Use Distribute fees to pay both recipients; the creator wallet pays network costs.');
+    warnings.push('This is a direct wallet split, not individual holder rewards or NFT purchases.', 'The finalized Pump fee recipients and percentages cannot be changed. Verify the full destination address before signing.', 'A community name is supplied by the launcher; it is not independent proof of endorsement or control.', policy.autoDistribute ? 'Daily distribution is authorized from collected creator fees. The creator wallet pays network costs; small balances accumulate until economical to distribute.' : 'Fees accrue on-chain. Use Distribute fees to pay both recipients; the creator wallet pays network costs.');
     warnings.push('The creator wallet also pays fee-sharing account rent and setup network costs. The pre-launch balance check reserves these costs plus 0.003 SOL for later distribution account rent. Distribution requires at least 0.001 SOL accrued and caps its network fee at 0.0001 SOL.');
   }
   if (policy.mode === 'holder_alliance') {
-    summary = `Community rewards: ${policy.creatorShareBps/100}% to the launcher, ${policy.ownHolderShareBps/100}% to this coin’s eligible holders${policy.partnerHolderShareBps ? `, ${policy.partnerHolderShareBps/100}% to holders of ${policy.partnerName} (${policy.partnerMint})` : ''}. Paid in SOL; this is not a custom trading pair.`;
+    summary = `Fee split: ${policy.creatorShareBps/100}% to the developer, ${policy.ownHolderShareBps/100}% to this coin’s eligible holders${policy.partnerHolderShareBps ? `, ${policy.partnerHolderShareBps/100}% to holders of ${policy.partnerName} (${policy.partnerMint})` : ''}${policy.recipientShareBps ? `, ${policy.recipientShareBps/100}% to recipient wallet ${policy.recipientWallet}` : ''}. Paid in SOL; this is not a custom trading pair.`;
+    if(policy.recipientShareBps)warnings.push('Verify the full recipient wallet, not a token CA. Its share passes through the same dedicated rewards vault and is paid on the 12-hour cycle, without a holder balance requirement or recipient signup. Incomplete active holder snapshots delay the entire allocation. Transfers are irreversible.');
     warnings.push('Permanent Pump fee split: launcher plus a dedicated encrypted SlimeWire holder vault. Individual holder payouts are managed by SlimeWire, not Pump’s native reward program. Keep a backup of the creator wallet.',
       'Every 12 hours, complete finalized holder snapshots and fresh USD quotes determine eligibility: strictly more than $20 of the respective token. Each community’s allocation is weighted by eligible token balances. Owning both coins can qualify a wallet for both allocations.',
       'Requires a funded, verified SOL Pump curve or an indexed USD market with at least $1,000 liquidity, and no more than 2,000 eligible wallets per community. Missing prices, incomplete lists or unavailable free RPC delay the cycle; funds stay reserved. This is a snapshot, not a continuous-holding requirement.',
       'The holder vault retains 0.001 SOL as a reserve. Each wallet’s rewards accumulate until at least 0.001 SOL can be sent. Pools, program accounts and burn addresses are excluded. A community with no eligible holders keeps its allocation for a later cycle.',
-      'The creator wallet pays fee-sharing setup rent and payout network costs: at most 0.0001 SOL per transaction, batches of up to 8 holders. Keep at least 0.003 SOL plus fees available. You may pause automatic execution; earned holder credits remain owed. No rewards are guaranteed without trading fees.',
-      'The percentages and partner token cannot be edited after launch. Naming another community does not prove endorsement or partnership.');
+      'The creator wallet pays fee-sharing setup rent and payout network costs: at most 0.0001 SOL per transaction, batches of up to 8 recipient wallets. Keep at least 0.003 SOL plus fees available. You may pause automatic execution; earned holder and receiving-wallet credits remain owed. No rewards are guaranteed without trading fees.',
+      'The percentages, partner token and receiving wallet cannot be edited after launch. Naming another community does not prove endorsement or partnership.');
   }
   if (policy.mode === 'nft_floor') {
     blockers.push(capabilities.nftFloor.reason);
     summary = `${policy.feeShareBps / 100}% of creator fees proposed for ${policy.collectionSymbol}; maximum ${policy.maxPriceSol} SOL per NFT and ${policy.dailyBudgetSol} SOL per day. Preview only.`;
     warnings.push('A marketplace collection name is not proof of authenticity or affiliation. On-chain collection verification is required before any purchase.', 'The preview never spends money, redirects fees, burns NFTs or runs a lottery.');
   }
-  return { policy, available: !blockers.length, summary, blockers, warnings, treasury: policy.mode === 'usepaid' ? capabilities.usepaid.treasury : policy.mode === 'alliance' ? policy.partnerWallet : '', consentVersion: policy.mode === 'holder_alliance' ? HOLDER_ALLIANCE_CONSENT_VERSION : policy.mode === 'alliance' ? ALLIANCE_CONSENT_VERSION : capabilities.consentVersion };
+  return { policy, available: !blockers.length, summary, blockers, warnings, treasury: policy.mode === 'usepaid' ? capabilities.usepaid.treasury : policy.mode === 'alliance' ? policy.partnerWallet : '', consentVersion: policy.mode === 'holder_alliance' ? (policy.recipientShareBps ? WALLET_SPLIT_CONSENT_VERSION : HOLDER_ALLIANCE_CONSENT_VERSION) : policy.mode === 'alliance' ? ALLIANCE_CONSENT_VERSION : capabilities.consentVersion };
 }
 export function assertLaunchUtilityReady(input, context = {}, env = process.env) {
   const review = reviewLaunchUtility(input, context, env);
   if (!review.available) fail(review.blockers.join(' '));
   if (review.policy.mode === 'usepaid' && review.policy.consentVersion !== LAUNCH_UTILITY_CONSENT_VERSION) fail('Review and confirm the permanent UsePaid fee destination for this launch.');
   if (review.policy.mode === 'alliance' && review.policy.consentVersion !== ALLIANCE_CONSENT_VERSION) fail('Review and confirm the permanent Community Alliance fee split for this launch.');
-  if (review.policy.mode === 'holder_alliance' && review.policy.consentVersion !== HOLDER_ALLIANCE_CONSENT_VERSION) fail('Review and confirm the permanent three-way holder allocation and automatic network costs for this launch.');
+  if (review.policy.mode === 'holder_alliance' && review.policy.consentVersion !== review.consentVersion) fail('Review and confirm every permanent fee allocation, recipient wallet and automatic network cost for this launch.');
   return review;
 }
 export function usePaidDescription(description, handle, limit = 800) {

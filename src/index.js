@@ -115,10 +115,11 @@ import { feeSetupSubmissionDisposition, launchDraftFingerprint, launchConfirmati
 import { verifyUsePaidRecipient } from "./lib/usePaidRecipient.js";
 import { allianceShareholders, allianceConfigMatches } from "./lib/launchAlliance.js";
 import { settleLaunchAlliance, publicAllianceSettlement } from "./lib/launchAllianceSettlement.js";
-import { normalizeHolderAlliance, allocateHolderCycle, publicHolderLedger, HOLDER_CADENCE_MS, HOLDER_MIN_PAYOUT, HOLDER_VAULT_RESERVE } from "./lib/holderAlliance.js";
+import { normalizeHolderAlliance, verifySplitRecipient, allocateHolderCycle, publicHolderLedger, HOLDER_CADENCE_MS, HOLDER_MIN_PAYOUT, HOLDER_VAULT_RESERVE } from "./lib/holderAlliance.js";
 import { settleHolderBatch } from "./lib/holderAllianceSettlement.js";
 import { readHolderSnapshot, readHolderCommunities } from "./lib/holderAllianceSnapshot.js";
 import { buildLaunchRewardReport, holderEligibilityReport } from "./lib/launchRewardReport.js";
+import { readLaunchFeeReceipt } from "./lib/launchFeeReceipt.js";
 import { createCommunityHub, buildRewardsInbox, receiptCredit, verifiedAgreementFor } from "./lib/communityHub.js";
 import { verifyCommunityAuthority } from "./lib/communityAuthority.js";
 import { hasManualCreatorFees } from "./lib/creatorClaimPolicy.js";
@@ -12757,12 +12758,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "POST" && pathname === "/api/web/launch/utility/review") {
       const body = await readJsonRequestBody(request, 16000);
       body.launchUtility = normalizeLaunchUtility(body.launchUtility);
+      let recipientCreator = "";
       if (["alliance", "holder_alliance"].includes(body.launchUtility?.mode) && (body.devWalletIndex || body.selectedDevWalletId || body.devWalletPublicKey)) {
         const selected = selectPumpLaunchWallet(await readWalletStore(), auth.userId, firstString(body.devWalletIndex, body.selectedDevWalletId, body.devWalletPublicKey));
         if (body.launchUtility.mode === "alliance") allianceShareholders(body.launchUtility, selected.wallet.publicKey);
+        recipientCreator = selected.wallet.publicKey;
         if (body.creatorFeeRecipient === selected.wallet.publicKey) delete body.creatorFeeRecipient;
         if (body.feeRecipient === selected.wallet.publicKey) delete body.feeRecipient;
       }
+      if (body.launchUtility.mode === "holder_alliance" && body.launchUtility.recipientShareBps) await verifySplitRecipient(launchFeeReadRpc(), body.launchUtility, { creator: recipientCreator });
       const review = reviewLiveLaunchUtility(body.launchUtility, body);
       if (review.policy.mode === "holder_alliance" && review.policy.partnerHolderShareBps > 0 && review.available) {
         try { await readHolderSnapshot(review.policy.partnerMint); }
@@ -32531,6 +32535,10 @@ const PUMP_HOLDER_REWARD_PAYOUT_FEE_RESERVE = 100_000n;
 const PUMP_HOLDER_REWARD_FORCE_CRANK_MS = 6 * 60 * 60 * 1000;
 
 const launchNftMarketReader = createNftMarketReader({ apiKey: process.env.MAGIC_EDEN_API_KEY || "" });
+// New fee accounting/recipient checks never consume the trading RPC budget.
+function launchFeeReadRpc() {
+  return new Connection("https://api.mainnet-beta.solana.com", { commitment: "finalized", disableRetryOnRateLimit: true, fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(12000) }) });
+}
 let communityHubInstance;
 function getCommunityHub() {
   if (communityHubInstance) return communityHubInstance;
@@ -32549,7 +32557,10 @@ function getCommunityHub() {
       const review = reviewLiveLaunchUtility(input, { rail: "pump" });
       if (!review.available) throw new Error(review.blockers.join(" "));
       assertLaunchUtilityReady(review.policy, { rail: "pump" });
-      if (review.policy.mode === "holder_alliance") await readHolderCommunities(context.mint, review.policy);
+      if (review.policy.mode === "holder_alliance") {
+        if (review.policy.recipientShareBps) await verifySplitRecipient(launchFeeReadRpc(), review.policy, { creator: context.creator, mint: context.mint });
+        await readHolderCommunities(context.mint, review.policy);
+      }
       return review.policy;
     },
     connect: async review => {
@@ -32612,7 +32623,7 @@ function launchUtilityPublic(attempt = {}) {
     vaultAddress: state.vaultAddress || "", signature: state.setupSignature || "", error: state.lastError || "",
     autoDistribute: attempt.allianceDistribution?.automaticPaused !== true, autoDistributionAuthorized: true,
     distribution: { ...publicHolderLedger(attempt.holderAllianceLedger), error: attempt.holderLastError || attempt.holderAllianceLedger?.lastError || "" }, feeDistribution: publicAllianceSettlement(attempt.allianceDistribution),
-    note: "Creator + selected communities. Holder snapshots every 12 hours, strictly over $20; proportional SOL credits. Small payouts accumulate."
+    note: "Developer + selected communities + optional receiving wallet. Community eligibility is strictly over $20; the pasted wallet has no holding requirement. Rewards cycle every 12 hours; small payouts accumulate."
   };
   if (attempt.launchUtility.mode === "alliance") return {
     mode: "alliance", launchAttemptId: pumpFeeSharingAttemptId(attempt), status: state.status || "PENDING_SETUP",
@@ -32707,6 +32718,7 @@ async function reconcileLaunchAlliance(initial) {
     assertLaunchUtilityReady(attempt.launchUtility, { rail: "pump" });
     if (attempt.launchUtility.mode === "holder_alliance") {
       if (attempt.launchUtility.partnerMint === mint) throw new Error("Partner community must use a different coin.");
+      if (attempt.launchUtility.recipientShareBps) await verifySplitRecipient(launchFeeReadRpc(), attempt.launchUtility, { creator: attempt.devWalletPublicKey, mint, vault: attempt.pumpFeeSharing?.vaultAddress });
       await ensurePumpHolderRewardVault(attempt);
       attempt = await freshPumpFeeSharingAttempt(id);
     }
@@ -32779,6 +32791,11 @@ async function distributeLaunchAlliance(initial, { force = false, holderCrankOnl
     const elapsed = Date.now() - (Date.parse(last.lastCheckedAt || last.lastConfirmedAt || "") || 0);
     if (!last.pending && ((!force && (attempt.launchUtility.autoDistribute !== true || last.automaticPaused === true || elapsed < (holderCrankOnly ? HOLDER_CADENCE_MS : 86400000))) || (force && elapsed < 60000))) return launchUtilityPublic(attempt);
     const state = await settleLaunchAlliance({
+      readReceipt: async signature => {
+        const rpc = launchFeeReadRpc();
+        const tx = await rpc.getTransaction(signature, { commitment: "finalized", maxSupportedTransactionVersion: 0 });
+        return readLaunchFeeReceipt(tx, { signature, mint, configAddress: getPumpFeeSharingAddresses({ mint }).sharingConfig.toBase58(), recipients: [attempt.devWalletPublicKey, policy.partnerWallet] });
+      },
       connection: holderCrankOnly ? {
         getSignatureStatus: async (...args) => {
           const result = await connection.getSignatureStatus(...args);
@@ -32858,7 +32875,7 @@ function effectiveAlliancePolicy(attempt) {
   if (attempt.launchUtility?.mode !== "holder_alliance") return attempt.launchUtility;
   const policy = normalizeHolderAlliance(attempt.launchUtility), vault = attempt.pumpFeeSharing?.vaultAddress;
   if (!vault) throw new Error("Holder vault is not ready. Retry the original setup.");
-  return { mode: "alliance", partnerWallet: vault, partnerName: "Dedicated holder vault", partnerShareBps: policy.ownHolderShareBps + policy.partnerHolderShareBps, autoDistribute: true };
+  return { mode: "alliance", partnerWallet: vault, partnerName: "Dedicated rewards vault", partnerShareBps: policy.ownHolderShareBps + policy.partnerHolderShareBps + policy.recipientShareBps, autoDistribute: true };
 }
 
 async function distributeHolderAlliance(initial) {
@@ -32877,6 +32894,7 @@ async function distributeHolderAlliance(initial) {
     const save = async ledger => { await upsertPumpLaunchAttempt({ id, holderAllianceLedger: ledger }); attempt = await freshPumpFeeSharingAttempt(id); };
     const load = async () => attempt.holderAllianceLedger || {};
     const prepare = async rows => {
+      if (policy.recipientShareBps && rows.some(row => row.wallet === policy.recipientWallet)) await verifySplitRecipient(launchFeeReadRpc(), policy, { creator: attempt.devWalletPublicKey, mint, vault: attempt.pumpFeeSharing?.vaultAddress });
       const creator = walletsForOwner(await readWalletStore(), attempt.userId).find(row => row.publicKey === attempt.devWalletPublicKey);
       if (!creator) throw new Error("Restore the creator wallet to pay holder payout network fees.");
       const signer = decryptWallet(creator), vault = await pumpHolderRewardVaultWallet(attempt);
@@ -104806,6 +104824,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
   }
   if (body.launchUtility?.mode === "holder_alliance") {
     const selected = selectPumpLaunchWallet(await readWalletStore(), userId, firstString(body.devWalletIndex, body.selectedDevWalletId, body.devWalletPublicKey));
+    if (body.launchUtility.recipientShareBps) await verifySplitRecipient(launchFeeReadRpc(), body.launchUtility, { creator: selected.wallet.publicKey });
     if (creatorFeeRecipient === selected.wallet.publicKey) { delete utilityContext.creatorFeeRecipient; delete utilityContext.feeRecipient; }
     // Verify complete free holder enumeration and pricing BEFORE minting or
     // spending anything. Never substitute a top-holder list on quota failure.

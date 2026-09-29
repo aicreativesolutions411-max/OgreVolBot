@@ -9,9 +9,10 @@ test('selected homepage is real accessible HTML with every product destination',
   assert.match(html, /One home\. <span>Every move\.<\/span>/);
   assert.doesNotMatch(html, /switchboard|slimewire\.com|Sign in with X/i);
   for(const link of ['/wallet','/terminal?desktop=1','/launch','/launch?mode=creator','/launch?mode=holder_self']) assert.ok(html.includes('href="'+link+'"'),link);
-  assert.match(html, /<dialog[^>]+id="claim-dialog"/);
-  assert.match(html, /Creator fees/);
-  assert.match(html, /Holder rewards/);
+  assert.doesNotMatch(html, /claim-dialog|X claim|X payout|Sign in with X/i);
+  assert.match(html, /Follow the fees/);
+  assert.match(html, /href="\/launch#mine"/);
+  assert.match(html, /Totals &amp; payout receipts/);
   assert.doesNotMatch(html, /<iframe|app\.js|fun\.js|config\.js/);
 });
 
@@ -57,7 +58,7 @@ test('Cloudflare and origin keep a separate terminal entry instead of replacing 
 
 test('homepage and terminal cannot swap shells when offline', () => {
   const worker=read('web/public/sw.js');
-  assert.match(worker,/slimewire-shell-v91-product-home/);
+  assert.match(worker,/slimewire-shell-v92-fee-destinations/);
   assert.match(worker,/url\.pathname === "\/" \? "\/" : "\/terminal\?desktop=1"/);
   assert.match(worker,/status: 503/);
 });

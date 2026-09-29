@@ -11,7 +11,7 @@
   <link rel="preload" as="image" href="/assets/slimewire/home/wallet-v1.webp" fetchpriority="high">
   <script src="/chart-links.js?v=20260928a"></script>
   <script src="/home-entry.js?v=20260928a"></script>
-  <script src="/home.js?v=20260928a" defer></script>
+  <script src="/home.js?v=20260928-fees2" defer></script>
 </head>
 <body>
   <a class="skip" href="#products">Skip to products</a>
@@ -28,7 +28,7 @@
       <a href="/terminal?desktop=1"><svg><use href="#terminal-icon"/></svg>Terminal</a>
       <a href="/launch"><svg><use href="#launch-icon"/></svg>Launch</a>
     </nav>
-    <a class="claim-link" href="#claim" data-claim-open>Claim fees <span aria-hidden="true">↗</span></a>
+    <a class="claim-link" href="/launch#mine">My launches <span aria-hidden="true">↗</span></a>
   </header>
   <main class="home-main">
     <section class="hero" aria-labelledby="home-title">
@@ -66,24 +66,15 @@
           <span class="card-foot">Explore / Track / Trade</span>
         </div>
       </article>
-      <article class="product-card claim-card" id="claim">
+      <article class="product-card claim-card" id="fee-activity">
         <div class="card-content">
-          <h2>Claim fees</h2>
-          <p>Track fees. View rewards.</p>
-          <a class="round-link" href="/wallet" data-claim-open aria-label="Choose creator fees or holder rewards"><svg><use href="#arrow-icon"/></svg></a>
+          <h2>Follow the fees</h2>
+          <p>Every destination.<br>Totals &amp; payout receipts.</p>
+          <a class="round-link" href="/launch#mine" aria-label="View fee destinations and receipts for your launches"><svg><use href="#arrow-icon"/></svg></a>
         </div>
       </article>
     </section>
     <footer class="site-foot"><span>SlimeWire</span><span>On-chain for what’s next</span></footer>
   </main>
-  <dialog id="claim-dialog" aria-labelledby="claim-title" aria-describedby="claim-description">
-    <form method="dialog"><button class="close-dialog" aria-label="Close claim options">×</button></form>
-    <span class="eyebrow">SlimeWire rewards</span>
-    <h2 id="claim-title">Your next move.</h2>
-    <p id="claim-description">Choose the fees or rewards you want to manage.</p>
-    <a class="claim-option" href="/wallet"><span><strong>Creator fees</strong><small>Open your wallet to view and claim Pump creator rewards.</small></span><span aria-hidden="true">↗</span></a>
-    <a class="claim-option" href="/launch/community#inbox"><span><strong>Holder rewards</strong><small>View your community reward inbox and payout history.</small></span><span aria-hidden="true">↗</span></a>
-    <p class="claim-note">Only available balances can be claimed. Opening this menu does not send a transaction.</p>
-  </dialog>
 </body>
 </html>
