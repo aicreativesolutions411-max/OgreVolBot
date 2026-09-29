@@ -20,16 +20,16 @@ export function createPumpFeeReferenceReader({fetchImpl=globalThis.fetch,now=Dat
   const cache=new Map(),pending=new Map();
   async function json(url){
     const r=await fetchImpl(url,{headers:{accept:'application/json'},signal:AbortSignal.timeout(3500),redirect:'error'});
-    if(!r.ok)throw Error('Pump reference unavailable');
+    if(!r.ok){const error=Error('Pump reference unavailable');error.reasonCode=Number.isInteger(r.status)?'provider_http_'+r.status:'provider_unavailable';throw error;}
     return r.json();
   }
   async function load(a,mint,creator,mode){
     const result=base(mint);
     if(mode==='creator'){
-      const coin=await json(API+'/coins-v2/'+mint);
-      if(coin?.mint!==mint||coin.creator!==creator)return result;
+      // Only completed local launches reach here. Their recorded creator is the
+      // attribution key; a second metadata service must not gate the fee read.
       const data=await json(API+'/fees/creator/'+creator+'?'+new URLSearchParams({mint,period:'30d',interval:'1d'}));
-      if(data?.creator!==creator)return result;
+      if(data?.creator!==creator)return {...result,reasonCode:'creator_mismatch'};
       result.earnedLamports=solAmount(data.earned);
       result.note='Pump-reported all-time creator earnings for this coin in SOL. Earned is not paid out or available to claim. Other quote assets are not included; wallet-wide balances stay in Wallet.';
       if(Number.isSafeInteger(data.asOf)&&data.asOf>0&&data.asOf<=now())result.providerAsOf=new Date(data.asOf).toISOString();
@@ -61,7 +61,7 @@ export function createPumpFeeReferenceReader({fetchImpl=globalThis.fetch,now=Dat
   return async function read(a={}){
     const mint=key(a.tokenMint),creator=key(a.devWalletPublicKey),mode=a.launchUtility?.mode||'creator';
     const empty=base(mint);
-    if(a.status!=='COMPLETE'||!mint||!creator||!['creator','alliance','holder_alliance'].includes(mode)||[a.pumpCashback,a.cashback,a.isCashbackCoin,a.holderRewards?.enabled].includes(true)||a.creatorFeeSplit?.length||(mode==='creator'&&a.creatorFeeRecipient&&a.creatorFeeRecipient!==creator))return empty;
+    if(a.status!=='COMPLETE'||!mint||!creator||!['creator','alliance','holder_alliance'].includes(mode)||[a.pumpCashback,a.cashback,a.isCashbackCoin,a.holderRewards?.enabled].includes(true)||a.creatorFeeSplit?.length||(mode==='creator'&&a.creatorFeeRecipient&&a.creatorFeeRecipient!==creator))return {...empty,reasonCode:'unsupported_launch'};
     const id=[mint,creator,mode,a.pumpFeeSharing?.configAddress||'',a.pumpFeeSharing?.vaultAddress||'',a.launchUtility?.partnerWallet||'',a.launchUtility?.creatorShareBps??'',a.launchUtility?.partnerShareBps??''].join(':');
     const old=cache.get(id);
     const stale=()=>old?.value.earnedLamports!=null&&now()-Date.parse(old.value.checkedAt)<1800000?{...old.value,status:'stale'}:empty;
@@ -70,7 +70,7 @@ export function createPumpFeeReferenceReader({fetchImpl=globalThis.fetch,now=Dat
     if(pending.size>=maxConcurrent)return stale();
     const job=(async()=>{
       let value;
-      try{value=await load(a,mint,creator,mode);}catch{value=stale();}
+      try{value=await load(a,mint,creator,mode);}catch(error){value={...stale(),reasonCode:/^provider_http_\d{3}$/.test(error.reasonCode||'')?error.reasonCode:error.name==='TimeoutError'?'provider_timeout':'provider_unavailable'};}
       cache.delete(id);cache.set(id,{value,expires:now()+(value.status==='available'?ttlMs:30000)});
       while(cache.size>maxEntries)cache.delete(cache.keys().next().value);
       return value;

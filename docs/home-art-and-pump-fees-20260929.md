@@ -19,7 +19,7 @@ Generated with the built-in image tool, with the previously approved concept boa
 
 The existing public earnings dashboard continues to report **verified SlimeWire payouts**, with all-time totals, per-coin details and receipts. Opening an individual coin also loads a separate **Pump reference** panel. It must never add Pump earnings to local payout totals: earned, distributed, paid and currently claimable are different measures.
 
-- Creator mode uses `GET https://frontend-api-v3.pump.fun/fees/creator/{creator}?mint={mint}&period=30d&interval=1d`, after verifying the mint and creator with `/coins-v2/{mint}`. The `earned` field is the provider's all-time amount; the requested period applies to its series, not the earnings headline.
+- Creator mode uses `GET https://frontend-api-v3.pump.fun/fees/creator/{creator}?mint={mint}&period=30d&interval=1d`, with the creator and mint from the completed SlimeWire launch record. The returned creator must match. A separate coin-metadata service is not an earnings dependency. The `earned` field is the provider's all-time amount; the requested period applies to its series, not the earnings headline.
 - Shared modes use `/fees/shareholder/{shareholder}` and require an exact mainnet chain, mint and saved sharing-config match. `totalEarned` and `totalUnclaimed` are coin-pool figures. Earlier creator-vault earnings are not included, and the coverage label says so.
 - Account-wide totals and claimable balances are **not** substituted for coin earnings. Creator claims remain in Wallet because a creator vault can cover multiple coins.
 - Only explicit SOL raw amounts with nine decimals are accepted. BigInt preserves precision. Missing, mismatched or malformed values are unavailable, never fabricated zeroes.

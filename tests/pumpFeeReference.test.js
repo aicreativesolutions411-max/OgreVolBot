@@ -13,6 +13,12 @@ test('Pump creator earnings are explicitly mint-filtered and never treated as pa
   const r=await read(attempt);assert.equal(r.earnedLamports,'9007199254740993');assert.equal(r.claimableLamports,null);assert.equal(r.paidLamports,undefined);assert.equal(r.status,'available');
   assert.ok(calls.some(u=>new URL(u).searchParams.get('mint')===mint));assert.ok(calls.every(u=>!u.includes('/totals')));
 });
+test('completed saved launches do not depend on the separate coin metadata API',async()=>{
+  const calls=[];
+  const read=createPumpFeeReferenceReader({fetchImpl:async url=>{calls.push(url);if(url.includes('/coins-v2/'))return {ok:false,status:403};return response({creator,earned:[sol('55')]});}});
+  assert.equal((await read(attempt)).earnedLamports,'55');assert.equal(calls.length,1);
+  assert.ok(calls[0].includes('/fees/creator/'+creator+'?'));
+});
 test('empty, malformed, wrong creator and wrong asset results stay unknown, never zero',async()=>{
   for(const data of [{creator,earned:[]},{creator:other,earned:[sol('100')]},{creator,earned:[sol('-1')]},{creator,earned:[{...sol('100'),amount:{raw:'100',decimals:6}}]},{creator,earned:[{...sol('100'),quote:{chainId:chain,address:other}}]}]){
     const read=createPumpFeeReferenceReader({fetchImpl:async u=>response(u.includes('coins-v2')?{mint,creator}:data)});
@@ -34,8 +40,8 @@ test('sharing data must match the exact chain, mint and saved config; wallet tot
 test('requests are coalesced and cached, errors retain a clearly stale reference',async()=>{
   let now=100000,calls=0,fail=false;
   const read=createPumpFeeReferenceReader({now:()=>now,ttlMs:1000,fetchImpl:async u=>{calls++;if(fail)throw Error('provider down');return response(u.includes('coins-v2')?{mint,creator}:{creator,earned:[sol('12')]});}});
-  await Promise.all([read(attempt),read(attempt),read(attempt)]);assert.equal(calls,2);
-  await read(attempt);assert.equal(calls,2);
+  await Promise.all([read(attempt),read(attempt),read(attempt)]);assert.equal(calls,1);
+  await read(attempt);assert.equal(calls,1);
   now+=2000;fail=true;const stale=await read(attempt);assert.equal(stale.status,'stale');assert.equal(stale.earnedLamports,'12');assert.equal(stale.checkedAt,new Date(100000).toISOString());
   now+=1800001;assert.equal((await read(attempt)).earnedLamports,null);
 });
