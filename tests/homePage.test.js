@@ -49,6 +49,10 @@ test('Cloudflare and origin keep a separate terminal entry instead of replacing 
   assert.match(build,/copyFile\(path\.join\(distDir, "index\.html"\), path\.join\(distDir, "terminal\.html"\)\)/);
   const server=read('src/index.js');
   assert.match(server,/requestUrl\.pathname === "\/" \? "home\.html"/);
+  const homeRoute=server.indexOf('["/", "/home", "/home.html"].includes(requestUrl.pathname)');
+  const terminalRoute=server.indexOf('await serveStaticHtmlPage(response, "gg.html"');
+  assert.ok(homeRoute>0 && homeRoute<terminalRoute, 'actual HTTP root routing must select home before the legacy terminal handler');
+  assert.match(server.slice(homeRoute,homeRoute+260), /serveStaticHtmlPage\(response, "home.html", "no-store, max-age=0"\)/);
 });
 
 test('homepage and terminal cannot swap shells when offline', () => {

@@ -7370,9 +7370,13 @@ and is checked by an automated release audit before every upload.</p></div>
       response.end();
       return;
     }
-    // /gg IS the main site now — served at root + all the former old-app entry points. The new terminal
-    // is fully self-contained (auto account, own wallet/connect flow), so nothing here needs the old app.
-    if (request.method === "GET" && (requestUrl.pathname === "/" || requestUrl.pathname === "/connect"
+    // Product homepage stays separate from the fully self-contained terminal.
+    // Its tiny entry bridge preserves legacy root hashes, invites and logins.
+    if ((request.method === "GET" || request.method === "HEAD") && ["/", "/home", "/home.html"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "home.html", "no-store, max-age=0");
+      return;
+    }
+    if (request.method === "GET" && (requestUrl.pathname === "/connect"
       || requestUrl.pathname === "/login" || requestUrl.pathname.startsWith("/account/login")
       || requestUrl.pathname === "/portal" || requestUrl.pathname.startsWith("/portal/")
       || requestUrl.pathname === "/terminal" || requestUrl.pathname.startsWith("/terminal/"))) {
