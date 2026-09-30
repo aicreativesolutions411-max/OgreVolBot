@@ -114,3 +114,29 @@ test('multi-recipient editor escapes labels and maintains valid-total feedback',
   assert.equal(ui.draftError({mode:'holder_alliance',creatorShareBps:2000,ownHolderShareBps:4000,partnerHolderShareBps:0,recipients:[]}), 'Fee percentages must total 100%.');
   assert.equal(ui.draftError({mode:'creator'}),'');
 });
+
+test('X drafts preserve percentages but never import profile proof or identity approval',()=>{
+  const policy={mode:'holder_alliance',creatorShareBps:2000,ownHolderShareBps:0,partnerHolderShareBps:0,recipients:[],socialRecipients:[{handle:'artist',xUserId:'123',shareBps:8000,name:'Artist',profileProof:'secret-proof'}]};
+  const draft=ui.templateDraft({launchUtility:policy});
+  assert.equal(draft.launchUtility.socialRecipients[0].shareBps,8000);
+  assert.equal(draft.launchUtility.socialRecipients[0].xUserId,undefined);
+  assert.equal(draft.launchUtility.socialRecipients[0].profileProof,undefined);
+  assert.equal(ui.draftError(draft.launchUtility),'');
+  assert.ok(ui.render('x',policy).includes('X recipients · claim SOL'));
+  assert.ok(!ui.render('x',policy).includes('value="holder_self" selected'));
+});
+
+test('X drafts cannot silently change the share total or accept duplicate handles',()=>{
+  const p={mode:'holder_alliance',creatorShareBps:2000,ownHolderShareBps:0,partnerHolderShareBps:0,recipients:[],socialRecipients:[{handle:'artist',shareBps:8000}]};
+  assert.equal(ui.draftError(p),'');
+  assert.match(ui.draftError({...p,creatorShareBps:3000}),/100%/);
+  assert.match(ui.draftError({...p,socialRecipients:[{handle:'Artist',shareBps:4000},{handle:'artist',shareBps:4000}]}),/duplicate/);
+});
+
+test('claim page uses same-origin HttpOnly session flow, exact review, and no simulated live earnings',()=>{
+  const page=readFileSync(new URL('../web/public/launch-claim.html',import.meta.url),'utf8');
+  const js=readFileSync(new URL('../web/public/launch-claim.js',import.meta.url),'utf8');
+  assert.ok(page.includes('id="claim-signin" disabled'));assert.ok(page.includes('id="claim-confirm" type="button" disabled'));
+  assert.ok(js.includes("credentials:'same-origin'"));assert.ok(js.includes("'X-Slime-CSRF'"));
+  assert.ok(!js.includes('localStorage'));assert.ok(!js.includes('setInterval'));assert.ok(!js.includes('DEMO'));
+});

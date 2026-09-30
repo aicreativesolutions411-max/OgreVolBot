@@ -1,4 +1,5 @@
 import { PublicKey, SystemProgram } from '@solana/web3.js';
+import { normalizeSocialRecipients } from './socialFeePolicy.js';
 export const HOLDER_ALLIANCE_CONSENT_VERSION='2026-09-27-holders-v1';
 export const WALLET_SPLIT_CONSENT_VERSION='2026-09-28-wallet-split-v2';
 export const MULTI_WALLET_CONSENT_VERSION='2026-09-29-multi-wallet-v3';
@@ -18,10 +19,13 @@ export function normalizeHolderAlliance(input={}) {
   const recipients=multi?input.recipients.map(r=>({wallet:String(r?.wallet||'').trim(),shareBps:Number(r?.shareBps),label:String(r?.label||'Recipient wallet').trim().slice(0,40)})):[];
   if(recipients.some(r=>!Number.isSafeInteger(r.shareBps)||r.shareBps<100||r.shareBps>9900||r.shareBps%100))throw new Error('Each receiving wallet needs a whole percentage from 1% to 99%. Remove unused wallets.');
   const recipientTotal=recipients.reduce((a,r)=>a+r.shareBps,0);
+  const socialRecipients=normalizeSocialRecipients(input.socialRecipients),socialTotal=socialRecipients.reduce((a,r)=>a+r.shareBps,0);
+  if(recipients.length+socialRecipients.length>MAX_FEE_RECIPIENTS)throw new Error('Use at most 10 wallet and X recipients combined.');
+  if(input.socialShareBps!==undefined&&Number(input.socialShareBps)!==socialTotal)throw new Error('X recipient percentages do not match their total.');
   if(multi&&input.recipientShareBps!==undefined&&Number(input.recipientShareBps)!==recipientTotal)throw new Error('Receiving wallet percentages do not match their total.');
   const keys=['creatorShareBps','ownHolderShareBps','partnerHolderShareBps','recipientShareBps'];
   const shares=keys.map(k=>Number(k==='recipientShareBps'?(multi?recipientTotal:input[k]??0):input[k]));
-  if(shares.some(v=>!Number.isSafeInteger(v)||v<0||v>9900||v%100!==0)||shares[0]<100||shares.reduce((a,b)=>a+b,0)!==10000)throw new Error('Use whole percentages totaling 100%. Keep at least 1% for the developer and 1% for another destination. Unused destinations can receive 0%; choose Keep my fees for 100% developer.');
+  if(shares.some(v=>!Number.isSafeInteger(v)||v<0||v>9900||v%100!==0)||shares[0]<100||shares.reduce((a,b)=>a+b,0)+socialTotal!==10000)throw new Error('Use whole percentages totaling 100%. Keep at least 1% for the developer and 1% for another destination. Unused destinations can receive 0%; choose Keep my fees for 100% developer.');
   let partnerMint='';
   if(shares[2]>0){
     let mint;try{mint=new PublicKey(input.partnerMint);}catch{throw new Error('Enter the partner community’s Solana coin address.');}
@@ -37,7 +41,7 @@ export function normalizeHolderAlliance(input={}) {
     if(seen.has(r.wallet))throw new Error('Duplicate recipient wallet. Combine its percentage into one row.');seen.add(r.wallet);
     if(!multi)recipientWallet=r.wallet;
   }
-  return {version:multi?3:shares[3]?2:1,mode:'holder_alliance',partnerMint,partnerName:partnerMint?String(input.partnerName||'Partner community').trim().slice(0,64):'',recipientWallet,...(multi?{recipients}:{}),...Object.fromEntries(keys.map((k,i)=>[k,shares[i]])),minimumUsd:20,cadenceMs:HOLDER_CADENCE_MS,autoDistribute:true,consentVersion:String(input.consentVersion||'')};
+  return {version:socialTotal?4:multi?3:shares[3]?2:1,mode:'holder_alliance',partnerMint,partnerName:partnerMint?String(input.partnerName||'Partner community').trim().slice(0,64):'',recipientWallet,...(multi?{recipients}:{}),...(socialTotal?{socialRecipients,socialShareBps:socialTotal}:{}),...Object.fromEntries(keys.map((k,i)=>[k,shares[i]])),minimumUsd:20,cadenceMs:HOLDER_CADENCE_MS,autoDistribute:true,consentVersion:String(input.consentVersion||'')};
 }
 export async function verifySplitRecipient(connection,policy,{creator='',mint='',vault=''}={}){
   const normalized=normalizeHolderAlliance(policy);
@@ -68,11 +72,12 @@ export function eligibleHolderBalances(rows,{decimals,priceUsd,excluded=[]}){
   const threshold=20n*d*10n**BigInt(decimals);
   return [...balances].filter(([,amount])=>amount*n>threshold).map(([wallet,amount])=>({wallet,amount:String(amount)})).sort((a,b)=>a.wallet.localeCompare(b.wallet,'en'));
 }
-export function holderLiabilities(state={}){return Object.values(state.credits||{}).reduce((a,b)=>a+BigInt(b),0n)+BigInt(state.carryOwn||0)+BigInt(state.carryPartner||0);}
+export function holderLiabilities(state={}){return [...Object.values(state.credits||{}),...Object.values(state.socialCredits||{})].reduce((a,b)=>a+BigInt(b),0n)+BigInt(state.carryOwn||0)+BigInt(state.carryPartner||0);}
 export function allocateHolderCycle(state,{policy,balance,snapshots,now=Date.now(),allocationLimitLamports=null,flowRun=null}){
   policy=normalizeHolderAlliance(policy);
   if(state.lastSnapshotAt&&now-state.lastSnapshotAt<HOLDER_CADENCE_MS)throw new Error('Holder snapshots are at least 12 hours apart.');
-  if(state.pending||state.retryRows)throw new Error('Reconcile the previous payout before a new snapshot.');
+  if(state.pending||state.retryRows||state.socialPending)throw new Error('Reconcile the previous payout before a new snapshot.');
+  if(policy.socialRecipients?.some(r=>!r.xUserId))throw new Error('Verify all X recipient identities before allocating fees.');
   if((!policy.ownHolderShareBps&&BigInt(state.carryOwn||0)>0n)||(!policy.partnerHolderShareBps&&BigInt(state.carryPartner||0)>0n))throw new Error('An inactive allocation has reserved rewards. Reconcile the original policy first.');
   let available=BigInt(balance)-holderLiabilities(state)-HOLDER_VAULT_RESERVE;
   if(available<0n)throw new Error('Vault balance does not cover its reserved holder rewards. No new allocation made.');
@@ -81,11 +86,16 @@ export function allocateHolderCycle(state,{policy,balance,snapshots,now=Date.now
     if(available>BigInt(allocationLimitLamports))available=BigInt(allocationLimitLamports);
   }
   if(flowRun&&(!flowRun.id||!Number.isSafeInteger(flowRun.revision)||(state.flowRuns||[]).some(r=>r.id===flowRun.id)))throw new Error('Invalid or duplicate program run. Reconcile the saved allocation.');
-  const combined=BigInt(policy.ownHolderShareBps+policy.partnerHolderShareBps+policy.recipientShareBps);
+  const socialBps=policy.socialShareBps||0;
+  const combined=BigInt(policy.ownHolderShareBps+policy.partnerHolderShareBps+policy.recipientShareBps+socialBps);
+  let social=available*BigInt(socialBps)/combined;
   const recipient=available*BigInt(policy.recipientShareBps)/combined;
-  const own=policy.partnerHolderShareBps?available*BigInt(policy.ownHolderShareBps)/combined:policy.ownHolderShareBps?available-recipient:0n;
-  const partner=policy.partnerHolderShareBps?available-own-recipient:0n;
-  const walletAmount=policy.ownHolderShareBps||policy.partnerHolderShareBps?recipient:available;
+  const own=policy.partnerHolderShareBps?available*BigInt(policy.ownHolderShareBps)/combined:policy.ownHolderShareBps?available-recipient-social:0n;
+  const partner=policy.partnerHolderShareBps?available-own-recipient-social:0n;
+  const walletAmount=policy.ownHolderShareBps||policy.partnerHolderShareBps?recipient:policy.recipientShareBps?available-social:0n;
+  if(!policy.ownHolderShareBps&&!policy.partnerHolderShareBps&&!policy.recipientShareBps)social=available;
+  const socialCredits={...(state.socialCredits||{})},socialAllocations={};
+  if(socialBps){let left=social;policy.socialRecipients.forEach((r,i)=>{const award=i===policy.socialRecipients.length-1?left:social*BigInt(r.shareBps)/BigInt(socialBps);left-=award;socialCredits[r.xUserId]=String(BigInt(socialCredits[r.xUserId]||0)+award);socialAllocations['x:'+r.xUserId]=award;});}
   const credits={...(state.credits||{})};
   const creditSources=Object.fromEntries(ledgerSources(state).map(k=>[k,{...(state.creditSources?.[k]||{})}]));
   const recipientAllocations={};
@@ -104,12 +114,12 @@ export function allocateHolderCycle(state,{policy,balance,snapshots,now=Date.now
   const carryOwn=policy.ownHolderShareBps?distribute(own+BigInt(state.carryOwn||0),snapshots.own,'own'):'0';
   const carryPartner=policy.partnerHolderShareBps?distribute(partner+BigInt(state.carryPartner||0),snapshots.partner,'partner'):'0';
   for(const r of splitRecipients(policy))add(recipientSource(policy,r.wallet),r.wallet,recipientAllocations[recipientSource(policy,r.wallet)]||0n);
-  const allocatedBySource={...(state.allocatedBySource||{}),...Object.fromEntries([['own',own],['partner',partner],...Object.entries(recipientAllocations)].map(([k,v])=>[k,String(BigInt(state.allocatedBySource?.[k]||0)+v)]))};
+  const allocatedBySource={...(state.allocatedBySource||{}),...Object.fromEntries([['own',own],['partner',partner],...Object.entries(recipientAllocations),...Object.entries(socialAllocations)].map(([k,v])=>[k,String(BigInt(state.allocatedBySource?.[k]||0)+v)]))};
   const summary=s=>s?{slot:s.slot,priceUsd:s.priceUsd,count:s.holders.length}:null;
-  return {...state,version:2,credits,creditSources,allocatedBySource,sourceTrackingSince:state.sourceTrackingSince||now,carryOwn,carryPartner,lastSnapshotAt:now,status:'ALLOCATED',lastError:'',
+  return {...state,version:2,credits,...(socialBps?{socialCredits}:{}),creditSources,allocatedBySource,sourceTrackingSince:state.sourceTrackingSince||now,carryOwn,carryPartner,lastSnapshotAt:now,status:'ALLOCATED',lastError:'',
     ...(flowRun?{flowRuns:[...(state.flowRuns||[]),{id:flowRun.id,revision:flowRun.revision,at:new Date(now).toISOString(),allocatedLamports:String(available),status:'ALLOCATED'}].slice(-100)}:{}),
     allocatedLamports:String(BigInt(state.allocatedLamports||0)+available),
     lastEligibility:{own:policy.ownHolderShareBps?snapshots.own.holders.map(r=>r.wallet):[],partner:policy.partnerHolderShareBps?snapshots.partner.holders.map(r=>r.wallet):[]},
     lastSnapshot:{at:new Date(now).toISOString(),newLamports:String(available),own:policy.ownHolderShareBps?summary(snapshots.own):null,partner:policy.partnerHolderShareBps?summary(snapshots.partner):null}};
 }
-export function publicHolderLedger(state={}){return {status:state.status||'ACCUMULATING',error:state.lastError||'',paidLamports:state.paidLamports||'0',owedLamports:String(holderLiabilities(state)),lastSnapshot:state.lastSnapshot||null,nextSnapshotAt:state.lastSnapshotAt?new Date(state.lastSnapshotAt+HOLDER_CADENCE_MS).toISOString():'',receiptCount:state.receiptCount||0,receipts:(state.receipts||[]).slice(-20).map(r=>({signature:r.signature,confirmedAt:r.confirmedAt,lamports:r.lamports,recipients:r.recipients})),signature:state.pending?.signature||state.receipts?.at(-1)?.signature||''};}
+export function publicHolderLedger(state={}){return {status:state.socialPending?'CLAIM_PENDING':state.status||'ACCUMULATING',error:state.lastError||state.socialLastError||'',paidLamports:state.paidLamports||'0',owedLamports:String(holderLiabilities(state)),lastSnapshot:state.lastSnapshot||null,nextSnapshotAt:state.lastSnapshotAt?new Date(state.lastSnapshotAt+HOLDER_CADENCE_MS).toISOString():'',receiptCount:state.receiptCount||0,receipts:(state.receipts||[]).slice(-20).map(r=>({signature:r.signature,confirmedAt:r.confirmedAt,lamports:r.lamports,recipients:r.recipients})),signature:state.socialPending?.signature||state.pending?.signature||state.receipts?.at(-1)?.signature||''};}

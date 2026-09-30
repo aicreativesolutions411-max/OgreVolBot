@@ -1,4 +1,5 @@
 import { normalizeHolderAlliance, holderLiabilities, HOLDER_VAULT_RESERVE } from './holderAlliance.js';
+import { socialClaimCapabilities } from './socialFeePolicy.js';
 
 // Read-only prerequisites, not an approval, transaction simulation or audit.
 // Adapters return public account data only; this module never handles keys.
@@ -7,6 +8,7 @@ export async function checkFlowReadiness(attempt, {enabled=false,readRuntime,rea
   const policy=normalizeHolderAlliance(attempt.launchUtility),checks=[];
   const add=(id,label,state,detail)=>checks.push({id,label,state,detail});
   const started=now();
+  if(policy.socialShareBps){const c=socialClaimCapabilities();add('social_claims','X recipient claims',c.available?'pass':'blocked',c.reason);}
   add('release','Production validation',enabled?'pass':'blocked',enabled?'Operator release gate enabled; this check is not a security audit.':'Funded validation and security review are still required. This check cannot enable the release gate.');
   let runtime={};
   try{runtime=await readRuntime(attempt);}catch{/* fail closed without exposing provider errors */}
@@ -16,7 +18,7 @@ export async function checkFlowReadiness(attempt, {enabled=false,readRuntime,rea
     ['creator_key','creatorKey','Creator wallet record','Original creator wallet has a stored encrypted signing record; decryptability is not tested.','Restore the original creator wallet signing record.'],
     ['vault_key','vaultKey','Rewards vault record','Dedicated vault has a stored encrypted signing record; decryptability is not tested.','Restore the dedicated rewards vault signing record.']
   ])add(id,label,runtime?.[key]===true?'pass':'blocked',runtime?.[key]===true?good:bad);
-  const pending=!!(attempt.holderAllianceLedger?.pending||attempt.allianceDistribution?.pending||attempt.holderAllianceLedger?.retryRows);
+  const pending=!!(attempt.holderAllianceLedger?.socialPending||attempt.holderAllianceLedger?.pending||attempt.allianceDistribution?.pending||attempt.holderAllianceLedger?.retryRows);
   add('pending','Saved transactions',pending?'blocked':'pass',pending?'A saved transaction or retry batch needs reconciliation. Do not create a replacement.':'No saved transaction or retry batch is pending.');
   add('pause','Coin-level payouts',attempt.allianceDistribution?.automaticPaused===true?'blocked':'pass',attempt.allianceDistribution?.automaticPaused===true?'Coin distribution is paused. Review its settings before resuming.':'Coin distribution is not paused. Program activation remains separate.');
   let balances=null;

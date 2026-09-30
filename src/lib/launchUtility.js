@@ -1,4 +1,5 @@
 import { PublicKey } from '@solana/web3.js';
+import { socialClaimCapabilities, SOCIAL_FEE_CONSENT_VERSION } from './socialFeePolicy.js';
 import { normalizeLaunchAlliance, ALLIANCE_CONSENT_VERSION } from './launchAlliance.js';
 import { normalizeHolderAlliance, HOLDER_ALLIANCE_CONSENT_VERSION, WALLET_SPLIT_CONSENT_VERSION, MULTI_WALLET_CONSENT_VERSION, MAX_FEE_RECIPIENTS, splitRecipients } from './holderAlliance.js';
 
@@ -45,6 +46,7 @@ export function launchUtilityCapabilities(env = process.env) {
   const usepaidAvailable = false;
   return {
     version: 1, consentVersion: LAUNCH_UTILITY_CONSENT_VERSION,
+    socialClaims: socialClaimCapabilities(env),
     linkedCollection: { available: true, chains: ['solana'], standard: 'metaplex-core' },
     alliance: { available: true, chains: ['solana'], rail: 'pump', quote: 'SOL', recipients: 2, consentVersion: ALLIANCE_CONSENT_VERSION },
     holderAlliance: { available: true, chains: ['solana'], rail: 'pump', quote: 'SOL', minimumUsd: 20, cadenceHours: 12, consentVersion: HOLDER_ALLIANCE_CONSENT_VERSION, walletSplitConsentVersion: WALLET_SPLIT_CONSENT_VERSION, multiWalletConsentVersion:MULTI_WALLET_CONSENT_VERSION,maxRecipients:MAX_FEE_RECIPIENTS },
@@ -79,6 +81,11 @@ export function reviewLaunchUtility(input, context = {}, env = process.env) {
   }
   if (policy.mode === 'holder_alliance') {
     summary = `Fee split: ${policy.creatorShareBps/100}% to the developer, ${policy.ownHolderShareBps/100}% to this coin’s eligible holders${policy.partnerHolderShareBps ? `, ${policy.partnerHolderShareBps/100}% to holders of ${policy.partnerName} (${policy.partnerMint})` : ''}${splitRecipients(policy).map(r=>`, ${r.shareBps/100}% to ${r.label||'recipient wallet'} (${r.wallet})`).join('')}. Paid in SOL; this is not a custom trading pair.`;
+    if(policy.socialShareBps){
+      if(!capabilities.socialClaims.available)blockers.push(capabilities.socialClaims.reason);
+      summary+=' X recipients: '+policy.socialRecipients.map(r=>`${r.shareBps/100}% to ${r.name||'X account'} (@${r.handle}, account ID ${r.xUserId||'not verified'})`).join('; ')+'.';
+      warnings.push('X recipients claim SOL on SlimeWire after official X sign-in. This is not X Money, cash or an X endorsement. Confirm the actual profile and numeric account ID; fees follow that account even if its handle changes. A handle alone never authorizes a claim.', 'Unclaimed allocations remain liabilities in this coin’s managed vault; they do not expire or return to the developer. Account recovery follows X account access. Claims require at least 0.001 SOL. The developer funds bounded network fees. No guaranteed earnings.');
+    }
     if(policy.recipientShareBps)warnings.push('Verify the full recipient wallet, not a token CA. Its share passes through the same dedicated rewards vault and is paid on the 12-hour cycle, without a holder balance requirement or recipient signup. Incomplete active holder snapshots delay the entire allocation. Transfers are irreversible.');
     warnings.push('Permanent Pump fee split: launcher plus a dedicated encrypted SlimeWire holder vault. Individual holder payouts are managed by SlimeWire, not Pump’s native reward program. Keep a backup of the creator wallet.',
       'Every 12 hours, complete finalized holder snapshots and fresh USD quotes determine eligibility: strictly more than $20 of the respective token. Each community’s allocation is weighted by eligible token balances. Owning both coins can qualify a wallet for both allocations.',
@@ -92,7 +99,7 @@ export function reviewLaunchUtility(input, context = {}, env = process.env) {
     summary = `${policy.feeShareBps / 100}% of creator fees proposed for ${policy.collectionSymbol}; maximum ${policy.maxPriceSol} SOL per NFT and ${policy.dailyBudgetSol} SOL per day. Preview only.`;
     warnings.push('A marketplace collection name is not proof of authenticity or affiliation. On-chain collection verification is required before any purchase.', 'The preview never spends money, redirects fees, burns NFTs or runs a lottery.');
   }
-  return { policy, available: !blockers.length, summary, blockers, warnings, treasury: policy.mode === 'usepaid' ? capabilities.usepaid.treasury : policy.mode === 'alliance' ? policy.partnerWallet : '', consentVersion: policy.mode === 'holder_alliance' ? (Array.isArray(policy.recipients)?MULTI_WALLET_CONSENT_VERSION:policy.recipientShareBps ? WALLET_SPLIT_CONSENT_VERSION : HOLDER_ALLIANCE_CONSENT_VERSION) : policy.mode === 'alliance' ? ALLIANCE_CONSENT_VERSION : capabilities.consentVersion };
+  return { policy, available: !blockers.length, summary, blockers, warnings, treasury: policy.mode === 'usepaid' ? capabilities.usepaid.treasury : policy.mode === 'alliance' ? policy.partnerWallet : '', consentVersion: policy.mode === 'holder_alliance' ? (policy.socialShareBps?SOCIAL_FEE_CONSENT_VERSION:Array.isArray(policy.recipients)?MULTI_WALLET_CONSENT_VERSION:policy.recipientShareBps ? WALLET_SPLIT_CONSENT_VERSION : HOLDER_ALLIANCE_CONSENT_VERSION) : policy.mode === 'alliance' ? ALLIANCE_CONSENT_VERSION : capabilities.consentVersion };
 }
 export function assertLaunchUtilityReady(input, context = {}, env = process.env) {
   const review = reviewLaunchUtility(input, context, env);

@@ -28,6 +28,7 @@ function termsFor(attempt) {
   return { mint: attempt.tokenMint, creator: attempt.devWalletPublicKey, mode: p.mode,
     creatorShareBps: p.creatorShareBps, ownHolderShareBps: p.ownHolderShareBps,
     partnerHolderShareBps: p.partnerHolderShareBps, partnerMint: p.partnerMint,
+    ...(p.socialShareBps?{socialShareBps:p.socialShareBps,socialRecipients:p.socialRecipients.map(({xUserId,handle,shareBps})=>({xUserId,handle,shareBps}))}:{}),
     ...(p.recipientShareBps?{recipientShareBps:p.recipientShareBps,...(Array.isArray(p.recipients)?{recipients:p.recipients}:{recipientWallet:p.recipientWallet})}:{}),
     minimumUsd: 20, cadenceHours: flowScheduleSummary(attempt).cadenceHours, asset: 'SOL', permanent: true,
     ...(approved?{program:{approvalHash:approved.hash,minimumLamports:approved.program?.minimumLamports,maximumLamports:approved.program?.maximumLamports}}:{}) };

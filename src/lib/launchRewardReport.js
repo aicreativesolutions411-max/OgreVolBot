@@ -22,7 +22,7 @@ function feeDestinations(attempt,policy,holder){
   const ledger=attempt.holderAllianceLedger||{};
   const destination=(id,label,shareBps,address,tokenMint)=>{
     const source=ledger.creditSources?.[id];
-    const owed=Object.values(source||{}).reduce((a,b)=>a+BigInt(amount(b)),0n)+BigInt(amount(id==='own'?ledger.carryOwn:id==='partner'?ledger.carryPartner:0));
+    const owed=Object.values(source||{}).reduce((a,b)=>a+BigInt(amount(b)),0n)+BigInt(amount(id==='own'?ledger.carryOwn:id==='partner'?ledger.carryPartner:id.startsWith('x:')?ledger.socialCredits?.[id.slice(2)]:0));
     return {id,label,shareBps:Number(shareBps)||0,address:text(address,44),tokenMint:text(tokenMint,44),
       paidLamports:ledger.sourceTrackingSince?amount(ledger.paidBySource?.[id]):null,reservedLamports:ledger.sourceTrackingSince?String(owed):null,allocatedLamports:ledger.sourceTrackingSince?amount(ledger.allocatedBySource?.[id]):null,
       coverage:ledger.sourceTrackingSince?'tracked':'not_yet_attributed'};
@@ -31,6 +31,7 @@ function feeDestinations(attempt,policy,holder){
     paidLamports:tracked?direct(attempt.devWalletPublicKey):null,reservedLamports:null,coverage:tracked?(partial?'partial':'verified_recorded_receipts'):'wallet_wide_only'}];
   if(holder)destinations.push(destination('own','This coin’s holders',policy.ownHolderShareBps,'',attempt.tokenMint),destination('partner',policy.partnerName||'Other community holders',policy.partnerHolderShareBps,'',policy.partnerMint),...splitRecipients(policy).map(r=>destination(recipientSource(policy,r.wallet),r.label||'Recipient wallet',r.shareBps,r.wallet,'')));
   else if(policy.mode==='alliance')destinations.push({id:'recipient',label:policy.partnerName||'Recipient wallet',address:text(policy.partnerWallet,44),shareBps:policy.partnerShareBps,paidLamports:direct(policy.partnerWallet),reservedLamports:null,coverage:partial?'partial':'verified_recorded_receipts'});
+  if(holder)for(const r of policy.socialRecipients||[])destinations.push({...destination('x:'+r.xUserId,'@'+r.handle,r.shareBps,'',''),xUserId:r.xUserId,claimMode:'verified_x_sol',claimUrl:'/launch/claim'});
   return {destinations:destinations.filter(d=>d.shareBps>0),collectionTotalLamports:tracked?String(verified.reduce((a,r)=>a+BigInt(amount(r.totalLamports)),0n)):null,
     collectionReceiptCount:verified.length,collectionAccountingPending:partial,
     collectionReceipts:[...verified.map(r=>({...r,accountingStatus:'verified'})),...receipts.filter(r=>!verified.some(v=>v.signature===r.signature))].slice(-20).map(r=>({signature:text(r.signature,100),confirmedAt:text(r.confirmedAt,40),totalLamports:r.accountingStatus==='verified'?amount(r.totalLamports):null,accountingStatus:r.accountingStatus||'unavailable'})),

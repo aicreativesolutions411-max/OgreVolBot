@@ -52,7 +52,7 @@ export function flowCapabilities(enabled = false) {
     activation: { available: enabled === true, reason: enabled ? '' : 'Program activation is held for funded validation. Drafts, reviews and simulations work; they never move funds.' },
     modules: [
       { id: 'programs', title: 'Native programs', state: enabled ? 'beta' : 'preview', detail: 'Saved drafts, exact-term approval, schedules, minimum funding, per-cycle allocation caps and receipts.' },
-      { id: 'social', title: 'Social claims', state: 'unavailable', detail: 'Identity verification, recipient recovery and a claim custody adapter are not implemented. No X Money connection.' },
+      { id: 'social', title: 'Social claims', state: 'unavailable', detail: 'Native X identity and SOL claim flow built; new routing and payments remain held for identity setup, security review and funded validation. No X Money connection.' },
       { id: 'assets', title: 'Asset rewards & pairs', state: 'unavailable', detail: 'Alternative quote launches, asset conversions and baskets require verified execution adapters and liquidity checks.' },
       { id: 'extensions', title: 'Apps & extensions', state: 'unavailable', detail: 'Third-party code execution, paid apps and public developer credentials are not enabled.' }
     ], note: 'No Bags dependency. Programs do not change permanent on-chain fee splits. Limits cover newly allocated managed rewards, not direct developer fees, saved unpaid credits or network costs.' };
@@ -87,7 +87,8 @@ export function previewFlow(attempt, definition, availableSol) {
   const shares = [
     ...(p.ownHolderShareBps ? [{ label: 'Own community', bps: p.ownHolderShareBps }] : []),
     ...(p.partnerHolderShareBps ? [{ label: 'Partner community', bps: p.partnerHolderShareBps }] : []),
-    ...splitRecipients(p).map(r => ({ label: r.label || 'Receiving wallet', wallet: r.wallet, bps: r.shareBps }))
+    ...splitRecipients(p).map(r => ({ label: r.label || 'Receiving wallet', wallet: r.wallet, bps: r.shareBps })),
+    ...(p.socialRecipients||[]).map(r=>({label:'@'+r.handle+' · reserved until claimed',xUserId:r.xUserId,bps:r.shareBps}))
   ];
   return { simulated: true, program, availableLamports: String(available), allocatedLamports: String(allocated), retainedLamports: String(available - allocated),
     destinations: shares.map(r => ({ ...r, lamports: String(allocated * BigInt(r.bps) / total) })),

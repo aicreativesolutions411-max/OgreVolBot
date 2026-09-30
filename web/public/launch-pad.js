@@ -171,6 +171,7 @@
     const sync=()=>{
       draft.name=$('coin-name').value;draft.symbol=$('coin-ticker').value;draft.description=$('coin-description').value;draft.mode=$('draftFeeMode').value;draft.launchUtility=utility.read('draftFee');
       const p=draft.launchUtility,shares=p.mode==='creator'?[['Developer',10000]]:p.mode==='alliance'?[['Developer',10000-p.partnerShareBps],[p.partnerName||'Treasury wallet',p.partnerShareBps]]:[['Developer',p.creatorShareBps],['My holders',p.ownHolderShareBps],['Other community',p.partnerHolderShareBps],...utility.recipients(p).map(r=>[r.label||'Receiving wallet',r.shareBps])];
+      shares.push(...(p.socialRecipients||[]).map(r=>['@'+r.handle+' · claim SOL',r.shareBps]));
       const error=utility.draftError(p);
       const checks=root.SlimeJourney?.readiness({...draft,splitError:error||''})||[];
       $('launch-readiness').innerHTML='<h3>Before your coin goes live</h3><ul>'+checks.map(c=>'<li data-state="'+c.state+'"><b>'+(c.state==='ready'?'✓ ':c.state==='fix'?'! ':'→ ')+esc(c.label)+'</b><small>'+esc(c.detail)+'</small></li>').join('')+'</ul>';

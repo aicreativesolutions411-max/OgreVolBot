@@ -120,6 +120,10 @@ import { normalizeHolderAlliance, splitRecipients, verifySplitRecipient, allocat
 import { checkFlowReadiness } from "./lib/slimeFlowReadiness.js";
 import { createSlimeFlows, flowCapabilities, evaluateFlow, flowScheduleSummary } from "./lib/slimeFlows.js";
 import { settleHolderBatch } from "./lib/holderAllianceSettlement.js";
+import { createSocialClaimIdentity } from "./lib/socialClaimIdentity.js";
+import { createSocialClaimTickets, settleSocialClaim } from "./lib/socialClaimSettlement.js";
+import { socialClaimCapabilities } from "./lib/socialFeePolicy.js";
+import { createSocialClaimRoutes } from "./lib/socialClaimRoutes.js";
 import { readHolderSnapshot, readHolderCommunities } from "./lib/holderAllianceSnapshot.js";
 import { buildLaunchRewardReport, holderEligibilityReport } from "./lib/launchRewardReport.js";
 import { createReadStreamBackoff } from "./lib/readStreamBackoff.js";
@@ -6995,6 +6999,7 @@ async function registerTelegramBotCommands() {
     { command: "rewards", description: "Holder rewards inbox across your wallets" },
     { command: "community", description: "Connect coins, partnerships and project goals" },
     { command: "flows", description: "Build and review native fee programs" },
+    { command: "claimsol", description: "X-recipient fee claims and availability" },
     { command: "balances", description: "Wallet balances" },
     { command: "trade", description: "Buy / sell menu" },
     { command: "livetest", description: "Real mainnet test buy/sell flow" },
@@ -7432,6 +7437,10 @@ and is checked by an automated release audit before every upload.</p></div>
     }
     if (request.method === "GET" && requestUrl.pathname === "/launch/community") {
       await serveStaticHtmlPage(response, "launch-community.html");
+      return;
+    }
+    if (request.method === "GET" && ["/launch/claim", "/launch/claim/"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "launch-claim.html");
       return;
     }
     if (request.method === "GET" && ["/launch/flows", "/launch/flows/"].includes(requestUrl.pathname)) {
@@ -8884,6 +8893,7 @@ async function handleSpotifyPlaylists(request, response) {
 async function handleWebApiRequest(request, response, requestUrl) {
   try {
     const pathname = requestUrl.pathname;
+    if (pathname.startsWith("/api/web/social-claims/") && await getSocialClaims().route(request, response, requestUrl)) return;
 
     const workerTickPaths = new Set([
       "/api/internal/worker/tick",
@@ -12829,6 +12839,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "POST" && pathname === "/api/web/launch/utility/review") {
       const body = await readJsonRequestBody(request, 16000);
       body.launchUtility = normalizeLaunchUtility(body.launchUtility);
+      if (body.launchUtility.socialShareBps && socialClaimCapabilities().lookupConfigured) body.launchUtility = await getSocialClaims().identity.resolvePolicy(body.launchUtility);
       let recipientCreator = "";
       if (["alliance", "holder_alliance"].includes(body.launchUtility?.mode) && (body.devWalletIndex || body.selectedDevWalletId || body.devWalletPublicKey)) {
         const selected = selectPumpLaunchWallet(await readWalletStore(), auth.userId, firstString(body.devWalletIndex, body.selectedDevWalletId, body.devWalletPublicKey));
@@ -20186,6 +20197,11 @@ async function handleMessage(message, userId) {
     return;
   }
 
+  if (/^\/claimsol(?:@\w+)?(?:\s|$)/i.test(text)) {
+    const cap = socialClaimCapabilities();
+    await sayHtml(chatId, "◈ <b>Claim SOL with X</b>\n\nSign in with the X account selected by the launcher, choose a receiving Solana wallet and review your allocated fees. View per-coin balances and finalized receipts.\n\n" + escapeTelegramHtml(cap.available ? "Claims are available on the secure SlimeWire page." : cap.reason) + "\n\nThis is SOL, not X Money or cash. No claim or wallet transfer runs from this command.", { inline_keyboard: [[{ text: "Open claim page", url: "https://app.slimewire.org/launch/claim" }]] });
+    return;
+  }
   if (/^\/flows(?:@\w+)?(?:\s|$)/i.test(text)) {
     if (!isPrivateChat(message.chat)) { await say(chatId, "Open my DM and use /flows to manage your private launch programs."); return; }
     const available = slimeFlowsEnabled();
@@ -32622,6 +32638,36 @@ function launchFeeReadRpc() {
 }
 let communityHubInstance;
 let slimeFlowsInstance;
+let socialClaimsInstance;
+async function verifySocialClaimDestination(wallet, attempt) {
+  if ([attempt.tokenMint, attempt.pumpFeeSharing?.vaultAddress].includes(wallet)) throw new Error("Choose a receiving wallet, not the coin or rewards vault.");
+  const info = await launchFeeReadRpc().getAccountInfo(new PublicKey(wallet), "finalized");
+  if (info && (!info.owner.equals(SystemProgram.programId) || info.executable || info.data?.length)) throw new Error("Destination is a token or program account. Paste a SOL receiving wallet.");
+}
+function getSocialClaims() {
+  if (socialClaimsInstance) return socialClaimsInstance;
+  const file = path.join(CONFIG.dataDir, "social-claim-identity.json");
+  const identity = createSocialClaimIdentity({
+    read: () => readJson(file),
+    mutate: task => withMoneyCacheLock("social-claim-identity", 30000, () => withFileLock(file, async () => {
+      const state = await readJson(file), result = await task(state);
+      await writeJsonFile(file, state); return result;
+    }), () => { throw new Error("X verification is busy. Please try again shortly."); })
+  });
+  const tickets = createSocialClaimTickets({ secret: process.env.SLIME_X_SESSION_SECRET });
+  const route = createSocialClaimRoutes({ identity, tickets,
+    attempts: async () => (await readPumpLaunchAttempts()).attempts || [],
+    managedWallets: async request => { const auth = await authenticateOptionalWebRequest(request); return auth?.userId ? walletsForOwner(await readWalletStore(), auth.userId) : []; },
+    verifyDestination: verifySocialClaimDestination,
+    readBody: readJsonRequestBody, send: sendWebJson,
+    execute: async intent => {
+      const attempt = await freshPumpFeeSharingAttempt(intent.attemptId);
+      if (!attempt || attempt.tokenMint !== intent.mint) throw new Error("Coin allocation no longer matches this review.");
+      await distributeHolderAlliance(attempt, { socialIntent: intent });
+    }
+  });
+  return socialClaimsInstance = { identity, route };
+}
 function slimeFlowsEnabled() { return process.env.SLIME_FLOWS_VALIDATED_VERSION === "2026-09-29-v1"; }
 function getSlimeFlows() {
   if (!slimeFlowsInstance) slimeFlowsInstance = createSlimeFlows({
@@ -32670,6 +32716,7 @@ function getCommunityHub() {
     wallets: async userId => walletsForOwner(await readWalletStore(), userId),
     authority: verifyCommunityAuthority,
     reviewPolicy: async (input, context) => {
+      if (input?.socialRecipients?.length) getSocialClaims().identity.verifyPolicy(input);
       const review = reviewLiveLaunchUtility(input, { rail: "pump" });
       if (!review.available) throw new Error(review.blockers.join(" "));
       assertLaunchUtilityReady(review.policy, { rail: "pump" });
@@ -32972,14 +33019,14 @@ function startHolderAllianceRunner() {
         const ledger = a.holderAllianceLedger || {};
         const flow = evaluateFlow(a, { now, enabled: slimeFlowsEnabled() });
         const flowPaused = a.slimeFlow?.approved && !['ready', 'schedule', 'minimum'].includes(flow.reason);
-        return ledger.pending || a.allianceDistribution?.pending || (!flowPaused && a.allianceDistribution?.automaticPaused !== true && (ledger.retryRows || Object.values(ledger.credits || {}).some(v => BigInt(v) >= HOLDER_MIN_PAYOUT) || (flow.allowed && now - Number(ledger.lastSnapshotAt || 0) >= HOLDER_CADENCE_MS)));
+        return ledger.socialPending || ledger.pending || a.allianceDistribution?.pending || (!flowPaused && a.allianceDistribution?.automaticPaused !== true && (ledger.retryRows || Object.values(ledger.credits || {}).some(v => BigInt(v) >= HOLDER_MIN_PAYOUT) || (flow.allowed && now - Number(ledger.lastSnapshotAt || 0) >= HOLDER_CADENCE_MS)));
       }).sort((a,b) => Number(a.holderLastCheckAt || 0) - Number(b.holderLastCheckAt || 0));
       const attempt = due[0]; if (!attempt) return;
       const id = pumpFeeSharingAttemptId(attempt);
       try {
         await distributeHolderAlliance(attempt);
         const latest = await freshPumpFeeSharingAttempt(id), ledger = latest.holderAllianceLedger || {};
-        const pending = ledger.pending || ledger.retryRows || latest.allianceDistribution?.pending || Object.values(ledger.credits || {}).some(v => BigInt(v) >= HOLDER_MIN_PAYOUT);
+        const pending = ledger.socialPending || ledger.pending || ledger.retryRows || latest.allianceDistribution?.pending || Object.values(ledger.credits || {}).some(v => BigInt(v) >= HOLDER_MIN_PAYOUT);
         const cadence = evaluateFlow(latest, { enabled: slimeFlowsEnabled() }).cadenceMs;
         const snapshotBase = Number(ledger.lastSnapshotAt || (latest.slimeFlow?.approved ? 0 : Date.now()));
         await upsertPumpLaunchAttempt({ id, holderLastError: "", holderLastCheckAt: Date.now(), holderNextCheckAt: pending ? Date.now() + 15000 : Math.max(Date.now() + 300000, snapshotBase + cadence) });
@@ -32998,14 +33045,14 @@ function effectiveAlliancePolicy(attempt) {
   if (attempt.launchUtility?.mode !== "holder_alliance") return attempt.launchUtility;
   const policy = normalizeHolderAlliance(attempt.launchUtility), vault = attempt.pumpFeeSharing?.vaultAddress;
   if (!vault) throw new Error("Holder vault is not ready. Retry the original setup.");
-  return { mode: "alliance", partnerWallet: vault, partnerName: "Dedicated rewards vault", partnerShareBps: policy.ownHolderShareBps + policy.partnerHolderShareBps + policy.recipientShareBps, autoDistribute: true };
+  return { mode: "alliance", partnerWallet: vault, partnerName: "Dedicated rewards vault", partnerShareBps: policy.ownHolderShareBps + policy.partnerHolderShareBps + policy.recipientShareBps + (policy.socialShareBps || 0), autoDistribute: true };
 }
 
-async function distributeHolderAlliance(initial) {
+async function distributeHolderAlliance(initial, { socialIntent = null } = {}) {
   const id = pumpFeeSharingAttemptId(initial), mint = pumpFeeSharingMint(initial);
   // Same durable lock as pause/resume, so a paused job cannot sign a later batch.
   // Crank uses that lock separately; never nest the same non-reentrant lock.
-  await distributeLaunchAlliance(initial, { holderCrankOnly: true });
+  if (!socialIntent && !initial.holderAllianceLedger?.socialPending) await distributeLaunchAlliance(initial, { holderCrankOnly: true });
   return withMoneyCacheLock(`alliance-distribute:${mint}`, 600000, async () => {
     let attempt = await freshPumpFeeSharingAttempt(id);
     const policy = normalizeHolderAlliance(attempt.launchUtility);
@@ -33015,7 +33062,7 @@ async function distributeHolderAlliance(initial) {
     if (!allianceConfigMatches(config, effectiveAlliancePolicy(attempt), attempt.devWalletPublicKey)) throw new Error("Permanent holder fee configuration does not match. No payout sent.");
     const program = evaluateFlow(attempt, { enabled: slimeFlowsEnabled() });
     const paused = attempt.allianceDistribution?.automaticPaused === true || (attempt.slimeFlow?.approved && !['ready', 'schedule', 'minimum'].includes(program.reason));
-    const save = async ledger => { await upsertPumpLaunchAttempt({ id, holderAllianceLedger: ledger }); attempt = await freshPumpFeeSharingAttempt(id); };
+    const save = async ledger => { await upsertPumpLaunchAttempt({ id, holderAllianceLedger: ledger, ...(ledger.socialPending ? { holderNextCheckAt: Date.now() } : {}) }); attempt = await freshPumpFeeSharingAttempt(id); };
     const load = async () => attempt.holderAllianceLedger || {};
     const prepare = async rows => {
       if (policy.recipientShareBps && splitRecipients(policy).some(recipient => rows.some(row => row.wallet === recipient.wallet))) await verifySplitRecipient(launchFeeReadRpc(), policy, { creator: attempt.devWalletPublicKey, mint, vault: attempt.pumpFeeSharing?.vaultAddress });
@@ -33029,17 +33076,26 @@ async function distributeHolderAlliance(initial) {
       const [fee, payerBalance, vaultBalance] = await Promise.all([connection.getFeeForMessage(tx.compileMessage(), "confirmed"), connection.getBalance(signer.publicKey, "confirmed"), connection.getBalance(vault.keypair.publicKey, "finalized")]);
       if (!Number.isSafeInteger(fee?.value) || fee.value < 0 || fee.value > 100000 || payerBalance < fee.value + 3000000) throw new Error("Creator needs 0.003 SOL plus network fees; payout network fee limit is 0.0001 SOL per batch.");
       if (BigInt(vaultBalance) < total + HOLDER_VAULT_RESERVE) throw new Error("Holder vault is short of its reserved payout balance. No payout sent.");
+      if (policy.socialShareBps && BigInt(vaultBalance) < holderLiabilities(await load()) + HOLDER_VAULT_RESERVE) throw new Error("Vault does not cover all saved rewards. No payout sent.");
       tx.sign(signer, vault.keypair);
       return { signature: bs58.encode(tx.signature), rawBase64: tx.serialize().toString("base64"), blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight };
     };
     let ledger = await load();
+    if (ledger.socialPending || socialIntent) {
+      if (socialIntent) {
+        if (socialIntent.attemptId !== id || socialIntent.mint !== mint || !policy.socialRecipients?.some(r => r.xUserId === socialIntent.xUserId)) throw new Error("Claim does not match this coin’s X allocation.");
+        await verifySocialClaimDestination(socialIntent.wallet, attempt);
+      }
+      await settleSocialClaim({ load, save, prepare, connection, intent: socialIntent, enabled: socialClaimCapabilities().available && !paused });
+      return launchUtilityPublic(attempt);
+    }
     // Pending/saved batches finish before allocating new deposits. At most one
     // transaction per tick keeps the trading hot path and RPC budget available.
     if (ledger.pending || ledger.retryRows || (!paused && Object.values(ledger.credits || {}).some(v => BigInt(v) >= HOLDER_MIN_PAYOUT))) {
       await settleHolderBatch({ load, save, prepare, connection, paused });
       return launchUtilityPublic(attempt);
     }
-    if (paused || !program.allowed || Date.now() - Number(ledger.lastSnapshotAt || 0) < HOLDER_CADENCE_MS) return launchUtilityPublic(attempt);
+    if (paused || (policy.socialShareBps && !socialClaimCapabilities().available) || !program.allowed || Date.now() - Number(ledger.lastSnapshotAt || 0) < HOLDER_CADENCE_MS) return launchUtilityPublic(attempt);
     const vault = attempt.pumpFeeSharing.vaultAddress;
     const balance = await connection.getBalance(new PublicKey(vault), "finalized");
     if (BigInt(balance) <= HOLDER_VAULT_RESERVE) return launchUtilityPublic(attempt);
@@ -45040,6 +45096,8 @@ async function writeJsonFile(filePath, value) {
 
 function defaultJsonForPath(filePath) {
   switch (path.basename(filePath)) {
+    case "social-claim-identity.json":
+      return { states: [], sessions: [], lookups: [] };
     case "wallets.json":
       return { wallets: [] };
     case "swamp-leaderboard.json":
@@ -104973,6 +105031,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
   }
   const nftCollection = normalizeLinkedNftCollection(body.nftCollection, { name, symbol });
   body.launchUtility = normalizeLaunchUtility(body.launchUtility);
+  if (body.launchUtility.socialShareBps) getSocialClaims().identity.verifyPolicy(body.launchUtility);
   const utilityContext = { ...body, rail: launchRail, pumpCashback, holderRewards, feeMode };
   if (launchRail === "pump" && isPumpPortalLocalLaunch()) {
     if (burnCreatorFees || buybackWallet || ["buyback", "burn", "split"].includes(feeMode)) throw new Error("This Pump launcher does not execute burn or buyback fee routes. Clear the saved route or choose Community Alliance under NFT & Fees.");
