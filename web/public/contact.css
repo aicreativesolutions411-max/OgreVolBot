@@ -1,0 +1,29 @@
+.contact-main{max-width:1480px;margin:0 auto;padding:30px 4% 0}
+.contact-hero{position:relative;isolation:isolate;overflow:hidden;min-height:590px;border:1px solid #b4d7be38;border-radius:22px;background:#040805;display:flex;align-items:center}
+.contact-art{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:right center;z-index:-2}
+.contact-hero:after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:linear-gradient(90deg,#030705ea,#03070570 43%,transparent 72%)}
+.contact-copy{max-width:610px;padding:60px 50px}
+.contact-kicker{margin:0 0 22px;color:#bedba1;font:10px monospace;letter-spacing:2.7px;line-height:1.5}
+.contact-copy h1{font-size:clamp(48px,5.2vw,76px);line-height:1.04;letter-spacing:-3.7px;margin:0 0 25px}
+.contact-copy h1 span{color:var(--lime)}
+.contact-intro{max-width:410px;font-size:16px;line-height:1.7;color:#c1ccc2;margin:0 0 28px}
+.contact-cta{min-height:50px;gap:28px}.contact-cta span{font-size:24px;line-height:1}
+.contact-handle{font-size:12px;color:#bacab9;line-height:1.8;margin:17px 0 0}
+.contact-handle a{font-weight:600;color:#e9f6e3;text-decoration:underline;text-underline-offset:3px}
+.contact-handle span{display:block;font-size:11px;color:#98aa9a}
+.contact-topics{padding:52px 0 40px}.contact-section-head .contact-kicker{margin-bottom:12px}
+.contact-section-head h2,.contact-brief h2{font-size:30px;line-height:1.2;letter-spacing:-1px;margin:0 0 26px}
+.contact-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}
+.contact-topic{border:1px solid #b3d6b22a;background:linear-gradient(135deg,#13201980,#060b08);padding:29px;border-radius:16px}
+.contact-number{font:10px monospace;letter-spacing:1.8px;color:#a2bc8d}
+.contact-topic h3{font-size:20px;letter-spacing:-.5px;margin:18px 0 12px}
+.contact-topic p,.contact-brief p{color:#b3c1b4;font-size:14px;line-height:1.75;margin:0}
+.contact-brief{display:grid;grid-template-columns:1.4fr 1fr;gap:60px;padding:38px 0 42px;border-top:1px solid #afcfb225}
+.contact-brief .contact-kicker{font:10px monospace;letter-spacing:2px;color:#bedba1;margin-bottom:13px}
+.contact-brief h2{margin-bottom:18px}.contact-help{display:inline-flex;align-items:center;min-height:44px;font-size:13px;line-height:1.5;color:#d4ecb9;margin-top:18px}.contact-help:hover{color:var(--lime)}
+.contact-safety{position:relative;border:1px solid #a3cb9240;border-radius:16px;padding:25px 30px;background:#17231950}
+.contact-safety>span{position:absolute;right:25px;top:21px;color:#a9d17c;font-size:26px}.contact-safety h3{margin:0 35px 12px 0;font-size:18px}.contact-safety p{font-size:12px;line-height:1.65}.contact-safety p+p{margin-top:13px}.contact-safety strong{color:#e1eedd}
+.contact-foot{align-items:center;gap:18px;flex-wrap:wrap;border-top:1px solid #afcfb225}.contact-foot nav{display:flex;flex-wrap:wrap;gap:22px}.contact-foot a{display:inline-flex;align-items:center;min-height:44px}.contact-foot a:hover{color:var(--lime)}
+@media(max-width:1050px){.contact-hero{min-height:540px}.contact-copy{padding:45px 34px;max-width:55%}.contact-copy h1{font-size:54px;letter-spacing:-2.5px}.contact-intro{font-size:15px}.contact-topic{padding:23px}.contact-brief{gap:30px}}
+@media(max-width:720px){.contact-main{padding:18px 4% 0}.contact-hero{min-height:610px;align-items:flex-start}.contact-art{height:100%;object-position:76% center;opacity:.76}.contact-hero:after{background:linear-gradient(180deg,#040906ef 7%,#040906d9 48%,#04090644 86%)}.contact-copy{padding:31px 25px 185px;max-width:100%}.contact-copy h1{font-size:clamp(42px,11vw,65px);letter-spacing:-2.3px}.contact-kicker{font-size:9px;margin-bottom:20px}.contact-intro{font-size:14px;max-width:360px}.contact-handle span{font-size:10px}.contact-grid{grid-template-columns:1fr}.contact-topics{padding:34px 0 29px}.contact-section-head h2,.contact-brief h2{font-size:27px}.contact-topic{padding:25px}.contact-topic h3{margin-top:12px}.contact-brief{grid-template-columns:1fr;gap:26px;padding:29px 0}.contact-foot{font-size:8px;letter-spacing:1.2px;justify-content:flex-start;gap:5px 22px}.contact-foot nav{gap:17px}.contact-foot>span{flex-basis:100%;padding:8px 0}}
+@media(prefers-reduced-motion:reduce){.contact-cta{transition:none;transform:none}}

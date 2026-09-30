@@ -11,6 +11,7 @@ const pages = new Map([
   ['launch.html', ['/launch', 'SlimeWire Launch — Create. Share. Track.', 'Launch a coin, choose your fee destinations and follow recorded payments with transaction receipts.']],
   ['bot.html', ['/bot', 'SlimeWire Telegram — Scan. Trade. Connect.', 'Scan coins, trade privately and run your community with the SlimeWire Telegram toolkit.']],
   ['help.html', ['/help', 'SlimeWire — Help & safety', 'Get started with SlimeWire. Understand wallets, fees, backups and safe recovery.']],
+  ['contact.html', ['/contact', 'SlimeWire — Contact & collaborations', 'Have feedback, a project idea, or a game in the works? Talk directly with SlimeWire on Telegram about support and collaboration.']],
   ['launch-earnings.html', ['/launch/earnings', 'SlimeWire — Earnings & receipts', 'Follow recorded fees, pending rewards and per-coin payout receipts.']],
   ['launch-community.html', ['/launch/community', 'SlimeWire — Community rewards', 'Manage community fee sharing, partnerships and recorded rewards.']],
   ['fun.html', ['/wallet', 'SlimeWallet — Your crypto. Your move.', 'Manage your SlimeWire wallets, review trades, fund wallets and track holdings.']],

@@ -6,7 +6,7 @@ const surfaces = new Map([
 
 export function productNavigation(active = '') {
   const link = (key, href, label) => `<a href="${href}"${key === active ? ' aria-current="page"' : ''}>${label}</a>`;
-  return `<nav class="sw-product-nav" data-sw-product-nav aria-label="SlimeWire products">${link('wallet', '/wallet', 'Wallet')}${link('terminal', '/terminal?desktop=1', 'Terminal')}${link('launch', '/launch', 'Launch')}<details class="sw-more"><summary>More <span aria-hidden="true">⌄</span></summary><div><a href="/">Home</a><a href="/bot">Telegram bot</a><a href="/games">Slime Games</a><a href="/launch/earnings">Earnings & receipts</a><a href="/launch/flows">Slime Flows</a><a href="/help">Help & getting started</a><a href="/help#fees">Fees</a><a href="/help#security">Wallet safety</a></div></details></nav>`;
+  return `<nav class="sw-product-nav" data-sw-product-nav aria-label="SlimeWire products">${link('wallet', '/wallet', 'Wallet')}${link('terminal', '/terminal?desktop=1', 'Terminal')}${link('launch', '/launch', 'Launch')}<details class="sw-more"><summary>More <span aria-hidden="true">⌄</span></summary><div><a href="/">Home</a><a href="/bot">Telegram bot</a><a href="/games">Slime Games</a><a href="/launch/earnings">Earnings & receipts</a><a href="/launch/flows">Slime Flows</a><a href="/contact">Contact & collaborations</a><a href="/help">Help & getting started</a><a href="/help#fees">Fees</a><a href="/help#security">Wallet safety</a></div></details></nav>`;
 }
 
 export function applyProductNavigation(html, fileName) {

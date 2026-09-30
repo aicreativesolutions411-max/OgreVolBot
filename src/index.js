@@ -7464,6 +7464,10 @@ and is checked by an automated release audit before every upload.</p></div>
       await serveStaticHtmlPage(response, "help.html");
       return;
     }
+    if (request.method === "GET" && ["/contact", "/contact/", "/contact.html"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "contact.html");
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === "/resources") {
       await serveStaticHtmlPage(response, "resources.html");
       return;

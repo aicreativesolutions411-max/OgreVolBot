@@ -40,6 +40,7 @@ export const launchSiteNavigation = `
       <a href="/launch-on-slimewire-guide">Launch guide <span>Learn the launch workflow</span></a>
       <a href="/tg-guide">Telegram bot <span>Scans, trades &amp; group tools</span></a>
       <a href="/support">Help &amp; support</a>
+      <a href="/contact">Contact &amp; collaborations</a>
     </div></details>
   </div>
 </nav>`;
