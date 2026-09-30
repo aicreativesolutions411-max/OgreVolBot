@@ -65525,6 +65525,8 @@ const groupBuyDeliveryDiag = {
   lastDeliveredAt: 0,
   lastErrorAt: 0,
 };
+// Bounded aggregate timings only: never retain wallets, chat IDs or transaction IDs in health data.
+const groupBuyLatencySamples = [];
 let groupBuyDeliveryHealthState = {
   pendingAlerts: 0,
   pendingChats: 0,
@@ -65599,16 +65601,37 @@ function noteGroupBuyDelivery(kind, item) {
     groupBuyDeliveryDiag[buyKey] += 1;
     if (kind === "delivered") {
       const detectedAt = Number(item?.options?.detectedAt) || 0;
-      const latencyMs = detectedAt > 0 ? Math.max(0, Date.now() - detectedAt) : 0;
+      const now = Date.now();
+      const latencyMs = detectedAt > 0 && detectedAt <= now ? now - detectedAt : 0;
       if (latencyMs > 0) {
         groupBuyDeliveryDiag.lastBuyLatencyMs = latencyMs;
         groupBuyDeliveryDiag.maxBuyLatencyMs = Math.max(groupBuyDeliveryDiag.maxBuyLatencyMs, latencyMs);
         if (latencyMs > 10_000) groupBuyDeliveryDiag.buysOver10s += 1;
+        const enqueuedAt = Number(item?.createdAt) || 0;
+        if (enqueuedAt >= detectedAt && enqueuedAt <= now) {
+          groupBuyLatencySamples.push({ total: latencyMs, feed: enqueuedAt - detectedAt, queue: now - enqueuedAt });
+          if (groupBuyLatencySamples.length > 200) groupBuyLatencySamples.shift();
+        }
       }
     }
   }
   if (kind === "delivered") groupBuyDeliveryDiag.lastDeliveredAt = Date.now();
   if (kind === "retried" || kind === "terminal") groupBuyDeliveryDiag.lastErrorAt = Date.now();
+}
+
+function groupBuyLatencySnapshot() {
+  const percentile = (field, fraction) => {
+    if (!groupBuyLatencySamples.length) return null;
+    const values = groupBuyLatencySamples.map((sample) => sample[field]).sort((a, b) => a - b);
+    return values[Math.max(0, Math.ceil(values.length * fraction) - 1)];
+  };
+  return {
+    samples: groupBuyLatencySamples.length,
+    totalP50Ms: percentile("total", .5),
+    totalP95Ms: percentile("total", .95),
+    feedP95Ms: percentile("feed", .95),
+    queueP95Ms: percentile("queue", .95),
+  };
 }
 
 function updateGroupBuyDeliveryHealthState(store) {
@@ -66460,7 +66483,7 @@ async function postGroupBuy(mint, { eventKey = "", eventAlias = "", detectedAt =
       groupAlertMediaFor(e, defImg),
       telegramWithCommunityFooter(lines.join("\n")),
       groupBuyMarkup(mint),
-      { eventKey: alertEventKey, targetGeneration, detectedAt: Number(detectedAt) || Date.now() },
+      { eventKey: alertEventKey, targetGeneration, detectedAt: Number(detectedAt) || 0 },
     );
     durableWrites.push(queued.durable);
   }
@@ -66820,14 +66843,22 @@ function groupBuyChainWakeUrl() {
     return "";
   }
 }
+function groupBuyChainWakeCapacity(url) {
+  if (!url) return 0;
+  // An explicit override to the free public service is still public, not a dedicated 200-token plan.
+  try { return /^(?:api\.mainnet(?:-beta)?|api\.devnet|api\.testnet)\.solana\.com$/i.test(new URL(url).hostname) ? 32 : 200; }
+  catch { return 0; }
+}
 const GROUP_BUY_CHAIN_WAKE_URL = groupBuyChainWakeUrl();
 // Never silently reuse paid trade RPC credentials for background subscriptions.
 // The public fallback is best effort and bounded; an explicit WSS keeps its existing capacity.
-const GROUP_BUY_CHAIN_WAKE_MAX_SUBSCRIPTIONS = firstString(process.env.GROUP_BUY_CHAIN_WAKE_WS_URL, CHAINSTACK_WSS) ? 200 : 32;
+const GROUP_BUY_CHAIN_WAKE_MAX_SUBSCRIPTIONS = groupBuyChainWakeCapacity(GROUP_BUY_CHAIN_WAKE_URL);
 const groupBuyWakeBackoff = createReadStreamBackoff();
 let groupBuyChainWakeWs = null;
 let groupBuyChainWakeReconnectTimer = null;
 let groupBuyChainWakeHeartbeatTimer = null;
+let groupBuyChainWakeAckTimer = null;
+const groupBuyChainWakeFailedSockets = new WeakSet();
 let groupBuyChainWakeLastPongAt = 0;
 let groupBuyChainWakeRequestId = 1;
 let groupBuyChainWakeDesired = new Set();
@@ -66859,6 +66890,10 @@ function groupBuyChainWakeConnected() {
 }
 
 function noteGroupBuyChainWakeError(error) {
+  if (groupBuyChainWakeWs) {
+    if (groupBuyChainWakeFailedSockets.has(groupBuyChainWakeWs)) return;
+    groupBuyChainWakeFailedSockets.add(groupBuyChainWakeWs);
+  }
   groupBuyChainWakeDiag.errors += 1;
   groupBuyChainWakeDiag.lastError = groupBuyWakeBackoff.fail(error).lastError;
 }
@@ -66920,6 +66955,17 @@ function syncGroupBuyChainWakeSubscriptions() {
     );
     if (!sent) groupBuyChainWakeRequested.delete(mint);
   }
+  if (!groupBuyChainWakeAckTimer && [...groupBuyChainWakeRequest.values()].some((request) => request.type === "subscribe")) {
+    const ws = groupBuyChainWakeWs;
+    groupBuyChainWakeAckTimer = setTimeout(() => {
+      groupBuyChainWakeAckTimer = null;
+      if (groupBuyChainWakeWs !== ws) return;
+      if (![...groupBuyChainWakeRequest.values()].some((request) => request.type === "subscribe")) return;
+      noteGroupBuyChainWakeError(new Error("Solana log subscription acknowledgement timed out"));
+      try { ws.terminate(); } catch {}
+    }, 6_000);
+    groupBuyChainWakeAckTimer.unref?.();
+  }
 }
 
 function startGroupBuyChainWake() {
@@ -66959,6 +67005,7 @@ function startGroupBuyChainWake() {
     });
     ws.on("message", (buffer) => {
       if (groupBuyChainWakeWs !== ws) return;
+      if (groupBuyChainWakeFailedSockets.has(ws)) return;
       let message;
       try { message = JSON.parse(buffer.toString()); } catch { return; }
       if (message?.id != null) {
@@ -66968,7 +67015,7 @@ function startGroupBuyChainWake() {
         if (message.error) {
           if (request.type === "subscribe") groupBuyChainWakeRequested.delete(request.mint);
           noteGroupBuyChainWakeError(message.error?.message || "Solana log subscription failed");
-          try { ws.close(); } catch {}
+          try { ws.terminate(); } catch {}
           return;
         }
         if (request.type === "subscribe" && message.result != null) {
@@ -66977,6 +67024,10 @@ function startGroupBuyChainWake() {
           groupBuyWakeBackoff.reset();
           groupBuyChainWakeSubscriptionMint.set(subscription, request.mint);
           groupBuyChainWakeMintSubscription.set(request.mint, subscription);
+          if (![...groupBuyChainWakeRequest.values()].some((pending) => pending.type === "subscribe")) {
+            if (groupBuyChainWakeAckTimer) clearTimeout(groupBuyChainWakeAckTimer);
+            groupBuyChainWakeAckTimer = null;
+          }
           if (!groupBuyChainWakeDesired.has(request.mint)) syncGroupBuyChainWakeSubscriptions();
         }
         return;
@@ -67011,6 +67062,8 @@ function startGroupBuyChainWake() {
       groupBuyChainWakeDiag.connected = false;
       if (groupBuyChainWakeHeartbeatTimer) clearInterval(groupBuyChainWakeHeartbeatTimer);
       groupBuyChainWakeHeartbeatTimer = null;
+      if (groupBuyChainWakeAckTimer) clearTimeout(groupBuyChainWakeAckTimer);
+      groupBuyChainWakeAckTimer = null;
       groupBuyChainWakeRequest.clear();
       groupBuyChainWakeRequested.clear();
       groupBuyChainWakeSubscriptionMint.clear();
@@ -67018,8 +67071,9 @@ function startGroupBuyChainWake() {
       scheduleGroupBuyChainWakeReconnect();
     });
     ws.on("error", (error) => {
+      if (groupBuyChainWakeWs !== ws) return;
       noteGroupBuyChainWakeError(error);
-      try { ws.close(); } catch {}
+      try { ws.terminate(); } catch {}
     });
   } catch (error) {
     groupBuyChainWakeWs = null;
@@ -67105,6 +67159,7 @@ async function onGroupBuyTrade(d) {
     priceUsd: tradePriceUsd,
     mcUsd: (mcSol > 0 && solUsd > 0) ? mcSol * solUsd : 0,
     traderPublicKey: trader,
+    timestamp: firstString(d.timestamp, d.blockTime, d.createdAt),
     symbol: sym,
     signature: String(d.signature || d.tx || "")
   };
@@ -67198,13 +67253,14 @@ const groupBuyTradeHandoffInFlight = new Map();
 const groupBuyTradePollInFlight = new Set();
 const groupBuyTradeWakePending = new Map();
 const groupBuyTradeWakeConfirmTimers = new Map();
+const groupBuyTradeDeferredTimers = new Map();
 const GROUP_BUY_WAKE_CONFIRM_DELAYS_MS = [500, 1_000, 2_000, 4_000];
 const groupBuyTradeBackoff = new Map();
 let groupBuyRecoveryOffset = 0;
 let groupBuyTradeLastWarnAt = 0;
 const groupBuyTradeDiag = {
   polls: 0, pages: 0, rows: 0, buysQueued: 0, errors: 0, cursorGaps: 0, paginationYields: 0, rateLimits: 0, retries: 0,
-  wakePolls: 0, wakeBatches: 0, wakeHits: 0, wakeConfirmations: 0, recoveryQueued: 0,
+  wakePolls: 0, wakeBatches: 0, wakeHits: 0, wakeConfirmations: 0, recoveryQueued: 0, deferredWakes: 0,
   lastSuccessAt: 0, lastError: ""
 };
 
@@ -67700,6 +67756,7 @@ function groupBuyHealthSnapshot() {
   const now = Date.now();
   const gate = pumpSwapApiHostGate.snapshot();
   const stream = pumpPortalStream.stats() || {};
+  const latency = groupBuyLatencySnapshot();
   const pendingAgeMs = groupBuyDeliveryHealthState.oldestPendingAt
     ? Math.max(0, now - groupBuyDeliveryHealthState.oldestPendingAt)
     : 0;
@@ -67714,7 +67771,7 @@ function groupBuyHealthSnapshot() {
     websocketSubscriptionErrors: Number(stream.currentSubscriptionErrors ?? stream.counters?.subscriptionErrors) || 0,
     websocketLastProviderError: stream.lastProviderError || null,
     chainWakeEnabled: Boolean(GROUP_BUY_CHAIN_WAKE_URL),
-    chainWakeSource: firstString(process.env.GROUP_BUY_CHAIN_WAKE_WS_URL, CHAINSTACK_WSS) ? "configured" : "public-best-effort",
+    chainWakeSource: GROUP_BUY_CHAIN_WAKE_MAX_SUBSCRIPTIONS === 32 ? "public-best-effort" : "configured",
     chainWakeCapacity: GROUP_BUY_CHAIN_WAKE_MAX_SUBSCRIPTIONS,
     chainWakeConnected: groupBuyChainWakeConnected(),
     chainWakeDesiredSubscriptions: groupBuyChainWakeDesired.size,
@@ -67741,6 +67798,8 @@ function groupBuyHealthSnapshot() {
     wakeBatches: Number(groupBuyTradeDiag.wakeBatches) || 0,
     wakeHits: Number(groupBuyTradeDiag.wakeHits) || 0,
     wakeConfirmations: Number(groupBuyTradeDiag.wakeConfirmations) || 0,
+    deferredWakes: Number(groupBuyTradeDiag.deferredWakes) || 0,
+    deferredMints: groupBuyTradeDeferredTimers.size,
     recoveryQueued: Number(groupBuyTradeDiag.recoveryQueued) || 0,
     cursorGaps: Number(groupBuyTradeDiag.cursorGaps) || 0,
     lastSuccessAgoMs: groupBuyTradeDiag.lastSuccessAt
@@ -67765,6 +67824,11 @@ function groupBuyHealthSnapshot() {
     deliveryBuysOver10s: groupBuyDeliveryDiag.buysOver10s,
     deliveryLastBuyLatencyMs: groupBuyDeliveryDiag.lastBuyLatencyMs,
     deliveryMaxBuyLatencyMs: groupBuyDeliveryDiag.maxBuyLatencyMs,
+    deliveryLatencySampleCount: latency.samples,
+    deliveryLatencyP50Ms: latency.totalP50Ms,
+    deliveryLatencyP95Ms: latency.totalP95Ms,
+    deliveryFeedP95Ms: latency.feedP95Ms,
+    deliveryQueueP95Ms: latency.queueP95Ms,
     deliveryLastSuccessAgoMs: groupBuyDeliveryDiag.lastDeliveredAt
       ? Math.max(0, now - groupBuyDeliveryDiag.lastDeliveredAt)
       : null,
@@ -67860,7 +67924,12 @@ function groupBuyTradeIdentity(trade) {
 }
 
 function noteGroupBuyTradePollError(mint, error) {
-  const message = friendlyError(error).slice(0, 180);
+  // A deliberate local deferral is not another provider failure and should not spam misleading
+  // RPC/Jupiter upgrade advice for a free Pump notification feed.
+  if (/^GROUP_BUY_(?:PROVIDER_COOLDOWN|BACKGROUND_DEFERRED|GATE_)/.test(String(error?.code || ""))) return;
+  const message = Number(error?.status) === 429
+    ? "Pump trade feed rate limited; preserving the cursor and respecting the provider retry deadline."
+    : friendlyError(error).replace(/(?:https?|wss?):\/\/\S+/gi, "[provider URL]").slice(0, 180);
   groupBuyTradeDiag.errors += 1;
   groupBuyTradeDiag.lastError = message;
   if (Date.now() - groupBuyTradeLastWarnAt >= 60_000) {
@@ -67871,9 +67940,10 @@ function noteGroupBuyTradePollError(mint, error) {
 
 function scheduleGroupBuyTradeBackoff(mint, error) {
   const current = groupBuyTradeBackoff.get(mint) || { failures: 0, nextAttemptAt: 0 };
-  const failures = current.failures + 1;
+  const localDeferral = /^GROUP_BUY_(?:PROVIDER_COOLDOWN|BACKGROUND_DEFERRED|GATE_)/.test(String(error?.code || ""));
+  const failures = current.failures + (localDeferral ? 0 : 1);
   const retryAfterMs = Math.max(0, Number(error?.retryAfterMs) || 0);
-  const delayMs = groupBuyBackoffDelayMs(failures, retryAfterMs);
+  const delayMs = localDeferral ? Math.max(250, retryAfterMs) : groupBuyBackoffDelayMs(failures, retryAfterMs);
   const next = { failures, nextAttemptAt: Date.now() + delayMs, delayMs };
   groupBuyTradeBackoff.set(mint, next);
   if (Number(error?.status) === 429) {
@@ -67884,6 +67954,26 @@ function scheduleGroupBuyTradeBackoff(mint, error) {
 
 function clearGroupBuyTradeBackoff(mint) {
   groupBuyTradeBackoff.delete(mint);
+}
+
+function deferGroupBuyTradePoll(mint, options, retryAt) {
+  const pending = groupBuyTradeWakePending.get(mint) || {};
+  groupBuyTradeWakePending.set(mint, {
+    force: true,
+    priority: Math.max(Number(pending.priority) || 100, Number(options?.priority) || 100),
+    confirmOnce: Boolean(pending.confirmOnce || options?.confirmOnce),
+    confirmAttempt: Math.min(Number(pending.confirmAttempt ?? options?.confirmAttempt) || 0, Number(options?.confirmAttempt) || 0),
+  });
+  if (groupBuyTradeDeferredTimers.has(mint)) return;
+  groupBuyTradeDiag.deferredWakes += 1;
+  const timer = setTimeout(() => {
+    groupBuyTradeDeferredTimers.delete(mint);
+    const next = groupBuyTradeWakePending.get(mint);
+    groupBuyTradeWakePending.delete(mint);
+    if (next) queueGroupBuyTradePoll(mint, next);
+  }, Math.max(1, Number(retryAt) - Date.now()));
+  timer.unref?.();
+  groupBuyTradeDeferredTimers.set(mint, timer);
 }
 
 async function fetchGroupBuyTradePage(mint, cursor, options) {
@@ -67987,7 +68077,8 @@ function normalizeGroupBuyTrade(trade) {
   return {
     eventKey: firstString(trade?.eventKey, groupBuyTradeIdentity(trade)),
     eventAlias: firstString(trade?.eventAlias, groupBuyTradeAlias(trade)),
-    detectedAt: firstMeaningfulNumber(trade?.detectedAt, groupBuyTradeTimestampMs(trade)) || Date.now(),
+    // Unknown source time is not a zero-latency trade. Do not manufacture timing samples at receipt.
+    detectedAt: firstMeaningfulNumber(trade?.detectedAt, groupBuyTradeTimestampMs(trade)) || 0,
     solAmount: firstMeaningfulNumber(trade?.amountSol, trade?.solAmount, trade?.quoteAmount) || 0,
     usdAmount: firstMeaningfulNumber(trade?.amountUsd, trade?.usdAmount) || 0,
     tokens: firstMeaningfulNumber(trade?.baseAmount, trade?.tokenAmount, trade?.tokens) || 0,
@@ -68182,12 +68273,22 @@ async function pollGroupBuyTradesForMint(mint, options) {
 }
 
 function queueGroupBuyTradePoll(mint, options) {
+  mint = String(mint || "").trim();
+  if (!mint) return false;
+  // A routine recovery tick can win the race with the retry timer. Keep the stronger pending wake
+  // rather than erasing its priority or its follow-up check for a not-yet-indexed transaction.
+  const deferred = groupBuyTradeDeferredTimers.has(mint) ? groupBuyTradeWakePending.get(mint) : null;
+  if (deferred) options = {
+    ...options,
+    force: Boolean(options?.force || deferred.force),
+    priority: Math.max(Number(options?.priority) || 100, Number(deferred.priority) || 100),
+    confirmOnce: Boolean(options?.confirmOnce || deferred.confirmOnce),
+    confirmAttempt: Math.min(Number(options?.confirmAttempt ?? deferred.confirmAttempt) || 0, Number(deferred.confirmAttempt) || 0),
+  };
   const force = Boolean(options?.force);
   const priority = Number(options?.priority) || 100;
   const confirmOnce = Boolean(options?.confirmOnce);
   const confirmAttempt = Math.max(0, Number.parseInt(options?.confirmAttempt ?? "0", 10) || 0);
-  mint = String(mint || "").trim();
-  if (!mint) return false;
   if (confirmOnce && groupBuyTradeWakeConfirmTimers.has(mint)) {
     clearTimeout(groupBuyTradeWakeConfirmTimers.get(mint));
     groupBuyTradeWakeConfirmTimers.delete(mint);
@@ -68205,10 +68306,24 @@ function queueGroupBuyTradePoll(mint, options) {
     return false;
   }
   const backoff = groupBuyTradeBackoff.get(mint);
-  if (!force && backoff && Date.now() < backoff.nextAttemptAt) return false;
+  const retryAt = Math.max(Number(backoff?.nextAttemptAt) || 0, Number(pumpSwapApiHostGate.snapshot().cooldownUntil) || 0);
+  if (Date.now() < retryAt) {
+    // Activity is remembered, not thrown away. Force means "fresh activity", never permission to
+    // bypass Retry-After. One timer resumes the exact saved page as soon as the deadline expires.
+    deferGroupBuyTradePoll(mint, { priority, confirmOnce, confirmAttempt }, retryAt);
+    return false;
+  }
+  const deferredTimer = groupBuyTradeDeferredTimers.get(mint);
+  if (deferredTimer) clearTimeout(deferredTimer);
+  groupBuyTradeDeferredTimers.delete(mint);
+  groupBuyTradeWakePending.delete(mint);
   groupBuyTradePollInFlight.add(mint);
   void pollGroupBuyTradesForMint(mint, { priority })
     .then((result) => {
+      if (result?.ok === false && groupBuyTradeBackoff.has(mint)) {
+        deferGroupBuyTradePoll(mint, { priority, confirmOnce, confirmAttempt }, groupBuyTradeBackoff.get(mint).nextAttemptAt);
+        return;
+      }
       if (!confirmOnce || result?.foundBuy || groupBuyTradeBackoff.has(mint)) return;
       const delayMs = GROUP_BUY_WAKE_CONFIRM_DELAYS_MS[confirmAttempt];
       if (!(delayMs > 0)) return;
@@ -68228,6 +68343,7 @@ function queueGroupBuyTradePoll(mint, options) {
     .catch((error) => noteGroupBuyTradePollError(mint, error))
     .finally(() => {
       groupBuyTradePollInFlight.delete(mint);
+      if (groupBuyTradeDeferredTimers.has(mint)) return;
       const pending = groupBuyTradeWakePending.get(mint);
       if (!pending) return;
       groupBuyTradeWakePending.delete(mint);
@@ -68250,6 +68366,11 @@ async function pollGroupBuyTrades() {
     for (const mint of groupBuyHttpState.keys()) if (!active.has(mint) && !groupBuyTradePollInFlight.has(mint)) groupBuyHttpState.delete(mint);
     for (const mint of groupBuyTradeBackoff.keys()) if (!active.has(mint) && !groupBuyTradePollInFlight.has(mint)) groupBuyTradeBackoff.delete(mint);
     for (const mint of groupBuyTradeWakePending.keys()) if (!active.has(mint)) groupBuyTradeWakePending.delete(mint);
+    for (const [mint, timer] of groupBuyTradeDeferredTimers) {
+      if (active.has(mint)) continue;
+      clearTimeout(timer);
+      groupBuyTradeDeferredTimers.delete(mint);
+    }
     for (const [mint, timer] of groupBuyTradeWakeConfirmTimers) {
       if (active.has(mint)) continue;
       clearTimeout(timer);

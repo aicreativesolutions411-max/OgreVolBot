@@ -38,9 +38,13 @@ The test operator should first open the coin in Flows, save the intended program
 
 ## Buy feed operational limits
 
-The background Solana wake feed no longer inherits the trading RPC or its paid credentials. An explicitly configured `GROUP_BUY_CHAIN_WAKE_WS_URL` or `CHAINSTACK_WSS` remains authoritative. Without one, the bot uses a best-effort public Solana stream capped at 32 subscriptions. Subscription failures retain backoff; an open socket alone is not a successful subscription. This public fallback is not a production latency guarantee. See [Solana public endpoint limits](https://solana.com/docs/references/clusters).
+The background Solana wake feed no longer inherits the trading RPC or its paid credentials. An explicitly configured `GROUP_BUY_CHAIN_WAKE_WS_URL` or `CHAINSTACK_WSS` remains authoritative. Without one, the bot uses a best-effort public Solana stream capped at 32 subscriptions. The same public cap applies when the public endpoint is explicitly selected through `GROUP_BUY_CHAIN_WAKE_WS_URL`; it does not become a 200-subscription dedicated service. Subscription failures retain backoff; an open socket alone is not a successful subscription. Unacknowledged subscriptions time out after six seconds, old-socket errors cannot poison a replacement, and one failed socket counts only once. This public fallback is not a production latency guarantee. See [Solana public endpoint limits](https://solana.com/docs/references/clusters).
 
 Pump HTTP 429 responses now enforce the full provider retry deadline for every priority. New requests that cannot fit within the queue deadline are deferred instead of repeatedly expiring. Trade pagination remains saved for recovery. If the free feed is throttled, under-ten-second delivery cannot be promised; a working authorized live source and enough quota are required. No paid feed is enabled by this change.
+
+Activity signals during a cooldown now coalesce into one scheduled retry per mint. A forced wake does not bypass the provider deadline, and local queue deferrals do not inflate the exponential provider-failure counter. The exact saved page resumes at its retry deadline rather than waiting for another full rotating recovery pass. Removing a tracked mint clears its deferred timers.
+
+`/healthz` reports deferred mints and a bounded last-200-deliveries timing window: source-to-outbox delay, outbox-to-Telegram delay, and total p50/p95 with the sample count. Only notifications with known, ordered source/enqueue/delivery times count; unknown times remain unmeasured. These are per-alert samples since process restart, not a guaranteed SLA or a unique-transaction count. No wallet, transaction or chat identifiers are stored in the timing sample array.
 
 ## Remaining requested platform capabilities
 
