@@ -24,13 +24,23 @@ Earnings, public reward reports, Wallet-facing launch metadata and Telegram rewa
 
 `GET /api/web/flows/capabilities` is public and contains no account data. The dashboard and all mutation routes require the existing authenticated session and server-side launch ownership. Requests are limited to 12 KB. Write operations also require the original creator wallet to remain owned by the account.
 
-Authenticated routes are `GET /api/web/flows/dashboard` and `POST /api/web/flows/draft`, `/preview`, `/review`, `/activate`, `/pause`. The browser module `/slime-flows-sdk.js` wraps these routes. It is a first-party session client, not public API credentials or a third-party app marketplace. Never pass bearer tokens in URLs or expose them to untrusted apps.
+Authenticated routes are `GET /api/web/flows/dashboard` and `POST /api/web/flows/draft`, `/preview`, `/readiness`, `/review`, `/activate`, `/pause`. The browser module `/slime-flows-sdk.js` wraps these routes. It is a first-party session client, not public API credentials or a third-party app marketplace. Never pass bearer tokens in URLs or expose them to untrusted apps.
+
+The **Check live prerequisites** button performs an owner-only, read-only check on the selected coin. It verifies the running reward loop, a shared safety lock, encrypted wallet records, finalized fee configuration, native account ownership, vault coverage of saved liabilities, creator fee funding and complete holder snapshots. Provider failures remain unknown, not zero balances or passing checks. It does not decrypt keys, simulate a transaction, collect fees, allocate rewards or submit payments. The check uses free read sources, runs only on demand, coalesces repeated clicks and reuses its result for one minute per coin. A changed saved program invalidates the report. Passing prerequisites is not funded validation or a security audit.
 
 ## Production activation gate
 
 Leave `SLIME_FLOWS_VALIDATED_VERSION` unset for this preview release. The exact value `2026-09-29-v1` enables activation and execution of approved programs. This is an operator safety gate, not evidence that validation has occurred. No deployment step should set it automatically.
 
 Before enabling it, obtain explicit approval for a test mint, creator wallet, payout destinations and maximum total spend including network costs. Validate collection attribution, full holder snapshots, allocation conservation, actual finalized recipient transfers, process restart, pause, delayed confirmation, insufficient funding and retry behavior. Verify web and Telegram receipts against the same chain transactions. Record that evidence, review key custody and recovery, and obtain a security review before broad financial rollout. No funded test has been performed for this implementation.
+
+The test operator should first open the coin in Flows, save the intended program and run **Check live prerequisites**. Resolve every blocked or unknown prerequisite, then conduct the separately approved funded test. A low reward balance is shown as waiting for fees; it is not permission to transfer money from another wallet. The release gate must stay unset until the evidence is reviewed. A successful local fixture or an enabled environment variable does not supply that evidence.
+
+## Buy feed operational limits
+
+The background Solana wake feed no longer inherits the trading RPC or its paid credentials. An explicitly configured `GROUP_BUY_CHAIN_WAKE_WS_URL` or `CHAINSTACK_WSS` remains authoritative. Without one, the bot uses a best-effort public Solana stream capped at 32 subscriptions. Subscription failures retain backoff; an open socket alone is not a successful subscription. This public fallback is not a production latency guarantee. See [Solana public endpoint limits](https://solana.com/docs/references/clusters).
+
+Pump HTTP 429 responses now enforce the full provider retry deadline for every priority. New requests that cannot fit within the queue deadline are deferred instead of repeatedly expiring. Trade pagination remains saved for recovery. If the free feed is throttled, under-ten-second delivery cannot be promised; a working authorized live source and enough quota are required. No paid feed is enabled by this change.
 
 ## Remaining requested platform capabilities
 

@@ -22,3 +22,14 @@ test('buy wake connection honors retry deadline even when polling calls start re
   assert.ok(source.includes('if (groupBuyWakeBackoff.remaining() > 0) return;'));
   assert.ok(source.includes('chainWakeRetryAfterMs: groupBuyWakeBackoff.remaining()'));
 });
+
+test('background wake no longer inherits trading RPC credentials and waits for accepted subscriptions',()=>{
+  const s=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
+  const select=s.slice(s.indexOf('function groupBuyChainWakeUrl()'),s.indexOf('const GROUP_BUY_CHAIN_WAKE_URL'));
+  assert.match(select,/wss:\/\/api.mainnet.solana.com/);assert.doesNotMatch(select,/CONFIG\.(?:rpcUrl|readRpcUrl|heliusWsUrl)/);
+  const start=s.slice(s.indexOf('function startGroupBuyChainWake()'),s.indexOf('function syncGroupBuyChainWake(mints)'));
+  const open=start.slice(start.indexOf('ws.on("open"'),start.indexOf('ws.on("pong"'));
+  assert.doesNotMatch(open,/groupBuyWakeBackoff.reset/);
+  assert.match(start,/if \(groupBuyChainWakeWs !== ws\) return;/);
+  assert.match(start,/Number.isSafeInteger\(subscription\)[\s\S]*?groupBuyWakeBackoff.reset/);
+});

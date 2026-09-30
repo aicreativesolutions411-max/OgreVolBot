@@ -111,6 +111,20 @@ test("local queue expiry retries the same read without freezing unrelated live b
   assert.equal(calls,2);assert.equal(result.trades[0].id,'same-cursor-buy');assert.deepEqual(cooldowns,[]);
 });
 
+test('long provider cooldown rejects new queued reads with a retry deadline instead of churning expired jobs',async()=>{
+  let now=1000;const gate=helpers.createGroupBuyHostRateGate({nowFn:()=>now,sleepFn:async ms=>{now+=ms;},maxWaitMs:10000});
+  gate.cooldown(60000);let ran=false;
+  await assert.rejects(gate.schedule(async()=>{ran=true;},{priority:120}),e=>e.code==='GROUP_BUY_PROVIDER_COOLDOWN'&&e.retryAfterMs===60000);
+  assert.equal(ran,false);assert.equal(gate.snapshot().queued,0);
+  now+=60000;await gate.schedule(async()=>{ran=true;});assert.equal(ran,true);
+});
+
+test('rate-limited trade pages yield after one attempt and preserve the provider retry deadline',async()=>{
+  let calls=0;const error=Object.assign(new Error('throttled'),{status:429,retryAfterMs:60000});
+  await assert.rejects(helpers.retryGroupBuyFeedOperation(async()=>{calls++;throw error;},{retryRateLimits:false}),e=>e===error);
+  assert.equal(calls,1);
+});
+
 test("Pump buy pages retry through the shared cooldown and preserve the page until success", async () => {
   let calls = 0;
   const cooldowns = [];
@@ -725,7 +739,8 @@ test("the provider's last quota slot is reserved for priority-120 live buy reads
     /remaining <= 1[\s\S]{0,180}?pumpSwapApiHostGate\.cooldown/,
     "low remaining quota must not freeze a priority-120 live read",
   );
-  assert.match(pumpFetch, /normalizedPriority >= 120[\s\S]*?cooldown\(Math\.min\(5_000, delayMs\)\)/);
+  assert.match(pumpFetch, /pumpSwapApiHostGate\.cooldown\(delayMs\)/, 'a real 429 Retry-After applies to live and background reads');
+  assert.doesNotMatch(pumpFetch, /cooldown\(Math\.min\(5_000, delayMs\)\)/);
 });
 
 test("a wake received during an in-flight mint poll is replayed once after completion", () => {

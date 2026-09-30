@@ -5,8 +5,8 @@
   <meta name="theme-color" content="#080b09"><title>SlimeWire / Flows</title>
   <meta name="description" content="Build native SlimeWire reward programs. Review schedules, allocation limits and exact permissions before activation.">
   <link rel="canonical" href="https://slimewire.org/launch/flows"><link rel="icon" href="/assets/slimewire/svg/slimewire-mark.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/launch-pad.css?v=20260929-dashboard"><link rel="stylesheet" href="/launch-flows.css?v=20260929-v1">
-  <script src="/config.js"></script><script src="/launch-flows.js?v=20260929-v1" defer></script>
+  <link rel="stylesheet" href="/launch-pad.css?v=20260929-dashboard"><link rel="stylesheet" href="/launch-flows.css?v=20260929-readiness">
+  <script src="/config.js"></script><script src="/launch-flows.js?v=20260929-readiness" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#flow-workspace">Skip to program builder</a><div class="art-backdrop" aria-hidden="true"></div>
@@ -31,7 +31,7 @@
           </form>
           <p id="flow-status" role="status" aria-live="polite"></p>
         </div>
-        <aside class="flow-side"><section class="flow-simulator"><p class="eyebrow">NO-FUNDS SIMULATION</p><h2>See where it goes.</h2><p>Choose a hypothetical unreserved vault amount. Nothing is collected, signed or sent.</p><label>Available SOL for this example<input id="flow-example" value="2" inputmode="decimal"></label><button type="button" id="flow-preview" class="button button-outline">Simulate allocation</button><div id="flow-preview-result" aria-live="polite"></div></section><section class="flow-simulator"><p class="eyebrow">SAVED ACTIVITY</p><div id="flow-history"><p>Select a coin to view program revisions, allocations and finalized receipts.</p></div></section></aside>
+        <aside class="flow-side"><section class="flow-simulator"><p class="eyebrow">NO-FUNDS SIMULATION</p><h2>See where it goes.</h2><p>Choose a hypothetical unreserved vault amount. Nothing is collected, signed or sent.</p><label>Available SOL for this example<input id="flow-example" value="2" inputmode="decimal"></label><button type="button" id="flow-preview" class="button button-outline">Simulate allocation</button><div id="flow-preview-result" aria-live="polite"></div></section><section class="flow-simulator"><p class="eyebrow">BEFORE GOING LIVE</p><h2>Check the prerequisites.</h2><p>Verify the saved fee split, vault coverage, network-fee funds and complete holder data. Read-only; no signing or payments. Results are reused for one minute.</p><button type="button" id="flow-readiness" class="button button-outline">Check live prerequisites</button><div id="flow-readiness-result" aria-live="polite"></div></section><section class="flow-simulator"><p class="eyebrow">SAVED ACTIVITY</p><div id="flow-history"><p>Select a coin to view program revisions, allocations and finalized receipts.</p></div></section></aside>
       </section>
       <details class="flow-roadmap"><summary>Platform availability & developer interface</summary><p>This release covers native reward programs. Unsupported modules cannot receive fees or execute money actions.</p><div id="flow-modules"></div><p>The first-party SDK uses your existing authenticated SlimeWire session. It is not a public API-key or third-party plugin platform. <a href="/slime-flows-sdk.js">View SDK module ↗</a></p></details>
     </main>

@@ -36,3 +36,10 @@ test('SDK does not auto-request or follow redirects with bearer tokens; activati
   await assert.rejects(createSlimeFlowsClient({getToken:()=>''}).dashboard(),/session/);
   assert.throws(()=>createSlimeFlowsClient({baseUrl:'http://external.example'}),/HTTPS/);
 });
+
+test('readiness UI escapes reports, explicitly runs only on click and never activates',()=>{
+  const h=window.SlimeFlowsUI.readinessHtml({ready:false,checks:[{label:'<img>',state:'<script>',detail:'<svg onload=x>'}],note:'<script>bad</script>',checkedAt:0});
+  assert.doesNotMatch(h,/<img|<svg|<script/);assert.match(h,/&lt;img&gt;/);
+  assert.match(html,/id="flow-readiness"/);assert.match(source,/api\('readiness',\{attemptId:selected.attemptId\}\)/);
+  assert.match(source,/path==='readiness'\?60000:15000/);
+});

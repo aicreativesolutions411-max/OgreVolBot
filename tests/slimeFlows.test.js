@@ -9,7 +9,7 @@ const recipient=Keypair.generate().publicKey.toBase58();
 const definition={name:'Community fund',trigger:{type:'schedule',hours:24},conditions:{minimumSol:'0.1',maximumSol:'1'},actions:['allocate_rewards','settle_rewards']};
 const attempt=()=>({id:'launch-1',userId:'alice',status:'COMPLETE',tokenMint:mint,devWalletPublicKey:wallet,pumpFeeSharing:{status:'ACTIVE',vaultAddress:recipient,configAddress:'config'},launchUtility:{mode:'holder_alliance',creatorShareBps:2000,ownHolderShareBps:8000,partnerHolderShareBps:0,autoDistribute:true},holderAllianceLedger:{}});
 const NOW=Date.parse('2026-09-29T12:00:00Z');
-function fixture({enabled=true}={}){let record=attempt(),time=NOW,tail=Promise.resolve();const service=createSlimeFlows({enabled,now:()=>time,attempts:async()=>[structuredClone(record)],load:async id=>id===record.id?structuredClone(record):null,save:async patch=>{record={...record,...structuredClone(patch)};},wallets:async user=>user==='alice'?[{publicKey:wallet}]:[],lock:async(mint,fn)=>{const p=tail.then(fn);tail=p.catch(()=>{});return p;}});return {service,get record(){return record},set record(v){record=v},advance:ms=>time+=ms};}
+function fixture({enabled=true,readiness}={}){let record=attempt(),time=NOW,tail=Promise.resolve();const service=createSlimeFlows({enabled,readiness,now:()=>time,attempts:async()=>[structuredClone(record)],load:async id=>id===record.id?structuredClone(record):null,save:async patch=>{record={...record,...structuredClone(patch)};},wallets:async user=>user==='alice'?[{publicKey:wallet}]:[],lock:async(mint,fn)=>{const p=tail.then(fn);tail=p.catch(()=>{});return p;}});return {service,get record(){return record},set record(v){record=v},advance:ms=>time+=ms};}
 async function active(f){await f.service.saveDraft('alice',{attemptId:'launch-1',revision:0,definition});const r=await f.service.review('alice',{attemptId:'launch-1',revision:1});return f.service.activate('alice',{attemptId:'launch-1',revision:1,reviewHash:r.review.hash,acknowledge:true});}
 
 test('flow schema uses exact units and rejects unknown actions, triggers, unsafe values and unknown fields',()=>{
@@ -75,4 +75,19 @@ test('owned program projection excludes transaction bytes, keys and full payout 
   f.record.holderAllianceLedger={credits:{[wallet]:'4000000'},pending:{rawBase64:'DO_NOT_EXPOSE'},receipts:[{signature:'public-signature',rawBase64:'DO_NOT_EXPOSE',lamports:'1000000',payments:[{wallet,lamports:'1000000'}]}]};
   const projected=publicFlow(f.record);assert.ok(!JSON.stringify(projected).includes('DO_NOT_EXPOSE'));
   assert.equal(projected.receipts[0].signature,'public-signature');assert.equal(projected.credits,undefined);assert.equal(projected.receipts[0].payments,undefined);
+});
+
+test('live prerequisite checks require ownership, coalesce clicks and do not mutate state',async()=>{
+  let calls=0;const f=fixture({readiness:async()=>{calls++;return {readOnly:true,ready:false};}}),before=structuredClone(f.record);
+  await assert.rejects(f.service.readiness('bob',{attemptId:'launch-1'}),/owned/);assert.equal(calls,0);
+  const r=await Promise.all([1,2,3].map(()=>f.service.readiness('alice',{attemptId:'launch-1'})));
+  assert.equal(calls,1);assert.equal(r[0].readOnly,true);assert.deepEqual(f.record,before);
+  f.advance(60001);await f.service.readiness('alice',{attemptId:'launch-1'});assert.equal(calls,2);
+});
+test('readiness rejects concurrent changed terms and does not reuse reports for a changed coin',async()=>{
+  let finish;const f=fixture({readiness:()=>new Promise(r=>{finish=r;})});
+  const check=f.service.readiness('alice',{attemptId:'launch-1'});await new Promise(r=>setImmediate(r));
+  f.record={...f.record,updatedAt:'changed'};finish({readOnly:true,ready:true});
+  await assert.rejects(check,/changed/);
+  await assert.rejects(f.service.readiness('alice',{attemptId:'launch-1'}),/one minute/);
 });

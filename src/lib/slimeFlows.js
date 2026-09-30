@@ -112,7 +112,8 @@ export function flowScheduleSummary(attempt, { enabled = process.env.SLIME_FLOWS
   try { hours = normalizeFlow(flowDefinition(approved.program)).trigger.hours; } catch { /* paused invalid program */ }
   return { cadenceHours: hours, paused: !['ready', 'schedule', 'minimum'].includes(decision.reason), program: true };
 }
-export function createSlimeFlows({ attempts, load, save, wallets, lock, enabled = false, now = Date.now }) {
+export function createSlimeFlows({ attempts, load, save, wallets, lock, readiness, enabled = false, now = Date.now }) {
+  const readinessCache = new Map();
   const owner = async (userId, id) => {
     const a = await load(String(id || ''));
     if (!a || String(a.userId) !== String(userId)) throw Error('This launch is not owned by this account.');
@@ -133,6 +134,25 @@ export function createSlimeFlows({ attempts, load, save, wallets, lock, enabled 
   };
   const revision = (a, input) => { if (!Number.isSafeInteger(input.revision) || input.revision !== (a.slimeFlow?.revision || 0)) throw Error('Program changed in another session. Refresh and review again.'); };
   return {
+    async readiness(userId, input) {
+      const a = await owner(userId, input.attemptId); supported(a);
+      if (typeof readiness !== 'function') throw Error('Live prerequisite checks are unavailable in this environment.');
+      const fingerprint = hash({policy:flowPolicyHash(a),revision:a.slimeFlow?.revision||0,updatedAt:a.updatedAt||''});
+      const key = `${userId}:${a.id}`, previous = readinessCache.get(key);
+      if (previous?.fingerprint === fingerprint && previous.expiresAt > now()) return previous.promise;
+      if (previous?.pending) throw Error('A prerequisite check is still running. Wait for it to finish, then refresh.');
+      if (previous?.expiresAt > now()) throw Error('Wait one minute between live prerequisite checks for this coin.');
+      // Coalesce clicks without a poller or unbounded per-user state. Never cache ownership checks.
+      for(const [k,v] of readinessCache)if(!v.pending&&v.expiresAt<=now())readinessCache.delete(k);
+      if(readinessCache.size>=200&&!previous)throw Error('Prerequisite checks are busy. Retry shortly.');
+      const entry={fingerprint,expiresAt:now()+60000,pending:true};
+      entry.promise=Promise.resolve().then(()=>readiness(a,{enabled})).then(async result=>{
+        const latest=await owner(userId,input.attemptId);
+        if(hash({policy:flowPolicyHash(latest),revision:latest.slimeFlow?.revision||0,updatedAt:latest.updatedAt||''})!==fingerprint)throw Error('The coin changed while checking. Refresh and check again.');
+        return result;
+      }).finally(()=>{entry.pending=false;});
+      readinessCache.set(key,entry);return entry.promise;
+    },
     async dashboard(userId) { return { capabilities: flowCapabilities(enabled), programs: (await attempts()).filter(a => String(a.userId) === String(userId) && a.status === 'COMPLETE').slice(-200).map(a => publicFlow(a, enabled, now())) }; },
     async saveDraft(userId, input) { return mutate(userId, input, async a => { revision(a, input); const draft = normalizeFlow(input.definition), f = a.slimeFlow || {};
       return record(a, { ...f, revision: (f.revision || 0) + 1, draft, review: null, state: f.approved ? f.state : 'DRAFT' }, 'draft_saved'); }); },

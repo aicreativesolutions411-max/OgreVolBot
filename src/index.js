@@ -117,6 +117,7 @@ import { verifyUsePaidRecipient } from "./lib/usePaidRecipient.js";
 import { allianceShareholders, allianceConfigMatches } from "./lib/launchAlliance.js";
 import { settleLaunchAlliance, publicAllianceSettlement } from "./lib/launchAllianceSettlement.js";
 import { normalizeHolderAlliance, splitRecipients, verifySplitRecipient, allocateHolderCycle, holderLiabilities, publicHolderLedger, HOLDER_CADENCE_MS, HOLDER_MIN_PAYOUT, HOLDER_VAULT_RESERVE } from "./lib/holderAlliance.js";
+import { checkFlowReadiness } from "./lib/slimeFlowReadiness.js";
 import { createSlimeFlows, flowCapabilities, evaluateFlow, flowScheduleSummary } from "./lib/slimeFlows.js";
 import { settleHolderBatch } from "./lib/holderAllianceSettlement.js";
 import { readHolderSnapshot, readHolderCommunities } from "./lib/holderAllianceSnapshot.js";
@@ -12775,7 +12776,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "POST" && pathname.startsWith("/api/web/flows/")) {
       const body = await readJsonRequestBody(request, 12000), service = getSlimeFlows();
       const action = pathname.slice("/api/web/flows/".length);
-      const handlers = { draft: () => service.saveDraft(auth.userId, body), preview: () => service.preview(auth.userId, body), review: () => service.review(auth.userId, body), activate: () => service.activate(auth.userId, body), pause: () => service.pause(auth.userId, body) };
+      const handlers = { readiness: () => service.readiness(auth.userId, body), draft: () => service.saveDraft(auth.userId, body), preview: () => service.preview(auth.userId, body), review: () => service.review(auth.userId, body), activate: () => service.activate(auth.userId, body), pause: () => service.pause(auth.userId, body) };
       if (!Object.hasOwn(handlers, action)) { sendWebJson(request, response, 404, { ok: false, error: "Unknown program action." }); return; }
       try {
         const result = await handlers[action]();
@@ -32629,6 +32630,28 @@ function getSlimeFlows() {
     load: freshPumpFeeSharingAttempt,
     save: upsertPumpLaunchAttempt,
     wallets: async userId => walletsForOwner(await readWalletStore(), userId),
+    readiness: (attempt, {enabled}) => checkFlowReadiness(attempt, {
+      enabled,
+      readRuntime: async a => {
+        const store = await readWalletStore();
+        const creator = walletsForOwner(store, a.userId).find(w => w.publicKey === a.devWalletPublicKey);
+        const vault = store.wallets.find(w => w.ownerId === PUMP_HOLDER_REWARD_VAULT_OWNER && w.publicKey === a.pumpFeeSharing.vaultAddress);
+        const lock = await withMoneyCacheLock(`alliance-distribute:${a.tokenMint}`, 15000, async () => true, () => false).catch(() => false);
+        return {runner:holderAllianceRunnerStarted,lock,creatorKey:!!creator?.secret,vaultKey:!!vault?.secret};
+      },
+      readChain: async a => {
+        const rpc = launchFeeReadRpc();
+        const [config, accounts] = await Promise.all([
+          readPumpFeeSharingConfig({connection:rpc,mint:a.tokenMint,required:true,commitment:'finalized'}),
+          rpc.getMultipleAccountsInfoAndContext([new PublicKey(a.devWalletPublicKey),new PublicKey(a.pumpFeeSharing.vaultAddress)],{commitment:'finalized'})
+        ]);
+        if(accounts.value.length!==2)throw Error('Incomplete account response');
+        const [creator,vault]=accounts.value;
+        if([creator,vault].some(account=>account&&!Number.isSafeInteger(account.lamports)))throw Error('Unsafe balance response');
+        return {configMatches:allianceConfigMatches(config,effectiveAlliancePolicy(a),a.devWalletPublicKey),accountsValid:[creator,vault].every(account=>!account||(!account.executable&&account.owner.equals(SystemProgram.programId))),slot:accounts.context.slot,creatorLamports:String(creator?.lamports||0),vaultLamports:String(vault?.lamports||0)};
+      },
+      readSnapshots: (a,policy) => readHolderCommunities(a.tokenMint,policy,{excluded:[a.pumpFeeSharing.vaultAddress]})
+    }),
     lock: (mint, task) => withMoneyCacheLock(`alliance-distribute:${mint}`, 600000, task, allianceOperationBusy)
   });
   return slimeFlowsInstance;
@@ -66722,9 +66745,7 @@ function groupBuyChainWakeUrl() {
   const configured = firstString(
     process.env.GROUP_BUY_CHAIN_WAKE_WS_URL,
     CHAINSTACK_WSS,
-    CONFIG.heliusWsUrl,
-    CONFIG.readRpcUrl,
-    CONFIG.rpcUrl
+    "wss://api.mainnet.solana.com"
   );
   if (!configured) return "";
   try {
@@ -66738,7 +66759,9 @@ function groupBuyChainWakeUrl() {
   }
 }
 const GROUP_BUY_CHAIN_WAKE_URL = groupBuyChainWakeUrl();
-const GROUP_BUY_CHAIN_WAKE_MAX_SUBSCRIPTIONS = 200;
+// Never silently reuse paid trade RPC credentials for background subscriptions.
+// The public fallback is best effort and bounded; an explicit WSS keeps its existing capacity.
+const GROUP_BUY_CHAIN_WAKE_MAX_SUBSCRIPTIONS = firstString(process.env.GROUP_BUY_CHAIN_WAKE_WS_URL, CHAINSTACK_WSS) ? 200 : 32;
 const groupBuyWakeBackoff = createReadStreamBackoff();
 let groupBuyChainWakeWs = null;
 let groupBuyChainWakeReconnectTimer = null;
@@ -66815,6 +66838,7 @@ function sendGroupBuyChainWakeRequest(payload, request) {
 
 function syncGroupBuyChainWakeSubscriptions() {
   if (!groupBuyChainWakeWs || groupBuyChainWakeWs.readyState !== WebSocket.OPEN) return;
+  if (groupBuyWakeBackoff.remaining() > 0) return;
   for (const [mint, subscription] of groupBuyChainWakeMintSubscription) {
     if (groupBuyChainWakeDesired.has(mint)) continue;
     groupBuyChainWakeMintSubscription.delete(mint);
@@ -66851,7 +66875,6 @@ function startGroupBuyChainWake() {
       groupBuyChainWakeDiag.connected = true;
       groupBuyChainWakeDiag.connectedAt = Date.now();
       groupBuyChainWakeDiag.lastError = "";
-      groupBuyWakeBackoff.reset();
       groupBuyChainWakeRequest.clear();
       groupBuyChainWakeRequested.clear();
       groupBuyChainWakeSubscriptionMint.clear();
@@ -66873,6 +66896,7 @@ function startGroupBuyChainWake() {
       if (groupBuyChainWakeWs === ws) groupBuyChainWakeLastPongAt = Date.now();
     });
     ws.on("message", (buffer) => {
+      if (groupBuyChainWakeWs !== ws) return;
       let message;
       try { message = JSON.parse(buffer.toString()); } catch { return; }
       if (message?.id != null) {
@@ -66882,10 +66906,13 @@ function startGroupBuyChainWake() {
         if (message.error) {
           if (request.type === "subscribe") groupBuyChainWakeRequested.delete(request.mint);
           noteGroupBuyChainWakeError(message.error?.message || "Solana log subscription failed");
+          try { ws.close(); } catch {}
           return;
         }
         if (request.type === "subscribe" && message.result != null) {
           const subscription = Number(message.result);
+          if (!Number.isSafeInteger(subscription) || subscription < 0) return;
+          groupBuyWakeBackoff.reset();
           groupBuyChainWakeSubscriptionMint.set(subscription, request.mint);
           groupBuyChainWakeMintSubscription.set(request.mint, subscription);
           if (!groupBuyChainWakeDesired.has(request.mint)) syncGroupBuyChainWakeSubscriptions();
@@ -67203,6 +67230,13 @@ function createGroupBuyHostRateGate({
     schedule(operation, { priority = 0 } = {}) {
       return new Promise((resolve, reject) => {
         rejectExpired();
+        if (defaultWaitMs > 0 && cooldownUntil - nowFn() >= defaultWaitMs) {
+          rejected += 1;
+          const error = gateError("GROUP_BUY_PROVIDER_COOLDOWN", "Provider cooldown is active; read deferred without losing its cursor");
+          error.retryAfterMs = Math.max(0, cooldownUntil - nowFn());
+          reject(error);
+          return;
+        }
         const normalizedPriority = Number(priority) || 0;
         if (queue.length >= capacity) {
           const evictionIndex = normalizedPriority >= Math.max(1, Number(evictionPriority) || 120) ? queue
@@ -67316,6 +67350,7 @@ function groupBuyFeedRetryDelayMs(error, failures = 1, jitterUnit = Math.random(
 
 async function retryGroupBuyFeedOperation(operation, {
   maxAttempts = 4,
+  retryRateLimits = true,
   cooldownFn = () => {},
   onRetry = () => {},
 } = {}) {
@@ -67326,6 +67361,7 @@ async function retryGroupBuyFeedOperation(operation, {
       return await operation({ attempt });
     } catch (error) {
       lastError = error;
+      if (error?.code === "GROUP_BUY_PROVIDER_COOLDOWN" || (!retryRateLimits && Number(error?.status) === 429)) throw error;
       const delayMs = groupBuyFeedRetryDelayMs(error, attempt);
       if (!(delayMs > 0) || attempt >= attempts) throw error;
       // The operation itself is scheduled through the host gate. Extending that gate's cooldown
@@ -67616,6 +67652,8 @@ function groupBuyHealthSnapshot() {
     websocketSubscriptionErrors: Number(stream.currentSubscriptionErrors ?? stream.counters?.subscriptionErrors) || 0,
     websocketLastProviderError: stream.lastProviderError || null,
     chainWakeEnabled: Boolean(GROUP_BUY_CHAIN_WAKE_URL),
+    chainWakeSource: firstString(process.env.GROUP_BUY_CHAIN_WAKE_WS_URL, CHAINSTACK_WSS) ? "configured" : "public-best-effort",
+    chainWakeCapacity: GROUP_BUY_CHAIN_WAKE_MAX_SUBSCRIPTIONS,
     chainWakeConnected: groupBuyChainWakeConnected(),
     chainWakeDesiredSubscriptions: groupBuyChainWakeDesired.size,
     chainWakeSubscriptions: groupBuyChainWakeMintSubscription.size,
@@ -67705,9 +67743,9 @@ async function pumpSwapApiFetch(url, options = {}, { priority = 0 } = {}) {
     if (response.status === 429) {
       const delayMs = Math.max(5_000, headerDelayMs);
       pumpSwapApiBackgroundPauseUntil = Math.max(pumpSwapApiBackgroundPauseUntil, Date.now() + delayMs);
-      // A genuine live request may retry soon, but background work stays parked through the full
-      // provider reset. This avoids both a retry storm and a minute-long live-buy gate freeze.
-      if (normalizedPriority >= 120) pumpSwapApiHostGate.cooldown(Math.min(5_000, delayMs));
+      // A real 429 applies to every lane, including live reads. Cutting Retry-After
+      // to five seconds exhausted quota repeatedly and produced expired queue jobs.
+      pumpSwapApiHostGate.cooldown(delayMs);
     }
     return response;
   }, { priority: normalizedPriority });
@@ -67822,9 +67860,10 @@ async function fetchGroupBuyTradePage(mint, cursor, options) {
     return payload;
   }, {
     maxAttempts: GROUP_BUY_TRADE_FETCH_ATTEMPTS,
-    // pumpSwapApiFetch already applies the provider's real Retry-After to the shared host lane. Cap the
-    // shared retry pause so one unhealthy mint cannot freeze every other tracked coin for a minute.
-    cooldownFn: (delayMs) => pumpSwapApiHostGate.cooldown(Math.min(5_000, delayMs)),
+    // Preserve the exact page for the scheduler, rather than parking four identical
+    // retries behind a provider-wide throttle. Transient failures still retry.
+    retryRateLimits: false,
+    cooldownFn: (delayMs) => pumpSwapApiHostGate.cooldown(delayMs),
     onRetry: ({ error }) => {
       groupBuyTradeDiag.retries += 1;
       if (Number(error?.status) === 429) groupBuyTradeDiag.rateLimits += 1;
