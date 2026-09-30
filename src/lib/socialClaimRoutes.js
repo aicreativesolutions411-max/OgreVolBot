@@ -22,7 +22,11 @@ export function createSocialClaimRoutes({identity,tickets,attempts,execute,verif
       }
       if(request.method==='GET'&&action==='callback'){
         try{
-          const result=await identity.finish({state:url.searchParams.get('state'),code:url.searchParams.get('code'),browser:socialCookieValue(request,'state')});
+          const hosted=cap.identityProvider==='privy',params=url.searchParams;
+          const stateKey=hosted?'privy_oauth_state':'state',codeKey=hosted?'privy_oauth_code':'code';
+          if(params.getAll(stateKey).length!==1||params.getAll(codeKey).length!==1||params.has('error')||params.has('privy_oauth_error'))throw new Error('Invalid sign-in callback.');
+          if(hosted?(params.getAll('privy_oauth_provider').length!==1||params.get('privy_oauth_provider')!=='twitter'||params.has('code')||params.has('state')):(params.has('privy_oauth_code')||params.has('privy_oauth_state')||params.has('privy_oauth_provider')))throw new Error('Sign-in providers cannot be mixed.');
+          const result=await identity.finish({state:params.get(stateKey),code:params.get(codeKey),provider:hosted?'privy':'x',browser:socialCookieValue(request,'state')});
           if(token)await identity.logout(token);
           redirect('/launch/claim',[socialCookie('session',result.token,3600),socialCookie('state','',0)]);
         }catch{redirect('/launch/claim?signin=failed',[socialCookie('state','',0)]);}

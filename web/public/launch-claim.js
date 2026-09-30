@@ -12,6 +12,8 @@
       $('claim-availability').textContent=cap.available?'X allocations are claimed as SOL on SlimeWire. Review each receiving address.':cap.reason||'X claims are not available on this deployment.';
       $('claim-signin').hidden=state.loggedIn;$('claim-logout').hidden=!state.loggedIn;$('claim-session').hidden=!state.loggedIn;
       $('claim-signin').disabled=!cap.identityConfigured;$('claim-signin').textContent=cap.identityConfigured?'Continue with X →':'X sign-in · setup pending';
+      $('claim-provider').textContent=cap.identityProvider==='privy'?'X sign-in is provided by Privy. Your fees and receiving wallet stay with SlimeWire; Privy does not process the payout.':'Your normal X account is enough. No developer signup is needed for recipients.';
+      $('claim-recipient-help').textContent=cap.recipientHelp||'A verified permanent X account ID is required before fees can be assigned.';
       $('claim-signin').onclick=()=>{if(cap.loginUrl){const u=new URL(cap.loginUrl);if(u.protocol==='https:'&&['slimewire.org','app.slimewire.org'].includes(u.hostname))location.assign(u.href);}};
       if(!state.loggedIn)return;
       $('claim-account').textContent='Signed in as @'+state.session.handle+' · '+state.session.name;

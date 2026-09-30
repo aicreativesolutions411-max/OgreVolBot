@@ -1,6 +1,6 @@
 # Creator-fee destinations
 
-The homepage links to My launches / fee activity instead of X claims. No new X or external-provider payout route is offered. Historical configurations are retained for recovery; existing permanent shares are not rewritten.
+The homepage links to My launches / fee activity. External cash-provider routing remains disabled. Native X-recipient SOL claims have a gated draft UI and identity adapters, but no new fee allocation or payout is enabled. See [social claim identity setup and release blockers](social-claims-identity.md). Historical configurations are retained for recovery; existing permanent shares are not rewritten.
 
 In **Launch → Custom fee split**, select whole percentages for:
 

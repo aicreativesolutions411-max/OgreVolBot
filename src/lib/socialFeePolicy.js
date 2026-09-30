@@ -5,11 +5,16 @@ export const SOCIAL_CLAIMS_RELEASE_READY=false;
 export function socialClaimCapabilities(env=process.env){
   let callback=false;
   try{const u=new URL(env.SLIME_X_CALLBACK_URL);callback=u.protocol==='https:'&&u.hostname==='app.slimewire.org'&&u.pathname==='/api/web/social-claims/callback'&&!u.search&&!u.hash&&!u.username&&!u.password&&!u.port;}catch{}
-  const identityConfigured=!!(env.SLIME_X_CLIENT_ID&&env.SLIME_X_CLIENT_SECRET&&String(env.SLIME_X_SESSION_SECRET||'').length>=32&&callback);
-  const lookupConfigured=identityConfigured&&!!env.SLIME_X_APP_BEARER_TOKEN;
-  return {identityConfigured,lookupConfigured,available:SOCIAL_CLAIMS_RELEASE_READY&&lookupConfigured,
+  const identityProvider=String(env.SLIME_SOCIAL_IDENTITY_PROVIDER||'x').trim().toLowerCase();
+  const credentials=identityProvider==='x'?!!(env.SLIME_X_CLIENT_ID&&env.SLIME_X_CLIENT_SECRET):identityProvider==='privy'?/^[A-Za-z0-9_-]{8,100}$/.test(env.SLIME_PRIVY_APP_ID||''):false;
+  const identityConfigured=!!(credentials&&String(env.SLIME_X_SESSION_SECRET||'').length>=32&&callback);
+  const arbitraryRecipientLookup=identityConfigured&&!!env.SLIME_X_APP_BEARER_TOKEN;
+  const recipientLookup=arbitraryRecipientLookup?'official-x':identityConfigured&&identityProvider==='privy'?'verified-only':'unavailable';
+  const lookupConfigured=recipientLookup!=='unavailable';
+  return {identityProvider,identityConfigured,lookupConfigured,recipientLookup,arbitraryRecipientLookup,available:SOCIAL_CLAIMS_RELEASE_READY&&lookupConfigured,
+    recipientHelp:recipientLookup==='verified-only'?'Without an X lookup API, only accounts freshly verified on SlimeWire can be selected. Ask the recipient to sign in on the claim page before reviewing the launch. Unknown handles cannot receive allocations.':'Recipient profiles must resolve to a verified permanent X account ID before a launch.',
     consentVersion:SOCIAL_FEE_CONSENT_VERSION,asset:'SOL',minimumLamports:'1000000',
-    reason:!identityConfigured?'X sign-in is awaiting SlimeWire’s identity setup. No fees can be routed here yet.':!lookupConfigured?'X profile verification is awaiting setup. New X fee allocations are disabled.':'X claims are awaiting security review and funded validation. New allocations and payments remain disabled.'};
+    reason:!identityConfigured?(identityProvider==='privy'?'Hosted X sign-in is awaiting SlimeWire’s Privy setup. No fees can be routed here yet.':'X sign-in is awaiting SlimeWire’s identity setup. No fees can be routed here yet.'):!lookupConfigured?'X profile verification is awaiting setup. New X fee allocations are disabled.':'X claims are awaiting security review and funded validation. New allocations and payments remain disabled.'};
 }
 export function normalizeSocialRecipients(input){
   if(input===undefined)return [];
