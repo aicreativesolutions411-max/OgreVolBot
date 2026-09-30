@@ -66929,6 +66929,7 @@ function sendGroupBuyChainWakeRequest(payload, request) {
   } catch (error) {
     groupBuyChainWakeRequest.delete(id);
     noteGroupBuyChainWakeError(error);
+    try { groupBuyChainWakeWs?.terminate(); } catch {}
     return false;
   }
 }
@@ -66995,7 +66996,10 @@ function startGroupBuyChainWake() {
           try { ws.terminate(); } catch {}
           return;
         }
-        try { ws.ping(); } catch (error) { noteGroupBuyChainWakeError(error); }
+        try { ws.ping(); } catch (error) {
+          noteGroupBuyChainWakeError(error);
+          try { ws.terminate(); } catch {}
+        }
       }, 20_000);
       if (groupBuyChainWakeHeartbeatTimer.unref) groupBuyChainWakeHeartbeatTimer.unref();
       syncGroupBuyChainWakeSubscriptions();

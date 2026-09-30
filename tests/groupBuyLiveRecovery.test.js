@@ -117,7 +117,7 @@ test('an explicitly configured public Solana endpoint retains the bounded public
 
 function wakeHarness() {
   let sequence = 0;
-  const timers = new Map(), sockets = [];
+  const timers = new Map(), sockets = [], intervals = [];
   class FakeWebSocket extends EventEmitter {
     static OPEN = 1; static CONNECTING = 0;
     constructor() { super(); this.readyState = 0; this.sent = []; sockets.push(this); }
@@ -131,11 +131,11 @@ function wakeHarness() {
     createReadStreamBackoff: () => createReadStreamBackoff({ random: () => 0 }),
     firstString: (...values) => values.find(value => value) || '',
     setTimeout(fn, ms) { const id = ++sequence; timers.set(id, { fn, ms }); return id; },
-    clearTimeout(id) { timers.delete(id); }, setInterval() { return 1; }, clearInterval() {},
+    clearTimeout(id) { timers.delete(id); }, setInterval(fn) { intervals.push(fn); return intervals.length; }, clearInterval() {},
     queueGroupBuyTradePoll() {},
   });
   vm.runInContext(between('function groupBuyChainWakeUrl(', 'async function buyWsSync('), c);
-  return { c, timers, sockets, read: expression => vm.runInContext(expression, c) };
+  return { c, timers, sockets, intervals, read: expression => vm.runInContext(expression, c) };
 }
 
 test('late errors from a replaced socket cannot poison the active live feed', () => {
@@ -163,6 +163,24 @@ test('one denied connection counts once even if several subscription errors arri
   const socket = h.sockets[0]; socket.readyState = 1; socket.emit('open');
   for (const request of socket.sent) socket.emit('message', Buffer.from(JSON.stringify({ id: request.id, error: { message: '403 forbidden' } })));
   socket.emit('error', new Error('403 forbidden'));
+  assert.equal(h.read('groupBuyChainWakeDiag.errors'), 1);
+});
+
+test('synchronous subscription-send failures close the broken socket so it can reconnect', () => {
+  const h = wakeHarness(); h.c.syncGroupBuyChainWake(['Mint']);
+  const socket = h.sockets[0]; socket.readyState = 1;
+  socket.send = () => { throw new Error('socket write failed'); };
+  socket.emit('open');
+  assert.equal(socket.readyState, 3);
+  assert.equal(h.read('groupBuyChainWakeDiag.errors'), 1);
+});
+
+test('a heartbeat write failure closes the broken socket rather than keeping a dead feed open', () => {
+  const h = wakeHarness(); h.c.syncGroupBuyChainWake(['Mint']);
+  const socket = h.sockets[0]; socket.readyState = 1; socket.emit('open');
+  socket.ping = () => { throw new Error('ping failed'); };
+  h.intervals[0]();
+  assert.equal(socket.readyState, 3);
   assert.equal(h.read('groupBuyChainWakeDiag.errors'), 1);
 });
 
