@@ -2,6 +2,7 @@
 // wallet/recovery state. This view needs no RPC, indexer or paid metadata calls.
 import {splitRecipients} from './holderAlliance.js';
 import {buildLaunchEarnings} from './launchEarnings.js';
+import {isTestLaunch} from './launchVisibility.js';
 const text = (value, max) => String(value || '').trim().slice(0, max);
 function feeSplit(attempt){
   const p=attempt.launchUtility||{};if(!['alliance','holder_alliance'].includes(p.mode))return {};
@@ -22,6 +23,7 @@ export function buildLaunchDirectory(attempts = []) {
     const mint = text(attempt?.tokenMint, 64);
     if (String(attempt?.status || '').toUpperCase() !== 'COMPLETE' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint) || seen.has(mint)) continue;
     seen.add(mint);
+    if(isTestLaunch(attempt))continue;
     const metadata = attempt.metadataJson || {};
     const date = Date.parse(attempt.completedAt || attempt.createdAt || '');
     rows.push({

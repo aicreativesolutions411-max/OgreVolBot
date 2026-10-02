@@ -34,3 +34,35 @@ test('entirely unattributed legacy history is not presented as zero earnings',()
   assert.ok(!ui.summaryHtml({...data,scope:'mine'}).includes('0 SOL'));
   assert.ok(ui.summaryHtml({...data,coins:[{paidLamports:'0',reservedLamports:'0'}]}).includes('earn-total-unit'));
 });
+
+test('public lists hide test launches while wallet earnings and accounting totals are preserved',()=>{
+  const coins=[{mint:'a',symbol:'TEST',hiddenFromDiscovery:true,paidLamports:'1000000000'},{mint:'b',symbol:'REAL',paidLamports:'2000000000'}];
+  assert.equal(ui.filteredCoins({scope:'all',coins}).length,1);
+  assert.equal(ui.filteredCoins({scope:'mine',coins}).length,2);
+  const html=ui.summaryHtml({scope:'all',coins,paidLamports:'3000000000'});
+  assert.ok(html.includes('Test coins are hidden'));assert.ok(html.includes('3<span'));
+});
+test('coin rows and details expose the full copy CA and exact DexScreener link',()=>{
+  const mint='29tonWkkMa9XZEF2iR8RXqkXWmPBiuKWbBUCCsFZpump';
+  const c={mint,symbol:'L4S',name:'Left4Sol',paidLamports:'0',totalPaidLamports:'0',receipts:[]};
+  for(const html of [ui.listHtml({scope:'all',coins:[c]}),ui.detailHtml(c,null)]){
+    assert.ok(html.includes('data-copy-ca="'+mint+'"'));assert.ok(html.includes('https://dexscreener.com/solana/'+mint));
+    assert.ok(html.includes('data-market-mint="'+mint+'"'));
+  }
+  assert.equal(ui.coinLinks({mint:'javascript:alert(1)'}),'');
+});
+test('market values label FDV honestly, show freshness and distinguish zero change from missing',()=>{
+  const html=ui.marketHtml({status:'ready',marketCap:12345,fdv:20000,change24h:0,asOf:1000});
+  assert.ok(html.includes('$12.35K'));assert.ok(html.includes('0.0%'));assert.ok(html.includes('DexScreener'));
+  const fallback=ui.marketHtml({status:'ready',marketCap:null,fdv:20000,change24h:null,asOf:1000});
+  assert.ok(fallback.includes('FDV'));assert.ok(fallback.includes('MC unavailable'));assert.ok(!fallback.includes('0.0%'));
+  assert.ok(ui.marketHtml({status:'error',asOf:1000}).includes('Unavailable'));
+  assert.ok(!ui.marketHtml({status:'error',asOf:1000}).includes('$0'));
+});
+test('copy uses the complete case-sensitive mint and surfaces blocked clipboard writes',async()=>{
+  const mint='29tonWkkMa9XZEF2iR8RXqkXWmPBiuKWbBUCCsFZpump';let copied='';
+  await ui.copyContractAddress(mint,async value=>{copied=value;});assert.equal(copied,mint);
+  await assert.rejects(ui.copyContractAddress('bad',async()=>{}),/Invalid contract/);
+  await assert.rejects(ui.copyContractAddress(mint,async()=>{throw Error('blocked');}),/blocked/);
+  assert.ok(source.includes("input.readOnly=true"));assert.ok(source.includes('input.select()'));
+});

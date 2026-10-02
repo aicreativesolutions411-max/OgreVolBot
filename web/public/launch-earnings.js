@@ -6,6 +6,28 @@
   const date=(v,time=false)=>Number.isFinite(Date.parse(v||''))?(time?new Date(v).toLocaleString():new Date(v).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})):'Date unavailable';
   const periodName={all:'All time','24h':'Past 24 hours','7d':'Past 7 days','30d':'Past 30 days'};
   const coinName=c=>c.symbol?'$'+c.symbol:c.name||short(c.mint);
+  const validMint=v=>/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(v||''));
+  const usd=v=>typeof v==='number'&&Number.isFinite(v)?'$'+v.toLocaleString('en-US',v>0&&v<1?{maximumSignificantDigits:5}:{notation:'compact',maximumFractionDigits:2}):'Unavailable';
+  function coinLinks(c){
+    if(!validMint(c.mint))return '';
+    return '<div class="earn-coin-links"><button type="button" class="earn-copy-ca" data-copy-ca="'+esc(c.mint)+'" aria-label="Copy contract address for '+esc(coinName(c))+'" title="'+esc(c.mint)+'"><code>'+esc(short(c.mint))+'</code><span>Copy CA</span></button><a href="https://dexscreener.com/solana/'+encodeURIComponent(c.mint)+'" target="_blank" rel="noopener noreferrer" aria-label="View '+esc(coinName(c))+' on DexScreener">DexScreener ↗</a></div>';
+  }
+  async function copyContractAddress(mint,write=value=>root.navigator.clipboard.writeText(value)){
+    if(!validMint(mint))throw Error('Invalid contract address');
+    await write(mint);
+  }
+  function marketHtml(market,detail=false){
+    if(!market)return '<span class="earn-market-muted">Loading MC…</span>';
+    const stamp=Number.isFinite(market.asOf)?new Date(market.asOf).toLocaleTimeString():'time unavailable';
+    const title='DexScreener · Checked '+stamp;
+    if(market.status!=='ready')return '<span class="earn-market-muted" title="'+esc(title)+'">'+(market.status==='unavailable'?'Not indexed':'Unavailable')+'</span><small>No market estimate'+(detail?' · '+esc(title):'')+'</small>';
+    const cap=market.marketCap??market.fdv,fdv=market.marketCap==null&&market.fdv!=null,change=market.change24h;
+    const movement=typeof change==='number'&&Number.isFinite(change)?'<small class="earn-change '+(change>0?'is-up':change<0?'is-down':'')+'">'+(change>0?'+':'')+change.toFixed(1)+'% <span>24h</span></small>':'<small>24h change unavailable</small>';
+    const main='<b title="'+esc(title+(cap!=null?' · '+usd(cap):''))+'">'+(fdv?'FDV ':'')+esc(usd(cap))+'</b>'+(fdv?'<small>MC unavailable</small>':'')+movement;
+    if(!detail)return main;
+    return '<div class="earn-market-grid"><div><small>Market cap</small>'+main+'</div><div><small>Price · USD</small><b>'+esc(usd(market.price))+'</b></div><div><small>Liquidity</small><b>'+esc(usd(market.liquidity))+'</b></div><div><small>Volume · 24h</small><b>'+esc(usd(market.volume24h))+'</b></div></div><p class="earn-market-note">'+esc(title)+'. Current estimates, not fee earnings or a guaranteed sale value.</p>';
+  }
+  function marketSlot(c,detail=false){return '<div class="earn-market-slot" data-market-mint="'+esc(c.mint)+'"'+(detail?' data-market-detail':'')+'>'+marketHtml(null,detail)+'</div>';}
   function avatar(c){
     const sources=root.SlimeLaunchPad?.imageCandidates(c.imageUrl)||[];
     return '<div class="coin-avatar"><span class="coin-initial" aria-hidden="true">'+esc((c.symbol||c.name||'?').slice(0,2))+'</span>'+('<img data-image-mint="'+esc(c.mint)+'" data-earnings-image="'+esc(JSON.stringify(sources))+'" alt="" hidden decoding="async" referrerpolicy="no-referrer">')+'</div>';
@@ -18,11 +40,11 @@
     const sides=mine?stat('Pending payout · current',esc(sol(pendingKnown?data.reservedLamports:null)))+stat('Available to claim','<a href="/wallet">Check in Wallet ↗</a>')+stat('Coins in your view',esc(coins.length)):
       stat('Developer payments',esc(sol(known?data.developerPaidLamports:null)))+stat('Holder communities',esc(sol(known?data.communityPaidLamports:null)))+stat('Receiving wallets',esc(sol(known?data.recipientPaidLamports:null)))+(BigInt(data.unattributedPaidLamports||0)>0n?stat('Older, unclassified payouts',esc(sol(data.unattributedPaidLamports))):'');
     return '<div class="earn-overview"><div class="earn-hero-value"><small>'+esc(mine?'Total received':'Total paid out')+' · '+esc(periodName[data.period||'all'])+'</small><strong>'+esc(total.replace(/ SOL$/,''))+(known?'<span class="earn-total-unit"> SOL</span>':'')+'</strong><p>'+esc(note)+(data.trackedSince?' · Tracked since '+esc(date(data.trackedSince)):'')+'</p></div><div class="earn-side-stats">'+sides+'</div></div>'+
-      '<details class="earn-coverage"><summary>'+esc(data.incomplete?'About these totals · partial coverage':'How these totals are counted')+'</summary><p>'+esc(data.note||'Recorded paid amounts are verified payments, not estimates.')+'</p>'+(data.unknownCoins?'<p>'+esc(data.unknownCoins)+' coin(s) have no per-coin attribution. Unavailable is not zero.</p>':'')+'<p>Amounts are in SOL. Pending balances are current, regardless of the selected period. '+(mine?'This is fee income—not wallet balance or trading P&amp;L.':'Public totals include all recorded SlimeWire launches.')+'</p></details>';
+      '<details class="earn-coverage"><summary>'+esc(data.incomplete?'About these totals · partial coverage':'How these totals are counted')+'</summary><p>'+esc(data.note||'Recorded paid amounts are verified payments, not estimates.')+'</p>'+(data.unknownCoins?'<p>'+esc(data.unknownCoins)+' coin(s) have no per-coin attribution. Unavailable is not zero.</p>':'')+'<p>Amounts are in SOL. Pending balances are current, regardless of the selected period. '+(mine?'This is fee income—not wallet balance or trading P&amp;L.':'Public totals include all recorded SlimeWire launches. Test coins are hidden from the public list, but their payment records remain in these totals and My Earnings.')+'</p></details>';
   }
   function filteredCoins(data,{search='',sort='earned',role='all'}={}){
     const q=search.trim().toLowerCase();
-    return (data.coins||[]).filter(c=>(!q||[c.name,c.symbol,c.mint].some(v=>String(v||'').toLowerCase().includes(q)))&&(role==='all'||(c.roles||[]).some(r=>role==='holder'?/holder|Rewards recipient/i.test(r):r===role)))
+    return (data.coins||[]).filter(c=>(data.scope!=='all'||!c.hiddenFromDiscovery)&&(!q||[c.name,c.symbol,c.mint].some(v=>String(v||'').toLowerCase().includes(q)))&&(role==='all'||(c.roles||[]).some(r=>role==='holder'?/holder|Rewards recipient/i.test(r):r===role)))
       .slice().sort((a,b)=>{if(sort==='newest')return (Date.parse(b.createdAt)||0)-(Date.parse(a.createdAt)||0);if(a.paidLamports==null)return b.paidLamports==null?0:1;if(b.paidLamports==null)return -1;const x=BigInt(a.paidLamports),y=BigInt(b.paidLamports);return x===y?0:x>y?-1:1;});
   }
   function paymentRows(coins){
@@ -36,11 +58,11 @@
     const {tab='coins',limit=25}=options,coins=filteredCoins(data,options),mine=data.scope!=='all';
     if(!coins.length)return '<div class="earn-empty"><h3>No matching coins.</h3><p>'+((data.coins||[]).length?'Clear the search or role filter to see your other coins.':'Recorded launches and payments will appear here. No estimated earnings or demo coins are included.')+'</p></div>';
     if(tab==='payments'){const rows=paymentRows(coins);return paymentsHtml(rows,{limit})+(rows.length>limit?'<button class="earn-more" type="button" data-earn-more>Show more payments ↓</button>':'')+(coins.some(c=>(c.receiptCount||0)>(c.receipts||[]).length)?'<p class="earn-detail-note">Showing up to 100 recent receipts per coin. Totals include the full recorded history.</p>':'');}
-    return '<table class="earn-table"><thead><tr><th>Coin</th><th>'+(mine?'You received':'Paid out')+'</th><th>Pending · current</th><th>Coin total · all time</th><th></th></tr></thead><tbody>'+coins.slice(0,limit).map(c=>'<tr><td><div class="earn-coin-name">'+avatar(c)+'<div><b>'+esc(coinName(c))+'</b><small>'+esc(c.name||short(c.mint))+(mine&&c.roles?.length?' · '+esc(c.roles.join(' / ')):'')+'</small></div></div></td><td class="earn-amount earn-paid-cell" data-label="'+(mine?'You received':'Paid out')+'">'+esc(sol(c.paidLamports))+(c.partial?'<small>Recorded subtotal</small>':'')+'</td><td class="earn-amount earn-pending-cell" data-label="Pending · current">'+esc(c.reservedLamports===null?'—':sol(c.reservedLamports))+(c.paused?'<small>Paused</small>':c.delayed?'<small>Delayed</small>':c.automatic?'<small>'+esc(c.cadenceHours||12)+'h rewards</small>':'')+'</td><td class="earn-amount earn-total-cell" data-label="Coin total · all time">'+esc(sol(c.totalPaidLamports))+'</td><td class="earn-action-cell"><button type="button" class="earn-view-coin" data-earn-coin="'+esc(c.mint)+'" aria-label="View '+esc(coinName(c))+' earnings">View ↗</button></td></tr>').join('')+'</tbody></table>'+(coins.length>limit?'<button class="earn-more" type="button" data-earn-more>Show more coins ↓</button>':'');
+    return '<table class="earn-table earn-coins-table"><thead><tr><th>Coin</th><th>Market cap · USD</th><th>'+(mine?'You received':'Paid out')+'</th><th>Pending · current</th><th>Coin total · all time</th><th></th></tr></thead><tbody>'+coins.slice(0,limit).map(c=>'<tr><td><div class="earn-coin-name">'+avatar(c)+'<div><b>'+esc(coinName(c))+'</b><small>'+esc(c.name||short(c.mint))+(mine&&c.roles?.length?' · '+esc(c.roles.join(' / ')):'')+'</small></div></div>'+coinLinks(c)+'</td><td class="earn-market-cell" data-label="Market cap · USD">'+marketSlot(c)+'</td><td class="earn-amount earn-paid-cell" data-label="'+(mine?'You received':'Paid out')+'">'+esc(sol(c.paidLamports))+(c.partial?'<small>Recorded subtotal</small>':'')+'</td><td class="earn-amount earn-pending-cell" data-label="Pending · current">'+esc(c.reservedLamports===null?'—':sol(c.reservedLamports))+(c.paused?'<small>Paused</small>':c.delayed?'<small>Delayed</small>':c.automatic?'<small>'+esc(c.cadenceHours||12)+'h rewards</small>':'')+'</td><td class="earn-amount earn-total-cell" data-label="Coin total · all time">'+esc(sol(c.totalPaidLamports))+'</td><td class="earn-action-cell"><button type="button" class="earn-view-coin" data-earn-coin="'+esc(c.mint)+'" aria-label="View '+esc(coinName(c))+' earnings">View ↗</button></td></tr>').join('')+'</tbody></table>'+(coins.length>limit?'<button class="earn-more" type="button" data-earn-more>Show more coins ↓</button>':'');
   }
   function detailHtml(c,report,period='all'){
     const collection=report?.collectionTotalLamports;
-    return '<div class="earn-detail-identity">'+avatar(c)+'<div><h2 id="earnings-detail-title">'+esc(coinName(c))+'</h2><p>'+esc(c.name||'')+' · '+esc(short(c.mint))+'</p></div></div>'+
+    return '<div class="earn-detail-identity">'+avatar(c)+'<div><h2 id="earnings-detail-title">'+esc(coinName(c))+'</h2><p>'+esc(c.name||'')+'</p></div></div>'+coinLinks(c)+marketSlot(c,true)+
       '<div class="earn-mini-stats"><div><small>Coin total paid · all time</small><b>'+esc(sol(c.totalPaidLamports))+'</b></div><div><small>Fees collected · recorded</small><b>'+esc(sol(collection))+'</b></div></div>'+
       '<div class="earn-tabs" role="group" aria-label="Coin earnings details"><button type="button" data-detail-tab="split" aria-pressed="true">Fee split</button><button type="button" data-detail-tab="payments" aria-pressed="false">Payments</button></div>'+
       '<section data-detail-panel="split">'+(report?'<dl class="earn-destinations">'+(report.destinations||[]).map(d=>'<div class="earn-destination"><dt><strong>'+esc(d.shareBps/100)+'%</strong>'+esc(d.label)+(d.address?'<small><a href="https://solscan.io/account/'+encodeURIComponent(d.address)+'" target="_blank" rel="noopener noreferrer">'+esc(short(d.address))+' ↗</a></small>':d.tokenMint?'<small>Community · '+esc(short(d.tokenMint))+'</small>':'')+'</dt><dd>'+esc(sol(d.paidLamports))+' paid<small>'+esc(d.reservedLamports===null?'Pending not attributed':sol(d.reservedLamports)+' pending')+'</small></dd></div>').join('')+'</dl>'+(!(report.destinations||[]).length?'<p class="earn-detail-note">Per-destination records are unavailable for this fee program.</p>':''):'<p class="earn-detail-note" role="status">Loading the verified fee split…</p>')+
@@ -51,11 +73,18 @@
       '<div class="hub-actions"><a class="button button-outline" href="/wallet?ca='+encodeURIComponent(c.mint)+'">Open coin in Wallet ↗</a><a class="text-button" href="/launch?rewards='+encodeURIComponent(c.mint)+'">Eligibility &amp; launch options ↗</a><button type="button" class="text-button" data-share-earnings="'+esc(c.mint)+'">Copy link</button></div><p id="earnings-detail-status" class="earn-status" role="status"></p>';
   }
   function earningsHtml(data,options={}){return summaryHtml(data)+listHtml(data,options);}
-  root.SlimeEarnings={sol,earningsHtml,summaryHtml,listHtml,detailHtml,filteredCoins,paymentRows};
+  root.SlimeEarnings={sol,earningsHtml,summaryHtml,listHtml,detailHtml,filteredCoins,paymentRows,coinLinks,marketHtml,copyContractAddress};
   if(!root.document?.getElementById('earnings-content'))return;
   const $=id=>document.getElementById(id),API=String(root.OGRE_PORTAL_CONFIG?.apiBase||'').replace(/\/+$/,''),status=t=>{$('earnings-status').textContent=t;},walletStatus=t=>{$('earnings-wallet-status').textContent=t;};
   let scope='all',period='all',tab='coins',limit=25,epoch=0,controller,data=null,detailEpoch=0,detailController,stops=[],detailStops=[],returnFocus;
   let selectedWallets=[],managedEpoch=0,sharedCoinOpened=false;
+  const marketReader=root.SlimeLaunchMarket?.createReader();
+  function hydrateMarkets(element){
+    const slots=[...element.querySelectorAll('[data-market-mint]')];
+    const render=(slot,value)=>{if(slot.isConnected)slot.innerHTML=marketHtml(value,slot.hasAttribute('data-market-detail'));};
+    slots.forEach(slot=>render(slot,marketReader?.peek(slot.dataset.marketMint)||(!marketReader?{status:'error'}:null)));
+    if(marketReader&&slots.length)marketReader.read(slots.map(slot=>slot.dataset.marketMint)).then(rows=>slots.forEach(slot=>render(slot,rows[slot.dataset.marketMint]||{status:'unavailable'}))).catch(()=>slots.forEach(slot=>render(slot,{status:'error'})));
+  }
   const stopImages=()=>{stops.forEach(f=>f());stops=[];};
   const loadImages=(element,list)=>{
     const images=element.querySelectorAll('[data-earnings-image]');
@@ -68,7 +97,7 @@
   const options=()=>({tab,limit,search:$('earnings-search').value,sort:$('earnings-sort').value,role:scope==='mine'?$('earnings-role').value:'all'});
   function paint(){
     if(!data)return;stopImages();
-    $('earnings-summary').innerHTML=summaryHtml(data);$('earnings-content').innerHTML=listHtml(data,options());loadImages($('earnings-content'),stops);
+    $('earnings-summary').innerHTML=summaryHtml(data);$('earnings-content').innerHTML=listHtml(data,options());loadImages($('earnings-content'),stops);hydrateMarkets($('earnings-content'));
   }
   function syncControls(){
     document.querySelectorAll('[data-earn-scope]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.earnScope===scope)));
@@ -96,7 +125,7 @@
     const c=data?.coins.find(c=>c.mint===mint);if(!c)return;
     const dialog=$('earnings-detail');if(!dialog.open){returnFocus=document.activeElement;dialog.showModal();}
     const id=++detailEpoch;detailController?.abort();detailController=new AbortController();const active=detailController,timer=setTimeout(()=>active.abort(),10000);
-    const render=r=>{detailStops.forEach(f=>f());detailStops=[];$('earnings-detail-body').innerHTML=detailHtml(c,r,period);loadImages($('earnings-detail-body'),detailStops);if(r&&root.SlimeFeeReference){const reference=document.createElement('div');$('earnings-detail-body').querySelector('.earn-detail-identity').after(reference);detailStops.push(root.SlimeFeeReference.mount(reference,mint,API));}};
+    const render=r=>{detailStops.forEach(f=>f());detailStops=[];$('earnings-detail-body').innerHTML=detailHtml(c,r,period);loadImages($('earnings-detail-body'),detailStops);hydrateMarkets($('earnings-detail-body'));if(r&&root.SlimeFeeReference){const reference=document.createElement('div');$('earnings-detail-body').querySelector('[data-market-detail]').after(reference);detailStops.push(root.SlimeFeeReference.mount(reference,mint,API));}};
     render(null);dialog.querySelector('[data-close]').focus();
     try{const response=await fetch(API+'/api/web/launch/rewards?mint='+encodeURIComponent(mint),{signal:active.signal,credentials:'omit'}),r=await response.json();if(!response.ok||!r.ok)throw Error(r.error||'Fee split could not be loaded.');if(id!==detailEpoch||!dialog.open)return;render(r.report);}
     catch(e){if(id===detailEpoch&&dialog.open){$('earnings-detail-status').textContent='Fee split unavailable. '+(e.name==='AbortError'?'Request timed out.':e.message);const b=document.createElement('button');b.type='button';b.className='text-button';b.textContent='Retry fee split';b.onclick=()=>showCoin(mint);$('earnings-detail-status').appendChild(b);}}
@@ -108,10 +137,16 @@
     selectedWallets=wallets;scope='mine';limit=25;walletStatus('');$('earnings-wallet-dialog').close();read();
   }
   $('earnings-form').onsubmit=e=>{e.preventDefault();applyWallets();};
-  $('earnings-wallet-open').onclick=openWallets;$('earnings-refresh').onclick=read;
+  $('earnings-wallet-open').onclick=openWallets;$('earnings-refresh').onclick=()=>{marketReader?.clear();read();};
   $('earnings-search').oninput=()=>{limit=25;paint();};$('earnings-sort').onchange=()=>{limit=25;paint();};$('earnings-role').onchange=()=>{limit=25;paint();};
   document.addEventListener('click',async e=>{
     const b=e.target.closest('button');if(!b)return;
+    if(b.dataset.copyCa&&validMint(b.dataset.copyCa)){
+      const mint=b.dataset.copyCa,label=b.querySelector('span'),message=$('earnings-detail').open?$('earnings-detail-status'):$('earnings-copy-status');
+      try{await copyContractAddress(mint);if(label)label.textContent='Copied ✓';message.textContent='Full contract address copied.';setTimeout(()=>{if(b.isConnected&&label)label.textContent='Copy CA';},1800);}
+      catch{message.textContent='Copy this contract address: ';const input=document.createElement('input');input.value=mint;input.readOnly=true;input.className='earn-copy-fallback';input.setAttribute('aria-label','Full contract address');message.appendChild(input);input.focus();input.select();}
+      return;
+    }
     if(b.dataset.close){$(b.dataset.close).close();return;}
     if(b.hasAttribute('data-pick-wallets')){openWallets();return;}
     if(b.dataset.earnScope){scope=b.dataset.earnScope;limit=25;read();return;}

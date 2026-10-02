@@ -5,9 +5,9 @@
   <meta name="theme-color" content="#080b09"><title>SlimeWire / Earnings</title>
   <meta name="description" content="Follow SlimeWire payouts. All-time totals, per-coin earnings, recipient splits and verified payment history.">
   <link rel="canonical" href="https://slimewire.org/launch/earnings"><link rel="icon" href="/assets/slimewire/svg/slimewire-mark.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/launch-pad.css?v=20260929-dashboard"><link rel="stylesheet" href="/launch-community.css?v=20260928c"><link rel="stylesheet" href="/launch-earnings.css?v=20260929-dashboard">
+  <link rel="stylesheet" href="/launch-pad.css?v=20260929-dashboard"><link rel="stylesheet" href="/launch-community.css?v=20260928c"><link rel="stylesheet" href="/launch-earnings.css?v=20261002-market1">
   <link rel="stylesheet" href="/launch-fee-reference.css?v=20260929-source1">
-  <script src="/config.js"></script><script src="/launch-fee-reference.js?v=20260929-source1" defer></script><script src="/launch-pad.js?v=20260929-flows1" defer></script><script src="/launch-earnings.js?v=20260929-flows1" defer></script>
+  <script src="/config.js"></script><script src="/launch-fee-reference.js?v=20260929-source1" defer></script><script src="/launch-pad.js?v=20260929-flows1" defer></script><script src="/launch-market.js?v=20261002-market1" defer></script><script src="/launch-earnings.js?v=20261002-market1" defer></script>
 </head>
 <body class="earnings-page">
   <a class="skip-link" href="#earnings-content">Skip to earnings</a><div class="art-backdrop" aria-hidden="true"></div>
@@ -21,7 +21,9 @@
       <section class="earn-list-panel" aria-label="Coins and payments">
         <div class="earn-list-toolbar"><div class="earn-tabs" role="group" aria-label="Earnings records"><button type="button" data-earn-tab="coins" aria-pressed="true">Coins</button><button type="button" data-earn-tab="payments" aria-pressed="false">Payments</button></div><div class="earn-filters"><input type="search" id="earnings-search" placeholder="Find a coin" aria-label="Search earnings by coin name, ticker or address"><select id="earnings-role" aria-label="Filter your role" hidden><option value="all">All roles</option><option value="Developer">Developer</option><option value="holder">Holder</option><option value="Receiving wallet">Receiving wallet</option></select><select id="earnings-sort" aria-label="Sort coins"><option value="earned">Most earned</option><option value="newest">Newest</option></select></div></div>
         <div id="earnings-content" tabindex="-1" aria-live="polite"></div>
+        <p class="earn-market-note earn-list-note">Current market estimates: DexScreener. Updated on open or Refresh; separate from recorded fee earnings. Open a coin for its quote timestamp.</p>
       </section>
+      <p id="earnings-copy-status" class="earn-status" role="status" aria-live="polite"></p>
     </main>
     <footer><a class="footer-brand" href="/launch">SLIMEWIRE</a><p>On-chain payments. No estimated earnings.</p><div><a href="/launch/community#inbox">Eligibility inbox ↗</a><a href="/wallet">Claims in Wallet ↗</a></div></footer>
   </div>
