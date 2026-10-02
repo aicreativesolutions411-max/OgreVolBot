@@ -7,6 +7,14 @@ const context = vm.createContext({ window: {}, URLSearchParams, document: { addE
 vm.runInContext(readFileSync(new URL('../web/public/launch-utility.js', import.meta.url), 'utf8'), context);
 const ui = context.window.SlimeLaunchUtility;
 
+test('unavailable X claims are not advertised to new launchers, while old draft rows remain visible',()=>{
+  assert.match(ui.render('new',{mode:'holder_alliance'}),/<details data-social-recipients hidden/);
+  assert.equal(ui.socialEditorVisible(false,'holder_alliance',0),false);
+  assert.equal(ui.socialEditorVisible(true,'holder_alliance',0),true);
+  assert.equal(ui.socialEditorVisible(false,'holder_alliance',1),true);
+  assert.equal(ui.socialEditorVisible(true,'holder_self',1),false);
+});
+
 test('Alliance is selectable, retired routes cannot be newly selected, and automatic distribution is opt-in', () => {
   const html=ui.render('test',{});
   assert.ok(html.includes('value="alliance"'));

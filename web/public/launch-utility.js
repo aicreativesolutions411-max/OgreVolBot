@@ -5,7 +5,8 @@
   const at = (prefix, key) => document.getElementById(prefix + key);
   const recipients = p => Array.isArray(p.recipients) ? p.recipients : p.recipientShareBps > 0 ? [{wallet:p.recipientWallet,shareBps:p.recipientShareBps,label:'Receiving wallet'}] : [];
   function socialRow(r={}){return `<div class="fee-recipient-row" data-social-row><label>X handle<input data-social-handle maxlength="16" autocomplete="off" spellcheck="false" value="${esc(r.handle||'')}" placeholder="@creator"></label><div class="fee-recipient-share"><label>Share · %<input data-social-share type="number" min="1" max="99" step="1" value="${esc((r.shareBps||100)/100)}"></label><button type="button" data-remove-social>Remove</button></div></div>`;}
-  function socialEditor(prefix,policy){return `<details data-social-recipients ${policy.socialRecipients?.length?'open':''}><summary>X recipients · claim SOL</summary><p class="launch-utility-note">Enter a handle and percentage. The final review verifies the actual X account. Recipients sign in on SlimeWire and claim SOL to a wallet. Account verification must be complete before launch; a handle alone is not proof. Not X Money or cash.</p><div id="${esc(prefix)}SocialRows">${(policy.socialRecipients||[]).map(socialRow).join('')}</div><button type="button" data-add-social>Add X recipient +</button><p data-social-availability class="launch-utility-note" role="status">Checking X claim availability…</p><a href="https://app.slimewire.org/launch/claim" target="_blank" rel="noopener noreferrer">View recipient claim page ↗</a></details>`;}
+  function socialEditorVisible(available,selected,rowCount){return selected!=='holder_self'&&(available===true||rowCount>0);}
+  function socialEditor(prefix,policy){return `<details data-social-recipients ${policy.socialRecipients?.length?'open':'hidden'}><summary>X recipients · claim SOL</summary><p class="launch-utility-note">Enter a handle and percentage. The final review verifies the actual X account. Recipients sign in on SlimeWire and claim SOL to a wallet. Account verification must be complete before launch; a handle alone is not proof. Not X Money or cash.</p><div id="${esc(prefix)}SocialRows">${(policy.socialRecipients||[]).map(socialRow).join('')}</div><button type="button" data-add-social disabled>Add X recipient +</button><p data-social-availability class="launch-utility-note" role="status">Checking X claim availability…</p><a href="https://app.slimewire.org/launch/claim" target="_blank" rel="noopener noreferrer">View recipient claim page ↗</a></details>`;}
   function readSocial(prefix){return [...(at(prefix,'SocialRows')?.querySelectorAll('[data-social-row]')||[])].map(row=>({handle:row.querySelector('[data-social-handle]').value.trim().replace(/^@/,''),shareBps:Number(row.querySelector('[data-social-share]').value)*100}));}
   function recipientEditor(prefix, policy={}) {
     const rows=recipients(policy);
@@ -133,11 +134,13 @@
   function wire(prefix, { request, context = () => ({}), onChange = () => {} }) {
     const root = at(prefix, 'Mode')?.closest('.launch-utility'); if (!root || root.dataset.wired) return;
     root.dataset.wired = 'true';
+    let socialAvailable=false;
+    const syncSocial=()=>{const box=root.querySelector('[data-social-recipients]');if(!box)return;box.hidden=!socialEditorVisible(socialAvailable,at(prefix,'Mode').value,box.querySelectorAll('[data-social-row]').length);box.querySelector('[data-add-social]').disabled=!socialAvailable;};
     const sync = () => {
       const selected = at(prefix, 'Mode').value, mode=selected==='holder_self'?'holder_alliance':selected;
       const partner=root.querySelector('[data-holder-partner]');if(partner)partner.hidden=selected==='holder_self';
       const receiverBox=root.querySelector('[data-recipient-wallet]');if(receiverBox)receiverBox.hidden=selected==='holder_self';
-      const socialBox=root.querySelector('[data-social-recipients]');if(socialBox)socialBox.hidden=selected==='holder_self';
+      syncSocial();
       const partnerShare=at(prefix,'PartnerHolderShare');if(partnerShare){partnerShare.closest('label').hidden=selected==='holder_self';if(selected==='holder_self'){partnerShare.value='0';at(prefix,'OwnHolderShare').value=String(100-Number(at(prefix,'CreatorShare').value));}}
       root.querySelectorAll('[data-utility-mode]').forEach(el => { el.hidden = el.dataset.utilityMode !== mode; });
       root.querySelector('.launch-utility-actions').hidden = mode === 'creator';
@@ -148,10 +151,10 @@
       }
     };
     const split = () => { const value = Number(at(prefix, 'PartnerShare')?.value); const line = root.querySelector('[data-alliance-split]'); if (line) line.textContent = value > 0 && value < 100 ? `${100-value}% creator · ${value}% community` : 'Choose a community share from 1% to 99%.';const p=read(prefix),sum=[p.creatorShareBps,p.ownHolderShareBps,p.partnerHolderShareBps,p.recipientShareBps,p.socialShareBps].reduce((n,v)=>n+Number(v||0),0)/100;const holderLine=root.querySelector('[data-holder-split]');if(holderLine){holderLine.textContent=sum===100?'100% allocated · permanent after launch':`${sum}% allocated · must total 100%`;holderLine.dataset.valid=String(sum===100);} };
-    const changed=()=>{at(prefix,'Review').hidden=true;split();onChange();};
+    const changed=()=>{at(prefix,'Review').hidden=true;syncSocial();split();onChange();};
     wireRecipients(prefix,changed);
-    root.querySelector('[data-social-recipients]')?.addEventListener('click',e=>{if(e.target.closest('[data-add-social]')){const rows=at(prefix,'SocialRows');if(rows.children.length<5){rows.insertAdjacentHTML('beforeend',socialRow());changed();}}else if(e.target.closest('[data-remove-social]')){e.target.closest('[data-social-row]').remove();changed();}});
-    capabilities().then(c=>{const label=root.querySelector('[data-social-availability]');if(label)label.textContent=(c.socialClaims?.available?'Available · verify the profile during final review.':'Draft only · '+(c.socialClaims?.reason||'X claims are not enabled on this deployment.'))+' '+(c.socialClaims?.recipientHelp||'');}).catch(()=>{const label=root.querySelector('[data-social-availability]');if(label)label.textContent='Availability could not be verified. No X fee routing is authorized.';});
+    root.querySelector('[data-social-recipients]')?.addEventListener('click',e=>{if(e.target.closest('[data-add-social]')){if(!socialAvailable)return;const rows=at(prefix,'SocialRows');if(rows.children.length<5){rows.insertAdjacentHTML('beforeend',socialRow());changed();}}else if(e.target.closest('[data-remove-social]')){e.target.closest('[data-social-row]').remove();changed();}});
+    capabilities().then(c=>{socialAvailable=c.socialClaims?.available===true;syncSocial();const label=root.querySelector('[data-social-availability]');if(label)label.textContent=(socialAvailable?'Available · verify the profile during final review.':'Unavailable · saved draft recipients are shown for review only. '+(c.socialClaims?.reason||'X claims are not enabled on this deployment.'))+' '+(c.socialClaims?.recipientHelp||'');}).catch(()=>{socialAvailable=false;syncSocial();const label=root.querySelector('[data-social-availability]');if(label)label.textContent='Availability could not be verified. No X fee routing is authorized.';});
     root.addEventListener('input', event => { if(at(prefix,'Mode').value==='holder_self'&&event.target.id===prefix+'CreatorShare')at(prefix,'OwnHolderShare').value=String(100-Number(at(prefix,'CreatorShare').value));changed(); });
     at(prefix, 'Mode').addEventListener('change', () => {sync();split();onChange();});
     at(prefix, 'Preview').onclick = async () => {
@@ -213,5 +216,5 @@
     const get = (key, max) => (q.get(key) || '').slice(0, max);
     return { name: get('lc_n', 64), symbol: get('lc_s', 12), description: get('lc_d', 800), x: get('lc_x', 200), telegram: get('lc_tg', 200), website: get('lc_web', 200), devBuySol: /^\d+(?:\.\d{1,9})?$/.test(q.get('lc_dev') || '') ? q.get('lc_dev') : '0', nftEnabled: q.get('lc_nft') === '1', launchUtility: ['creator', 'alliance', 'holder_self', 'holder_alliance', 'nft_floor'].includes(q.get('lc_utility')) ? { mode: q.get('lc_utility'), collectionSymbol: get('lc_collection', 100), partnerName: get('lc_community',64) } : { mode: 'creator' } };
   }
-  window.SlimeLaunchUtility = { render, read, wire, prepare, resultHtml, configureRecovery, prefill, capabilities, recipients,recipientEditor,readRecipients,wireRecipients,draftError,templateDraft,parseTemplate,templateLink };
+  window.SlimeLaunchUtility = { render, read, wire, prepare, resultHtml, configureRecovery, prefill, capabilities, recipients,recipientEditor,readRecipients,wireRecipients,draftError,templateDraft,parseTemplate,templateLink,socialEditorVisible };
 })();

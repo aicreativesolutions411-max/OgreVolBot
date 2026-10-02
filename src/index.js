@@ -131,6 +131,7 @@ import { buildLaunchEarnings } from "./lib/launchEarnings.js";
 import { readPumpFeeReference } from "./lib/pumpFeeReference.js";
 import { readLaunchFeeReceipt } from "./lib/launchFeeReceipt.js";
 import { createCommunityHub, buildRewardsInbox, receiptCredit, verifiedAgreementFor } from "./lib/communityHub.js";
+import { createSlimeBuild } from "./lib/slimeBuild.js";
 import { verifyCommunityAuthority } from "./lib/communityAuthority.js";
 import { hasManualCreatorFees } from "./lib/creatorClaimPolicy.js";
 import {
@@ -7439,6 +7440,14 @@ and is checked by an automated release audit before every upload.</p></div>
       await serveStaticHtmlPage(response, "launch-community.html");
       return;
     }
+    if (request.method === "GET" && ["/launch/build", "/launch/build/"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "slime-build.html");
+      return;
+    }
+    if (request.method === "GET" && ["/launch/rehearsal", "/launch/rehearsal/"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "launch-rehearsal.html");
+      return;
+    }
     if (request.method === "GET" && ["/launch/claim", "/launch/claim/"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "launch-claim.html");
       return;
@@ -10183,6 +10192,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/build/public") {
+      sendWebJson(request, response, 200, { ok: true, ...await getSlimeBuild().publicData({ id: String(requestUrl.searchParams.get("project") || "").slice(0, 80) }) }, "", { "Cache-Control": "no-store" });
+      return;
+    }
     if (request.method === "GET" && pathname === "/api/web/flows/capabilities") {
       sendWebJson(request, response, 200, { ok: true, ...flowCapabilities(slimeFlowsEnabled()) }, "", { "Cache-Control": "no-store" });
       return;
@@ -12795,6 +12808,19 @@ async function handleWebApiRequest(request, response, requestUrl) {
       try {
         const result = await handlers[action]();
         await audit("slime_flow_action", { userId: auth.userId, action, launchAttemptId: String(body.attemptId || ""), revision: body.revision });
+        sendWebJson(request, response, 200, { ok: true, result }, "", { "Cache-Control": "private, no-store" });
+      } catch (error) { sendWebJson(request, response, 400, { ok: false, error: friendlyError(error) }); }
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/build/dashboard") {
+      sendWebJson(request, response, 200, { ok: true, ...await getSlimeBuild().dashboard(auth.userId) }, "", { "Cache-Control": "private, no-store" });
+      return;
+    }
+    if (request.method === "POST" && ["/api/web/build/create", "/api/web/build/update"].includes(pathname)) {
+      const body = await readJsonRequestBody(request, 18000), action = pathname.endsWith("/create") ? "create" : "update";
+      try {
+        const result = await getSlimeBuild()[action](auth.userId, body);
+        await audit("slime_build_record", { userId: auth.userId, action, projectId: result.id, revision: result.revision });
         sendWebJson(request, response, 200, { ok: true, result }, "", { "Cache-Control": "private, no-store" });
       } catch (error) { sendWebJson(request, response, 400, { ok: false, error: friendlyError(error) }); }
       return;
@@ -32641,6 +32667,7 @@ function launchFeeReadRpc() {
   return new Connection("https://api.mainnet-beta.solana.com", { commitment: "finalized", disableRetryOnRateLimit: true, fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(12000) }) });
 }
 let communityHubInstance;
+let slimeBuildInstance;
 let slimeFlowsInstance;
 let socialClaimsInstance;
 async function verifySocialClaimDestination(wallet, attempt) {
@@ -32673,6 +32700,19 @@ function getSocialClaims() {
   return socialClaimsInstance = { identity, route };
 }
 function slimeFlowsEnabled() { return process.env.SLIME_FLOWS_VALIDATED_VERSION === "2026-09-29-v1"; }
+function getSlimeBuild() {
+  if (slimeBuildInstance) return slimeBuildInstance;
+  const file = path.join(CONFIG.dataDir, "slime-build.json");
+  return slimeBuildInstance = createSlimeBuild({
+    read: async () => {
+      try { return JSON.parse(await fs.readFile(file, "utf8")); }
+      catch (error) { if (error.code === "ENOENT") return { projects: [] }; throw error; }
+    },
+    write: value => writeJsonFile(file, value),
+    lock: task => withMoneyCacheLock("slime-build-records", 30000, () => withFileLock(file, task), () => { throw new Error("A project update is saving. Refresh and try again."); }),
+    context: userId => getCommunityHub().dashboard(userId)
+  });
+}
 function getSlimeFlows() {
   if (!slimeFlowsInstance) slimeFlowsInstance = createSlimeFlows({
     enabled: slimeFlowsEnabled(),

@@ -3,8 +3,8 @@
   function safeReturn(value){
     if(typeof value!=='string'||!value.startsWith('/')||value.startsWith('//')||/[\\\r\n]/.test(value))return '';
     try{const u=new URL(value,'https://app.slimewire.org');
-      if(u.origin!=='https://app.slimewire.org'||!['/launch/community','/launch/earnings'].includes(u.pathname))return '';
-      if([...u.searchParams.keys()].some(k=>!['mint','coin','agreement'].includes(k)))return '';
+      if(u.origin!=='https://app.slimewire.org'||!['/launch/community','/launch/earnings','/launch/build'].includes(u.pathname))return '';
+      if([...u.searchParams.keys()].some(k=>!['mint','coin','agreement','project'].includes(k)))return '';
       if(u.hash&&!['#connect','#partners','#inbox','#goals'].includes(u.hash))return '';
       return u.pathname+u.search+u.hash;
     }catch{return '';}

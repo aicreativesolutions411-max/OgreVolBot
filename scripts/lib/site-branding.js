@@ -14,6 +14,8 @@ const pages = new Map([
   ['contact.html', ['/contact', 'SlimeWire — Contact & collaborations', 'Have feedback, a project idea, or a game in the works? Talk directly with SlimeWire on Telegram about support and collaboration.']],
   ['launch-earnings.html', ['/launch/earnings', 'SlimeWire — Earnings & receipts', 'Follow recorded fees, pending rewards and per-coin payout receipts.']],
   ['launch-community.html', ['/launch/community', 'SlimeWire — Community rewards', 'Manage community fee sharing, partnerships and recorded rewards.']],
+  ['slime-build.html', ['/launch/build', 'Slime Build — Ideas into evidence.', 'Plan milestones, share delivery evidence and follow recorded project funding. No escrow or automatic spending.']],
+  ['launch-rehearsal.html', ['/launch/rehearsal', 'SlimeWire — Launch Rehearsal', 'Preview your coin and understand a hypothetical fee split before choosing a wallet or spending SOL.']],
   ['fun.html', ['/wallet', 'SlimeWallet — Your crypto. Your move.', 'Manage your SlimeWire wallets, review trades, fund wallets and track holdings.']],
 ]);
 const esc = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

@@ -8,7 +8,7 @@ import { applyLaunchSiteDesign } from '../scripts/lib/launch-site-design.js';
 const read = name => readFileSync(new URL('../web/public/' + name, import.meta.url), 'utf8');
 
 test('every core product has one accessible Wallet / Terminal / Launch switcher', () => {
-  for (const name of ['index.html', 'gg.html', 'fun.html', 'cash/index.html', 'launch.html', 'launch-community.html', 'launch-earnings.html']) {
+  for (const name of ['index.html', 'gg.html', 'fun.html', 'cash/index.html', 'launch.html', 'launch-community.html', 'launch-earnings.html', 'slime-build.html', 'launch-rehearsal.html']) {
     const output = applyProductNavigation(applyLaunchSiteDesign(read(name), name), name);
     assert.match(output, /data-sw-product-nav/, name);
     assert.match(output, /href="\/wallet"[^>]*>Wallet<\/a>/, name);
@@ -38,6 +38,7 @@ test('current product is accurate across shared Wallet/Go HTML and terminal laun
   assert.equal(current('/cash/'), 'Wallet');
   assert.equal(current('/fun'), '');
   assert.equal(current('/terminal'), 'Terminal');
+  assert.equal(current('/'), '');
   assert.equal(current('/terminal', '#launch'), 'Launch');
   assert.equal(current('/launch/community'), 'Launch');
   assert.equal(current('/launch/earnings'), 'Launch');

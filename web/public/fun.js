@@ -5361,6 +5361,21 @@
     closeSheet();
   });
 
+  function requestedWalletTool(routeParams) {
+    const tool = routeParams.get("tool");
+    return ["wallets", "bundle", "presets"].includes(tool) ? tool : "";
+  }
+  async function openRequestedWalletTool(routeParams) {
+    if (!IS_WALLET_ROUTE) return;
+    const tool = requestedWalletTool(routeParams);
+    if (!tool) return;
+    // A deep link opens a review screen only. No amounts, destinations, wallet
+    // selections, approvals or pending financial operations are read from it.
+    if (!state.token) { openFunAccount("login"); return; }
+    if (tool === "wallets") await openWalletManager();
+    else if (tool === "bundle") await openMultiWalletEntry();
+    else if (tool === "presets") await openPresetManager();
+  }
   function applyInitialRoute(routeParams) {
     if (IS_WALLET_ROUTE) {
       state.profileTab = routeParams.get("tab") === "activity" ? "activity" : "positions";
@@ -5427,6 +5442,7 @@
       IS_WALLET_ROUTE ? Promise.resolve([]) : loadCreatedCoinsSilently()
     ]).then(() => {
       renderCashHandoff(); renderHomeReadiness(); resumePendingFunFunding();
+      void openRequestedWalletTool(routeParams).catch(error => toast(error.message || "Could not open wallet tools.", true));
       const firstWallet = state.wallets[0];
       if (firstWallet && !walletBackedUp(firstWallet)) {
         try {
@@ -5447,6 +5463,7 @@
       });
     }).catch(() => {});
     resumePendingFunFunding();
+    if (!state.token) void openRequestedWalletTool(routeParams);
     if (routeParams.get("install") === "1") setTimeout(showFunInstallGuide, 350);
   }
   $("[data-quick-paste-form]")?.addEventListener("submit", (event) => { event.preventDefault(); void loadQuickTarget($("[data-quick-ca]")?.value); });

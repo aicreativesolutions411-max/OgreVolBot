@@ -27,7 +27,7 @@ The owner has shelved X-recipient claims because recipients must be selectable b
 
 A small closed beta can establish this evidence. A general public financial launch should not be advertised as fully proven while these items remain open. The metrics above are a small observed sample, not a long-term latency estimate.
 
-## Best-fit additions — proposals, not shipped features
+## Best-fit additions — proposals as of 30 September (see 2 October update below)
 
 ### 1. Launch Rehearsal — the best low-risk next build
 
@@ -62,6 +62,23 @@ Let a project share one clean page/card to open its verified fee terms, view ear
 [Bags' current developer docs](https://docs.bags.fm/) list custom quote launches, launch-intent URLs, token lifetime fees, claim events, fee customization and developer/agent interfaces. SlimeWire already has meaningful overlap in launch templates, recorded earnings, allocation and wallet tooling. A small internal SDK is not an open developer platform, and a saved fee hash is not a signed commitment. Close those quality gaps deliberately; do not call this complete Bags parity.
 
 Recommended sequence: reliability and funded acceptance → Launch Rehearsal → signed Passport/change history → project milestone board. Do not add another worker or paid API just to make the feature list longer. Budget/quota, contract review and identity remain explicit dependencies for the larger extensions.
+
+## 2 October product pass — implementation and acceptance evidence
+
+- **Launch Rehearsal** (`/launch/rehearsal`): a local fee-split planner with reusable presets, whole-percentage validation, exact integer-lamport hypothetical allocations and a separately displayed rounding remainder. It hands only editable coin/fee terms to the existing launch form. It does not fetch market data, select a spending wallet, carry a buy amount, approve a transaction, estimate earnings, or simulate the full on-chain launch. Live costs and final checks remain in the existing review.
+- **Slime Build, phase one** (`/launch/build`): durable, account-owned plans with up to 12 milestones, planned budgets, dates, HTTPS evidence, creator-reported acceptance/reopening and retained revision history. Private by default; publishing requires explicit acknowledgement. Owners can make records private, archive and restore them. Published views exclude account IDs and operation IDs. Optional existing coin/project-target links use recorded finalized receipts; spendable balance and payments to builders remain untracked, not invented.
+- Build is a delivery board, **not escrow**. No funds are reserved or released, fee shares do not change, and holder credits are unaffected. Named external reviewers, disputes, wallet-signed promises and controlled payments are not implemented in this phase. The creator owns and reviews the record; acceptance is not independent verification.
+- **Find a tool** on shared product navigation, plus Ctrl/Cmd+K: searchable routes across Launch, Wallet, Terminal, Telegram, Games and help. Wallet management, bundle trading and presets have allowlisted navigation-only deep links; no query-string amounts, destinations, approvals or transactions are accepted. The wallet's existing visual layout and trade execution are preserved.
+- Homepage and Launch links make the new tools discoverable. New pages use the existing black/lime visual system and existing artwork, with phone layouts checked at 390px. Homepage is no longer marked as Terminal. Empty/unavailable X recipient setup is hidden unless server capabilities enable it; saved recipient rows remain visible for review/removal. The misleading main Launch "Claim SOL" shortcut was removed, without deleting legacy records or routes.
+- No new provider, dependency, recurring polling loop, worker or paid API. Build stores JSON on the existing persistent web disk with serialized writes and revision conflicts. Back up `slime-build.json` with the other application data.
+- Regression evidence: **1,706 tests passed**; `npm run check`, `npm run build:web` and `git diff --check` passed. New behavior tests were observed failing before their implementation. Cache-release assertions were advanced with the corresponding Wallet/Go service-worker versions.
+- Local browser fixture: create private project → submit evidence → record creator acceptance → explicitly publish → reload and see public record. Verified mobile tool search, keyboard opening, no horizontal overflow, and rehearsal handoff preserving 20/40/40 terms while leaving wallet/approval separate. The fixture has no production API, RPC or real funds. This does not replace funded human acceptance.
+
+### Updated live reliability evidence, before this release
+
+Read-only `/healthz`, 2 October, roughly 48.5 hours uptime: chain-wake connected with 27/27 subscriptions, 40 notifications, zero chain-wake errors and two reconnects. Telegram delivery had 17 buys delivered, none pending or terminal, with 3 deliveries over 10 seconds. The rolling latency sample contained 11 measurements: p50 **3,619 ms**, p95/max **42,702 ms**, feed p95 **41,023 ms**. These are a small observed sample, not a guaranteed SLA. Shared provider rate limits and a temporary HTTP cooldown were still present. The earlier disconnected-feed defect is corrected, but the under-10-second target is **not closed**.
+
+Postgres had recent successful reads/writes and a closed circuit, but 30 cumulative connection timeout errors. Do not equate recovery with proof of complete availability. Funded launch/reward/bundle/exit acceptance, independent custody review, backup recovery and approved operator terms/privacy remain required. Social claims and Slime Flows activation remain gated; this release must not enable either.
 
 ## Contact implementation in this batch
 
