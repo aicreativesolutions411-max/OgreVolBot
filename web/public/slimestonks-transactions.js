@@ -1,8 +1,10 @@
 (function (root) {
   'use strict';
-  // Execution must pass through the same-origin trusted edge; the general data
-  // API override may point straight to Render and cannot assert user geography.
-  const $ = id => document.getElementById(id), apiBase = '';
+  // The public readiness GET follows the site's configured data origin. All
+  // wallet/session and execution requests must still use the same-origin edge;
+  // the general data API override cannot assert user geography.
+  const $ = id => document.getElementById(id);
+  const readOnlyApiBase = String(root.OGRE_PORTAL_CONFIG?.apiBase || '').replace(/\/+$/, '');
   let provider, wallet = '', token = '', consent, readiness, intent, request, lastFocus, busy = false;
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const b64 = bytes => btoa(Array.from(bytes, n => String.fromCharCode(n)).join(''));
@@ -11,6 +13,7 @@
   function message(text) { $('tx-status').textContent = text; }
   function resetWallet() { provider = undefined; wallet = ''; token = ''; intent = undefined; $('tx-connect').textContent = 'Connect wallet'; $('tx-sign').hidden = true; $('tx-history').hidden = true; message('Wallet disconnected or changed. Review again with the selected wallet.'); }
   async function api(action, body) {
+    const apiBase = action === 'readiness' && !body ? readOnlyApiBase : '';
     const response = await fetch(apiBase + '/api/web/stonks/execution/' + action, body ? {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, credentials: 'omit', cache: 'no-store', body: JSON.stringify({ ...body, wallet: body.wallet || wallet, consent }),
     } : { credentials: 'omit', cache: 'no-store', headers: { Accept: 'application/json' } });

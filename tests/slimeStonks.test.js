@@ -130,3 +130,30 @@ test('SlimeStonks is a separate white-label page with no wallet or execution pre
   assert.match(read('src/index.js'), /serveStaticHtmlPage\(response, "slimestonks.html"/);
   assert.match(read('scripts/lib/site-branding.js'), /slimestonks\.html/);
 });
+
+test('readiness uses the configured public data origin but financial requests stay on the trusted edge', async () => {
+  const nodes = new Map(), requests = [];
+  const document = {
+    getElementById(id) {
+      if (!nodes.has(id)) nodes.set(id, { checked: true, hidden: false, textContent: '', innerHTML: '',
+        showModal() {}, addEventListener() {}, setAttribute() {}, removeAttribute() {}, querySelectorAll: () => [] });
+      return nodes.get(id);
+    },
+    querySelectorAll: () => [], addEventListener() {},
+  };
+  const window = { document, OGRE_PORTAL_CONFIG: { apiBase: 'https://app.slimewire.org/' },
+    phantom: { solana: { connect: async () => {}, publicKey: { toString: () => MINT }, signMessage() {}, signTransaction() {} } } };
+  const context = vm.createContext({ window, document, fetch: async (url, options) => {
+    requests.push({ url, method: options.method || 'GET' });
+    if (options.method === 'POST') throw Error('Mock stops before any signature or transaction');
+    return { ok: true, json: async () => ({ ok: true, data: { pilotConfigured: false, checks: [] } }) };
+  } });
+  vm.runInContext(readFileSync(new URL('../web/public/slimestonks-transactions.js', import.meta.url), 'utf8'), context);
+  assert.equal(requests.length, 0, 'no request or wallet connection during script load');
+  await window.SlimeStonksTransactions.open();
+  assert.equal(requests[0].url, 'https://app.slimewire.org/api/web/stonks/execution/readiness');
+  assert.equal(nodes.get('tx-pilot').hidden, true);
+  assert.match(nodes.get('tx-status').textContent, /Public transactions are not live/);
+  await nodes.get('tx-connect').onclick();
+  assert.deepEqual(requests[1], { url: '/api/web/stonks/execution/challenge', method: 'POST' });
+});
