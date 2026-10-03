@@ -16,6 +16,7 @@ const publicLaunchDirectory = createLaunchDirectoryReader(() => readPumpLaunchAt
 import { createSlimeStonksReader } from "./lib/slimeStonks.js";
 const slimeStonksReader = createSlimeStonksReader();
 let slimeStonksExecutionApi;
+let tokenRewardsApi;
 import ffmpegPath from "ffmpeg-static";
 import { WebSocketServer, WebSocket } from "ws";
 import nacl from "tweetnacl";
@@ -8913,6 +8914,12 @@ async function handleSpotifyPlaylists(request, response) {
 async function handleWebApiRequest(request, response, requestUrl) {
   try {
     const pathname = requestUrl.pathname;
+    if (pathname.startsWith("/api/web/token-rewards/")) {
+      tokenRewardsApi ||= import("./lib/tokenRewardsApi.js").then(({ createTokenRewardsApi }) =>
+        createTokenRewardsApi({ readBody: readRequestBody, sendJson: sendWebJson }));
+      await (await tokenRewardsApi).route(request, response, requestUrl);
+      return;
+    }
     if (pathname.startsWith("/api/web/stonks/")) {
       if (pathname.startsWith("/api/web/stonks/execution/")) {
         // Lazy import: no SDK initialization, RPC or wallet preload on site visits.
