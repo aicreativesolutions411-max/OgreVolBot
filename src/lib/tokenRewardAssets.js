@@ -56,7 +56,7 @@ export function createRewardAssetResolver({ rpc, fetchImpl = fetch, now = Date.n
       if (!Number.isFinite(liquidityUsd) || liquidityUsd < 0 || !Number.isFinite(priceUsd) || priceUsd <= 0) continue;
       if ((result.get(mint)?.liquidityUsd ?? -1) >= liquidityUsd) continue;
       const known = cryptoAssetForMint(mint);
-      result.set(mint, { mint, symbol: known?.symbol || clean(p.baseToken.symbol, 32), name: known?.name || clean(p.baseToken.name, 80), imageUrl: https(p.info?.imageUrl), liquidityUsd, priceUsd: String(p.priceUsd), verified: false });
+      result.set(mint, { mint, symbol: known?.symbol || clean(p.baseToken.symbol, 32), name: known?.name || clean(p.baseToken.name, 80), imageUrl: https(p.info?.imageUrl), liquidityUsd, priceUsd: String(p.priceUsd), referenceMint: Boolean(known), verified: false });
     }
     return [...result.values()].sort((a, b) => b.liquidityUsd - a.liquidityUsd);
   }
@@ -66,6 +66,10 @@ export function createRewardAssetResolver({ rpc, fetchImpl = fetch, now = Date.n
     let exact = ''; try { exact = rewardAddress(q); } catch { /* Tickers are never resolved to an arbitrary first match. */ }
     return cached('search:' + (exact || q.toLowerCase()), 60000, async () => {
       const rows = candidates(await market(exact ? '/latest/dex/tokens/' + exact : '/latest/dex/search?q=' + encodeURIComponent(q)), exact);
+      // A look-alike can report more liquidity than a known reference mint.
+      // Rank a reviewed ticker identity first without selecting or endorsing it.
+      const exactReference = t => t.referenceMint && t.symbol.toLowerCase() === q.toLowerCase();
+      if (!exact) rows.sort((a, b) => Number(exactReference(b)) - Number(exactReference(a)) || b.liquidityUsd - a.liquidityUsd);
       // An unindexed CA can still be inspected on chain; never substitute a similarly named mint.
       if (exact && !rows.length) return [{ mint: exact, symbol: cryptoAssetForMint(exact)?.symbol || 'Unknown token', name: 'Exact address · market data unavailable', imageUrl: '', verified: false }];
       return rows.slice(0, 12);

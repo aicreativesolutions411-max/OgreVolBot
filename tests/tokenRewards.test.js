@@ -52,6 +52,17 @@ test('custom payout policy binds mint and full split without promising external 
   assert.throws(() => normalizeTokenRewardPolicy({ ...policyInput, creatorShareBps: -1, holderShareBps: 10001 }, asset), /percentage/);
 });
 
+test('recognized exact ticker mints precede look-alikes without automatic verification', async () => {
+  const { createRewardAssetResolver } = await import('../src/lib/tokenRewardAssets.js');
+  const bonk = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+  const row = (address, liquidity) => ({ chainId: 'solana', baseToken: { address, symbol: 'BONK', name: 'BONK' }, priceUsd: '0.00001', liquidity: { usd: liquidity } });
+  const resolver = createRewardAssetResolver({ fetchImpl: async()=> new Response(JSON.stringify({ pairs:[row(QUOTE,900000000),row(bonk,10000000)] })) });
+  const rows = await resolver.search('BONK');
+  assert.equal(rows[0].mint, bonk); assert.equal(rows[0].referenceMint, true); assert.equal(rows[0].verified, false);
+  assert.equal(rows[1].mint, QUOTE); assert.equal(rows[1].referenceMint, false);
+  const exact = await resolver.search(QUOTE); assert.equal(exact.length, 1); assert.equal(exact[0].mint, QUOTE);
+});
+
 test('allocations use exact raw units, preserve dust, keep source totals and cannot allocate twice', async () => {
   const { normalizeTokenRewardPolicy } = await import('../src/lib/tokenRewardPolicy.js');
   const { createRewardLedger, recordRewardCollection, allocateTokenRewards, rewardLiabilities } = await import('../src/lib/tokenRewardLedger.js');
