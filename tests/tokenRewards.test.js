@@ -63,6 +63,49 @@ test('recognized exact ticker mints precede look-alikes without automatic verifi
   const exact = await resolver.search(QUOTE); assert.equal(exact.length, 1); assert.equal(exact[0].mint, QUOTE);
 });
 
+test('rate-limited market reads use the existing keyed fallback without weakening mint checks', async () => {
+  const { createRewardAssetResolver } = await import('../src/lib/tokenRewardAssets.js');
+  let time = 1800000000000, dexReads = 0, trackerReads = 0, rpcReads = 0;
+  const row = mint => ({ mint, symbol: 'SAME', name: 'Exact token', image: 'https://example.org/coin.png', priceUsd: 0.1, liquidityUsd: 25000 });
+  const fetchImpl = async (url, options) => {
+    const u = new URL(url);
+    if (u.hostname === 'api.dexscreener.com') { dexReads++; assert.equal(options.headers['x-api-key'], undefined); return new Response('{}', { status: 429 }); }
+    assert.equal(u.origin, 'https://data.solanatracker.io'); assert.equal(u.pathname, '/search');
+    assert.equal(options.headers['x-api-key'], 'fixture-key'); assert.equal(options.redirect, 'error');
+    trackerReads++; return new Response(JSON.stringify({ status: 'success', data: [row(COIN), row(QUOTE)] }));
+  };
+  const resolver = createRewardAssetResolver({ fetchImpl, now: () => time, trackerApiKey: 'fixture-key', rpc: { getAccountInfoAndContext: async () => { rpcReads++; return { context: { slot: 12 }, value: mintAccount() }; } } });
+  const results = await resolver.search(QUOTE);
+  assert.equal(results.length, 1, 'promoted or similarly named rows must not replace the exact mint');
+  assert.equal(results[0].mint, QUOTE); assert.equal(results[0].verified, false);
+  const selected = await resolver.resolve(QUOTE);
+  assert.equal(selected.verified, true); assert.equal(rpcReads, 1); assert.equal(trackerReads, 1, 'selection reuses a fresh market read, not a second credit');
+  assert.equal(selected.marketSource, 'solana-tracker');
+  await resolver.resolve(QUOTE, { fresh: true }); assert.equal(rpcReads, 2); assert.equal(trackerReads, 1);
+  time += 21000;
+  await resolver.resolve(QUOTE, { fresh: true }); assert.equal(trackerReads, 2); assert.equal(dexReads, 1, 'primary provider observes its rate-limit cooldown');
+  const frozen = createRewardAssetResolver({ fetchImpl, trackerApiKey: 'fixture-key', rpc: { getAccountInfoAndContext: async () => ({ context: { slot: 12 }, value: mintAccount(TOKEN_PROGRAM_ID, 1) }) } });
+  await assert.rejects(frozen.resolve(QUOTE), /freeze authority/);
+});
+
+test('fallback is demand-only, bounded and fails closed on missing credentials or wrong-token data', async () => {
+  const { createRewardAssetResolver } = await import('../src/lib/tokenRewardAssets.js');
+  let reads = 0, time = 1800000000000;
+  const missing = createRewardAssetResolver({ trackerApiKey: '', fetchImpl: async()=>{reads++;return new Response('{}',{status:429});} });
+  assert.equal(reads, 0); await assert.rejects(missing.search('SAME'), /temporarily unavailable/); assert.equal(reads, 1);
+  let trackerReads = 0;
+  const fetchImpl = async url => {
+    if (new URL(url).hostname === 'api.dexscreener.com') return new Response('{}', { status: 429 });
+    trackerReads++; return new Response(JSON.stringify({ status:'success',data:[{mint:COIN,symbol:'SAME',priceUsd:1,liquidityUsd:50000}] }));
+  };
+  const resolver = createRewardAssetResolver({ now:()=>time, trackerApiKey:'fixture-key', trackerDailyLimit:2, fetchImpl, rpc:{getAccountInfoAndContext:async()=>({context:{slot:12},value:mintAccount()})} });
+  await assert.rejects(resolver.resolve(QUOTE), /liquid indexed market/);
+  await resolver.search('ANOTHER'); assert.equal(trackerReads, 2);
+  await assert.rejects(resolver.search('THIRD'), /fallback lookup budget/); assert.equal(trackerReads, 2);
+  time += 86400001;
+  await resolver.search('THIRD'); assert.equal(trackerReads, 3);
+});
+
 test('allocations use exact raw units, preserve dust, keep source totals and cannot allocate twice', async () => {
   const { normalizeTokenRewardPolicy } = await import('../src/lib/tokenRewardPolicy.js');
   const { createRewardLedger, recordRewardCollection, allocateTokenRewards, rewardLiabilities } = await import('../src/lib/tokenRewardLedger.js');
