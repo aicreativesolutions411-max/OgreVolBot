@@ -1,6 +1,7 @@
 (function(root){
   'use strict';
   function currentProduct(pathname, hash = '') {
+    if (/^\/slimestonks(?:\/|\.html|$)/.test(pathname)) return 'Stonks';
     if (/^\/(?:launch(?:\/|$)|prelaunch(?:\/|$)|launch-os(?:\/|$)|launch-hq(?:\/|$)|trend-launch(?:\/|$)|partner-rewards(?:\/|$))/.test(pathname) || /^#launch(?:\/|$)/.test(hash)) return 'Launch';
     if (/^\/(?:wallet|cash)(?:\/|\.html|$)/.test(pathname)) return 'Wallet';
     if (/^\/(?:terminal|portal)(?:\/|$)/.test(pathname) || /^\/(?:index|gg)\.html$/.test(pathname)) return 'Terminal';

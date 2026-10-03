@@ -1,6 +1,7 @@
 (function(root){
   'use strict';
   const items=[
+    {title:'SlimeStonks',group:'Discover',hint:'Paired-token markets, recorded rewards and launch planning · preview',href:'/slimestonks',words:'stocks stonks tokenized assets pairing markets rewards creator'},
     {title:'Launch Rehearsal',group:'Launch',hint:'Preview a fee plan without spending SOL',href:'/launch/rehearsal',words:'preview simulate dry run percentages test launch plan'},
     {title:'Create a coin',group:'Launch',hint:'Pump launch · artwork, bundles and fee destinations',href:'/launch?mode=creator',words:'token mint deploy bundle invite'},
     {title:'Slime Build',group:'Launch',hint:'Milestones, delivery evidence and creator-reported progress',href:'/launch/build',words:'project game roadmap build work funding development'},

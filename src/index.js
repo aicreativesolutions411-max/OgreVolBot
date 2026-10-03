@@ -13,6 +13,9 @@ import sharp from "sharp";
 import { createScanPfpLoader, scanPhotoContent } from "./lib/telegramScanPfp.js";
 import { createLaunchDirectoryReader } from "./lib/launchDirectory.js";
 const publicLaunchDirectory = createLaunchDirectoryReader(() => readPumpLaunchAttempts());
+import { createSlimeStonksReader } from "./lib/slimeStonks.js";
+const slimeStonksReader = createSlimeStonksReader();
+let slimeStonksExecutionApi;
 import ffmpegPath from "ffmpeg-static";
 import { WebSocketServer, WebSocket } from "ws";
 import nacl from "tweetnacl";
@@ -7386,6 +7389,10 @@ and is checked by an automated release audit before every upload.</p></div>
     }
     // Product homepage stays separate from the fully self-contained terminal.
     // Its tiny entry bridge preserves legacy root hashes, invites and logins.
+    if ((request.method === "GET" || request.method === "HEAD") && ["/slimestonks", "/slimestonks/", "/slimestonks.html"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "slimestonks.html", "no-store, max-age=0");
+      return;
+    }
     if ((request.method === "GET" || request.method === "HEAD") && ["/", "/home", "/home.html"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "home.html", "no-store, max-age=0");
       return;
@@ -8906,6 +8913,27 @@ async function handleSpotifyPlaylists(request, response) {
 async function handleWebApiRequest(request, response, requestUrl) {
   try {
     const pathname = requestUrl.pathname;
+    if (pathname.startsWith("/api/web/stonks/")) {
+      if (pathname.startsWith("/api/web/stonks/execution/")) {
+        // Lazy import: no SDK initialization, RPC or wallet preload on site visits.
+        slimeStonksExecutionApi ||= import("./lib/slimeStonksApi.js").then(({ createStonksExecutionApi }) =>
+          createStonksExecutionApi({ dataDir: CONFIG.dataDir, readBody: readRequestBody, sendJson: sendWebJson }));
+        await (await slimeStonksExecutionApi).route(request, response, requestUrl);
+        return;
+      }
+      // Read-only, allowlisted, bounded and coalesced. No transaction proxying.
+      if (request.method !== "GET") {
+        sendWebJson(request, response, 405, { ok: false, error: "This preview only supports market reads. No transaction was submitted." }, "", { Allow: "GET", "Cache-Control": "no-store" });
+        return;
+      }
+      try {
+        const payload = await slimeStonksReader.read(pathname.slice("/api/web/stonks/".length), requestUrl.searchParams);
+        sendWebJson(request, response, 200, payload, "", { "Cache-Control": "no-store" });
+      } catch (error) {
+        sendWebJson(request, response, [400, 403, 404, 429, 502].includes(error?.status) ? error.status : 502, { ok: false, error: error?.status ? error.message : "Market data is temporarily unavailable." }, "", { "Cache-Control": "no-store", ...(error?.retryAfter ? { "Retry-After": String(error.retryAfter) } : {}) });
+      }
+      return;
+    }
     if (pathname.startsWith("/api/web/social-claims/") && await getSocialClaims().route(request, response, requestUrl)) return;
 
     const workerTickPaths = new Set([

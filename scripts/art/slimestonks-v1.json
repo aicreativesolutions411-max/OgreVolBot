@@ -1,0 +1,16 @@
+{
+  "tool": "built-in image_gen.imagegen",
+  "useCase": "stylized-concept",
+  "assets": [
+    {
+      "paths": ["web/public/assets/slimewire/stonks/bull-hero-v1.webp", "web/public/assets/slimewire/stonks/bull-home-v1.webp"],
+      "reference": "web/public/assets/slimewire/home/launch-v1.webp",
+      "prompt": "Create one premium cinematic website hero artwork for SLIMESTONKS, a crypto market exploration feature in SlimeWire. Use the reference solely for the established material language: near-black obsidian, polished dark chrome, liquid acid-lime slime, pinpoint green rimlight, controlled luxury studio photography. New scene, NOT the rocket: on the RIGHT HALF construct a powerful sculptural bull made from liquid black chrome and translucent lime glass, elegant horns, turned three-quarter toward camera, solid muscular silhouette; it stands on a low obsidian circular exchange plinth with a thin green ring. Behind the bull a few very restrained vertical translucent green glass market bars, NOT a literal dashboard or real stock logo. A fine liquid slime stream and flowing glossy reflections lead diagonally from bottom center toward the right-side sculpture. Wide panoramic 2:1 composition. LEFT 50% stays very dark calm and nearly empty for real HTML heading overlay, with just subtle texture and a soft horizon. Mood: editorial finance meets high-end science-fiction industrial design, dramatic, mature, original, crisp silhouette, masterful specular highlights, photographic dimensionality, precise materials. No lettering, no words, no logos, no watermark, no UI elements, no cartoon, no clipart, no excessive glow. Keep all horns, sculpture and base fully inside the frame with generous margin, crop-safe. Match the reference's restrained dark palette and rich lime liquid exactly. Produce high-resolution raster artwork, not a web page mockup."
+    },
+    {
+      "paths": ["web/public/assets/slimewire/stonks/reward-flow-v1.webp"],
+      "reference": "Selected bull hero artwork",
+      "prompt": "Use case: stylized-concept. Asset type: SlimeStonks premium rewards and pairing section artwork, wide 2:1. Image 1 is STYLE REFERENCE ONLY: preserve its obsidian, dark liquid chrome, acid-lime translucent glass, luxury directional studio light, flowing slime reflections. Completely different subject: a beautiful precision-engineered orbital mechanism on the RIGHT HALF, two large polished dark-chrome coin rings connected by a luminous lime liquid stream, smaller luminous glass coin discs below showing branching distribution into three separate circular reservoirs. Visual metaphor of paired assets and holder rewards. Elegant, tactile, engineered, not generic flat icons. One ring in front and one tilted behind, readable simple strong silhouette. No literal stock logos, no numbers, no bull, no rocket. LEFT HALF calm deep black negative space for real website text, with a very subtle floor horizon. Very high-end photorealistic 3D product photography, razor sharp materials, restrained bloom, beautiful lime edge lighting, crop-safe all objects completely in frame. No text, no watermarks, no UI, no excessive particles, no busy cityscape. Output one artwork, not a webpage mockup."
+    }
+  ]
+}
