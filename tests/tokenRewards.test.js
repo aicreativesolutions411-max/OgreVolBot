@@ -98,7 +98,7 @@ test('fallback is demand-only, bounded and fails closed on missing credentials o
     if (new URL(url).hostname === 'api.dexscreener.com') return new Response('{}', { status: 429 });
     trackerReads++; return new Response(JSON.stringify({ status:'success',data:[{mint:COIN,symbol:'SAME',priceUsd:1,liquidityUsd:50000}] }));
   };
-  const resolver = createRewardAssetResolver({ now:()=>time, trackerApiKey:'fixture-key', trackerDailyLimit:2, fetchImpl, rpc:{getAccountInfoAndContext:async()=>({context:{slot:12},value:mintAccount()})} });
+  const resolver = createRewardAssetResolver({ now:()=>time, trackerApiKey:'fixture-key', trackerDailyLimit:2, raydiumFallback:false, fetchImpl, rpc:{getAccountInfoAndContext:async()=>({context:{slot:12},value:mintAccount()})} });
   await assert.rejects(resolver.resolve(QUOTE), /liquid indexed market/);
   await resolver.search('ANOTHER'); assert.equal(trackerReads, 2);
   await assert.rejects(resolver.search('THIRD'), /fallback lookup budget/); assert.equal(trackerReads, 2);
@@ -185,7 +185,7 @@ test('durable reward pipeline persists before broadcasting, reconciles timeouts 
   const { normalizeTokenRewardPolicy } = await import('../src/lib/tokenRewardPolicy.js');
   const store=memoryStore(), receipts=new Map(), broadcasts=[];let time=1800000000000, snapReads=0;
   const pending=(kind,rows=[])=>({kind,rows,mint:QUOTE,signature:kind+'-sig',rawBase64:Buffer.from(kind).toString('base64'),blockhash:'block',lastValidBlockHeight:900});
-  const driver={verify:async()=>true,balance:async()=> '100',prepareCollection:async()=>pending('collection'),preparePayout:async(_p,rows)=>pending('payout',rows),receipt:async(_p,p)=>receipts.get(p.signature)||{status:'unknown'},broadcast:async p=>{assert.equal(store.snapshot().tokenRewardPrograms[COIN].ledger.pending.signature,p.signature);broadcasts.push(p);throw Error('timeout after submit');}};
+  const driver={verify:async()=>true,balance:async()=> '100',prepareCollection:async p=>p.collectionSources?.includes('dbc')?null:{...pending('collection'),collectionSource:'dbc'},preparePayout:async(_p,rows)=>pending('payout',rows),receipt:async(_p,p)=>receipts.get(p.signature)||{status:'unknown'},broadcast:async p=>{assert.equal(store.snapshot().tokenRewardPrograms[COIN].ledger.pending.signature,p.signature);broadcasts.push(p);throw Error('timeout after submit');}};
   const service=createTokenRewardService({store,driverFor:async()=>driver,now:()=>time,enableBroadcast:true,snapshot:async mint=>{snapReads++;return {mint,slot:100,capturedAt:time,holders:[{wallet:B,amount:'1'}]};}});
   await service.register({mint:COIN,policy:normalizeTokenRewardPolicy(policyInput,asset),pool:Keypair.generate().publicKey.toBase58(),config:Keypair.generate().publicKey.toBase58(),vault:Keypair.generate().publicKey.toBase58(),adoptionReceipt:'launch-proof',validationApproved:true,minimumPayoutRaw:'1',minimumCollectionRaw:'1',maxNetworkCostLamports:20000000});
   await service.pause(COIN,false);await service.tick(COIN);

@@ -24,7 +24,7 @@ export function pumpCurveUsdPrice(curve,decimals,solUsd){
   return String(price);
 }
 // Dedicated free reads: never fall back to a paid RPC or a truncated top list.
-export async function readHolderSnapshot(mint,{fetchImpl=fetch,excluded=[]}={}){
+export async function readHolderSnapshot(mint,{fetchImpl=fetch,excluded=[],priceAtSnapshot}={}){
   mint=new PublicKey(mint).toBase58();
   const deadline=AbortSignal.timeout(25000);
   const request=async(url,options={})=>{
@@ -48,11 +48,18 @@ export async function readHolderSnapshot(mint,{fetchImpl=fetch,excluded=[]}={}){
   if(!PROGRAMS.has(program)||!Number.isInteger(decimals))throw new Error('Partner must be a verified Solana token mint.');
   const [accounts,market]=await Promise.all([
     rpc('getProgramAccounts',[program,{commitment:'finalized',encoding:'base64',withContext:true,dataSlice:{offset:0,length:166},filters:[{memcmp:{offset:0,bytes:mint}},...(program.startsWith('Tokenkeg')?[{dataSize:165}]:[])]}]),
-    request(`https://api.dexscreener.com/latest/dex/tokens/${mint}`)
+    priceAtSnapshot ? Promise.resolve({pairs:[]}) : request(`https://api.dexscreener.com/latest/dex/tokens/${mint}`)
   ]);
   if(!Number.isSafeInteger(accounts?.context?.slot)||!Array.isArray(accounts?.value))throw new Error('Incomplete holder snapshot; no rewards allocated.');
   const pair=(market.pairs||[]).filter(p=>p.chainId==='solana'&&p.baseToken?.address===mint&&Number(p.priceUsd)>0&&Number(p.liquidity?.usd)>=1000).sort((a,b)=>Number(b.liquidity.usd)-Number(a.liquidity.usd))[0];
   let priceUsd=pair?.priceUsd,priceSource='DexScreener USD quote';
+  if(priceAtSnapshot){
+    // Internal, verified native-pool reader only; never supplied by a browser.
+    // Newly launched DBC tokens need not wait for a third-party indexer.
+    const price=await priceAtSnapshot({mint,decimals,minContextSlot:accounts.context.slot});
+    if(!Number.isFinite(Number(price?.priceUsd))||Number(price.priceUsd)<=0||!Number.isSafeInteger(price.slot)||price.slot<accounts.context.slot)throw new Error('Native pool pricing is not fresh enough for this holder snapshot.');
+    priceUsd=price.priceUsd;priceSource=String(price.source||'verified native pool');
+  }
   if(!priceUsd){
     const [curveInfo,solMarket]=await Promise.all([
       rpc('getAccountInfo',[bondingCurvePda(mint).toBase58(),{encoding:'base64',commitment:'finalized',minContextSlot:accounts.context.slot}]),

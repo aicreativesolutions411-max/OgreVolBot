@@ -22,11 +22,11 @@ export function inspectRewardMint(mint, info) {
   return { mint, decimals: parsed.decimals, tokenProgram: TOKEN_PROGRAM_ID.toBase58(), supplyRaw: parsed.supply.toString(), mintAuthority: parsed.mintAuthority?.toBase58() || null };
 }
 
-export function createRewardAssetResolver({ rpc, fetchImpl = fetch, now = Date.now, trackerApiKey = process.env.SOLANA_TRACKER_API_KEY || '', trackerDailyLimit = 60 } = {}) {
+export function createRewardAssetResolver({ rpc, fetchImpl = fetch, now = Date.now, trackerApiKey = process.env.SOLANA_TRACKER_API_KEY || '', trackerDailyLimit = 60, raydiumFallback = true } = {}) {
   let connection = rpc;
   const getRpc = () => connection ||= new Connection('https://api.mainnet-beta.solana.com', { commitment: 'finalized', disableRetryOnRateLimit: true, fetch: (url, opts) => fetchImpl(url, { ...opts, signal: AbortSignal.timeout(10000) }) });
   const cache = new Map(), pending = new Map(), marketCache = new Map(), marketPending = new Map();
-  let requests = [], trackerRequests = [], dexRetryAt = 0, trackerRetryAt = 0;
+  let requests = [], trackerRequests = [], dexRetryAt = 0, trackerRetryAt = 0, raydiumRetryAt = 0;
   // This is a per-process safety ceiling, not an account-wide billing meter.
   // Existing keyed REST data is fallback-only: no timers, polling or paid RPC.
   const trackerLimit = Number.isSafeInteger(trackerDailyLimit) ? Math.max(0, Math.min(60, trackerDailyLimit)) : 60;
@@ -56,6 +56,7 @@ export function createRewardAssetResolver({ rpc, fetchImpl = fetch, now = Date.n
     if (marketPending.has(key)) return marketPending.get(key);
     const job = (async () => {
       let primaryError = rewardError(429, 'Token market lookup is temporarily unavailable.');
+      let primaryEmpty = false;
       if (now() >= dexRetryAt) {
         try {
           // Use the current chain-specific endpoint for exact-mint reads, not
@@ -63,13 +64,31 @@ export function createRewardAssetResolver({ rpc, fetchImpl = fetch, now = Date.n
           const route = exact ? '/tokens/v1/solana/' + exact : '/latest/dex/search?q=' + encodeURIComponent(query);
           const body = await marketJson('https://api.dexscreener.com' + route);
           const rows = candidates(Array.isArray(body) ? body : Array.isArray(body.pairs) ? body.pairs : [], exact, 'dexscreener');
-          if (rows.length || !trackerApiKey) return rows;
+          if (rows.length) return rows;
+          primaryEmpty = true;
         } catch (e) {
           primaryError = e.status ? e : rewardError(502, 'Token market lookup is temporarily unavailable.');
           dexRetryAt = now() + (e.status === 429 ? 60000 : 15000);
         }
       }
-      if (!trackerApiKey || now() < trackerRetryAt) throw primaryError;
+      // A separate, public market-data source keeps exact-CA setup working
+      // when Render's shared DexScreener IP is limited. No keys or paid RPC.
+      // Unknown tickers are never converted to an arbitrary mint here.
+      const reference = STONKS_CRYPTO_ASSETS.find(t => t.symbol.toLowerCase() === query.toLowerCase() || (query.toLowerCase() === 'sol' && t.mint === WSOL));
+      const rayMint = exact || reference?.mint;
+      if (raydiumFallback && rayMint && now() >= raydiumRetryAt) {
+        try {
+          const params = new URLSearchParams({ mint1: rayMint, poolType: 'all', poolSortField: 'liquidity', sortType: 'desc', pageSize: '3', page: '1' });
+          const [pools, prices] = await Promise.all([marketJson('https://api-v3.raydium.io/pools/info/mint?' + params), marketJson('https://api-v3.raydium.io/mint/price?mints=' + rayMint)]);
+          if (pools.success !== true || prices.success !== true || !Array.isArray(pools.data?.data)) throw Error('Invalid public market response');
+          const rows = candidates(pools.data.data.flatMap(p => {
+            const token = [p.mintA, p.mintB].find(m => m?.address === rayMint && m.chainId === 101);
+            return token ? [{ chainId: 'solana', baseToken: token, priceUsd: prices.data?.[rayMint], liquidity: { usd: p.tvl }, info: { imageUrl: token.logoURI } }] : [];
+          }), rayMint, 'raydium');
+          if (rows.length) return rows;
+        } catch (e) { raydiumRetryAt = now() + (e.status === 429 ? 60000 : 15000); }
+      }
+      if (!trackerApiKey || now() < trackerRetryAt) { if (primaryEmpty) return []; throw primaryError; }
       trackerRequests = trackerRequests.filter(t => now() - t < 86400000);
       if (trackerRequests.length >= trackerLimit || trackerRequests.filter(t => now() - t < 3600000).length >= 10) throw rewardError(429, 'The fallback lookup budget is temporarily exhausted. Please try again later.');
       trackerRequests.push(now());

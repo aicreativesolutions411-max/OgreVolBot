@@ -18,8 +18,15 @@ export function createTokenRewardService({ store, driverFor, snapshot = readHold
     if (rewardRaw(program.minimumPayoutRaw) < 1n || rewardRaw(program.minimumCollectionRaw) < 1n || !Number.isSafeInteger(program.maxNetworkCostLamports) || program.maxNetworkCostLamports < 1 || program.maxNetworkCostLamports > 50000000) throw new Error('A bounded, explicit payout and network-cost policy is required.');
     if (program.vault === ledger.policy.creator) throw new Error('Use a dedicated fee vault, not the developer wallet.');
     await (await driverFor(program)).verify(program);
-    await store.mutate(db => { const all = programs(db); if (all[program.mint]) throw new Error('This launch is already registered; its fee policy is immutable.'); if (Object.values(all).some(p => p.vault === program.vault || p.pool === program.pool)) throw new Error('A pool and fee vault must belong to only one reward program.'); all[program.mint] = program; });
-    return publicTokenRewardLedger(ledger);
+    return store.mutate(db => {
+      const all = programs(db), existing = all[program.mint];
+      if (existing) {
+        if (existing.adoptionReceipt !== program.adoptionReceipt || existing.pool !== program.pool || existing.config !== program.config || existing.vault !== program.vault || existing.ledger.policyHash !== program.ledger.policyHash) throw new Error('This launch is already registered; its fee policy is immutable.');
+        return publicTokenRewardLedger(existing.ledger); // Do not reset a recovered launch's ledger.
+      }
+      if (Object.values(all).some(p => p.vault === program.vault || p.pool === program.pool)) throw new Error('A pool and fee vault must belong to only one reward program.'); all[program.mint] = program;
+      return publicTokenRewardLedger(ledger);
+    });
   }
   async function pause(mint, paused = true) { await store.mutate(db => { const p = programs(db)[mint]; if (!p) throw new Error('Reward program not found.'); p.paused = paused; p.status = paused ? 'PAUSED' : 'READY'; p.nextCheckAt = now(); }); }
   async function tick(mint) {
@@ -35,7 +42,10 @@ export function createTokenRewardService({ store, driverFor, snapshot = readHold
         if (program.ledger.pending) {
           const pending = program.ledger.pending, receipt = await driver.receipt(program, pending);
           if (receipt.status === 'finalized') {
-            if (pending.kind === 'collection') { program.ledger = recordRewardCollection(program.ledger, receipt); program.ledger.pending = null; }
+            if (pending.kind === 'collection') {
+              program.ledger = recordRewardCollection(program.ledger, { ...receipt, source: pending.collectionSource }); program.ledger.pending = null;
+              program.collectionSources ||= []; if (pending.collectionSource) program.collectionSources.push(pending.collectionSource);
+            }
             else program.ledger = finalizeTokenRewardPayment(program.ledger, receipt);
             program.status = 'RECONCILED'; program.lastError = ''; program.nextCheckAt = now();
             return { status: program.status };
@@ -60,13 +70,15 @@ export function createTokenRewardService({ store, driverFor, snapshot = readHold
         const cycleDue = !program.ledger.lastCycleAt || now() - program.ledger.lastCycleAt >= TOKEN_REWARD_CADENCE_MS;
         if (!cycleDue) { program.nextCheckAt = program.ledger.lastCycleAt + TOKEN_REWARD_CADENCE_MS; return { status: 'ACCUMULATING' }; }
         if (!program.collectionCycleAt || now() - program.collectionCycleAt >= TOKEN_REWARD_CADENCE_MS) {
-          const pending = await driver.prepareCollection(program); program.collectionCycleAt = now();
+          if (!program.collectionStartedAt || now() - program.collectionStartedAt >= TOKEN_REWARD_CADENCE_MS) { program.collectionStartedAt = now(); program.collectionSources = []; }
+          const pending = await driver.prepareCollection(program);
           if (pending) { reserve(program, pending, 'collection', []); return { program: structuredClone(program), pending, status: 'PREPARED' }; }
+          program.collectionCycleAt = now();
         }
         const p = program.ledger.policy, excluded = [program.vault, program.pool, mint], snapshots = {};
         if (rewardRaw(program.ledger.unallocatedRaw) === 0n && Object.values(program.ledger.carry).every(v => rewardRaw(v) === 0n)) { program.nextCheckAt = now() + TOKEN_REWARD_CADENCE_MS; return { status: 'ACCUMULATING' }; }
         await Promise.all([['own', p.holderShareBps, mint], ['partner', p.partnerShareBps, p.partnerMint]].map(async ([source, share, token]) => {
-          if (!share) return; const value = await snapshot(token, { excluded });
+          if (!share) return; const value = await snapshot(token, { excluded, program, source });
           // Only our complete all-account reader can supply this marker. Never
           // upgrade a provider's top-holder page to a full holder snapshot.
           snapshots[source] = { ...value, complete: true };
@@ -92,6 +104,6 @@ export function createTokenRewardService({ store, driverFor, snapshot = readHold
   }
   async function tickDue() { const due = await store.mutate(db => Object.values(programs(db)).filter(p => p.nextCheckAt <= now() && (!p.paused || p.ledger.pending)).slice(0, 10).map(p => p.mint)); for (const mint of due) await tick(mint).catch(() => {}); return due.length; }
   async function read(mint) { return store.mutate(db => { const p = programs(db)[mint]; return p ? { ...publicTokenRewardLedger(p.ledger), status: p.status, paused: p.paused, error: p.lastError } : null; }); }
-  function start() { if (!enableBroadcast) throw new Error('Reward runner activation is disabled.'); let running = false; const timer = setInterval(async () => { if (running) return; running = true; try { await tickDue(); } finally { running = false; } }, 15000); timer.unref?.(); return () => clearInterval(timer); }
+  function start() { if (!enableBroadcast) throw new Error('Reward runner activation is disabled.'); let running = false; const timer = setInterval(async () => { if (running) return; running = true; try { await tickDue(); } catch { audit({ type: 'token_reward_runner', status: 'STORAGE_UNAVAILABLE' }); } finally { running = false; } }, 15000); timer.unref?.(); return () => clearInterval(timer); }
   return { register, pause, tick, tickDue, read, start };
 }

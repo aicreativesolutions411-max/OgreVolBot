@@ -17,6 +17,12 @@ import { createSlimeStonksReader } from "./lib/slimeStonks.js";
 const slimeStonksReader = createSlimeStonksReader();
 let slimeStonksExecutionApi;
 let tokenRewardsApi;
+let tokenRewardRuntime;
+function getTokenRewardRuntime() {
+  return tokenRewardRuntime ||= import("./lib/tokenRewardRuntime.js").then(({ createTokenRewardRuntime }) => createTokenRewardRuntime({
+    dataDir: CONFIG.dataDir, encrypt: secret => encryptSecret(Buffer.from(secret)), decrypt: decryptSecretBuffer
+  }));
+}
 import ffmpegPath from "ffmpeg-static";
 import { WebSocketServer, WebSocket } from "ws";
 import nacl from "tweetnacl";
@@ -5916,6 +5922,9 @@ async function main() {
     console.log("Autopilot STOPPED (AUTOPILOT_ENABLED=false) — Ogre A.I. tick off, no auto-trading.");
   }
   startHolderRewardAutoClaimRunner();
+  // Dedicated native-reward reconciliation survives closed browsers and starts
+  // at boot, not on a page request. An empty store performs no background RPC.
+  void getTokenRewardRuntime().then(runtime => runtime.start()).catch(() => console.warn("[token-rewards] startup verification pending"));
   startCreatorFeeAutoClaimRunner();
   startRhSushiFeeAutoClaimRunner();
   startPartnerRewardRunner();
@@ -8915,8 +8924,8 @@ async function handleWebApiRequest(request, response, requestUrl) {
   try {
     const pathname = requestUrl.pathname;
     if (pathname.startsWith("/api/web/token-rewards/")) {
-      tokenRewardsApi ||= import("./lib/tokenRewardsApi.js").then(({ createTokenRewardsApi }) =>
-        createTokenRewardsApi({ readBody: readRequestBody, sendJson: sendWebJson }));
+      tokenRewardsApi ||= import("./lib/tokenRewardsApi.js").then(async ({ createTokenRewardsApi }) =>
+        createTokenRewardsApi({ readBody: readRequestBody, sendJson: sendWebJson, runtime: await getTokenRewardRuntime() }));
       await (await tokenRewardsApi).route(request, response, requestUrl);
       return;
     }

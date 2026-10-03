@@ -13,8 +13,9 @@
   <script src="/config.js?v=20261003"></script>
   <script src="/slimestonks.js?v=20261003-crypto-rewards" defer></script>
   <script src="/slimestonks-transactions.js?v=20261003-crypto-rewards" defer></script>
-  <link rel="stylesheet" href="/token-rewards.css?v=20261003-custom-pairs">
-  <script src="/token-rewards.js?v=20261003-reference-mints-2" defer></script>
+  <link rel="stylesheet" href="/token-rewards.css?v=20261003-live-validation">
+  <script src="/token-rewards.js?v=20261003-live-validation" defer></script>
+  <script src="/token-reward-launch.js?v=20261003-live-validation" defer></script>
 </head>
 <body>
   <a class="skip" href="#markets">Skip to markets</a>
@@ -77,6 +78,24 @@
       <button type="submit" id="reward-review-button" class="stonks-primary" disabled>Review reward plan</button><p id="reward-status" class="stonks-data-note" role="status" aria-live="polite"></p>
     </form>
     <section id="reward-review" class="stonks-plan-summary" hidden aria-label="Reviewed payout plan"></section><button id="reward-download" type="button" class="stonks-secondary" hidden>Save reviewed plan ↓</button>
+    <section class="reward-execution" aria-labelledby="reward-live-title">
+      <span class="stonks-eyebrow">WALLET-APPROVED VALIDATION</span><h3 id="reward-live-title">Launch &amp; reward status</h3>
+      <p id="reward-live-readiness" class="stonks-data-note">General release is awaiting a verified live launch and payout.</p>
+      <div class="reward-live-actions"><button type="button" class="stonks-secondary" id="reward-connect">Connect wallet</button><button type="button" class="stonks-secondary" id="reward-history" hidden>My launches</button></div>
+      <div id="reward-launch-details" class="reward-step" hidden>
+        <label>Coin image <input id="reward-image" type="file" accept="image/png,image/jpeg,image/webp"></label>
+        <label>Description <textarea id="reward-description" maxlength="1000" rows="3" placeholder="What is your coin about?"></textarea></label>
+        <label>Reward network budget · SOL <select id="reward-budget"><option value="20000000">0.02 SOL</option><option value="50000000" selected>0.05 SOL</option><option value="100000000">0.1 SOL</option><option value="500000000">0.5 SOL</option></select></label>
+        <p class="stonks-data-note">Separate from launch rent. Pays collection, transfers and new token-account rent. A low budget pauses payouts; tokens remain reserved. It is not withdrawn from your personal wallet later.</p>
+        <label class="reward-consent"><input type="checkbox" id="reward-image-rights">I have rights to use this coin image and description.</label>
+        <label class="reward-consent"><input type="checkbox" id="reward-live-consent">I accept this validation launch, its immutable fee split and service-managed fee vault. I will review two separate wallet transactions. A custom pair may require a separately funded migration when its curve fills. Rewards depend on trading fees, complete holder data and sufficient network funding; returns are not guaranteed.</label>
+        <button type="button" class="stonks-primary" id="reward-prepare">Prepare wallet review</button>
+      </div>
+      <p id="reward-live-status" class="stonks-data-note" role="status" aria-live="polite"></p>
+      <div id="reward-launch-review"></div>
+      <div id="reward-live-controls" class="reward-live-actions"><button type="button" class="stonks-primary" id="reward-sign" hidden>Review &amp; sign</button><button type="button" class="stonks-secondary" id="reward-resume" hidden>Continue launch</button><button type="button" class="stonks-secondary" id="reward-refresh" hidden>Refresh status</button><button type="button" class="stonks-secondary" id="reward-retry" hidden>Retry saved transaction</button><button type="button" class="stonks-secondary" id="reward-cancel" hidden>Discard unsigned draft</button></div>
+      <div id="reward-launch-history"></div><div id="reward-ledger"></div>
+    </section>
   </dialog>
   <dialog class="stonks-dialog" id="transaction-dialog" aria-labelledby="tx-title">
     <button class="stonks-close" type="button" data-close="transaction-dialog" aria-label="Close transaction status">×</button>

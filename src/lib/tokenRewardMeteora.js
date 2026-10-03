@@ -6,6 +6,7 @@ import bs58 from 'bs58';
 import { inspectRewardMint } from './tokenRewardAssets.js';
 import { rewardWallet, assertTokenRewardPolicy } from './tokenRewardPolicy.js';
 import { rewardRaw } from './tokenRewardLedger.js';
+import { createRewardDammCollector } from './tokenRewardDamm.js';
 
 // Independent SlimeWire rail. No external platform IDs or fee authorities.
 // Do not call with an external StonkFun pool: registration checks every authority.
@@ -70,9 +71,10 @@ export function retainWrappedRewardVault(tx, owner) {
   return tx;
 }
 
-export function createTokenRewardDriver({ connection, signer, client }) {
+export function createTokenRewardDriver({ connection, signer, client, dammCollector }) {
   const sdk = client || DynamicBondingCurveClient.create(connection, 'finalized');
   const owner = signer.publicKey, vault = owner.toBase58();
+  const graduated = dammCollector || createRewardDammCollector({ connection, owner });
   async function inspect(program) {
     assertTokenRewardPolicy(program.ledger.policy);
     if (program.vault !== vault) throw new Error('Wrong fee-vault signer.');
@@ -80,7 +82,10 @@ export function createTokenRewardDriver({ connection, signer, client }) {
     const state = pool?.poolState;
     if (!state || state.config.toBase58() !== program.config || state.baseMint.toBase58() !== program.ledger.mint || state.creator.toBase58() !== p.creator) throw new Error('Pool does not match the registered launch.');
     const config = await sdk.state.getPoolConfig(new PublicKey(program.config));
-    if (!config || config.quoteMint.toBase58() !== p.quoteMint || config.feeClaimer.toBase58() !== vault || config.creatorTradingFeePercentage !== 0 || config.collectFeeMode !== CollectFeeMode.QuoteToken || config.quoteTokenFlag !== 0 || config.partnerPermanentLockedLiquidityPercentage !== 100 || config.creatorPermanentLockedLiquidityPercentage !== 0) throw new Error('Pool fee authority, asset or allocation does not match the reviewed policy.');
+    if (!config || config.quoteMint.toBase58() !== p.quoteMint || config.feeClaimer.toBase58() !== vault || config.leftoverReceiver.toBase58() !== p.creator ||
+        config.creatorTradingFeePercentage !== 0 || config.collectFeeMode !== CollectFeeMode.QuoteToken || config.quoteTokenFlag !== 0 || config.tokenType !== TokenType.SPLToken || config.tokenDecimal !== 6 ||
+        config.partnerPermanentLockedLiquidityPercentage !== 100 || config.partnerLiquidityPercentage !== 0 || config.creatorLiquidityPercentage !== 0 || config.creatorPermanentLockedLiquidityPercentage !== 0 ||
+        config.migrationOption !== MigrationOption.MET_DAMM_V2 || config.migrationFeeOption !== MigrationFeeOption.Customizable || config.migratedCollectFeeMode !== MigratedCollectFeeMode.QuoteToken || config.migratedPoolFeeBps !== 100) throw new Error('Pool fee authority, asset or allocation does not match the reviewed policy.');
     const mint = new PublicKey(p.payoutMint), parsed = inspectRewardMint(p.payoutMint, await connection.getAccountInfo(mint, 'finalized'));
     if (parsed.decimals !== p.asset.decimals) throw new Error('Payout decimals changed.');
     return { state, config, mint, ata: getAssociatedTokenAddressSync(mint, owner) };
@@ -102,12 +107,20 @@ export function createTokenRewardDriver({ connection, signer, client }) {
     async balance(program) { const { ata, mint } = await inspect(program), info = await connection.getAccountInfo(ata, 'finalized'); if (!info) return '0'; const account = unpackAccount(ata, info); if (!account.owner.equals(owner) || !account.mint.equals(mint) || account.isFrozen) throw new Error('Invalid reward vault token account.'); return account.amount.toString(); },
     async prepareCollection(program) {
       const { state, mint } = await inspect(program);
-      if (state.isMigrated) throw new Error('Graduated-pool fee collection is not yet validated. Keep this launch route disabled.');
-      const amount = new BN(state.partnerQuoteFee.toString()); if (amount.isZero()) return null;
-      if (amount.lt(new BN(program.minimumCollectionRaw))) return null;
-      const tx = await sdk.partner.claimPartnerTradingFeeToReceiver({ feeClaimer: owner, payer: owner, pool: new PublicKey(program.pool), receiver: owner, maxBaseAmount: new BN(0), maxQuoteAmount: amount });
-      if (mint.equals(NATIVE_MINT)) retainWrappedRewardVault(tx, owner);
-      return finish(tx, program, 'collection');
+      const done = program.collectionSources || [];
+      const amount = new BN(state.partnerQuoteFee.toString());
+      // Final DBC fees remain claimable after graduation. Collect both sources,
+      // once each per cycle, instead of abandoning the old pool's balance.
+      if (!done.includes('dbc') && !amount.isZero() && amount.gte(new BN(program.minimumCollectionRaw))) {
+        const tx = await sdk.partner.claimPartnerTradingFeeToReceiver({ feeClaimer: owner, payer: owner, pool: new PublicKey(program.pool), receiver: owner, maxBaseAmount: new BN(0), maxQuoteAmount: amount });
+        if (mint.equals(NATIVE_MINT)) retainWrappedRewardVault(tx, owner);
+        return { ...await finish(tx, program, 'collection'), collectionSource: 'dbc' };
+      }
+      if (state.isMigrated && !done.includes('damm-v2')) {
+        const tx = await graduated.prepare({ baseMint: program.ledger.mint, quoteMint: mint.toBase58(), minimumRaw: program.minimumCollectionRaw });
+        if (tx) return { ...await finish(tx, program, 'collection'), collectionSource: 'damm-v2' };
+      }
+      return null;
     },
     async preparePayout(program, rows) { await inspect(program); return finish(new Transaction().add(...tokenRewardTransferInstructions({ asset: program.ledger.policy.asset, vault, rows })), program, 'payout', rows); },
     async broadcast(pending) { const tx = Transaction.from(Buffer.from(pending.rawBase64, 'base64')); if (!tx.verifySignatures() || !tx.feePayer.equals(owner) || bs58.encode(tx.signature) !== pending.signature) throw new Error('Saved reward transaction failed signature checks.'); return connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 2 }); },
