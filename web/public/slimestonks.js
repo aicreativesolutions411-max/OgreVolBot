@@ -7,6 +7,13 @@
   function usd(v){return number(v)?'$'+new Intl.NumberFormat('en-US',v>0&&v<1?{maximumSignificantDigits:5}:{notation:'compact',maximumFractionDigits:2}).format(v):'Unavailable';}
   function count(v){return number(v)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:1}).format(v):'Unavailable';}
   function amount(v,symbol=''){return number(v)?new Intl.NumberFormat('en-US',{maximumSignificantDigits:8}).format(v)+(symbol?' '+symbol:''):'Unavailable';}
+  function networkVolumeUsd(stats){
+    const t=stats?.tokens||{},v=t.totalVolume24hUsd;
+    // The upstream rollup can temporarily report zero for an active, nonempty
+    // network while coin-level volumes remain positive. Do not present that as
+    // verified inactivity, sum a partial page, or substitute an older total.
+    return number(v)&&v>=0&&!(v===0&&t.total!==0)?v:null;
+  }
   function safeUrl(v){try{const u=new URL(v);return u.protocol==='https:'&&!u.username&&!u.password?u.href:'';}catch{return '';}}
   function stamp(v){return Number.isFinite(Date.parse(v||''))?new Date(v).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'Time unavailable';}
   const stage=v=>({graduated:'Graduated',new:'New','aboutToGraduate':'Near graduation'}[v]||'Indexed');
@@ -29,7 +36,7 @@
     if(mode==='community'&&(pair.communityMode!==true||pricing.community?.available!==true))return {ready:false,reason:'Two-community rewards are not offered on this pairing.'};
     return {ready:true,reason:'Current pairing parameters are available for this plan. Transaction execution is not enabled.'};
   }
-  root.SlimeStonks={usd,amount,tokenCard,filterPairs,launchReadiness,rewardHtml,feeHtml};
+  root.SlimeStonks={usd,amount,networkVolumeUsd,tokenCard,filterPairs,launchReadiness,rewardHtml,feeHtml};
   if(!root.document?.getElementById('coin-grid'))return;
   const $=id=>document.getElementById(id),API=String(root.OGRE_PORTAL_CONFIG?.apiBase||'').replace(/\/+$/,'');
   let pairs=[],stats=null,view='markets',page=1,selectedStage='',selectedQuote='',marketEpoch=0,marketController,creatorEpoch=0,creatorController,creatorPage=1,creatorAddress='',pairLimit=48,detailEpoch=0,detailController,planEpoch=0,planController,planPricing=null,coinFocus=null,planFocus=null,toastTimer;
@@ -70,7 +77,7 @@
       const selected=$('plan-pair').value;$('plan-pair').innerHTML='<option value="">Choose a pairing asset…</option>'+pairs.slice().sort((a,b)=>(a.category==='xstock'?-1:1)-(b.category==='xstock'?-1:1)||(a.symbol||'').localeCompare(b.symbol||'')).map(p=>'<option value="'+esc(p.mint)+'">'+esc((p.symbol||'?')+' · '+(p.name||p.categoryLabel||'Token')+' · '+short(p.mint))+'</option>').join('');$('plan-pair').value=selected;renderPairs();
     }catch(error){$('stat-pairs').textContent='Unavailable';$('pair-status').textContent=error.message;$('pair-grid').innerHTML=empty('Pairing data is unavailable.',error.message,'pairs');}
   }
-  async function loadStats(){try{const response=await api('stats');stats=response.data;$('stat-coins').textContent=count(stats.tokens.total);$('stat-volume').textContent=usd(stats.tokens.totalVolume24hUsd);$('network-status').textContent='Updated '+stamp(response.meta.sourceAsOf||response.meta.checkedAt);}catch{$('stat-coins').textContent='Unavailable';$('stat-volume').textContent='Unavailable';$('network-status').textContent='Network totals unavailable';}}
+  async function loadStats(){try{const response=await api('stats');stats=response.data;const volume=networkVolumeUsd(stats);$('stat-coins').textContent=count(stats.tokens.total);$('stat-volume').textContent=usd(volume);$('network-status').textContent='Updated '+stamp(response.meta.sourceAsOf||response.meta.checkedAt)+(volume===null?' · Network volume not verified.':'');}catch{$('stat-coins').textContent='Unavailable';$('stat-volume').textContent='Unavailable';$('network-status').textContent='Network totals unavailable';}}
   function switchView(next){view=next;document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===next)));$('market-panel').hidden=next!=='markets';$('pair-panel').hidden=next!=='pairs';$('creator-panel').hidden=next!=='creator';if(next==='pairs')renderPairs();}
   async function loadCreator(){
     if(!valid(creatorAddress)){$('creator-status').textContent='Enter a public Solana wallet address, not a seed phrase or private key.';return;}

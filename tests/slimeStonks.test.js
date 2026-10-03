@@ -102,6 +102,9 @@ test('browser helpers escape metadata, keep quote assets separate and expose exa
   vm.runInContext(readFileSync(new URL('../web/public/slimestonks.js', import.meta.url), 'utf8'), context);
   const ui = context.SlimeStonks;
   assert.equal(ui.usd(null), 'Unavailable');
+  assert.equal(ui.networkVolumeUsd({ tokens: { total: 166783, totalVolume24hUsd: 0 } }), null, 'an unverified zero network rollup must not look like no trading');
+  assert.equal(ui.networkVolumeUsd({ tokens: { total: 0, totalVolume24hUsd: 0 } }), 0, 'a verified empty network can have zero volume');
+  assert.equal(ui.networkVolumeUsd({ tokens: { total: 100, totalVolume24hUsd: 12500 } }), 12500);
   assert.equal(ui.amount(null, 'ABC'), 'Unavailable');
   assert.match(ui.amount(0, 'ABC'), /0 ABC/);
   assert.doesNotMatch(ui.tokenCard({ ...token, imageUrl: 'javascript:alert(1)', symbol: '<script>x</script>', market: {} }), /<script>|javascript:/);
