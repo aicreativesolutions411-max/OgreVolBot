@@ -5,7 +5,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
-import { TOKEN_2022_PROGRAM_ID, MintLayout } from '@solana/spl-token';
+import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, MintLayout } from '@solana/spl-token';
+import { STONKS_CRYPTO_ASSETS } from '../src/lib/slimeStonksAssets.js';
 import bs58 from 'bs58';
 import {
   checkStonksEligibility, createStonksIntentService, verifyStonksEdge, createDurableStonksStore,
@@ -18,21 +19,22 @@ import { getPdaLaunchpadConfigId, getPdaPlatformAllowConfig, getPdaPlatformCurve
 import BN from 'bn.js';
 
 const wallet = Keypair.generate(), other = Keypair.generate();
-const quote = new PublicKey('XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W');
-function fixture() {
+const quote = new PublicKey(STONKS_CRYPTO_ASSETS[0].mint);
+function fixture(asset = STONKS_CRYPTO_ASSETS[0]) {
+  const quote = new PublicKey(asset.mint);
   const configId = getPdaLaunchpadConfigId(STONKS_PROGRAM, quote, 0, 0).publicKey;
   const pricing = {
-    quote: { mint: quote.toBase58(), decimals: 8, tokenProgram: TOKEN_2022_PROGRAM_ID.toBase58() },
+    quote: { mint: quote.toBase58(), decimals: asset.decimals, tokenProgram: asset.tokenProgram },
     prices: { observedAt: new Date().toISOString() }, raise: { raw: '1310696504' },
     curve: { programId: STONKS_PROGRAM.toBase58(), configId: configId.toBase58(), curveType: 'ConstantCurve', migrateType: 'cpmm', baseDecimals: 6, supply: '1000000000000000', totalSellA: '793100000000000', vesting: { totalLockedAmount: '0', cliffPeriod: '0', unlockPeriod: '0' }, cpmmCreatorFeeOn: 0, migrateFeeRaw: '0' },
     platform: STONKS_PLATFORMS,
-    allowConfig: {}, curveRule: {}, modes: { reward: { transferFeeBps: [100, 300] } }, communityMode: { offeredOnThisQuote: true, shareBps: 3300 },
+    allowConfig: {}, curveRule: {}, modes: { reward: { transferFeeBps: [100, 300] } }, communityMode: { offeredOnThisQuote: asset.community, shareBps: 3300 },
   };
   for (const [mode, platform] of Object.entries(STONKS_PLATFORMS)) {
     pricing.allowConfig[mode] = getPdaPlatformAllowConfig(STONKS_PROGRAM, new PublicKey(platform), configId).publicKey.toBase58();
     pricing.curveRule[mode] = getPdaPlatformCurveRule(STONKS_PROGRAM, new PublicKey(platform), configId).publicKey.toBase58();
   }
-  return { pair: { ...pricing.quote, launchable: true, launchLabReady: true, communityMode: true }, pricing,
+  return { pair: { ...pricing.quote, launchable: true, launchLabReady: true, communityMode: asset.community }, pricing,
     input: { wallet: wallet.publicKey.toBase58(), quoteMint: quote.toBase58(), name: 'Slime example', symbol: 'SLM', mode: 'standard', transferFeeBps: 0, metadataUri: 'https://gateway.pinata.cloud/ipfs/bafkreiexample' } };
 }
 
@@ -45,11 +47,40 @@ test('native launch validates exact documented shape and both trailing PDA accou
   assert.equal(instruction.keys[1].pubkey.toBase58(), wallet.publicKey.toBase58());
   assert.equal(instruction.keys[5].pubkey.toBase58(), pool.toBase58());
   assert.equal(instruction.keys[10].pubkey.toBase58(), TOKEN_2022_PROGRAM_ID.toBase58());
-  assert.equal(instruction.keys[11].pubkey.toBase58(), TOKEN_2022_PROGRAM_ID.toBase58());
+  assert.equal(instruction.keys[11].pubkey.toBase58(), TOKEN_PROGRAM_ID.toBase58());
   assert.equal(instruction.keys.at(-2).pubkey.toBase58(), f.pricing.allowConfig.standard);
   assert.equal(instruction.keys.at(-1).pubkey.toBase58(), f.pricing.curveRule.standard);
   assert.equal(instruction.keys.at(-1).isWritable, false);
   assert.equal(instruction.data[instruction.data.length - 11], 0, 'standard omits transfer fee option');
+});
+
+test('all pinned crypto assets preserve their mint in launch instructions and reward policy', () => {
+  for (const asset of STONKS_CRYPTO_ASSETS) {
+    const f = fixture(asset); f.input.mode = asset.community ? 'community' : 'reward'; f.input.transferFeeBps = 100;
+    const spec = validateStonksLaunch({ ...f, rewardsValidated: true });
+    const { instruction } = buildStonksLaunchInstruction(spec, Keypair.generate().publicKey);
+    assert.equal(instruction.keys[7].pubkey.toBase58(), asset.mint);
+    assert.equal(spec.rewardPolicy.rewardAsset.mint, asset.mint);
+    assert.equal(spec.rewardPolicy.creatorFeePosition, false);
+    assert.equal(spec.rewardPolicy.ownHolderShareBps, asset.community ? 6700 : 10000);
+    assert.equal(spec.rewardPolicy.quoteHolderShareBps, asset.community ? 3300 : 0);
+    assert.throws(() => validateStonksLaunch(f), /validation/i, 'registry membership does not unlock live rewards');
+  }
+});
+
+test('stock mint spoofing and crypto program or decimals substitution fail before RPC or uploads', async () => {
+  for (const asset of [
+    { ...STONKS_CRYPTO_ASSETS[0], mint: 'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W', symbol: 'STONK' },
+    { ...STONKS_CRYPTO_ASSETS[0], decimals: 8 },
+    { ...STONKS_CRYPTO_ASSETS[0], tokenProgram: TOKEN_2022_PROGRAM_ID.toBase58() },
+  ]) {
+    const f = fixture(asset), build = createStonksNativeBuilder({
+      rpc: new Proxy({}, { get() { assert.fail('Invalid asset must be rejected before RPC'); } }),
+      metadata: async () => assert.fail('Invalid asset must be rejected before publishing metadata'),
+      fetchImpl: async url => new Response(JSON.stringify({ data: url.includes('/pairs') ? { pairs: [f.pair] } : f.pricing })),
+    });
+    await assert.rejects(build({ ...f.input, operation: 'launch' }), /crypto|decimals|program/i);
+  }
 });
 
 test('launch refuses stale prices, platform substitution, mismatched quote, changed curve, tax and vesting', () => {
@@ -217,11 +248,11 @@ test('full native launch prepares a simulated two-signer transaction without spe
   function encoded(layout, fields) { const buffer = Buffer.alloc(layout.span); const defaults = layout.decode(buffer); layout.encode({ ...defaults, ...fields }, buffer); return buffer; }
   const account = (data, owner = STONKS_PROGRAM) => ({ data, owner, lamports: 10000000, executable: false });
   const config = encoded(LaunchpadConfig, { mintB: quote, curveType: 0 });
-  const platform = encoded(PlatformConfig, {});
-  const mintData = Buffer.alloc(MintLayout.span); MintLayout.encode({ mintAuthorityOption: 0, mintAuthority: PublicKey.default, supply: 10000000000000n, decimals: 8, isInitialized: true, freezeAuthorityOption: 0, freezeAuthority: PublicKey.default }, mintData);
+  const platform = encoded(PlatformConfig, { transferFeeExtensionAuth: new PublicKey('5KXDF6QnqhBj72hDtJNkkpFaQVUfbFXNybMsp3DiK6tD') });
+  const mintData = Buffer.alloc(MintLayout.span); MintLayout.encode({ mintAuthorityOption: 0, mintAuthority: PublicKey.default, supply: 10000000000000n, decimals: 9, isInitialized: true, freezeAuthorityOption: 0, freezeAuthority: PublicKey.default }, mintData);
   let simulations = 0, uploads = 0;
   const rpc = {
-    getMultipleAccountsInfo: async () => [account(config), account(platform), account(Buffer.alloc(8)), account(Buffer.alloc(8)), account(mintData, TOKEN_2022_PROGRAM_ID)],
+    getMultipleAccountsInfo: async () => [account(config), account(platform), account(Buffer.alloc(8)), account(Buffer.alloc(8)), account(mintData, TOKEN_PROGRAM_ID)],
     getLatestBlockhash: async () => ({ blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 1234 }),
     getBalance: async () => 1000000000,
     getFeeForMessage: async () => ({ value: 16000 }),
@@ -236,6 +267,19 @@ test('full native launch prepares a simulated two-signer transaction without spe
   assert.ok(transaction.signatures[1].signature); assert.equal(transaction.verifySignatures(false), true);
   assert.equal(result.lastValidBlockHeight, 1234); assert.equal(simulations, 1); assert.equal(uploads, 1);
   assert.ok(result.review.maxSolCostLamports > 30000000);
+  assert.equal(result.review.quoteSymbol, 'STONK');
+  assert.equal(result.review.rewardPolicy.rewardAsset, null);
+  // Explicit fixture-only validation. The production API does not enable this.
+  const validatedFixtureBuilder = createStonksNativeBuilder({ rpc, rewardsValidated: true, metadata: async () => f.input.metadataUri, fetchImpl: async url => new Response(JSON.stringify({ data: url.includes('/pairs') ? { pairs: [f.pair] } : f.pricing })) });
+  for (const mode of ['reward', 'community']) {
+    const input = { ...f.input, operation: 'launch', mode, transferFeeBps: 100 };
+    await assert.rejects(builder(input), /validation/i);
+    const { review } = await validatedFixtureBuilder(input);
+    assert.equal(review.rewardPolicy.rewardAsset.mint, quote.toBase58());
+    assert.equal(review.rewardPolicy.ownHolderShareBps, mode === 'community' ? 6700 : 10000);
+    assert.match(review.creatorFees, /No separate creator-fee position/);
+    assert.doesNotMatch(review.creatorFees, /Forwarded automatically/);
+  }
   rpc.simulateTransaction = async () => ({ value: { err: 'insufficient funds' } });
   await assert.rejects(builder({ ...f.input, operation: 'launch' }), /simulation failed/i);
 });
@@ -244,15 +288,16 @@ test('native curve buys and sells encode a nonzero minimum, exact amounts and re
   const mint = Keypair.generate().publicKey, configId = getPdaLaunchpadConfigId(STONKS_PROGRAM, quote, 0, 0).publicKey, platformId = new PublicKey(STONKS_PLATFORMS.standard);
   const poolId = getPdaLaunchpadPoolId(STONKS_PROGRAM, mint, quote).publicKey;
   function encoded(layout, fields) { const buffer = Buffer.alloc(layout.span); layout.encode({ ...layout.decode(buffer), ...fields }, buffer); return buffer; }
-  const fields = { mintA: mint, mintB: quote, configId, platformId, creator: wallet.publicKey, mintDecimalsA: 6, mintDecimalsB: 8, status: 0,
+  const fields = { mintA: mint, mintB: quote, configId, platformId, creator: wallet.publicKey, mintDecimalsA: 6, mintDecimalsB: 9, status: 0,
     supply: new BN('1000000000000000'), totalSellA: new BN('793100000000000'), virtualA: new BN('1073025605751775'), virtualB: new BN('462611918'), realA: new BN('100000000000000'), realB: new BN('100000000'), totalFundRaisingB: new BN('1310696504'),
     vaultA: getPdaLaunchpadVaultId(STONKS_PROGRAM, poolId, mint).publicKey, vaultB: getPdaLaunchpadVaultId(STONKS_PROGRAM, poolId, quote).publicKey };
   const account = (data, owner = STONKS_PROGRAM) => ({ data, owner, executable: false, lamports: 10000000 });
-  const mintInfo = decimals => { const data = Buffer.alloc(MintLayout.span); MintLayout.encode({ mintAuthorityOption: 0, mintAuthority: PublicKey.default, supply: 1000000000000000n, decimals, isInitialized: true, freezeAuthorityOption: 0, freezeAuthority: PublicKey.default }, data); return account(data, TOKEN_2022_PROGRAM_ID); };
-  const token = { mint: mint.toBase58(), pool: poolId.toBase58(), symbol: 'EX', launchpad: 'launchlab', quote: { mint: quote.toBase58(), symbol: 'SPYX' } };
+  const mintInfo = (decimals, program = TOKEN_2022_PROGRAM_ID) => { const data = Buffer.alloc(MintLayout.span); MintLayout.encode({ mintAuthorityOption: 0, mintAuthority: PublicKey.default, supply: 1000000000000000n, decimals, isInitialized: true, freezeAuthorityOption: 0, freezeAuthority: PublicKey.default }, data); return account(data, program); };
+  const token = { mint: mint.toBase58(), pool: poolId.toBase58(), symbol: 'EX', launchpad: 'launchlab', quote: { mint: quote.toBase58(), symbol: 'untrusted ticker' } };
+  let quoteDecimals = 9, quoteProgram = TOKEN_PROGRAM_ID;
   const rpc = {
     getAccountInfo: async () => account(encoded(LaunchpadPool, fields)),
-    getMultipleAccountsInfo: async () => [account(encoded(LaunchpadConfig, { mintB: quote, curveType: 0, tradeFeeRate: new BN(5000) })), account(encoded(PlatformConfig, { feeRate: new BN(10000), creatorFeeRate: new BN(5000) })), mintInfo(6), mintInfo(8)],
+    getMultipleAccountsInfo: async () => [account(encoded(LaunchpadConfig, { mintB: quote, curveType: 0, tradeFeeRate: new BN(5000) })), account(encoded(PlatformConfig, { feeRate: new BN(10000), creatorFeeRate: new BN(5000) })), mintInfo(6), mintInfo(quoteDecimals, quoteProgram)],
     getSlot: async () => 400000000,
     getTokenAccountBalance: async () => ({ value: { amount: '1000000000000000' } }),
     getLatestBlockhash: async () => ({ blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 500 }),
@@ -267,7 +312,15 @@ test('native curve buys and sells encode a nonzero minimum, exact amounts and re
     assert.equal(instruction.data.readBigUInt64LE(16).toString(), out.review.minOutputRaw);
     assert.equal(BigInt(out.review.minOutputRaw), BigInt(out.review.expectedOutputRaw) * 9900n / 10000n);
     assert.equal(transaction.signatures.length, 1); assert.equal(transaction.signatures[0].signature, null);
+    assert.equal(out.review.quoteSymbol, 'STONK'); assert.equal(out.review.quoteMint, quote.toBase58());
+    assert.equal(out.review.inputDecimals, operation === 'buy' ? 9 : 6);
+    assert.equal(out.review.outputDecimals, operation === 'buy' ? 6 : 9);
+    assert.equal(out.review.inputRaw, operation === 'buy' ? '10000000' : '100000000000');
   }
+  const input = { operation: 'buy', mint: mint.toBase58(), wallet: wallet.publicKey.toBase58(), amount: '0.01', slippageBps: 100 };
+  quoteDecimals = 8; await assert.rejects(build(input), /decimals/); quoteDecimals = 9;
+  quoteProgram = TOKEN_2022_PROGRAM_ID; await assert.rejects(build(input), /program/); quoteProgram = TOKEN_PROGRAM_ID;
+  token.quote.mint = 'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W'; await assert.rejects(build(input), /crypto/); token.quote.mint = quote.toBase58();
   fields.status = 1; await assert.rejects(build({ operation: 'buy', mint: mint.toBase58(), wallet: wallet.publicKey.toBase58(), amount: '0.01', slippageBps: 100 }), /migrated/);
   fields.status = 0; token.pool = other.publicKey.toBase58(); await assert.rejects(build({ operation: 'buy', mint: mint.toBase58(), wallet: wallet.publicKey.toBase58(), amount: '0.01', slippageBps: 100 }), /match/);
 });

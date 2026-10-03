@@ -1,5 +1,6 @@
 (function(root){
   'use strict';
+  const DEFAULT_QUOTE='6GmAFSYs4gk3FDao5FzzySQpPZaWsa4rUJHacpMpUNgx';
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const valid=v=>/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(v||''));
   const number=v=>typeof v==='number'&&Number.isFinite(v);
@@ -26,20 +27,29 @@
   function filterPairs(rows,search='',category=''){
     const q=search.trim().toLowerCase();return rows.filter(p=>(!category||p.category===category)&&(!q||[p.name,p.symbol,p.mint].some(v=>String(v||'').toLowerCase().includes(q))));
   }
-  function launchReadiness(pair,pricing,mode='standard'){
+  function launchReadiness(pair,pricing,mode='standard',tax){
     if(!pair)return {ready:false,reason:'Choose a pairing asset.'};
+    if(pair.cryptoAllowed!==true)return {ready:false,reason:'This mint is not an enabled crypto pairing.'};
+    if(!['standard','reward','community'].includes(mode))return {ready:false,reason:'Choose a supported fee model.'};
     if(pair.launchable!==true)return {ready:false,reason:'This asset is not currently offered for new launches.'};
     if(pair.launchLabReady!==true)return {ready:false,reason:pair.launchLabReady===false?'The on-chain pairing configuration is not ready.':'The on-chain pairing configuration has not been confirmed.'};
     if(!pricing)return {ready:false,reason:'Waiting for current launch parameters.'};
-    if(pricing.quote?.mint!==pair.mint)return {ready:false,reason:'Pairing parameters do not match this asset.'};
-    if(mode!=='standard'&&!(pricing.transferFeeBps||[]).length)return {ready:false,reason:'Holder rewards are not offered on this pairing.'};
-    if(mode==='community'&&(pair.communityMode!==true||pricing.community?.available!==true))return {ready:false,reason:'Two-community rewards are not offered on this pairing.'};
+    if(pricing.quote?.mint!==pair.mint||pricing.quote?.cryptoAllowed!==true)return {ready:false,reason:'Pairing parameters do not match an enabled crypto asset.'};
+    const offered=(pricing.transferFeeBps||[]).filter(v=>[100,300].includes(v));
+    if(mode!=='standard'&&(!offered.length||(tax!==undefined&&!offered.includes(tax))))return {ready:false,reason:'This transfer fee is not offered on this pairing.'};
+    if(mode==='community'&&(pair.communityMode!==true||pricing.community?.available!==true||pricing.community.shareBps!==3300))return {ready:false,reason:'Two-community rewards are not offered on this pairing. Choose Holder rewards for this coin’s holders only, or a different asset.'};
     return {ready:true,reason:'Current pairing parameters are available for this plan. Transaction execution is not enabled.'};
   }
-  root.SlimeStonks={usd,amount,networkVolumeUsd,tokenCard,filterPairs,launchReadiness,rewardHtml,feeHtml};
+  function rewardPlanHtml(pair,pricing,mode,tax){
+    if(!launchReadiness(pair,pricing,mode,tax).ready)return '';
+    const symbol=esc(pair.symbol),shared=mode==='community',share=shared?pricing.community.shareBps/100:0;
+    if(mode==='standard')return '<h3>Creator-fee model</h3><p>Trades are paired in <b>'+symbol+'</b>. No transfer tax and no holder-reward pool. Creator payments depend on external settlement; verify actual receipts.</p>';
+    return '<h3>Pair in '+symbol+' · Reward in '+symbol+'</h3><dl><dt>Reward asset</dt><dd>'+symbol+' · same as the pairing asset</dd><dt>Your coin’s holders</dt><dd>'+(100-share)+'% of the holder-reward pool</dd>'+(shared?'<dt>'+symbol+' community holders</dt><dd>'+share+'% of the holder-reward pool</dd>':'')+'<dt>Funding</dt><dd>'+tax/100+'% transfer fee on the launched coin</dd><dt>Creator fees</dt><dd>No separate creator-fee position</dd></dl><p>Rewards are paid in '+symbol+', not converted to SOL. The percentages split the holder-reward pool, not trading volume. External distribution timing and eligibility apply; payouts are not guaranteed. SOL is still needed for network fees.</p>';
+  }
+  root.SlimeStonks={usd,amount,networkVolumeUsd,tokenCard,filterPairs,launchReadiness,rewardPlanHtml,rewardHtml,feeHtml};
   if(!root.document?.getElementById('coin-grid'))return;
   const $=id=>document.getElementById(id),API=String(root.OGRE_PORTAL_CONFIG?.apiBase||'').replace(/\/+$/,'');
-  let pairs=[],stats=null,view='markets',page=1,selectedStage='',selectedQuote='',marketEpoch=0,marketController,creatorEpoch=0,creatorController,creatorPage=1,creatorAddress='',pairLimit=48,detailEpoch=0,detailController,planEpoch=0,planController,planPricing=null,coinFocus=null,planFocus=null,toastTimer;
+  let pairs=[],stats=null,view='markets',page=1,selectedStage='',selectedQuote=DEFAULT_QUOTE,marketEpoch=0,marketController,creatorEpoch=0,creatorController,creatorPage=1,creatorAddress='',pairLimit=48,detailEpoch=0,detailController,planEpoch=0,planController,planPricing=null,coinFocus=null,planFocus=null,toastTimer;
   const indexed=new Map();
   function toast(message){clearTimeout(toastTimer);$('stonks-toast').textContent=message;toastTimer=setTimeout(()=>$('stonks-toast').textContent='',3500);}
   async function api(resource,query={},signal){
@@ -58,23 +68,26 @@
     const epoch=++marketEpoch;marketController?.abort();marketController=new AbortController();setMarketBusy(true);$('market-status').textContent='Loading indexed markets…';
     $('coin-grid').innerHTML=empty('Finding the markets…','Fetching a bounded page of current market data.');
     try{
-      const response=await api('tokens',{q:$('market-search').value.trim(),category:$('market-category').value,mode:$('market-mode').value,sort:$('market-sort').value,status:selectedStage,quoteMint:selectedQuote,page,pageSize:24},marketController.signal);
+      // Filter upstream by the actual quote mint, preserving correct pagination.
+      // Never label one locally filtered page as the whole crypto market.
+      const response=await api('tokens',{q:$('market-search').value.trim(),mode:$('market-mode').value,sort:$('market-sort').value,status:selectedStage,quoteMint:selectedQuote,page,pageSize:24},marketController.signal);
       if(epoch!==marketEpoch)return;const {tokens,pagination:p}=response.data;renderTokens($('coin-grid'),tokens);$('market-status').textContent=dataNote(response.meta)+(selectedQuote?' Filtered to '+(pairs.find(p=>p.mint===selectedQuote)?.symbol||short(selectedQuote))+'.':'');$('page-label').textContent='Page '+page+(p.totalPages?' of '+p.totalPages.toLocaleString():'');$('previous-page').disabled=page<=1;$('next-page').disabled=!p.totalPages||page>=p.totalPages;
     }catch(error){if(epoch!==marketEpoch||error.name==='AbortError')return;$('coin-grid').innerHTML=empty('Markets are taking a breather.',error.message,'markets');$('market-status').textContent='Could not refresh. No cached figures are being presented as current.';}
-    finally{if(epoch===marketEpoch){$('coin-grid').setAttribute('aria-busy','false');$('refresh-markets').disabled=false;$('clear-filters').hidden=!($('market-search').value||$('market-category').value||$('market-mode').value||selectedStage||selectedQuote);}}
+    finally{if(epoch===marketEpoch){$('coin-grid').setAttribute('aria-busy','false');$('refresh-markets').disabled=false;$('clear-filters').hidden=!($('market-search').value||$('market-mode').value||selectedStage||selectedQuote!==DEFAULT_QUOTE);}}
   }
   function renderPairs(){
-    const rows=filterPairs(pairs,$('pair-search').value,$('pair-category').value);$('pair-status').textContent=rows.length+' pairing assets. A listed asset is not an eligibility approval; verify its mint.';
+    const rows=filterPairs(pairs,$('pair-search').value,$('pair-category').value);$('pair-status').textContent=rows.length+' supported crypto assets. The selected pairing is also the reward asset. Availability is not an eligibility approval; verify the exact mint.';
     $('pair-grid').innerHTML=rows.length?rows.slice(0,pairLimit).map(p=>'<article class="stonks-pair-card"><div class="stonks-coin-top">'+image(p)+'<div class="stonks-coin-name"><h3>'+esc(p.symbol||short(p.mint))+'</h3><p>'+esc(p.name)+'</p></div></div><p>'+esc(p.categoryLabel||p.category||'Token')+' · '+esc(p.launchable!==true?'Not offered':p.launchLabReady===true?'Pairing available':p.launchLabReady===false?'Configuration pending':'Status unconfirmed')+'</p><code>'+esc(short(p.mint))+'</code><div class="stonks-pair-actions"><button type="button" data-pair-market="'+esc(p.mint)+'">View coins ↗</button><button type="button" data-plan-pair="'+esc(p.mint)+'">Plan</button><button type="button" data-copy="'+esc(p.mint)+'" aria-label="Copy '+esc(p.symbol)+' mint">⧉</button></div></article>').join(''):empty('No pairing match.','Try a ticker, full mint address or another category.');
     hydrateImages($('pair-grid'));$('more-pairs').hidden=rows.length<=pairLimit;
   }
   async function loadPairs(){
-    try{const response=await api('pairs');pairs=response.data.pairs;$('stat-pairs').textContent=count(pairs.filter(p=>p.launchable===true&&p.launchLabReady===true).length);
+    try{const response=await api('pairs');pairs=response.data.pairs.filter(p=>p.cryptoAllowed===true);$('stat-pairs').textContent=count(pairs.filter(p=>p.launchable===true&&p.launchLabReady===true).length);
       const categories=[...new Set(pairs.map(p=>p.category).filter(Boolean))].sort(),current=$('pair-category').value;
       const categoryOptions=categories.map(c=>'<option value="'+esc(c)+'">'+esc(pairs.find(p=>p.category===c)?.categoryLabel||c)+'</option>').join('');
       $('pair-category').innerHTML='<option value="">All categories</option>'+categoryOptions;$('pair-category').value=current;
-      const marketCategory=$('market-category').value;$('market-category').innerHTML='<option value="">All pairings</option>'+categoryOptions;$('market-category').value=marketCategory;
-      const selected=$('plan-pair').value;$('plan-pair').innerHTML='<option value="">Choose a pairing asset…</option>'+pairs.slice().sort((a,b)=>(a.category==='xstock'?-1:1)-(b.category==='xstock'?-1:1)||(a.symbol||'').localeCompare(b.symbol||'')).map(p=>'<option value="'+esc(p.mint)+'">'+esc((p.symbol||'?')+' · '+(p.name||p.categoryLabel||'Token')+' · '+short(p.mint))+'</option>').join('');$('plan-pair').value=selected;renderPairs();
+      const ordered=pairs.slice().sort((a,b)=>Number(b.mint===DEFAULT_QUOTE)-Number(a.mint===DEFAULT_QUOTE)||(a.symbol||'').localeCompare(b.symbol||''));
+      $('market-category').innerHTML=ordered.map(p=>'<option value="'+esc(p.mint)+'">'+esc(p.symbol)+' pairs</option>').join('');$('market-category').value=selectedQuote;
+      const selected=$('plan-pair').value||DEFAULT_QUOTE;$('plan-pair').innerHTML='<option value="">Choose a pairing asset…</option>'+ordered.map(p=>'<option value="'+esc(p.mint)+'">'+esc((p.symbol||'?')+' · '+(p.name||'Token')+' · '+short(p.mint))+'</option>').join('');$('plan-pair').value=selected;renderPairs();
     }catch(error){$('stat-pairs').textContent='Unavailable';$('pair-status').textContent=error.message;$('pair-grid').innerHTML=empty('Pairing data is unavailable.',error.message,'pairs');}
   }
   async function loadStats(){try{const response=await api('stats');stats=response.data;const volume=networkVolumeUsd(stats);$('stat-coins').textContent=count(stats.tokens.total);$('stat-volume').textContent=usd(volume);$('network-status').textContent='Updated '+stamp(response.meta.sourceAsOf||response.meta.checkedAt)+(volume===null?' · Network volume not verified.':'');}catch{$('stat-coins').textContent='Unavailable';$('stat-volume').textContent='Unavailable';$('network-status').textContent='Network totals unavailable';}}
@@ -98,16 +111,16 @@
     try{const response=await api('tokens/'+mint,{},detailController.signal);if(epoch!==detailEpoch)return;t=response.data.token;indexed.set(mint,t);$('coin-detail-status').textContent=dataNote(response.meta);}
     catch(error){if(epoch!==detailEpoch||error.name==='AbortError')return;if(error.status===403||error.status===404){$('coin-detail').innerHTML='<h2 id="coin-dialog-title">Coin unavailable</h2>'+empty('This coin could not be loaded.',error.message);$('coin-detail-status').textContent='No missing balances have been replaced with zero.';return;}$('coin-detail-status').textContent=(cached?'Latest coin detail is unavailable. Market figures below are the last list snapshot, not a fresh quote.':'Coin identity and market figures are unavailable.')+' Rewards and receipts are checked independently.';}
     $('coin-detail').innerHTML=detailHtml(t);hydrateImages($('coin-detail'));
-    if(t.launchpad==='launchlab'&&['new','aboutToGraduate'].includes(t.status)){
+    if(t.quote?.cryptoAllowed===true&&t.launchpad==='launchlab'&&['new','aboutToGraduate'].includes(t.status)){
       const trade=document.createElement('button');trade.type='button';trade.className='stonks-secondary';trade.textContent='Trade readiness & wallet';
       trade.onclick=()=>root.SlimeStonksTransactions?.open({operation:'buy',mint:t.mint,quoteSymbol:t.quote?.symbol});$('coin-detail').prepend(trade);
     }
-    await Promise.all([['rewards',rewardHtml],['fees',d=>feeHtml(d,t)],['burns',d=>burnHtml(d,t)]].map(async([key,render])=>{try{const r=await api('tokens/'+mint+'/'+key,{},detailController.signal);if(epoch===detailEpoch)$('detail-'+key).innerHTML=render(r.data)+'<p class="stonks-data-note">Checked '+esc(stamp(r.meta.sourceAsOf||r.meta.checkedAt))+'.</p>';}catch(error){if(epoch===detailEpoch&&error.name!=='AbortError')$('detail-'+key).innerHTML='<h3>'+esc(key==='fees'?'Creator fees':key==='burns'?'Burn history':'Holder rewards')+'</h3><p>'+esc(error.message)+'</p>';}}));
+    await Promise.all([['rewards',rewardHtml],['fees',d=>feeHtml(d,t)],['burns',d=>burnHtml(d,t)]].map(async([key,render])=>{try{const r=await api('tokens/'+mint+'/'+key,{},detailController.signal);if(key==='rewards'&&r.data.quote?.mint!==t.quote?.mint)throw Error('Reward asset does not match the coin’s pairing. Amounts are hidden until verified.');if(epoch===detailEpoch)$('detail-'+key).innerHTML=render(r.data)+'<p class="stonks-data-note">Checked '+esc(stamp(r.meta.sourceAsOf||r.meta.checkedAt))+'.</p>';}catch(error){if(epoch===detailEpoch&&error.name!=='AbortError')$('detail-'+key).innerHTML='<h3>'+esc(key==='fees'?'Creator fees':key==='burns'?'Burn history':'Holder rewards')+'</h3><p>'+esc(error.message)+'</p>';}}));
   }
   function paintPlan(){
-    const pair=pairs.find(p=>p.mint===$('plan-pair').value),mode=$('plan-mode').value,ready=launchReadiness(pair,planPricing,mode);$('plan-tax-label').hidden=mode==='standard';$('save-plan').disabled=!ready.ready;
+    const pair=pairs.find(p=>p.mint===$('plan-pair').value),mode=$('plan-mode').value,tax=mode==='standard'?0:Number($('plan-tax').value),ready=launchReadiness(pair,planPricing,mode,tax);$('plan-tax-label').hidden=mode==='standard';$('save-plan').disabled=!ready.ready;reviewLaunch.disabled=!ready.ready;
     if(!ready.ready){$('plan-summary').textContent=ready.reason;return;}
-    const p=planPricing;$('plan-summary').innerHTML='<dl><dt>Pairing asset</dt><dd>'+esc(p.quote.symbol)+' · '+esc(short(p.quote.mint))+'</dd><dt>Initial market cap estimate</dt><dd>'+usd(p.marketCap.startUsd)+'</dd><dt>Graduation estimate</dt><dd>'+usd(p.marketCap.graduationUsd)+'</dd><dt>Quote raise target</dt><dd>'+esc(amount(p.raise.units,p.quote.symbol))+'</dd><dt>Coin supply</dt><dd>'+esc(count(p.totalSupplyTokens))+'</dd><dt>Transfer fee</dt><dd>'+esc(mode==='standard'?'None':Number($('plan-tax').value)/100+'%')+'</dd>'+(mode==='community'?'<dt>Quote-community share of holder payouts</dt><dd>'+esc(number(p.community.shareBps)?p.community.shareBps/100+'%':'Unavailable')+'</dd>':'')+'</dl><p>Planning estimates · '+esc(stamp(p.observedAt))+'. A raise target is a curve parameter, not a fee or a required deposit. Native signing is not enabled.</p>';
+    const p=planPricing;$('plan-summary').innerHTML=rewardPlanHtml(pair,p,mode,tax)+'<p class="stonks-wrap"><small>Exact pairing mint</small><br><code>'+esc(pair.mint)+'</code></p><details><summary>Curve &amp; supply estimates</summary><dl><dt>Initial market cap estimate</dt><dd>'+usd(p.marketCap.startUsd)+'</dd><dt>Graduation estimate</dt><dd>'+usd(p.marketCap.graduationUsd)+'</dd><dt>Quote raise target</dt><dd>'+esc(amount(p.raise.units,p.quote.symbol))+'</dd><dt>Coin supply</dt><dd>'+esc(count(p.totalSupplyTokens))+'</dd></dl><p>Estimates · '+esc(stamp(p.observedAt))+'. A raise target is a curve parameter, not a fee or a required deposit.</p></details><p>Native signing and public payouts for new SlimeStonks launches are not enabled.</p>';
   }
   async function loadPricing(){
     const epoch=++planEpoch;planController?.abort();planController=new AbortController();planPricing=null;$('plan-status').textContent='';paintPlan();const quote=$('plan-pair').value;if(!valid(quote))return;
@@ -122,22 +135,22 @@
     if(b.dataset.close){$(b.dataset.close).close();return;}
     if(b.hasAttribute('data-open-plan')){openPlan();return;}
     if(b.dataset.planPair){openPlan(b.dataset.planPair);return;}
-    if(b.dataset.pairMarket){selectedQuote=b.dataset.pairMarket;page=1;$('market-category').value='';switchView('markets');loadMarkets();return;}
-    if(b.hasAttribute('data-reward-markets')){$('market-mode').value='reward';selectedQuote='';page=1;switchView('markets');loadMarkets();return;}
+    if(b.dataset.pairMarket){if(!pairs.some(p=>p.mint===b.dataset.pairMarket))return;selectedQuote=b.dataset.pairMarket;page=1;$('market-category').value=selectedQuote;switchView('markets');loadMarkets();return;}
+    if(b.hasAttribute('data-reward-markets')){$('market-mode').value='reward';page=1;switchView('markets');loadMarkets();return;}
     if(b.dataset.view){switchView(b.dataset.view);return;}
     if(b.hasAttribute('data-stage')){selectedStage=b.dataset.stage;page=1;document.querySelectorAll('[data-stage]').forEach(el=>el.setAttribute('aria-pressed',String(el.dataset.stage===selectedStage)));loadMarkets();return;}
     if(b.dataset.retry){if(b.dataset.retry==='pairs')loadPairs();else if(b.dataset.retry==='creator')loadCreator();else loadMarkets();}
   });
-  $('market-search-form').addEventListener('submit',e=>{e.preventDefault();page=1;loadMarkets();});for(const id of ['market-category','market-mode','market-sort'])$(id).addEventListener('change',()=>{selectedQuote='';page=1;loadMarkets();});
+  $('market-search-form').addEventListener('submit',e=>{e.preventDefault();const value=$('market-search').value.trim();if(valid(value)){openCoin(value);return;}page=1;loadMarkets();});for(const id of ['market-category','market-mode','market-sort'])$(id).addEventListener('change',()=>{if(id==='market-category'){if(!pairs.some(p=>p.mint===$(id).value))return;selectedQuote=$(id).value;}page=1;loadMarkets();});
   $('previous-page').onclick=()=>{page=Math.max(1,page-1);loadMarkets();};$('next-page').onclick=()=>{page++;loadMarkets();};
-  $('clear-filters').onclick=()=>{for(const id of ['market-search','market-category','market-mode'])$(id).value='';selectedStage='';selectedQuote='';page=1;document.querySelectorAll('[data-stage]').forEach(b=>b.setAttribute('aria-pressed',String(!b.dataset.stage)));loadMarkets();};
+  $('clear-filters').onclick=()=>{for(const id of ['market-search','market-mode'])$(id).value='';selectedStage='';selectedQuote=DEFAULT_QUOTE;$('market-category').value=selectedQuote;page=1;document.querySelectorAll('[data-stage]').forEach(b=>b.setAttribute('aria-pressed',String(!b.dataset.stage)));loadMarkets();};
   $('refresh-markets').onclick=()=>{if(view==='pairs')loadPairs();else if(view==='creator'){if(creatorAddress)loadCreator();}else loadMarkets();};
   $('pair-search').oninput=()=>{pairLimit=48;renderPairs();};$('pair-category').onchange=()=>{pairLimit=48;renderPairs();};$('more-pairs').onclick=()=>{pairLimit+=48;renderPairs();};
   $('creator-form').onsubmit=e=>{e.preventDefault();creatorAddress=$('creator-wallet').value.trim();creatorPage=1;loadCreator();};$('creator-prev').onclick=()=>{creatorPage=Math.max(1,creatorPage-1);loadCreator();};$('creator-next').onclick=()=>{creatorPage++;loadCreator();};
   $('plan-pair').onchange=loadPricing;$('plan-mode').onchange=paintPlan;$('plan-tax').onchange=paintPlan;
   const reviewLaunch=document.createElement('button');reviewLaunch.type='button';reviewLaunch.className='stonks-secondary';reviewLaunch.textContent='Check launch eligibility';
-  reviewLaunch.onclick=()=>{if(!$('plan-form').reportValidity())return;root.SlimeStonksTransactions?.open({operation:'launch',name:$('plan-name').value.trim(),symbol:$('plan-symbol').value.trim(),quoteMint:$('plan-pair').value,mode:$('plan-mode').value,transferFeeBps:$('plan-mode').value==='standard'?0:Number($('plan-tax').value)});};$('save-plan').after(reviewLaunch);
-  $('plan-form').onsubmit=e=>{e.preventDefault();const mode=$('plan-mode').value,pair=pairs.find(p=>p.mint===$('plan-pair').value);if(!launchReadiness(pair,planPricing,mode).ready)return;const draft={version:1,product:'SlimeStonks',type:'unsigned-local-launch-plan',createdAt:new Date().toISOString(),name:$('plan-name').value.trim(),symbol:$('plan-symbol').value.trim(),quoteMint:pair.mint,mode,transferFeeBps:mode==='standard'?0:Number($('plan-tax').value),estimatedParameters:planPricing,executionEnabled:false,note:'No coin has been launched. Fetch fresh parameters and pass eligibility, simulation, signing and adoption checks before any transaction.'};const blob=new Blob([JSON.stringify(draft,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='slimestonks-'+draft.symbol.toLowerCase()+'-plan.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1500);$('plan-status').textContent='Plan downloaded. No wallet was connected and no funds were spent.';};
+  reviewLaunch.onclick=()=>{if(!$('plan-form').reportValidity())return;const mode=$('plan-mode').value,tax=mode==='standard'?0:Number($('plan-tax').value),pair=pairs.find(p=>p.mint===$('plan-pair').value);if(!launchReadiness(pair,planPricing,mode,tax).ready)return;root.SlimeStonksTransactions?.open({operation:'launch',name:$('plan-name').value.trim(),symbol:$('plan-symbol').value.trim(),quoteMint:pair.mint,mode,transferFeeBps:tax});};$('save-plan').after(reviewLaunch);
+  $('plan-form').onsubmit=e=>{e.preventDefault();const mode=$('plan-mode').value,pair=pairs.find(p=>p.mint===$('plan-pair').value),tax=mode==='standard'?0:Number($('plan-tax').value);if(!launchReadiness(pair,planPricing,mode,tax).ready)return;const partner=mode==='community'?planPricing.community.shareBps:0;const draft={version:2,product:'SlimeStonks',type:'unsigned-local-launch-plan',createdAt:new Date().toISOString(),name:$('plan-name').value.trim(),symbol:$('plan-symbol').value.trim(),quoteMint:pair.mint,mode,transferFeeBps:tax,rewardPolicy:{rewardMint:mode==='standard'?null:pair.mint,ownHolderShareBps:mode==='standard'?0:10000-partner,quoteHolderShareBps:partner,creatorFeePosition:mode==='standard',convertsToSol:false,cadenceHours:null,minimumUsd:null},estimatedParameters:planPricing,executionEnabled:false,note:'No coin has been launched. Fetch fresh parameters and pass eligibility, simulation, signing and adoption checks before any transaction.'};const blob=new Blob([JSON.stringify(draft,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='slimestonks-'+draft.symbol.toLowerCase()+'-plan.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1500);$('plan-status').textContent='Plan downloaded. No wallet was connected and no funds were spent.';};
   $('coin-dialog').addEventListener('close',()=>{detailEpoch++;detailController?.abort();coinFocus?.focus?.();});$('plan-dialog').addEventListener('close',()=>{planEpoch++;planController?.abort();planFocus?.focus?.();});
   root.addEventListener('pagehide',()=>{marketController?.abort();creatorController?.abort();detailController?.abort();planController?.abort();});
   loadStats();loadPairs();loadMarkets();const linkedCoin=new URLSearchParams(root.location.search).get('coin');if(valid(linkedCoin))openCoin(linkedCoin);

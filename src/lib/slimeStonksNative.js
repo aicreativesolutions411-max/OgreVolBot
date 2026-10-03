@@ -3,8 +3,9 @@ import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync,
 import { initializeWithToken2022, getPdaLaunchpadAuth, getPdaLaunchpadConfigId, getPdaLaunchpadPoolId, getPdaLaunchpadVaultId, getPdaPlatformAllowConfig, getPdaPlatformCurveRule, LaunchpadConfig, PlatformConfig, LaunchpadPool, Curve, buyExactInInstruction, sellExactInInstruction, getPdaPlatformVault, getPdaCreatorVault } from '@raydium-io/raydium-sdk-v2';
 import BN from 'bn.js';
 import { stonksError } from './slimeStonksExecution.js';
+import { cryptoAssetForMint, requireCryptoQuote, cryptoRewardPolicy } from './slimeStonksAssets.js';
 
-// Fixed audited mainnet program and documented platform identities. A changed
+// Fixed mainnet program and documented platform identities. A changed
 // upstream API response cannot redirect launch fees or choose another program.
 export const STONKS_PROGRAM = new PublicKey('LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj');
 export const STONKS_PLATFORMS = Object.freeze({ standard: '4E876qZTE9FJMrBzgVtBrSrzz2TLivB5Y5QXPjB4gZL7', reward: '6BwHHDg3u1854jC8PDLXvR4spTcLNaoBxLJNGC4nTESt', community: 'CUqSiwPs6C4WyntMgaFazLp7wYQfaLp5URbjUP9V7SNi' });
@@ -18,6 +19,8 @@ const checked = (yes, message) => { if (!yes) fail(message); };
 export function validateStonksLaunch({ pair, pricing: p, input: i, now = Date.now(), rewardsValidated = false }) {
   checked(pair?.launchable === true && pair.launchLabReady === true, 'This pairing is not ready for on-chain launches.');
   checked(eq(pair.mint, i.quoteMint) && eq(p?.quote?.mint, i.quoteMint) && eq(p.quote.tokenProgram, pair.tokenProgram) && p.quote.decimals === pair.decimals, 'The launch quote does not match this pairing.');
+  requireCryptoQuote(pair);
+  requireCryptoQuote(p.quote);
   checked(Number.isFinite(Date.parse(p.prices?.observedAt)) && Math.abs(now - Date.parse(p.prices.observedAt)) < 120000, 'Launch pricing is stale. Refresh before signing.');
   const mode = i.mode, curve = p.curve;
   checked(Object.hasOwn(STONKS_PLATFORMS, mode), 'Unknown launch model.');
@@ -33,7 +36,8 @@ export function validateStonksLaunch({ pair, pricing: p, input: i, now = Date.no
   const quote = key(i.quoteMint), platform = key(STONKS_PLATFORMS[mode]), config = getPdaLaunchpadConfigId(STONKS_PROGRAM, quote, 0, 0).publicKey;
   const allow = getPdaPlatformAllowConfig(STONKS_PROGRAM, platform, config).publicKey, rule = getPdaPlatformCurveRule(STONKS_PROGRAM, platform, config).publicKey;
   checked(eq(config, curve.configId) && eq(allow, p.allowConfig?.[mode]) && eq(rule, p.curveRule?.[mode]), 'Derived launch configuration does not match the published configuration.');
-  return { creator: key(i.wallet), quote, platform, config, allow, rule, quoteProgram: key(pair.tokenProgram), name: i.name.trim(), symbol: i.symbol, metadataUri: i.metadataUri, raiseRaw: p.raise.raw, transferFeeBps: i.transferFeeBps, mode, pricing: p, pair };
+  const rewardPolicy = cryptoRewardPolicy({ quote: pair, mode, transferFeeBps: i.transferFeeBps, communityShareBps: p.communityMode?.shareBps });
+  return { creator: key(i.wallet), quote, platform, config, allow, rule, quoteProgram: key(pair.tokenProgram), name: i.name.trim(), symbol: i.symbol, metadataUri: i.metadataUri, raiseRaw: p.raise.raw, transferFeeBps: i.transferFeeBps, mode, pricing: p, pair, rewardPolicy };
 }
 
 export function buildStonksLaunchInstruction(spec, mint) {
@@ -104,13 +108,15 @@ export function createStonksNativeBuilder({ rpc, metadata, fetchImpl = fetch, no
     const metadataUri = await metadata(input);
     const spec = validateStonksLaunch({ pair, pricing, input: { ...input, metadataUri }, now: now(), rewardsValidated });
     const mint = Keypair.generate(), { instruction, pool } = buildStonksLaunchInstruction(spec, mint.publicKey);
-    return finish(spec.creator, [instruction], { operation: 'launch', name: spec.name, symbol: spec.symbol, mint: mint.publicKey.toBase58(), pool: pool.toBase58(), creator: input.wallet, quoteMint: input.quoteMint, quoteSymbol: pair.symbol, feeModel: spec.mode, transferFeeBps: spec.transferFeeBps, creatorFees: 'Forwarded automatically by external infrastructure after indexing; delivery is not guaranteed by confirmation.', metadataUri, devBuy: false, supply: '1000000000', raiseTargetRaw: spec.raiseRaw, raiseTargetDecimals: pair.decimals }, [mint]);
+    return finish(spec.creator, [instruction], { operation: 'launch', name: spec.name, symbol: spec.symbol, mint: mint.publicKey.toBase58(), pool: pool.toBase58(), creator: input.wallet, quoteMint: input.quoteMint, quoteSymbol: spec.rewardPolicy.pairingAsset.symbol, feeModel: spec.mode, transferFeeBps: spec.transferFeeBps, rewardPolicy: spec.rewardPolicy, creatorFees: spec.rewardPolicy.creatorFeePosition ? 'Forwarded automatically by external infrastructure after indexing; delivery is not guaranteed by confirmation.' : 'No separate creator-fee position. Holder rewards use the pairing asset, not SOL conversion.', metadataUri, devBuy: false, supply: '1000000000', raiseTargetRaw: spec.raiseRaw, raiseTargetDecimals: pair.decimals }, [mint]);
   }
   async function swap(input) {
     checked(['buy', 'sell'].includes(input.operation), 'Unsupported operation.');
     checked(Number.isInteger(input.slippageBps) && input.slippageBps >= 10 && input.slippageBps <= 500, 'Slippage must be between 0.1% and 5%.');
     const mint = key(input.mint), wallet = key(input.wallet), record = await data('/tokens/' + mint.toBase58());
     checked(record.token?.mint === input.mint && record.token.launchpad === 'launchlab', 'A verified native LaunchLab market is required.');
+    const quoteAsset = cryptoAssetForMint(record.token.quote?.mint);
+    checked(quoteAsset, 'This market is not paired with an enabled crypto quote asset.');
     const quote = key(record.token.quote?.mint), poolId = getPdaLaunchpadPoolId(STONKS_PROGRAM, mint, quote).publicKey;
     checked(record.token.pool === poolId.toBase58(), 'Indexed pool does not match the native market.');
     const poolAccount = await rpc.getAccountInfo(poolId, 'confirmed');
@@ -124,6 +130,7 @@ export function createStonksNativeBuilder({ rpc, metadata, fetchImpl = fetch, no
     checked(config.curveType === 0 && config.mintB.equals(quote), 'This market uses an unsupported curve.');
     const programs = infos.slice(2).map(info => { checked(info && [TOKEN_PROGRAM_ID.toBase58(), TOKEN_2022_PROGRAM_ID.toBase58()].includes(info.owner.toBase58()), 'Unsupported token owner.'); return info.owner; });
     const mints = [unpackMint(mint, infos[2], programs[0]), unpackMint(quote, infos[3], programs[1])];
+    requireCryptoQuote({ mint: quote.toBase58(), decimals: mints[1].decimals, tokenProgram: programs[1].toBase58() });
     checked(mints[0].decimals === pool.mintDecimalsA && mints[1].decimals === pool.mintDecimalsB, 'Token decimals differ from the pool.');
     const slot = await rpc.getSlot('confirmed'), buying = input.operation === 'buy';
     const amount = stonksRawAmount(input.amount, mints[buying ? 1 : 0].decimals);
@@ -140,7 +147,7 @@ export function createStonksNativeBuilder({ rpc, metadata, fetchImpl = fetch, no
       buying && calculation.amountB.lt(amount) ? calculation.amountB : amount, minimum, new BN(0));
     const target = buying ? 0 : 1;
     return finish(wallet, [createAssociatedTokenAccountIdempotentInstruction(wallet, atas[target], wallet, target === 0 ? mint : quote, programs[target]), instruction],
-      { operation: input.operation, mint: input.mint, symbol: record.token.symbol, quoteMint: quote.toBase58(), quoteSymbol: record.token.quote.symbol, inputRaw: amount.toString(), inputDecimals: mints[buying ? 1 : 0].decimals, expectedOutputRaw: expected.toString(), minOutputRaw: minimum.toString(), outputDecimals: mints[buying ? 0 : 1].decimals, slippageBps: input.slippageBps, transferFeesIncluded: true, quoteOnly: true });
+      { operation: input.operation, mint: input.mint, symbol: record.token.symbol, quoteMint: quote.toBase58(), quoteSymbol: quoteAsset.symbol, inputRaw: amount.toString(), inputDecimals: mints[buying ? 1 : 0].decimals, expectedOutputRaw: expected.toString(), minOutputRaw: minimum.toString(), outputDecimals: mints[buying ? 0 : 1].decimals, slippageBps: input.slippageBps, transferFeesIncluded: true, quoteOnly: true });
   }
   return async input => input.operation === 'launch' ? launch(input) : swap(input);
 }

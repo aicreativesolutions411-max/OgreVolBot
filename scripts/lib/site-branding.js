@@ -6,7 +6,7 @@ export const SHARE_IMAGE = 'https://slimewire.org/assets/slimewire/brand/slimewi
 const DEFAULT_DESCRIPTION = 'One home. Every move. Wallet, terminal and launches with creator and community fee sharing.';
 const pages = new Map([
   ['home.html', ['/', 'SlimeWire — One home. Every move.', DEFAULT_DESCRIPTION]],
-  ['slimestonks.html', ['/slimestonks', 'SlimeStonks — Culture meets capital.', 'Explore paired-token markets, recorded rewards and launch planning in the SlimeStonks market preview.']],
+  ['slimestonks.html', ['/slimestonks', 'SlimeStonks — Pair in crypto. Reward in crypto.', 'Explore STONK and other crypto pairings, follow recorded holder rewards and plan a same-asset reward launch. Market preview; public transactions are not enabled.']],
   ['index.html', ['/terminal', 'SlimeWire Terminal — Charts & trading', 'Explore markets, research coins and review trades in the SlimeWire terminal.']],
   ['gg.html', ['/terminal', 'SlimeWire Terminal — Charts & trading', 'Explore markets, research coins and review trades in the SlimeWire terminal.']],
   ['launch.html', ['/launch', 'SlimeWire Launch — Create. Share. Track.', 'Launch a coin, choose your fee destinations and follow recorded payments with transaction receipts.']],

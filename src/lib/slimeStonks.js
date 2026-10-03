@@ -1,4 +1,5 @@
 import { PublicKey } from '@solana/web3.js';
+import { cryptoAssetForMint } from './slimeStonksAssets.js';
 
 // Authorized white-label data adapter. This is NOT a website reverse proxy.
 // No credentials, wallet keys, RPC, jobs or transaction relaying are involved.
@@ -23,8 +24,12 @@ function url(value) {
   if (typeof value !== 'string' || value.length > 2000) return '';
   try { const u = new URL(value, value.startsWith('/api/asset/quote-logo/') ? ORIGIN : undefined); return u.protocol === 'https:' && !u.username && !u.password ? u.href : ''; } catch { return ''; }
 }
-function asset(v = {}) {
-  return { mint: mint(v.mint), symbol: text(v.symbol, 32), name: text(v.name, 100), decimals: Number.isInteger(v.decimals) && v.decimals >= 0 && v.decimals <= 18 ? v.decimals : null,
+function asset(v = {}, configurationRequired = false) {
+  const known = cryptoAssetForMint(v.mint), cryptoAllowed = !!known &&
+    (v.decimals === known.decimals || (!configurationRequired && v.decimals === undefined)) &&
+    (v.tokenProgram === known.tokenProgram || (!configurationRequired && v.tokenProgram === undefined));
+  return { mint: mint(v.mint), symbol: cryptoAllowed ? known.symbol : text(v.symbol, 32), name: cryptoAllowed ? known.name : text(v.name, 100), decimals: Number.isInteger(v.decimals) && v.decimals >= 0 && v.decimals <= 18 ? v.decimals : null,
+    tokenProgram: mint(v.tokenProgram), cryptoAllowed,
     imageUrl: url(v.imageUrl || v.logoUrl), category: text(v.category, 32), categoryLabel: text(v.categoryLabel, 40) };
 }
 function token(v = {}) {
@@ -86,10 +91,10 @@ export function normalizeStonksData(resource, input) {
   }
   if (resource === 'pairs') {
     if (!Array.isArray(d.pairs)) throw fail(502, 'Pairing data is temporarily unavailable.');
-    return { pairs: list(d.pairs, 2000).map(v => ({ ...asset(v), launchable: flag(v.launchable), launchLabReady: flag(v.launchLabReady), communityMode: flag(v.communityMode), symbolAmbiguous: v.symbolAmbiguous === true })).filter(p => p.mint) };
+    return { pairs: list(d.pairs, 2000).map(v => ({ ...asset(v, true), launchable: flag(v.launchable), launchLabReady: flag(v.launchLabReady), communityMode: flag(v.communityMode), symbolAmbiguous: v.symbolAmbiguous === true })).filter(p => p.mint) };
   }
   if (resource === 'stats') return { tokens: { total: positive(d.tokens?.total), graduated: positive(d.tokens?.graduated), rewardLaunches: positive(d.tokens?.rewardLaunches), totalMarketCapUsd: positive(d.tokens?.totalMarketCapUsd), totalVolume24hUsd: positive(d.tokens?.totalVolume24hUsd) }, config: { launchLabEnabled: flag(d.config?.launchLabEnabled), rewardLaunchesEnabled: flag(d.config?.rewardLaunchesEnabled) }, execution: { launch: false, swap: false, claim: false, reason: 'Native transaction signing and end-to-end settlement validation are not enabled in this release.' } };
-  if (resource === 'pricing') return { quote: asset(obj(d.quote)), raise: { raw: raw(d.raise?.raw), units: positive(d.raise?.units) }, marketCap: { startUsd: positive(d.marketCap?.startUsd), graduationUsd: positive(d.marketCap?.graduationUsd) }, observedAt: date(d.prices?.observedAt), totalSupplyTokens: positive(d.curve?.totalSupplyTokens), transferFeeBps: list(d.modes?.reward?.transferFeeBps, 10).filter(v => Number.isInteger(v) && v >= 0 && v <= 10000), community: { shareBps: positive(d.communityMode?.shareBps), available: flag(d.communityMode?.offeredOnThisQuote) } };
+  if (resource === 'pricing') return { quote: asset(obj(d.quote), true), raise: { raw: raw(d.raise?.raw), units: positive(d.raise?.units) }, marketCap: { startUsd: positive(d.marketCap?.startUsd), graduationUsd: positive(d.marketCap?.graduationUsd) }, observedAt: date(d.prices?.observedAt), totalSupplyTokens: positive(d.curve?.totalSupplyTokens), transferFeeBps: list(d.modes?.reward?.transferFeeBps, 10).filter(v => Number.isInteger(v) && [100, 300].includes(v)), community: { shareBps: positive(d.communityMode?.shareBps), available: flag(d.communityMode?.offeredOnThisQuote) } };
   if (resource.endsWith('/rewards')) return { mint: mint(d.mint), mode: text(d.mode, 20), quote: asset(obj(d.quote)), rewards: rewards(d.rewards), base: rewards(d.base) };
   if (resource.endsWith('/fees')) {
     const c = obj(d.claimable);

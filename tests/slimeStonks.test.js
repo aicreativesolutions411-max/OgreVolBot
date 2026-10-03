@@ -127,7 +127,7 @@ test('SlimeStonks is a separate white-label page with no wallet or execution pre
   assert.doesNotMatch(html + js, /stonkfun|powered by|partnered with|<iframe/i);
   assert.match(html, /SlimeStonks/);
   assert.match(html, /United States/);
-  assert.match(html, /not direct ownership/i);
+  assert.match(html, /not stock-backed assets or direct ownership/i);
   assert.doesNotMatch(js, /sendTransaction|signTransaction|setInterval|privateKey|secretKey/);
   assert.match(read('web/public/home.html'), /href="\/slimestonks"/);
   assert.match(read('src/index.js'), /serveStaticHtmlPage\(response, "slimestonks.html"/);
